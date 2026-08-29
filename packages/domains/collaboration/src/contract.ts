@@ -144,6 +144,7 @@ export const collaborationTaskViewSchema = z.object({
     'offered',
     'awaiting-manual',
     'accepting',
+    'rejecting',
     'running',
     'needs-human',
     'submitting',
@@ -348,6 +349,10 @@ export const collaborationTaskOfferDecisionInputSchema = z.discriminatedUnion('d
   z.object({
     taskOfferId: idSchema,
     decision: z.literal('dismiss')
+  }).strict(),
+  z.object({
+    taskOfferId: idSchema,
+    decision: z.literal('reject')
   }).strict()
 ])
 export const collaborationTaskOfferDecisionResultSchema = z.object({

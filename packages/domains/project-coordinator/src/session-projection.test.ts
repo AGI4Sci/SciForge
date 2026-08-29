@@ -26,15 +26,34 @@ const workerDeviceId = 'dev_ProjectWorker01'
 const taskId = 'tsk_ProjectTask0001'
 const executionId = 'exe_ProjectExec0001'
 
-test('public projection filters stale Principals and Agent reads cannot enumerate other Sessions', async () => {
+test('state commit permits only one Coordinator Session per Project authority and projection filters stale Principals', async () => {
   const settings = memorySettings()
   const state = new ProjectCoordinatorStateStore(settings)
-  await state.bindCoordinatorSession(coordinatorBinding('runtime-a', 'thread-a'))
-  await state.bindCoordinatorSession(coordinatorBinding('runtime-b', 'thread-b'))
-  await state.bindCoordinatorSession({
-    ...coordinatorBinding('runtime-old', 'thread-old'),
-    principalUserId: 'usr_PreviousOwner01'
-  })
+  await commitCoordinatorSession(state, 'runtime-a', 'thread-a')
+  await assert.rejects(
+    commitCoordinatorSession(state, 'runtime-b', 'thread-b'),
+    /already has a Coordinator Session binding/u
+  )
+  await commitCoordinatorSession(
+    state,
+    'runtime-old',
+    'thread-old',
+    'usr_PreviousOwner01',
+    2
+  )
+  assert.deepEqual((await state.readCoordinatorSessionBindings()).map((binding) => ({
+    coordinatorAuthorityEpoch: binding.coordinatorAuthorityEpoch,
+    runtimeId: binding.runtimeId,
+    threadId: binding.threadId
+  })), [{
+    coordinatorAuthorityEpoch: 1,
+    runtimeId: 'runtime-a',
+    threadId: 'thread-a'
+  }, {
+    coordinatorAuthorityEpoch: 2,
+    runtimeId: 'runtime-old',
+    threadId: 'thread-old'
+  }])
   const port = createProjectCoordinatorSessionProjectionPort({
     state,
     workspace: workspacePort(() => workspaceFixture({ principalUserId: ownerUserId })),
@@ -45,7 +64,10 @@ test('public projection filters stale Principals and Agent reads cannot enumerat
   const uiProjection = await port.readProjection()
   assert.deepEqual(uiProjection.bindings.map(({ runtimeId, threadId }) => (
     `${runtimeId}/${threadId}`
-  )), ['runtime-a/thread-a', 'runtime-b/thread-b'])
+  )), ['runtime-a/thread-a'])
+  assert.deepEqual(uiProjection.pendingActivations.map(({ coordinatorSession }) => (
+    `${coordinatorSession.runtimeId}/${coordinatorSession.threadId}`
+  )), ['runtime-a/thread-a'])
   assert.equal(JSON.stringify(uiProjection).includes('usr_PreviousOwner01'), false)
 
   const agentProjection = await port.readProjection({
@@ -61,7 +83,8 @@ test('public projection filters stale Principals and Agent reads cannot enumerat
   }), {
     schemaVersion: 1,
     observedAt: now,
-    bindings: []
+    bindings: [],
+    pendingActivations: []
   })
 })
 
@@ -76,28 +99,12 @@ test('unbound workspace reads fail closed and Coordinator authority epoch fences
     now: () => new Date(now)
   })
   const session = { runtimeId: 'runtime-owner', threadId: 'thread-owner' }
-  const createInput = {
-    createIntentId: 'pct_SessionCreateIntent1',
-    displayName: 'Bound Project',
-    goal: 'Bind the ordinary Coordinator Session.',
-    budget: {
-      maxTasks: 4,
-      maxTasksPerRound: 4,
-      maxTaskRetries: 1,
-      maxCoordinationRounds: 2
-    }
-  }
-  await state.resolveProjectCreateIntent(ownerUserId, createInput)
 
   await assert.rejects(
     port.scopeWorkspaceRead({}, session),
     /not bound to a Cloud Project/u
   )
-  await port.withUnboundSession(session, () => port.bindCreatedProject({
-    createIntentId: createInput.createIntentId,
-    createdProjectId: projectId,
-    workspace
-  }, session, createInput))
+  await commitCoordinatorSession(state, session.runtimeId, session.threadId)
   assert.deepEqual(await port.scopeWorkspaceRead({}, session), { projectId })
   assert.equal((await port.authorize(projectId, session, 'coordinator')).access, 'coordinator')
   const restarted = createProjectCoordinatorSessionProjectionPort({
@@ -160,10 +167,10 @@ test('membership removal clears Coordinator and Worker public scope and rejects 
     runtimeId: 'runtime-removed-owner',
     threadId: 'thread-removed-owner'
   }
-  await coordinatorState.bindCoordinatorSession(coordinatorBinding(
+  await commitCoordinatorSession(coordinatorState,
     coordinatorSession.runtimeId,
     coordinatorSession.threadId
-  ))
+  )
   const coordinator = createProjectCoordinatorSessionProjectionPort({
     state: coordinatorState,
     workspace: workspacePort(() => workspaceFixture({
@@ -244,6 +251,56 @@ function coordinatorBinding(
     threadId,
     boundAt: now
   }
+}
+
+async function commitCoordinatorSession(
+  state: ProjectCoordinatorStateStore,
+  runtimeId: string,
+  threadId: string,
+  principalUserId: string = ownerUserId,
+  coordinatorAuthorityEpoch: number = 1
+): Promise<void> {
+  const token = `${runtimeId}${threadId}`
+    .replaceAll(/[^A-Za-z0-9]/gu, '')
+    .slice(0, 24)
+    .padEnd(12, '0')
+  const createInput = {
+    createIntentId: `pct_${token}`,
+    displayName: 'Bound Project',
+    goal: 'Bind one fresh ordinary Coordinator Session.',
+    budget: {
+      maxTasks: 4,
+      maxTasksPerRound: 4,
+      maxTaskRetries: 1,
+      maxCoordinationRounds: 2
+    }
+  }
+  const createIntentId = await state.resolveProjectCreateIntent(
+    principalUserId,
+    createInput
+  )
+  const receipt = {
+    createIntentId,
+    createdProjectId: projectId,
+    workspace: workspaceFixture({ principalUserId: ownerUserId })
+  }
+  const binding = {
+    ...coordinatorBinding(runtimeId, threadId),
+    principalUserId,
+    coordinatorAuthorityEpoch
+  }
+  await state.commitProjectCreation(
+    principalUserId,
+    { ...createInput, createIntentId },
+    receipt,
+    binding,
+    {
+      activationRequestId: `pca_${token}`,
+      projectId,
+      coordinatorSession: { runtimeId, threadId },
+      requestedAt: now
+    }
+  )
 }
 
 function workerBinding() {

@@ -128,6 +128,21 @@ describe('thread-sidebar-visibility', () => {
     ])).toEqual([visiblePlaceholder, legacyUnknown])
   })
 
+  it('keeps an explicitly main thread visible before its first user message', () => {
+    const freshCoordinatorSession = thread({
+      id: 'fresh-coordinator-session',
+      title: 'New Thread',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main',
+      hasUserMessage: false
+    })
+
+    expect(filterThreadsForSidebar([freshCoordinatorSession])).toEqual([
+      freshCoordinatorSession
+    ])
+  })
+
   it('hides attached side conversation ids without thread reads', () => {
     const attachedChildThread = thread({ id: 'child-thread', title: 'research child' })
     const mainThread = thread({ id: 'main-thread', title: 'Main research task' })

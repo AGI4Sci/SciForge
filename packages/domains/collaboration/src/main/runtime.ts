@@ -40,7 +40,9 @@ import type {
 import {
   coordinatorCloudCommandSchema,
   type CoordinatorAgentInboxHandler,
-  type CoordinatorCloudCommand
+  type CoordinatorCloudCommand,
+  type CoordinatorCloudCommandReplay,
+  type CoordinatorCloudCommandReplayValidator
 } from '../coordinator-cloud-command.js'
 import { CollaborationConnection, type CollaborationInboxHandler } from './connection.js'
 import { collaborationRequestId } from './request-id.js'
@@ -75,9 +77,10 @@ export type CollaborationRuntimeOptions = Readonly<{
 export function isWorkerTaskInboxPayload(payload: AgentInboxMessage['payload']): boolean {
   return payload.type === 'task.offered' ||
     payload.type === 'task.offer.claimed' ||
-    payload.type === 'task.offer.closed' ||
+    (payload.type === 'task.offer.closed' && payload.audience === 'worker') ||
     payload.type === 'task.recovery.output_linked' ||
     payload.type === 'task.recovery.abandoned' ||
+    payload.type === 'task.execution.fenced' ||
     payload.type === 'task.cancelled' ||
     payload.type === 'task.updated' ||
     payload.type === 'collaboration.state.changed'
@@ -89,6 +92,9 @@ export function isCoordinatorProjectInboxPayload(
   return payload.type === 'project.started' ||
     payload.type === 'project.plan.confirmed' ||
     payload.type === 'task.result.submitted' ||
+    payload.type === 'task.execution.started' ||
+    payload.type === 'task.execution.failed' ||
+    (payload.type === 'task.offer.closed' && payload.audience === 'coordinator') ||
     payload.type === 'project_record.submitted' ||
     payload.type === 'coordinator.transferred' || (
     payload.type === 'human.answer.received' &&
@@ -794,12 +800,7 @@ export class CollaborationRuntime {
   }
 
   async decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<void> {
-    await this.requireTasks().decideOffer(
-      input.taskOfferId,
-      input.decision === 'accept'
-        ? { decision: 'accept' }
-        : { decision: 'dismiss' }
-    )
+    await this.requireTasks().decideOffer(input.taskOfferId, { decision: input.decision })
   }
 
   /**
@@ -812,6 +813,22 @@ export class CollaborationRuntime {
       'coordinator.command',
       coordinatorCloudCommandSchema.parse(command)
     )
+  }
+
+  async resumeCoordinatorCloudCommand(
+    idempotencyKey: string,
+    validateCommand: CoordinatorCloudCommandReplayValidator
+  ): Promise<CoordinatorCloudCommandReplay | null> {
+    const replay = await this.requireOutbox().resumeAndWait(
+      'coordinator.command',
+      idempotencyKey,
+      (request) => validateCommand(coordinatorCloudCommandSchema.parse(request))
+    )
+    if (!replay) return null
+    return Object.freeze({
+      command: coordinatorCloudCommandSchema.parse(replay.request),
+      response: replay.response
+    })
   }
 
   private async reconcileTranscriptSnapshots(): Promise<void> {

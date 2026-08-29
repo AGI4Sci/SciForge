@@ -495,6 +495,12 @@ export const taskOfferAcceptCommandSchema = z.object({
   type: z.literal('task.offer.accept')
 }).strict()
 
+export const taskOfferRejectCommandSchema = z.object({
+  ...offerCommandShape,
+  type: z.literal('task.offer.reject')
+}).strict()
+export type TaskOfferRejectCommand = z.infer<typeof taskOfferRejectCommandSchema>
+
 export const taskOfferWithdrawCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('task.offer.withdraw'),
@@ -715,6 +721,7 @@ export const cloudStateCommandSchemas = [
   projectPlanConfirmCommandSchema,
   taskOfferCreateCommandSchema,
   taskOfferAcceptCommandSchema,
+  taskOfferRejectCommandSchema,
   taskOfferWithdrawCommandSchema,
   taskOfferReassignCommandSchema,
   taskExecutionStartCommandSchema,

@@ -32,7 +32,10 @@ describe('ClaudeCodeThreadStore', () => {
       claudeSessionId: 'claude-session-1',
       workspace: '/tmp/workspace',
       title: 'Claude Code work',
-      model: 'claude-sonnet'
+      model: 'claude-sonnet',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
     })
 
     await expect(new ClaudeCodeThreadStore({ rootDir }).get('gui-thread-1')).resolves.toMatchObject({
@@ -42,6 +45,9 @@ describe('ClaudeCodeThreadStore', () => {
       workspace: '/tmp/workspace',
       title: 'Claude Code work',
       model: 'claude-sonnet',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main',
       archived: false,
       latestSeq: 0
     })

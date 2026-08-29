@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
@@ -9,9 +10,12 @@ import {
   humanEndpointBindingSchema,
   managedProviderContainerSchema,
   participantProfileSchema,
+  projectPlanSubmitCommandSchema,
   projectSchema,
   providerLocatorSchema,
   remoteSessionProjectionSchema,
+  restRequestSchema,
+  restResponseSchema,
   taskExecutionPreflightSchema,
   taskExecutionSchema,
   taskResultOutputSchema,
@@ -144,7 +148,11 @@ export const collaborationOutboxEntrySchema = z.object({
   updatedAt: timestampSchema,
   deliveredAt: timestampSchema.optional(),
   response: z.record(z.string(), z.json()).optional(),
-  error: z.string().trim().min(1).max(4_000).optional()
+  error: z.string().trim().min(1).max(4_000).optional(),
+  replayBlockedReason: z.enum([
+    'legacy_plan_v1_delivery_outcome_unknown',
+    'legacy_plan_v1_not_safely_upgradable'
+  ]).optional()
 }).strict().superRefine((entry, context) => {
   if ((entry.state === 'delivered') !== (entry.deliveredAt !== undefined)) {
     context.addIssue({ code: 'custom', path: ['deliveredAt'], message: 'Delivered outbox entry requires deliveredAt.' })
@@ -154,6 +162,20 @@ export const collaborationOutboxEntrySchema = z.object({
       code: 'custom',
       path: ['response'],
       message: 'Only a delivered outbox command may retain its strict Cloud response.'
+    })
+  }
+  if (entry.replayBlockedReason !== undefined && entry.state !== 'failed') {
+    context.addIssue({
+      code: 'custom',
+      path: ['replayBlockedReason'],
+      message: 'A replay-blocked outbox command must remain failed.'
+    })
+  }
+  if (entry.replayBlockedReason !== undefined && entry.error === undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['error'],
+      message: 'A replay-blocked outbox command requires a durable diagnostic.'
     })
   }
 })
@@ -202,7 +224,16 @@ export const collaborationPendingTaskOfferSchema = z.object({
     'content_not_ready',
     'provider_not_ready'
   ])).max(5),
-  state: z.enum(['pending', 'awaiting-manual', 'claiming', 'dismissed', 'claimed_elsewhere', 'closed', 'failed']),
+  state: z.enum([
+    'pending',
+    'awaiting-manual',
+    'claiming',
+    'rejecting',
+    'dismissed',
+    'claimed_elsewhere',
+    'closed',
+    'failed'
+  ]),
   updatedAt: timestampSchema,
   completedAt: timestampSchema.nullable(),
   error: z.string().trim().min(1).max(4_000).nullable()
@@ -419,8 +450,7 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
   updatedAt: timestampSchema
 }).strict()
 
-export const collaborationLocalStateSchema = z.object({
-  schemaVersion: z.literal(2),
+const collaborationLocalStateShape = {
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -458,6 +488,16 @@ export const collaborationLocalStateSchema = z.object({
   outbox: z.array(collaborationOutboxEntrySchema).max(100_000),
   diagnostics: z.array(collaborationDiagnosticRecordSchema).max(256),
   remoteApprovals: z.array(collaborationLocalRemoteApprovalSchema).max(10_000).default([])
+} as const
+
+const collaborationLocalStateV2Schema = z.object({
+  schemaVersion: z.literal(2),
+  ...collaborationLocalStateShape
+}).strict()
+
+export const collaborationLocalStateSchema = z.object({
+  schemaVersion: z.literal(3),
+  ...collaborationLocalStateShape
 }).strict()
 
 export type CollaborationLocalState = z.infer<typeof collaborationLocalStateSchema>
@@ -479,7 +519,7 @@ export type CollaborationWorkerAcceptancePolicy = z.infer<
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   revision: 0,
   lastInboxSequence: 0,
   endpoints: [],
@@ -557,15 +597,20 @@ export class CollaborationLocalStore {
     if (
       stored !== undefined &&
       (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
-        (stored as { schemaVersion?: unknown }).schemaVersion !== 2)
+        ![2, 3].includes((stored as { schemaVersion?: number }).schemaVersion ?? -1))
     ) {
       throw new Error(
-        'Collaboration local state is not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud.'
+        'Collaboration local state is not schema version 2 or 3; clear the obsolete local Collaboration state and reconnect to Cloud.'
       )
     }
-    this.state = stored === undefined
-      ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
-      : collaborationLocalStateSchema.parse(stored)
+    if (stored === undefined) {
+      this.state = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
+    } else if ((stored as { schemaVersion: number }).schemaVersion === 2) {
+      this.state = migrateCollaborationLocalStateV2(collaborationLocalStateV2Schema.parse(stored))
+      await this.backend.write(this.state)
+    } else {
+      this.state = collaborationLocalStateSchema.parse(stored)
+    }
     await this.recoverInterruptedWork()
     return this.snapshot()
   }
@@ -629,6 +674,205 @@ export class CollaborationLocalStore {
     await this.backend.write(parsed)
     this.state = parsed
   }
+}
+
+type CollaborationLocalStateV2 = z.infer<typeof collaborationLocalStateV2Schema>
+
+/**
+ * State v2 could retain v18 Plan commands whose nested file declaration was
+ * valid when queued but is no longer a strict current request. Only an entry
+ * that has never entered delivery can be rewritten safely. Terminal responses
+ * retain the Cloud-issued digest; they are normalized solely for strict local
+ * replay, never reconstructed as a new current command.
+ */
+function migrateCollaborationLocalStateV2(
+  state: CollaborationLocalStateV2
+): CollaborationLocalState {
+  const migratedAt = new Date().toISOString()
+  const diagnostics = [...state.diagnostics]
+  const outbox = state.outbox.map((entry) => {
+    const commandType = isRecord(entry.body) ? entry.body.type : undefined
+    if (
+      entry.state === 'delivered' &&
+      (commandType === 'project.plan.submit' || commandType === 'project.plan.confirm')
+    ) {
+      try {
+        return migrateDeliveredPlanEntry(entry)
+      } catch {
+        return blockLegacyPlanReplay(
+          entry,
+          'legacy_plan_v1_not_safely_upgradable',
+          migratedAt,
+          diagnostics
+        )
+      }
+    }
+    if (
+      commandType !== 'project.plan.submit' ||
+      !hasLegacyPlanTaskDeclaration(entry.body.tasks)
+    ) return entry
+    if (entry.state === 'pending' && entry.attempts === 0) {
+      try {
+        const body = migratePendingPlanSubmit(entry.body)
+        return collaborationOutboxEntrySchema.parse({
+          ...entry,
+          body,
+          updatedAt: migratedAt
+        })
+      } catch {
+        return blockLegacyPlanReplay(
+          entry,
+          'legacy_plan_v1_not_safely_upgradable',
+          migratedAt,
+          diagnostics
+        )
+      }
+    }
+    return blockLegacyPlanReplay(
+      entry,
+      'legacy_plan_v1_delivery_outcome_unknown',
+      migratedAt,
+      diagnostics
+    )
+  })
+  return collaborationLocalStateSchema.parse({
+    ...state,
+    schemaVersion: 3,
+    outbox,
+    diagnostics
+  })
+}
+
+function migratePendingPlanSubmit(body: Record<string, unknown>): Record<string, unknown> {
+  const request = projectPlanSubmitCommandSchema.parse({
+    ...body,
+    tasks: migratePlanTaskDeclarations(body.tasks)
+  })
+  const planFacts = {
+    projectId: request.projectId,
+    expectedProjectRevision: request.expectedProjectRevision,
+    expectedCoordinatorAuthorityEpoch: request.expectedCoordinatorAuthorityEpoch,
+    supersedesProjectPlanId: request.supersedesProjectPlanId,
+    sourceInputLocators: request.sourceInputLocators,
+    tasks: request.tasks,
+    rationale: request.rationale,
+    runtimeProvenance: request.runtimeProvenance
+  }
+  return projectPlanSubmitCommandSchema.parse({
+    ...request,
+    planDigest: stableDigest(planFacts)
+  })
+}
+
+function migrateDeliveredPlanEntry(
+  entry: CollaborationOutboxEntry
+): CollaborationOutboxEntry {
+  const request = restRequestSchema.parse({
+    ...entry.body,
+    ...(entry.body.type === 'project.plan.submit'
+      ? { tasks: migratePlanTaskDeclarations(entry.body.tasks) }
+      : {})
+  })
+  if (request.type !== 'project.plan.submit' && request.type !== 'project.plan.confirm') {
+    throw new Error('Delivered legacy Plan outbox entry has an inconsistent request type.')
+  }
+  if (!entry.response) {
+    throw new Error('Delivered legacy Plan outbox entry is missing its durable Cloud response.')
+  }
+  const response = restResponseSchema.parse(migratePlanResponse(entry.response))
+  if (response.requestId !== request.requestId) {
+    throw new Error('Delivered legacy Plan outbox response belongs to another request.')
+  }
+  return collaborationOutboxEntrySchema.parse({ ...entry, body: request, response })
+}
+
+function migratePlanResponse(response: Record<string, unknown>): Record<string, unknown> {
+  if (response.type === 'rest.entity') {
+    return { ...response, entity: migrateProjectPlanEntity(response.entity) }
+  }
+  if (response.type === 'rest.collection' && Array.isArray(response.items)) {
+    return { ...response, items: response.items.map(migrateProjectPlanEntity) }
+  }
+  return response
+}
+
+function migrateProjectPlanEntity(entity: unknown): unknown {
+  if (!isRecord(entity) || entity.type !== 'project_plan') return entity
+  return { ...entity, tasks: migratePlanTaskDeclarations(entity.tasks) }
+}
+
+function migratePlanTaskDeclarations(tasks: unknown): unknown {
+  if (!Array.isArray(tasks)) return tasks
+  return tasks.map((task) => {
+    if (!isRecord(task) || !isRecord(task.fileIntent)) return task
+    if (
+      task.fileIntent.schemaVersion !== 1 ||
+      Object.hasOwn(task.fileIntent, 'dependencyInputs')
+    ) return task
+    return {
+      ...task,
+      fileIntent: {
+        ...task.fileIntent,
+        schemaVersion: 2,
+        dependencyInputs: []
+      }
+    }
+  })
+}
+
+function hasLegacyPlanTaskDeclaration(tasks: unknown): boolean {
+  return Array.isArray(tasks) && tasks.some((task) => (
+    isRecord(task) && isRecord(task.fileIntent) && task.fileIntent.schemaVersion === 1
+  ))
+}
+
+function blockLegacyPlanReplay(
+  entry: CollaborationOutboxEntry,
+  reason: NonNullable<CollaborationOutboxEntry['replayBlockedReason']>,
+  migratedAt: string,
+  diagnostics: CollaborationLocalState['diagnostics']
+): CollaborationOutboxEntry {
+  const {
+    deliveredAt: _deliveredAt,
+    response: _response,
+    ...retainedEntry
+  } = entry
+  const message = reason === 'legacy_plan_v1_delivery_outcome_unknown'
+    ? 'Legacy Plan command delivery may already have reached Cloud; automatic replay is permanently blocked.'
+    : 'Legacy Plan command cannot be upgraded to the current strict delivery contract safely.'
+  if (diagnostics.length < 256) {
+    diagnostics.push({
+      code: 'collaboration.outbox.legacy_plan_v1_replay_blocked',
+      severity: 'error',
+      message: `${message} Outbox entry: ${entry.outboxId}.`,
+      occurredAt: migratedAt,
+      recoverable: false
+    })
+  }
+  return collaborationOutboxEntrySchema.parse({
+    ...retainedEntry,
+    state: 'failed',
+    updatedAt: migratedAt,
+    error: entry.error ?? message,
+    replayBlockedReason: reason
+  })
+}
+
+function stableDigest(value: unknown): string {
+  return createHash('sha256').update(stableJson(value), 'utf8').digest('hex')
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) => (
+    `${JSON.stringify(key)}:${stableJson(record[key])}`
+  )).join(',')}}`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isUnsupportedDirectorySync(error: unknown): boolean {

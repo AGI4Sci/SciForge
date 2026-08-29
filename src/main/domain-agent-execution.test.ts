@@ -51,6 +51,14 @@ describe('domain Agent execution Host', () => {
       runtimeId: 'codex', threadId: 'thread-fixed', turnId: 'turn-prepared'
     })
     expect(runtime.startThread).toHaveBeenCalledTimes(1)
+    expect(runtime.startThread).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      workspace: '/workspace/project',
+      mode: 'agent',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
+    })
     expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       runtimeId: 'codex', threadId: 'thread-fixed',
       clientDirectiveId: 'collab-worker-stable-directive',

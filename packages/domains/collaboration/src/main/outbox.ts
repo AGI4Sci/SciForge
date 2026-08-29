@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  idempotencyKeySchema,
   idempotencyComparableCommandProjection,
   restRequestSchema,
   restResponseSchema,
@@ -32,6 +33,11 @@ type CoordinatorActor = Readonly<{
 type TerminalWaiter = Readonly<{
   resolve: (response: RestResponse) => void
   reject: (error: Error) => void
+}>
+
+export type DurableCloudOutboxReplay = Readonly<{
+  request: RestRequest
+  response: RestResponse
 }>
 
 export class DurableCloudOutbox implements ProjectionCloudOutbox {
@@ -149,10 +155,52 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
     return this.waitForTerminal(parsed.idempotencyKey)
   }
 
+  /**
+   * Resumes one already-enqueued durable command without asking its caller to
+   * reconstruct the body. A failed delivery reuses the original row and its
+   * idempotency key; a delivered row returns its retained strict response.
+   */
+  async resumeAndWait(
+    kind: CollaborationOutboxEntry['kind'],
+    rawIdempotencyKey: string,
+    validateRequest: (request: RestRequest) => void
+  ): Promise<DurableCloudOutboxReplay | null> {
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey)
+    if (typeof validateRequest !== 'function') {
+      throw new TypeError('Durable cloud outbox replay validator is invalid.')
+    }
+    const existing = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === idempotencyKey
+    ))
+    if (!existing) return null
+    if (existing.kind !== kind) {
+      throw new Error('Outbox idempotency key belongs to another command kind.')
+    }
+    assertOutboxReplayAllowed(existing)
+    const request = restRequestSchema.parse(existing.body)
+    if (!('idempotencyKey' in request) || request.idempotencyKey !== idempotencyKey) {
+      throw new Error('Durable cloud outbox command identity is inconsistent.')
+    }
+    validateRequest(request)
+    if (existing.state === 'failed') await this.retry(existing.outboxId)
+    else this.schedule()
+    const response = await this.waitForTerminal(idempotencyKey)
+    return Object.freeze({ request, response })
+  }
+
   async retry(id?: string): Promise<void> {
+    const blocked = this.options.store.snapshot().outbox.find((entry) => (
+      entry.state === 'failed' &&
+      entry.replayBlockedReason !== undefined &&
+      id !== undefined &&
+      (entry.outboxId === id || entry.idempotencyKey === id)
+    ))
+    if (blocked) assertOutboxReplayAllowed(blocked)
     await this.options.store.transact((draft) => {
       const candidates = draft.outbox.filter((entry) => (
-        entry.state === 'failed' && (!id || entry.outboxId === id || entry.idempotencyKey === id)
+        entry.state === 'failed' &&
+        entry.replayBlockedReason === undefined &&
+        (!id || entry.outboxId === id || entry.idempotencyKey === id)
       ))
       const now = this.now().toISOString()
       for (const entry of candidates) {
@@ -179,9 +227,13 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
       const authority = await this.options.agentCloudRuntime.authorityStatus(agentId)
       if (authority.state !== 'ready') return
       const next = this.options.store.snapshot().outbox
-        .filter((entry) => entry.state === 'pending' || entry.state === 'reconciling')
+        .filter((entry) => (
+          entry.replayBlockedReason === undefined &&
+          (entry.state === 'pending' || entry.state === 'reconciling')
+        ))
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0]
       if (!next) return
+      assertOutboxReplayAllowed(next)
       const startedAt = this.now().toISOString()
       const request = restRequestSchema.parse(next.body)
       await this.options.store.transact((draft) => {
@@ -314,6 +366,13 @@ export class DurableCloudOutbox implements ProjectionCloudOutbox {
   }
 }
 
+function assertOutboxReplayAllowed(entry: CollaborationOutboxEntry): void {
+  if (entry.replayBlockedReason === undefined) return
+  throw new Error(
+    `Cloud command replay is permanently blocked: ${entry.replayBlockedReason}.`
+  )
+}
+
 function assertExpectedWriteResponse(
   kind: CollaborationOutboxEntry['kind'],
   request: RestRequest,
@@ -330,11 +389,17 @@ function assertExpectedWriteResponse(
     throw new Error(`Cloud write returned unexpected ${response.type}.`)
   }
   if (response.type === 'rest.error') {
+    if (
+      kind === 'task.offer-decision' &&
+      response.requestId === request.requestId
+    ) return
     throw new Error(response.error.message)
   }
   let expected: boolean
   if (kind === 'task.offer-decision' && request.type === 'task.offer.accept') {
     expected = isExpectedTaskOfferClaimResponse(request, response)
+  } else if (kind === 'task.offer-decision' && request.type === 'task.offer.reject') {
+    expected = isExpectedTaskOfferRejectResponse(request, response, actor)
   } else if (kind === 'task.external-operation') {
     expected = isExpectedExternalOperationResponse(request, response)
   } else if (kind === 'task.progress' && request.type === 'task.execution.start') {
@@ -520,17 +585,33 @@ function isExpectedCoordinatorResponse(
         offerRevision: request.expectedOfferRevision + 1
       })
     case 'task.offer.reassign':
-      return isUserTaskOfferCollection(response, {
-        outcome: 'reassigned',
-        taskId: request.taskId,
-        workerUserId: request.workerUserId,
-        offeredByCoordinatorAgentId: actor.agentId,
-        offerExpiresAt: request.offerExpiresAt,
-        taskRevision: request.expectedTaskRevision + 1,
-        offerRevision: 1
-      })
+      return isTaskOfferReassignCollection(request, response, actor)
   }
   return unexpectedCoordinatorCommand(request)
+}
+
+function isTaskOfferReassignCollection(
+  request: Extract<CoordinatorCloudCommand, { type: 'task.offer.reassign' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (!isUserTaskOfferCollection(response, {
+    outcome: 'reassigned',
+    taskId: request.taskId,
+    workerUserId: request.workerUserId,
+    offeredByCoordinatorAgentId: actor.agentId,
+    offerExpiresAt: request.offerExpiresAt,
+    taskRevision: request.expectedTaskRevision + 1,
+    offerRevision: 1
+  })) return false
+  if (response.type !== 'rest.collection') return false
+  const [task, successorOffer] = response.items
+  // The command carries no authoritative executionCount baseline. The parsed
+  // Cloud Task owns that fact, so accepting this response must not infer one.
+  return task?.type === 'task' &&
+    successorOffer?.type === 'task_offer' &&
+    canonicalJson(task.fileIntent) === canonicalJson(request.nextFileIntent) &&
+    successorOffer.taskOfferId !== request.previousTaskOfferId
 }
 
 function unexpectedCoordinatorCommand(command: never): false {
@@ -801,6 +882,35 @@ function isExpectedTaskOfferClaimResponse(
     offer.revision === request.expectedOfferRevision + 1
 }
 
+function isExpectedTaskOfferRejectResponse(
+  request: Extract<RestRequest, { type: 'task.offer.reject' }>,
+  response: Exclude<RestResponse, { type: 'rest.error' }>,
+  actor: CoordinatorActor
+): boolean {
+  if (
+    response.requestId !== request.requestId ||
+    response.type !== 'rest.collection' ||
+    response.nextCursor !== undefined ||
+    response.items.length !== 2
+  ) return false
+  const [task, offer] = response.items
+  return task?.type === 'task' &&
+    offer?.type === 'task_offer' &&
+    task.taskId === request.taskId &&
+    task.revision === request.expectedTaskRevision + 1 &&
+    task.status === 'revision_requested' &&
+    task.currentExecutionId === null &&
+    task.currentExecutionState === null &&
+    task.completedAt === null &&
+    offer.taskOfferId === request.taskOfferId &&
+    offer.taskId === task.taskId &&
+    offer.projectId === task.projectId &&
+    offer.workerUserId === actor.userId &&
+    offer.executionId === null &&
+    offer.state === 'rejected' &&
+    offer.revision === request.expectedOfferRevision + 1
+}
+
 function isExpectedTaskExecutionStartResponse(
   request: Extract<RestRequest, { type: 'task.execution.start' }>,
   response: Exclude<RestResponse, { type: 'rest.error' }>,
@@ -845,14 +955,14 @@ function isExpectedTaskExecutionFailureResponse(
     response.items.length !== 2
   ) return false
   const [task, execution] = response.items
-  return task?.type === 'task' &&
-    execution?.type === 'task_execution' &&
-    task.taskId === request.taskId &&
+  if (task?.type !== 'task' || execution?.type !== 'task_execution') return false
+  const retryable = task.executionCount < task.maxRetries + 1
+  return task.taskId === request.taskId &&
     task.revision === request.expectedTaskRevision + 1 &&
-    task.status === 'failed' &&
+    task.status === (retryable ? 'revision_requested' : 'failed') &&
     task.currentExecutionId === request.executionId &&
     task.currentExecutionState === 'failed' &&
-    task.completedAt === request.failedAt &&
+    task.completedAt === (retryable ? null : request.failedAt) &&
     execution.taskId === task.taskId &&
     execution.projectId === task.projectId &&
     execution.executionId === request.executionId &&

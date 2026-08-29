@@ -465,7 +465,11 @@ async function activeContentProjectFixture(
   }
 }
 
-async function activeTextOfferFixture(suffix: string) {
+async function activeTextOfferFixture(
+  suffix: string,
+  maxTaskRetries = 2,
+  additionalTaskDeclarations: readonly FixturePlanTask[] = []
+) {
   const repository = new FakeCollaborationRepository()
   const service = new CollaborationService({ repository, now })
   const owner = await seedOidcUserDevice(repository, `${suffix}-owner`, at)
@@ -542,7 +546,7 @@ async function activeTextOfferFixture(suffix: string) {
     idempotencyKey: `idem_${suffix}_project`,
     displayName: `${suffix} workflow`,
     goal: 'Exercise exact workflow authority and execution fencing.',
-    budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries: 2, maxCoordinationRounds: 2 }
+    budget: { maxTasks: 5, maxTasksPerRound: 5, maxTaskRetries, maxCoordinationRounds: 2 }
   })
   const runtimeProvenance = {
     runtimeId: `runtime_${suffix}_coordinator`,
@@ -559,7 +563,10 @@ async function activeTextOfferFixture(suffix: string) {
     dependencyPlanItemIds: [],
     requiredCapabilityTags: ['research.execute'],
     fileIntent: null
-  }]
+  }, ...additionalTaskDeclarations.map((task) => ({
+    ...task,
+    workerUserId: firstWorker.userId
+  }))]
   const planFacts = {
     projectId: created.project.projectId,
     expectedProjectRevision: created.project.revision,
@@ -649,6 +656,71 @@ async function activeTextOfferFixture(suffix: string) {
     confirmedPlan,
     activeProject,
     offered
+  }
+}
+
+async function retryableFailedTextOfferFixture(suffix: string) {
+  const fixture = await activeTextOfferFixture(suffix, 1)
+  const requestLabel = suffix.replaceAll('-', '_')
+  const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+    protocolVersion: '1.0',
+    type: 'task.offer.accept',
+    requestId: `req_${requestLabel}_accept`,
+    idempotencyKey: `idem_${requestLabel}_accept`,
+    taskOfferId: fixture.offered.offer.taskOfferId,
+    taskId: fixture.offered.task.taskId,
+    expectedTaskRevision: fixture.offered.task.revision,
+    expectedOfferRevision: fixture.offered.offer.revision
+  })
+  const running = await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+    protocolVersion: '1.0',
+    type: 'task.execution.start',
+    requestId: `req_${requestLabel}_start`,
+    idempotencyKey: `idem_${requestLabel}_start`,
+    taskId: accepted.task.taskId,
+    executionId: accepted.execution.executionId,
+    expectedTaskRevision: accepted.task.revision,
+    expectedExecutionRevision: accepted.execution.revision,
+    startedAt: at.toISOString()
+  })
+  const failed = await fixture.service.failTaskExecution(fixture.firstWorkerAgent, {
+    protocolVersion: '1.0',
+    type: 'task.execution.fail',
+    requestId: `req_${requestLabel}_fail`,
+    idempotencyKey: `idem_${requestLabel}_fail`,
+    taskId: running.task.taskId,
+    executionId: running.execution.executionId,
+    expectedTaskRevision: running.task.revision,
+    expectedExecutionRevision: running.execution.revision,
+    safeFailureCode: 'runtime_transient',
+    safeMessage: 'The Runtime reported a retryable failure.',
+    failedAt: at.toISOString()
+  })
+  return { ...fixture, accepted, running, failed }
+}
+
+async function currentReassignCommand(
+  fixture: Awaited<ReturnType<typeof activeTextOfferFixture>>,
+  label: string
+) {
+  const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+  const task = (await fixture.repository.getTask(fixture.offered.task.taskId))!
+  const offer = (await fixture.repository.getTaskOffer(fixture.offered.offer.taskOfferId))!
+  return {
+    protocolVersion: '1.0' as const,
+    type: 'task.offer.reassign' as const,
+    requestId: `req_${label}`,
+    idempotencyKey: `idem_${label}`,
+    taskId: task.taskId,
+    previousTaskOfferId: offer.taskOfferId,
+    expectedPreviousOfferRevision: offer.revision,
+    expectedProjectRevision: project.revision,
+    expectedTaskRevision: task.revision,
+    expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+    workerUserId: fixture.owner.userId,
+    offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+    nextFileIntent: null
   }
 }
 
@@ -810,8 +882,9 @@ async function manualRecoveryFileOfferFixture(
   })
 
   const fileIntent = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     inputs: [],
+    dependencyInputs: [],
     output: {
       kind: 'content-space.output-new' as const,
       target: 'project-binding-root' as const,
@@ -980,7 +1053,7 @@ async function manualRecoveryFileOfferFixture(
 describe('vNext Cloud application service', () => {
   it('binds an initial logical file Plan to the attested Team-root revision only when offering', async () => {
     const fileDeclaration = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       inputs: [{
         kind: 'content-space.input-file' as const,
         locator: {
@@ -993,6 +1066,7 @@ describe('vNext Cloud application service', () => {
         expectedSemanticRevision: null,
         expectedMediaType: 'text/markdown'
       }],
+      dependencyInputs: [],
       output: {
         kind: 'content-space.output-new' as const,
         target: 'project-binding-root' as const,
@@ -1043,7 +1117,9 @@ describe('vNext Cloud application service', () => {
       offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
     })
     expect(offered.task.fileIntent).toEqual({
-      ...fileDeclaration,
+      schemaVersion: 1,
+      inputs: fileDeclaration.inputs,
+      output: fileDeclaration.output,
       bindingRevision: fixture.binding.revision
     })
 
@@ -1059,6 +1135,263 @@ describe('vNext Cloud application service', () => {
     })
     expect(accepted.execution.fence.bindingRevision).toBe(fixture.binding.revision)
     expect(accepted.execution.fileIntent?.bindingRevision).toBe(fixture.binding.revision)
+  })
+
+  it('resolves only the current Coordinator-accepted dependency file output into a concrete downstream input', async () => {
+    const sourcePlanItemId = 'item_dependency_source'
+    const downstreamPlanItemId = 'item_dependency_consumer'
+    const staleDownstreamPlanItemId = 'item_stale_dependency_consumer'
+    const sourceDeclaration = {
+      schemaVersion: 2 as const,
+      inputs: [],
+      dependencyInputs: [],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'dependency-source.md',
+        mediaType: 'text/markdown',
+        maxBytes: 1_000_000
+      }
+    }
+    const dependencyInput = {
+      planItemId: sourcePlanItemId,
+      outputIndex: 0,
+      destinationName: 'accepted-source.md'
+    }
+    const downstreamDeclaration = {
+      schemaVersion: 2 as const,
+      inputs: [],
+      dependencyInputs: [dependencyInput],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'dependency-consumer.md',
+        mediaType: 'text/markdown',
+        maxBytes: 1_000_000
+      }
+    }
+    const tasks = [{
+      planItemId: sourcePlanItemId,
+      title: 'Produce one dependency file',
+      objective: 'Produce one exact file for a downstream Plan item.',
+      completionCriteria: ['The Coordinator accepts the exact current file result.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: sourceDeclaration
+    }, {
+      planItemId: downstreamPlanItemId,
+      title: 'Consume the accepted dependency file',
+      objective: 'Receive the accepted upstream file as a concrete input.',
+      completionCriteria: ['The assigned intent contains the exact accepted locator.'],
+      dependencyPlanItemIds: [sourcePlanItemId],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: downstreamDeclaration
+    }, {
+      planItemId: staleDownstreamPlanItemId,
+      title: 'Reject one stale dependency file',
+      objective: 'Fail closed after the active Project root changes.',
+      completionCriteria: ['No Task is created from a stale accepted output.'],
+      dependencyPlanItemIds: [sourcePlanItemId],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: {
+        ...downstreamDeclaration,
+        output: { ...downstreamDeclaration.output, fileName: 'stale-dependency-consumer.md' }
+      }
+    }]
+    const fixture = await activeContentProjectFixture('dependency-input-resolution', tasks)
+    await publishReadyAvailability(
+      fixture.service,
+      fixture.workerAgent,
+      'dependency_input_resolution_worker'
+    )
+
+    const sourceProject = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const sourceOffer = await fixture.service.createTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_dependency_source_offer',
+      idempotencyKey: 'idem_dependency_source_offer',
+      projectId: sourceProject.projectId,
+      expectedProjectRevision: sourceProject.revision,
+      expectedCoordinatorAuthorityEpoch: sourceProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: sourceProject.executionAuthorityEpoch,
+      projectPlanId: fixture.launch.confirmed.projectPlanId,
+      expectedPlanRevision: fixture.launch.confirmed.revision,
+      planItemId: sourcePlanItemId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })
+    const sourceAccepted = await fixture.service.acceptTaskOffer(fixture.workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_dependency_source_accept',
+      idempotencyKey: 'idem_dependency_source_accept',
+      taskOfferId: sourceOffer.offer.taskOfferId,
+      taskId: sourceOffer.task.taskId,
+      expectedTaskRevision: sourceOffer.task.revision,
+      expectedOfferRevision: sourceOffer.offer.revision
+    })
+    const sourceRunning = await fixture.service.startTaskExecution(fixture.workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_dependency_source_start',
+      idempotencyKey: 'idem_dependency_source_start',
+      taskId: sourceAccepted.task.taskId,
+      executionId: sourceAccepted.execution.executionId,
+      expectedTaskRevision: sourceAccepted.task.revision,
+      expectedExecutionRevision: sourceAccepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+    const sourceLocator = {
+      contractVersion: 1 as const,
+      kind: 'content-space.file-reference' as const,
+      authority: fixture.rootLocator.authority,
+      identity: { fileId: 'dependency-source-file' }
+    }
+    const sourceOutput = {
+      executionId: sourceRunning.execution.executionId,
+      assignmentTaskRevision: sourceRunning.execution.fence.assignmentTaskRevision,
+      locator: sourceLocator,
+      locatorDigest: stableDigest(sourceLocator),
+      rootLocatorDigest: fixture.binding.rootLocatorDigest!,
+      bindingRevision: fixture.binding.revision,
+      transferReceiptDigest: stableDigest({ receipt: 'dependency-source-upload' }),
+      observationDigest: stableDigest({ observation: 'dependency-source-file' }),
+      preflightObservationDigest: stableDigest({ preflight: 'dependency-source-file' })
+    }
+    const resultFacts = {
+      taskId: sourceRunning.task.taskId,
+      executionId: sourceRunning.execution.executionId,
+      expectedTaskRevision: sourceRunning.task.revision,
+      expectedExecutionRevision: sourceRunning.execution.revision,
+      summary: 'One exact dependency file is ready for Coordinator review.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_dependency_source_worker',
+        modelId: null,
+        startedAt: at.toISOString(),
+        completedAt: at.toISOString()
+      },
+      outputs: [sourceOutput],
+      recoveryJournalEntryIds: []
+    }
+    const submitted = await fixture.service.submitTaskResult(fixture.workerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.result.submit',
+      requestId: 'req_dependency_source_submit',
+      idempotencyKey: 'idem_dependency_source_submit',
+      ...resultFacts,
+      submissionDigest: stableDigest(resultFacts)
+    })
+
+    const nonAcceptedProject = (await fixture.repository.getProject(sourceProject.projectId))!
+    await expect(fixture.service.createTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_dependency_nonaccepted_offer',
+      idempotencyKey: 'idem_dependency_nonaccepted_offer',
+      projectId: nonAcceptedProject.projectId,
+      expectedProjectRevision: nonAcceptedProject.revision,
+      expectedCoordinatorAuthorityEpoch: nonAcceptedProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: nonAcceptedProject.executionAuthorityEpoch,
+      projectPlanId: fixture.launch.confirmed.projectPlanId,
+      expectedPlanRevision: fixture.launch.confirmed.revision,
+      planItemId: downstreamPlanItemId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+    expect(await fixture.repository.getTask(canonicalTaskIdForPlanItem(
+      fixture.launch.confirmed.projectPlanId,
+      downstreamPlanItemId
+    ))).toBeNull()
+
+    const acceptedResult = await fixture.service.reviewTaskResult(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.result.review',
+      requestId: 'req_dependency_source_review',
+      idempotencyKey: 'idem_dependency_source_review',
+      projectId: nonAcceptedProject.projectId,
+      taskId: submitted.task.taskId,
+      executionId: submitted.execution.executionId,
+      resultSubmissionId: submitted.submission.resultSubmissionId,
+      expectedProjectRevision: nonAcceptedProject.revision,
+      expectedTaskRevision: submitted.task.revision,
+      expectedExecutionRevision: submitted.execution.revision,
+      expectedResultRevision: submitted.submission.revision,
+      expectedCoordinatorAuthorityEpoch: nonAcceptedProject.coordinatorAuthorityEpoch,
+      decision: 'accept',
+      instruction: null,
+      nextWorkerUserId: null,
+      nextOfferExpiresAt: null,
+      nextFileIntent: null
+    })
+    expect(acceptedResult.review.acceptedProjectRecordId).not.toBeNull()
+
+    const acceptedProject = (await fixture.repository.getProject(sourceProject.projectId))!
+    const downstreamOffer = await fixture.service.createTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_dependency_accepted_offer',
+      idempotencyKey: 'idem_dependency_accepted_offer',
+      projectId: acceptedProject.projectId,
+      expectedProjectRevision: acceptedProject.revision,
+      expectedCoordinatorAuthorityEpoch: acceptedProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: acceptedProject.executionAuthorityEpoch,
+      projectPlanId: fixture.launch.confirmed.projectPlanId,
+      expectedPlanRevision: fixture.launch.confirmed.revision,
+      planItemId: downstreamPlanItemId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })
+    expect(downstreamOffer.task).toMatchObject({
+      dependencyTaskIds: [sourceOffer.task.taskId],
+      fileIntent: {
+        schemaVersion: 1,
+        inputs: [{
+          kind: 'content-space.input-file',
+          locator: sourceLocator,
+          destinationName: dependencyInput.destinationName,
+          expectedSemanticRevision: null,
+          expectedMediaType: null
+        }],
+        output: downstreamDeclaration.output,
+        bindingRevision: fixture.binding.revision
+      }
+    })
+
+    const currentBinding = (await fixture.repository.getProjectContentSpaceBinding(
+      sourceProject.projectId
+    ))!
+    const replacementRoot = {
+      ...fixture.rootLocator,
+      identity: { containerId: 'dependency-replacement-root' }
+    }
+    await fixture.repository.transaction(async (tx) => {
+      await tx.upsertProjectContentSpaceBinding({
+        ...currentBinding,
+        rootLocator: replacementRoot,
+        rootLocatorDigest: stableDigest(replacementRoot),
+        revision: currentBinding.revision + 1,
+        updatedAt: at.toISOString()
+      }, currentBinding.revision)
+    })
+    const staleProject = (await fixture.repository.getProject(sourceProject.projectId))!
+    await expect(fixture.service.createTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_dependency_stale_offer',
+      idempotencyKey: 'idem_dependency_stale_offer',
+      projectId: staleProject.projectId,
+      expectedProjectRevision: staleProject.revision,
+      expectedCoordinatorAuthorityEpoch: staleProject.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: staleProject.executionAuthorityEpoch,
+      projectPlanId: fixture.launch.confirmed.projectPlanId,
+      expectedPlanRevision: fixture.launch.confirmed.revision,
+      planItemId: staleDownstreamPlanItemId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+    expect(await fixture.repository.getTask(canonicalTaskIdForPlanItem(
+      fixture.launch.confirmed.projectPlanId,
+      staleDownstreamPlanItemId
+    ))).toBeNull()
   })
 
   it('replays one Project for the same business command when only request correlation changes', async () => {
@@ -2190,7 +2523,7 @@ describe('vNext Cloud application service', () => {
       status: 'paused'
     })
     const fileIntent = {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       inputs: [{
         kind: 'content-space.input-file' as const,
         locator: {
@@ -2203,6 +2536,7 @@ describe('vNext Cloud application service', () => {
         expectedSemanticRevision: null,
         expectedMediaType: 'text/markdown'
       }],
+      dependencyInputs: [],
       output: {
         kind: 'content-space.output-new' as const,
         target: 'project-binding-root' as const,
@@ -3667,7 +4001,8 @@ describe('vNext Cloud application service', () => {
       executionId: null,
       workerUserId: fixture.owner.userId,
       offeredByCoordinatorAgentId: fixture.nextCoordinatorAgent.agentId,
-      state: 'pending'
+      state: 'pending',
+      reassignmentTaskRevision: null
     })
 
     const fresh = await fixture.service.readProjectCoordination(fixture.owner.user, {
@@ -3714,7 +4049,12 @@ describe('vNext Cloud application service', () => {
     const fixture = await activeTextOfferFixture('user-offer-device-claim')
     expect(fixture.offered).toMatchObject({
       task: { currentExecutionId: null, executionCount: 0, status: 'offered' },
-      offer: { executionId: null, workerUserId: fixture.firstWorker.userId, state: 'pending' }
+      offer: {
+        executionId: null,
+        workerUserId: fixture.firstWorker.userId,
+        state: 'pending',
+        reassignmentTaskRevision: null
+      }
     })
     expect(await fixture.repository.listTaskExecutionsByProject(
       fixture.activeProject.projectId,
@@ -3774,7 +4114,11 @@ describe('vNext Cloud application service', () => {
         offeredByCoordinatorAgentId: fixture.coordinator.agentId,
         state: 'accepted'
       },
-      offer: { executionId: claimed.execution.executionId, state: 'accepted' }
+      offer: {
+        executionId: claimed.execution.executionId,
+        state: 'accepted',
+        reassignmentTaskRevision: null
+      }
     })
 
     await expect(fixture.service.acceptTaskOffer(fixture.secondWorkerAgent, {
@@ -3798,6 +4142,139 @@ describe('vNext Cloud application service', () => {
       payload.taskOfferId === fixture.offered.offer.taskOfferId &&
       payload.claimedByAgentId === fixture.firstWorkerAgent.agentId
     ))).toBe(true)
+  })
+
+  it('lets the selected Worker reject without an execution and reassigns only from the causal terminal offer', async () => {
+    const fixture = await activeTextOfferFixture('worker-reject-causal-reassign')
+    const rejectionFacts = {
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    }
+    await expect(fixture.service.rejectTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reject',
+      requestId: 'req_worker_reject_wrong_user',
+      idempotencyKey: 'idem_worker_reject_wrong_user',
+      ...rejectionFacts
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const rejected = await fixture.service.rejectTaskOffer(fixture.secondWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reject',
+      requestId: 'req_worker_reject_current',
+      idempotencyKey: 'idem_worker_reject_current',
+      ...rejectionFacts
+    })
+    expect(rejected.task).toMatchObject({
+      status: 'revision_requested',
+      currentExecutionId: null,
+      currentExecutionState: null,
+      executionCount: 0
+    })
+    expect(rejected.offer).toMatchObject({
+      state: 'rejected',
+      executionId: null,
+      reassignmentTaskRevision: rejected.task.revision,
+      respondedAt: at.toISOString()
+    })
+    expect(await fixture.repository.listTaskExecutionsByProject(
+      fixture.activeProject.projectId,
+      null,
+      10
+    )).toEqual([])
+
+    for (const [agent, audience] of [
+      [fixture.coordinator, 'coordinator'],
+      [fixture.firstWorkerAgent, 'worker'],
+      [fixture.secondWorkerAgent, 'worker']
+    ] as const) {
+      const inbox = await fixture.service.pullInbox(agent, { afterSequence: 0, limit: 100 })
+      const closed = inbox.messages.find(({ payload }) => (
+        payload.type === 'task.offer.closed' &&
+        payload.taskOfferId === rejected.offer.taskOfferId &&
+        payload.outcome === 'rejected'
+      ))
+      expect(closed?.payload).toMatchObject({
+        audience,
+        taskRevision: rejected.task.revision,
+        offerRevision: rejected.offer.revision
+      })
+    }
+
+    const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    const successor = await fixture.service.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_worker_reject_reassign',
+      idempotencyKey: 'idem_worker_reject_reassign',
+      taskId: rejected.task.taskId,
+      previousTaskOfferId: rejected.offer.taskOfferId,
+      expectedPreviousOfferRevision: rejected.offer.revision,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: rejected.task.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      workerUserId: fixture.owner.userId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString(),
+      nextFileIntent: null
+    })
+    expect(successor.offer).toMatchObject({
+      state: 'pending',
+      executionId: null,
+      reassignmentTaskRevision: null
+    })
+
+    const withdrawn = await fixture.service.withdrawTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.withdraw',
+      requestId: 'req_worker_reject_successor_withdraw',
+      idempotencyKey: 'idem_worker_reject_successor_withdraw',
+      taskOfferId: successor.offer.taskOfferId,
+      taskId: successor.task.taskId,
+      expectedTaskRevision: successor.task.revision,
+      expectedOfferRevision: successor.offer.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      reason: 'Create a later terminal offer to prove the causal revision fence.'
+    })
+    expect(withdrawn.offer.reassignmentTaskRevision).toBe(withdrawn.task.revision)
+
+    await expect(fixture.service.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_worker_reject_stale_reassign',
+      idempotencyKey: 'idem_worker_reject_stale_reassign',
+      taskId: withdrawn.task.taskId,
+      previousTaskOfferId: rejected.offer.taskOfferId,
+      expectedPreviousOfferRevision: rejected.offer.revision,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: withdrawn.task.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      workerUserId: fixture.firstWorker.userId,
+      offerExpiresAt: new Date(at.getTime() + 120_000).toISOString(),
+      nextFileIntent: null
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+
+    await expect(fixture.service.reassignTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.reassign',
+      requestId: 'req_worker_reject_fresh_reassign',
+      idempotencyKey: 'idem_worker_reject_fresh_reassign',
+      taskId: withdrawn.task.taskId,
+      previousTaskOfferId: withdrawn.offer.taskOfferId,
+      expectedPreviousOfferRevision: withdrawn.offer.revision,
+      expectedProjectRevision: project.revision,
+      expectedTaskRevision: withdrawn.task.revision,
+      expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: project.executionAuthorityEpoch,
+      workerUserId: fixture.firstWorker.userId,
+      offerExpiresAt: new Date(at.getTime() + 120_000).toISOString(),
+      nextFileIntent: null
+    })).resolves.toMatchObject({
+      offer: { state: 'pending', reassignmentTaskRevision: null }
+    })
   })
 
   it.each([
@@ -3958,7 +4435,11 @@ describe('vNext Cloud application service', () => {
       currentExecutionState: null,
       executionCount: 0
     })
-    expect(timedOutOffer).toMatchObject({ state: 'timed_out', executionId: null })
+    expect(timedOutOffer).toMatchObject({
+      state: 'timed_out',
+      executionId: null,
+      reassignmentTaskRevision: timedOutTask.revision
+    })
     expect(timedOutOffer.respondedAt).toBe('2026-08-24T08:01:00.001Z')
 
     const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
@@ -3978,7 +4459,11 @@ describe('vNext Cloud application service', () => {
       offerExpiresAt: new Date(at.getTime() + 120_000).toISOString(),
       nextFileIntent: null
     })
-    expect(reassigned.offer).toMatchObject({ state: 'pending', executionId: null })
+    expect(reassigned.offer).toMatchObject({
+      state: 'pending',
+      executionId: null,
+      reassignmentTaskRevision: null
+    })
     expect((await fixture.repository.listTaskExecutionsByProject(project.projectId, null, 10))).toEqual([])
 
     await expect(recoveredService.acceptTaskOffer(fixture.firstWorkerAgent, {
@@ -4170,7 +4655,11 @@ describe('vNext Cloud application service', () => {
     const withdrawn = await fixture.service.withdrawTaskOffer(fixture.coordinator, command)
     await expect(fixture.service.withdrawTaskOffer(fixture.coordinator, command)).resolves.toEqual(withdrawn)
     expect(withdrawn.task.currentExecutionId).toBeNull()
-    expect(withdrawn.offer).toMatchObject({ state: 'withdrawn', executionId: null })
+    expect(withdrawn.offer).toMatchObject({
+      state: 'withdrawn',
+      executionId: null,
+      reassignmentTaskRevision: withdrawn.task.revision
+    })
 
     const currentProject = (await fixture.repository.getProject(project.projectId))!
     const successor = await fixture.service.reassignTaskOffer(fixture.coordinator, {
@@ -4201,6 +4690,220 @@ describe('vNext Cloud application service', () => {
       expectedTaskRevision: successor.task.revision,
       expectedOfferRevision: withdrawn.offer.revision
     })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it.each([
+    {
+      label: 'retryable',
+      maxTaskRetries: 1,
+      expectedTaskStatus: 'revision_requested' as const,
+      expectedCompletedAt: null,
+      retryable: true
+    },
+    {
+      label: 'budget-exhausted',
+      maxTaskRetries: 0,
+      expectedTaskStatus: 'failed' as const,
+      expectedCompletedAt: at.toISOString(),
+      retryable: false
+    }
+  ])('durably fences a $label failed execution and notifies the Coordinator', async ({
+    label,
+    maxTaskRetries,
+    expectedTaskStatus,
+    expectedCompletedAt,
+    retryable
+  }) => {
+    const fixture = await activeTextOfferFixture(`task-failure-${label}`, maxTaskRetries)
+    const requestLabel = label.replaceAll('-', '_')
+    const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: `req_task_failure_${requestLabel}_accept`,
+      idempotencyKey: `idem_task_failure_${requestLabel}_accept`,
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    })
+    const running = await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: `req_task_failure_${requestLabel}_start`,
+      idempotencyKey: `idem_task_failure_${requestLabel}_start`,
+      taskId: accepted.task.taskId,
+      executionId: accepted.execution.executionId,
+      expectedTaskRevision: accepted.task.revision,
+      expectedExecutionRevision: accepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+    const safeFailureCode = retryable ? 'runtime_transient' : 'retry_budget_exhausted'
+    const safeMessage = retryable
+      ? 'The Runtime reported a retryable failure.'
+      : 'The Runtime failed after the Task retry budget was exhausted.'
+    const failed = await fixture.service.failTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.fail',
+      requestId: `req_task_failure_${requestLabel}_fail`,
+      idempotencyKey: `idem_task_failure_${requestLabel}_fail`,
+      taskId: running.task.taskId,
+      executionId: running.execution.executionId,
+      expectedTaskRevision: running.task.revision,
+      expectedExecutionRevision: running.execution.revision,
+      safeFailureCode,
+      safeMessage,
+      failedAt: at.toISOString()
+    })
+
+    expect(failed.task).toMatchObject({
+      taskId: running.task.taskId,
+      currentExecutionId: running.execution.executionId,
+      currentExecutionState: 'failed',
+      status: expectedTaskStatus,
+      completedAt: expectedCompletedAt,
+      revision: running.task.revision + 1
+    })
+    expect(failed.execution).toMatchObject({
+      executionId: running.execution.executionId,
+      state: 'failed',
+      terminalAt: at.toISOString(),
+      revision: running.execution.revision + 1,
+      fence: {
+        status: 'fenced',
+        reason: 'execution_failed',
+        fencedAt: at.toISOString()
+      }
+    })
+    expect(await fixture.repository.getTask(failed.task.taskId)).toEqual(failed.task)
+    expect(await fixture.repository.getTaskExecution(failed.execution.executionId))
+      .toEqual(failed.execution)
+
+    const inbox = await fixture.service.pullInbox(fixture.coordinator, {
+      afterSequence: 0,
+      limit: 100
+    })
+    expect(inbox.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        recipient: { kind: 'agent', id: fixture.coordinator.agentId },
+        messageType: 'task.execution.failed',
+        payload: {
+          protocolVersion: '1.0',
+          type: 'task.execution.failed',
+          projectId: fixture.activeProject.projectId,
+          taskId: failed.task.taskId,
+          executionId: failed.execution.executionId,
+          taskRevision: failed.task.revision,
+          executionRevision: failed.execution.revision,
+          taskStatus: expectedTaskStatus,
+          retryable,
+          safeFailureCode,
+          safeMessage
+        }
+      })
+    ]))
+  })
+
+  it('reassigns a retryable failed execution while preserving the terminal execution fact', async () => {
+    const fixture = await retryableFailedTextOfferFixture('reassign-retryable-failure')
+    const reassigned = await fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await currentReassignCommand(fixture, 'reassign_retryable_failure')
+    )
+
+    expect(reassigned.task).toMatchObject({
+      status: 'offered',
+      currentExecutionId: null,
+      currentExecutionState: null,
+      executionCount: 1
+    })
+    expect(reassigned.offer).toMatchObject({ state: 'pending', executionId: null })
+    expect(await fixture.repository.getTaskExecution(fixture.failed.execution.executionId))
+      .toEqual(fixture.failed.execution)
+  })
+
+  it('rejects reassignment when the Task terminal-state projection differs from the execution fact', async () => {
+    const fixture = await retryableFailedTextOfferFixture('reassign-state-projection-mismatch')
+    await fixture.repository.transaction(async (tx) => {
+      const task = (await tx.getTaskForUpdate(fixture.failed.task.taskId))!
+      await tx.updateTask({
+        ...task,
+        currentExecutionState: 'cancelled',
+        revision: task.revision + 1,
+        updatedAt: at.toISOString()
+      }, task.revision)
+    })
+
+    await expect(fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await currentReassignCommand(fixture, 'reassign_state_projection_mismatch')
+    )).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it('rejects reassignment when the terminal execution belongs to another Project', async () => {
+    const fixture = await retryableFailedTextOfferFixture('reassign-execution-project-mismatch')
+    const mismatchedExecutionId = `exe_${stableDigest('reassign-project-mismatch-execution').slice(0, 32)}`
+    const mismatchedProjectId = `prj_${stableDigest('reassign-project-mismatch-project').slice(0, 32)}`
+    await fixture.repository.transaction(async (tx) => {
+      const task = (await tx.getTaskForUpdate(fixture.failed.task.taskId))!
+      const offer = (await tx.getTaskOfferForUpdate(fixture.accepted.offer.taskOfferId))!
+      await tx.insertTaskExecution({
+        ...fixture.failed.execution,
+        executionId: mismatchedExecutionId,
+        projectId: mismatchedProjectId,
+        fence: {
+          ...fixture.failed.execution.fence,
+          executionId: mismatchedExecutionId
+        }
+      })
+      await tx.updateTaskOffer({
+        ...offer,
+        executionId: mismatchedExecutionId,
+        revision: offer.revision + 1,
+        updatedAt: at.toISOString()
+      }, offer.revision)
+      await tx.updateTask({
+        ...task,
+        currentExecutionId: mismatchedExecutionId,
+        revision: task.revision + 1,
+        updatedAt: at.toISOString()
+      }, task.revision)
+    })
+
+    await expect(fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await currentReassignCommand(fixture, 'reassign_execution_project_mismatch')
+    )).rejects.toMatchObject({ code: 'invalid_state_transition' })
+  })
+
+  it('rejects reassignment after the Task retry budget is exhausted', async () => {
+    const fixture = await activeTextOfferFixture('reassign-budget-exhausted', 0)
+    const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_reassign_budget_exhausted_accept',
+      idempotencyKey: 'idem_reassign_budget_exhausted_accept',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    })
+    const currentAgent = (await fixture.repository.getAgent(fixture.firstWorkerAgent.agentId))!
+    await fixture.service.revokeAgent(fixture.firstWorker.user, {
+      agentId: currentAgent.agentId,
+      expectedRevision: currentAgent.revision,
+      idempotencyKey: 'idem_reassign_budget_exhausted_revoke'
+    })
+    expect(await fixture.repository.getTask(accepted.task.taskId)).toMatchObject({
+      status: 'revision_requested',
+      currentExecutionState: 'revoked',
+      executionCount: 1,
+      maxRetries: 0
+    })
+
+    await expect(fixture.service.reassignTaskOffer(
+      fixture.coordinator,
+      await currentReassignCommand(fixture, 'reassign_budget_exhausted')
+    )).rejects.toMatchObject({ code: 'budget_exhausted' })
   })
 
   it('creates a fresh execution after Agent authority revoke and leaves the revoked execution immutable', async () => {
@@ -4381,6 +5084,322 @@ describe('vNext Cloud application service', () => {
       nextTaskOfferId: reviewed.review.nextTaskOfferId
     })])
     expect(records).toEqual([])
+  })
+
+  it('rejects final summary while a confirmed dependent Plan item has no canonical accepted Task', async () => {
+    const fixture = await activeTextOfferFixture('final-summary-plan-coverage', 2, [{
+      planItemId: 'item_workflow_dependent',
+      title: 'Consume the accepted root result',
+      objective: 'Finish the confirmed dependent Plan item before Project completion.',
+      completionCriteria: ['The dependent result is explicitly accepted.'],
+      dependencyPlanItemIds: ['item_workflow_task'],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: null
+    }])
+    const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_final_summary_plan_coverage_accept',
+      idempotencyKey: 'idem_final_summary_plan_coverage_accept',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision
+    })
+    const running = await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.execution.start',
+      requestId: 'req_final_summary_plan_coverage_start',
+      idempotencyKey: 'idem_final_summary_plan_coverage_start',
+      taskId: accepted.task.taskId,
+      executionId: accepted.execution.executionId,
+      expectedTaskRevision: accepted.task.revision,
+      expectedExecutionRevision: accepted.execution.revision,
+      startedAt: at.toISOString()
+    })
+    const resultFacts = {
+      taskId: running.task.taskId,
+      executionId: running.execution.executionId,
+      expectedTaskRevision: running.task.revision,
+      expectedExecutionRevision: running.execution.revision,
+      summary: 'The root Plan item completed, but its confirmed dependent is still pending.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_final_summary_plan_coverage_worker',
+        modelId: null,
+        startedAt: at.toISOString(),
+        completedAt: at.toISOString()
+      },
+      outputs: [],
+      recoveryJournalEntryIds: []
+    }
+    const result = await fixture.service.submitTaskResult(fixture.firstWorkerAgent, {
+      protocolVersion: '1.0',
+      type: 'task.result.submit',
+      requestId: 'req_final_summary_plan_coverage_submit',
+      idempotencyKey: 'idem_final_summary_plan_coverage_submit',
+      ...resultFacts,
+      submissionDigest: stableDigest(resultFacts)
+    })
+    const currentProject = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+    await fixture.service.reviewTaskResult(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.result.review',
+      requestId: 'req_final_summary_plan_coverage_review',
+      idempotencyKey: 'idem_final_summary_plan_coverage_review',
+      projectId: currentProject.projectId,
+      taskId: result.task.taskId,
+      executionId: result.execution.executionId,
+      resultSubmissionId: result.submission.resultSubmissionId,
+      expectedProjectRevision: currentProject.revision,
+      expectedTaskRevision: result.task.revision,
+      expectedExecutionRevision: result.execution.revision,
+      expectedResultRevision: result.submission.revision,
+      expectedCoordinatorAuthorityEpoch: currentProject.coordinatorAuthorityEpoch,
+      decision: 'accept',
+      instruction: null,
+      nextWorkerUserId: null,
+      nextOfferExpiresAt: null,
+      nextFileIntent: null
+    })
+    const projectBefore = (await fixture.repository.getProject(currentProject.projectId))!
+    const recordsBefore = await fixture.repository.listProjectRecords(currentProject.projectId, true)
+    expect(await fixture.repository.getTask(canonicalTaskIdForPlanItem(
+      fixture.confirmedPlan.projectPlanId,
+      'item_workflow_dependent'
+    ))).toBeNull()
+
+    await expect(fixture.service.submitProjectFinalSummary(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.final_summary.submit',
+      requestId: 'req_final_summary_plan_coverage_complete',
+      idempotencyKey: 'idem_final_summary_plan_coverage_complete',
+      projectId: currentProject.projectId,
+      expectedProjectRevision: projectBefore.revision,
+      expectedCoordinatorAuthorityEpoch: projectBefore.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectBefore.executionAuthorityEpoch,
+      projectPlanId: fixture.confirmedPlan.projectPlanId,
+      confirmedPlanRevision: fixture.confirmedPlan.planRevision,
+      acceptedResultSubmissionIds: [result.submission.resultSubmissionId],
+      summary: 'This summary must wait for every confirmed Plan item.'
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    expect(await fixture.repository.getProject(currentProject.projectId)).toEqual(projectBefore)
+    expect(await fixture.repository.listProjectFinalSummaries(currentProject.projectId)).toEqual([])
+    expect(await fixture.repository.listProjectRecords(currentProject.projectId, true)).toEqual(recordsBefore)
+  })
+
+  it('completes the current confirmed Plan without citing immutable Tasks from a superseded Plan', async () => {
+    const fixture = await activeTextOfferFixture('final-summary-superseded-plan')
+    const completeAcceptedTask = async (
+      offered: Awaited<ReturnType<typeof fixture.service.createTaskOffer>>,
+      label: string
+    ) => {
+      const accepted = await fixture.service.acceptTaskOffer(fixture.firstWorkerAgent, {
+        protocolVersion: '1.0',
+        type: 'task.offer.accept',
+        requestId: `req_${label}_accept`,
+        idempotencyKey: `idem_${label}_accept`,
+        taskOfferId: offered.offer.taskOfferId,
+        taskId: offered.task.taskId,
+        expectedTaskRevision: offered.task.revision,
+        expectedOfferRevision: offered.offer.revision
+      })
+      const running = await fixture.service.startTaskExecution(fixture.firstWorkerAgent, {
+        protocolVersion: '1.0',
+        type: 'task.execution.start',
+        requestId: `req_${label}_start`,
+        idempotencyKey: `idem_${label}_start`,
+        taskId: accepted.task.taskId,
+        executionId: accepted.execution.executionId,
+        expectedTaskRevision: accepted.task.revision,
+        expectedExecutionRevision: accepted.execution.revision,
+        startedAt: at.toISOString()
+      })
+      const resultFacts = {
+        taskId: running.task.taskId,
+        executionId: running.execution.executionId,
+        expectedTaskRevision: running.task.revision,
+        expectedExecutionRevision: running.execution.revision,
+        summary: `${label} produced one bounded accepted result.`,
+        runtimeProvenance: {
+          runtimeId: `runtime_${label}_worker`,
+          modelId: null,
+          startedAt: at.toISOString(),
+          completedAt: at.toISOString()
+        },
+        outputs: [],
+        recoveryJournalEntryIds: []
+      }
+      const result = await fixture.service.submitTaskResult(fixture.firstWorkerAgent, {
+        protocolVersion: '1.0',
+        type: 'task.result.submit',
+        requestId: `req_${label}_submit`,
+        idempotencyKey: `idem_${label}_submit`,
+        ...resultFacts,
+        submissionDigest: stableDigest(resultFacts)
+      })
+      const project = (await fixture.repository.getProject(fixture.activeProject.projectId))!
+      await fixture.service.reviewTaskResult(fixture.coordinator, {
+        protocolVersion: '1.0',
+        type: 'task.result.review',
+        requestId: `req_${label}_review`,
+        idempotencyKey: `idem_${label}_review`,
+        projectId: project.projectId,
+        taskId: result.task.taskId,
+        executionId: result.execution.executionId,
+        resultSubmissionId: result.submission.resultSubmissionId,
+        expectedProjectRevision: project.revision,
+        expectedTaskRevision: result.task.revision,
+        expectedExecutionRevision: result.execution.revision,
+        expectedResultRevision: result.submission.revision,
+        expectedCoordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+        decision: 'accept',
+        instruction: null,
+        nextWorkerUserId: null,
+        nextOfferExpiresAt: null,
+        nextFileIntent: null
+      })
+      return result
+    }
+
+    const supersededResult = await completeAcceptedTask(fixture.offered, 'superseded_plan_task')
+    const projectAfterHistoricalTask = (await fixture.repository.getProject(
+      fixture.activeProject.projectId
+    ))!
+    const paused = await fixture.service.transitionProject(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: 'req_final_summary_superseded_plan_pause',
+      idempotencyKey: 'idem_final_summary_superseded_plan_pause',
+      projectId: projectAfterHistoricalTask.projectId,
+      expectedRevision: projectAfterHistoricalTask.revision,
+      expectedCoordinatorAuthorityEpoch: projectAfterHistoricalTask.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectAfterHistoricalTask.executionAuthorityEpoch,
+      status: 'paused'
+    })
+    const currentTasks = [{
+      workerUserId: fixture.firstWorker.user.userId,
+      planItemId: 'item_current_plan_task',
+      title: 'Complete the replacement Plan',
+      objective: 'Produce the only result required by the current confirmed Plan.',
+      completionCriteria: ['The current Plan result is accepted.'],
+      dependencyPlanItemIds: [],
+      requiredCapabilityTags: ['research.execute'],
+      fileIntent: null
+    }]
+    const currentPlanFacts = {
+      projectId: paused.projectId,
+      expectedProjectRevision: paused.revision,
+      expectedCoordinatorAuthorityEpoch: paused.coordinatorAuthorityEpoch,
+      supersedesProjectPlanId: fixture.confirmedPlan.projectPlanId,
+      sourceInputLocators: [],
+      tasks: currentTasks,
+      rationale: 'Replace the completed historical Plan with one current bounded Task.',
+      runtimeProvenance: {
+        runtimeId: 'runtime_final_summary_superseded_plan_coordinator',
+        modelId: null,
+        generatedByCoordinatorAgentId: fixture.coordinator.agentId,
+        generatedAt: at.toISOString()
+      }
+    }
+    const submittedPlan = await fixture.service.submitProjectPlan(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.plan.submit',
+      requestId: 'req_final_summary_superseded_plan_submit',
+      idempotencyKey: 'idem_final_summary_superseded_plan_submit',
+      ...currentPlanFacts,
+      planDigest: stableDigest(currentPlanFacts)
+    })
+    const projectAfterPlan = (await fixture.repository.getProject(paused.projectId))!
+    const currentPlan = await fixture.service.confirmProjectPlan(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.plan.confirm',
+      requestId: 'req_final_summary_superseded_plan_confirm',
+      idempotencyKey: 'idem_final_summary_superseded_plan_confirm',
+      projectId: projectAfterPlan.projectId,
+      projectPlanId: submittedPlan.projectPlanId,
+      expectedProjectRevision: projectAfterPlan.revision,
+      expectedCoordinatorAuthorityEpoch: projectAfterPlan.coordinatorAuthorityEpoch,
+      expectedPlanRevision: submittedPlan.revision,
+      planDigest: submittedPlan.planDigest,
+      initialTeam: null
+    })
+    const projectAfterConfirmation = (await fixture.repository.getProject(paused.projectId))!
+    const active = await fixture.service.transitionProject(fixture.owner.user, {
+      protocolVersion: '1.0',
+      type: 'project.transition',
+      requestId: 'req_final_summary_superseded_plan_activate',
+      idempotencyKey: 'idem_final_summary_superseded_plan_activate',
+      projectId: projectAfterConfirmation.projectId,
+      expectedRevision: projectAfterConfirmation.revision,
+      expectedCoordinatorAuthorityEpoch: projectAfterConfirmation.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectAfterConfirmation.executionAuthorityEpoch,
+      status: 'active'
+    })
+    const offered = await fixture.service.createTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.create',
+      requestId: 'req_final_summary_superseded_plan_offer',
+      idempotencyKey: 'idem_final_summary_superseded_plan_offer',
+      projectId: active.projectId,
+      expectedProjectRevision: active.revision,
+      expectedCoordinatorAuthorityEpoch: active.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: active.executionAuthorityEpoch,
+      projectPlanId: currentPlan.projectPlanId,
+      expectedPlanRevision: currentPlan.revision,
+      planItemId: currentTasks[0]!.planItemId,
+      offerExpiresAt: new Date(at.getTime() + 60_000).toISOString()
+    })
+    const currentResult = await completeAcceptedTask(offered, 'current_plan_task')
+    const projectBeforeExtraCitation = (await fixture.repository.getProject(active.projectId))!
+    const recordsBeforeExtraCitation = await fixture.repository.listProjectRecords(active.projectId, true)
+
+    await expect(fixture.service.submitProjectFinalSummary(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.final_summary.submit',
+      requestId: 'req_final_summary_superseded_plan_extra',
+      idempotencyKey: 'idem_final_summary_superseded_plan_extra',
+      projectId: active.projectId,
+      expectedProjectRevision: projectBeforeExtraCitation.revision,
+      expectedCoordinatorAuthorityEpoch: projectBeforeExtraCitation.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectBeforeExtraCitation.executionAuthorityEpoch,
+      projectPlanId: currentPlan.projectPlanId,
+      confirmedPlanRevision: currentPlan.planRevision,
+      acceptedResultSubmissionIds: [
+        supersededResult.submission.resultSubmissionId,
+        currentResult.submission.resultSubmissionId
+      ],
+      summary: 'A current final summary must not cite a superseded Plan result.'
+    })).rejects.toMatchObject({ code: 'invalid_state_transition' })
+
+    expect(await fixture.repository.getProject(active.projectId)).toEqual(projectBeforeExtraCitation)
+    expect(await fixture.repository.listProjectFinalSummaries(active.projectId)).toEqual([])
+    expect(await fixture.repository.listProjectRecords(active.projectId, true))
+      .toEqual(recordsBeforeExtraCitation)
+
+    const completed = await fixture.service.submitProjectFinalSummary(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'project.final_summary.submit',
+      requestId: 'req_final_summary_superseded_plan_complete',
+      idempotencyKey: 'idem_final_summary_superseded_plan_complete',
+      projectId: active.projectId,
+      expectedProjectRevision: projectBeforeExtraCitation.revision,
+      expectedCoordinatorAuthorityEpoch: projectBeforeExtraCitation.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectBeforeExtraCitation.executionAuthorityEpoch,
+      projectPlanId: currentPlan.projectPlanId,
+      confirmedPlanRevision: currentPlan.planRevision,
+      acceptedResultSubmissionIds: [currentResult.submission.resultSubmissionId],
+      summary: 'The current confirmed Plan completed without citing immutable historical Tasks.'
+    })
+
+    expect(completed.project.status).toBe('completed')
+    expect(completed.finalSummary.acceptedResultSubmissionIds)
+      .toEqual([currentResult.submission.resultSubmissionId])
+    expect((await fixture.repository.listProjectPlans(active.projectId)).map(({ state }) => state))
+      .toEqual(['superseded', 'confirmed'])
+    expect(await fixture.repository.getTask(supersededResult.task.taskId)).toMatchObject({
+      status: 'completed'
+    })
   })
 
   it('keeps Worker HumanNeeded execution-bound and runs review before Coordinator decision/completion', async () => {

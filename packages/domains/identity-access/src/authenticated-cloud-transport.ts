@@ -11,7 +11,7 @@ import {
 
 export const AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID =
   'sciforge.authenticated-cloud-transport' as const
-export const AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION = '2.0.0' as const
+export const AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION = '3.0.0' as const
 export const AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID = 'sciforge.cloud.command' as const
 
 const publicAuthenticatedCloudCommandSchema = restRequestSchema.superRefine(
@@ -66,7 +66,8 @@ export const authenticatedCloudTransportStatusSchema = z.discriminatedUnion('sta
     state: z.literal('ready'),
     baseUrl: z.url().max(2_048),
     userId: userIdSchema,
-    deviceId: deviceIdSchema
+    deviceId: deviceIdSchema,
+    deviceRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
   }).strict().readonly(),
   z.object({
     state: z.literal('identity_required'),

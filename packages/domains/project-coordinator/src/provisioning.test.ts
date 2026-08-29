@@ -859,7 +859,8 @@ function unusedTransport(): AuthenticatedCloudTransport {
       state: 'ready',
       baseUrl: 'https://cloud.invalid/',
       userId: ownerUserId,
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async () => { throw new Error('No Cloud write is expected.') }
   }
@@ -888,7 +889,8 @@ function cloudHarness(): Readonly<{
       state: 'ready',
       baseUrl: 'https://cloud.invalid/',
       userId: ownerUserId,
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async (request): Promise<AuthenticatedCloudResponse> => {
       const payload = request.payload
@@ -1015,7 +1017,8 @@ function membershipCloudHarness(state: 'invited' | 'active'): Readonly<{
       state: 'ready',
       baseUrl: 'https://cloud.invalid/',
       userId: ownerUserId,
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async (request) => {
       if (request.payload.type !== 'project.membership.add') {
@@ -1055,7 +1058,8 @@ function membershipRemovalCloudHarness(
       state: 'ready',
       baseUrl: 'https://cloud.invalid/',
       userId: ownerUserId,
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async (request) => {
       if (request.payload.type !== 'project.membership.remove') {
@@ -1095,7 +1099,8 @@ function membershipAcceptanceCloudHarness(
       state: 'ready',
       baseUrl: 'https://cloud.invalid/',
       userId: workerUserId,
-      deviceId: 'dev_WorkerDevice01'
+      deviceId: 'dev_WorkerDevice01',
+      deviceRevision: 1
     }),
     execute: async (request) => {
       if (request.payload.type !== 'project.membership.accept') {

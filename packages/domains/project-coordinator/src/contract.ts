@@ -57,6 +57,7 @@ const safeReasonSchema = z.string().trim().min(1).max(2_000)
 export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   workspaceRead: 'project-coordinator.workspace.read',
   projectCreate: 'project-coordinator.project.create',
+  projectActivationAcknowledge: 'project-coordinator.project-activation.acknowledge',
   sessionProjectionRead: 'project-coordinator.session-projection.read',
   planDraftRead: 'project-coordinator.plan-draft.read',
   planDraftGenerate: 'project-coordinator.plan-draft.generate',
@@ -65,9 +66,9 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   planConfirm: 'project-coordinator.plan.confirm',
   workflowPrepare: 'project-coordinator.workflow.prepare',
   workflowContinue: 'project-coordinator.workflow.continue',
+  taskOfferReassign: 'project-coordinator.task-offer.reassign',
   contentRecoveryObserveLink: 'project-coordinator.content-recovery.observe-link',
   contentRecoveryAbandon: 'project-coordinator.content-recovery.abandon',
-  contentRecoveryRetrySuccessor: 'project-coordinator.content-recovery.retry-successor',
   membershipAdd: 'project-coordinator.membership.add',
   membershipAccept: 'project-coordinator.membership.accept',
   membershipRemove: 'project-coordinator.membership.remove',
@@ -159,10 +160,26 @@ export const projectCoordinatorSessionBindingSchema = z.discriminatedUnion('role
   projectCoordinatorWorkerSessionBindingSchema
 ])
 
+export const projectCoordinatorOrdinarySessionSchema = z.object({
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512)
+}).strict().readonly()
+
+export const projectCoordinatorActivationRequestIdSchema = z.string()
+  .regex(/^pca_[A-Za-z0-9]{12,64}$/u)
+
+export const projectCoordinatorPendingActivationSchema = z.object({
+  activationRequestId: projectCoordinatorActivationRequestIdSchema,
+  projectId: projectIdSchema,
+  coordinatorSession: projectCoordinatorOrdinarySessionSchema,
+  requestedAt: timestampSchema
+}).strict().readonly()
+
 export const projectCoordinatorSessionProjectionSchema = z.object({
   schemaVersion: z.literal(1),
   observedAt: timestampSchema,
-  bindings: z.array(projectCoordinatorSessionBindingSchema).max(100_000)
+  bindings: z.array(projectCoordinatorSessionBindingSchema).max(100_000),
+  pendingActivations: z.array(projectCoordinatorPendingActivationSchema).max(10_000).default([])
 }).strict().superRefine((projection, context) => {
   const identities = projection.bindings.map(({ runtimeId, threadId }) => (
     `${runtimeId}\u0000${threadId}`
@@ -186,6 +203,14 @@ export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSc
   type: true,
   idempotencyKey: true
 }).readonly()
+
+export const projectCoordinatorActivationAcknowledgeInputSchema = z.object({
+  activationRequestId: projectCoordinatorActivationRequestIdSchema
+}).strict().readonly()
+
+export const projectCoordinatorActivationAcknowledgeResultSchema = z.object({
+  acknowledged: z.literal(true)
+}).strict().readonly()
 
 export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', [
   z.object({
@@ -384,6 +409,20 @@ export const projectCoordinatorWorkflowPrepareInputSchema = z.object({
 
 export const projectCoordinatorWorkflowContinueInputSchema = projectCoordinatorWorkflowPlanSchema
 
+/**
+ * The caller selects only the current Task/offer, successor User, expiry, and
+ * optional output filename. Main derives every Cloud CAS and file-intent fact
+ * from a fresh workspace read.
+ */
+export const projectCoordinatorTaskOfferReassignInputSchema = z.object({
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  previousTaskOfferId: taskOfferSchema.shape.taskOfferId,
+  workerUserId: userIdSchema,
+  offerExpiresAt: timestampSchema,
+  nextOutputFileName: taskFileDestinationNameSchema.nullable().optional()
+}).strict().readonly()
+
 export const projectCoordinatorMembershipAcceptInputSchema = projectMembershipAcceptCommandSchema.omit({
   protocolVersion: true,
   requestId: true,
@@ -402,19 +441,6 @@ export const projectCoordinatorContentRecoveryAbandonInputSchema = z.object({
   reason: safeReasonSchema.refine((reason) => reason.length <= 500, {
     message: 'A recovery abandon reason cannot exceed 500 characters.'
   })
-}).strict().readonly()
-
-/**
- * Human-reviewed recovery choices only. The package re-reads every Task,
- * execution, authority, availability, and file-intent CAS fact before the
- * current Coordinator Agent may create a successor execution.
- */
-export const projectCoordinatorContentRecoveryRetrySuccessorInputSchema = z.object({
-  projectId: projectIdSchema,
-  recoveryActionId: visibleRecoveryActionSchema.shape.recoveryActionId,
-  workerUserId: userIdSchema,
-  nextOutputFileName: taskFileDestinationNameSchema,
-  offerExpiresAt: timestampSchema
 }).strict().readonly()
 
 export const projectCoordinatorMembershipAddInputSchema = z.object({
@@ -915,7 +941,7 @@ export const projectCoordinatorPlanSubmitResultSchema = z.object({
   }
 }).readonly()
 
-export const projectCoordinatorProjectCreateResultSchema = z.object({
+export const projectCoordinatorProjectCreateReceiptSchema = z.object({
   createIntentId: projectCoordinatorProjectCreateInputSchema.unwrap().shape.createIntentId,
   createdProjectId: projectIdSchema,
   workspace: projectCoordinatorWorkspaceSchema
@@ -929,6 +955,29 @@ export const projectCoordinatorProjectCreateResultSchema = z.object({
   }
 }).readonly()
 
+export const projectCoordinatorProjectCreateResultSchema =
+  projectCoordinatorProjectCreateReceiptSchema.unwrap().extend({
+    coordinatorSession: projectCoordinatorOrdinarySessionSchema.unwrap().extend({
+      projectId: projectIdSchema
+    }).strict().readonly(),
+    activationRequestId: projectCoordinatorActivationRequestIdSchema
+  }).strict().superRefine((result, context) => {
+    if (result.workspace.focusedProjectId !== result.createdProjectId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['workspace', 'focusedProjectId'],
+        message: 'Project creation must focus the exact new Project.'
+      })
+    }
+    if (result.coordinatorSession.projectId !== result.createdProjectId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['coordinatorSession', 'projectId'],
+        message: 'Project creation must bind the exact new Project.'
+      })
+    }
+  }).readonly()
+
 export type ProjectCoordinatorConnection = z.infer<typeof projectCoordinatorConnectionSchema>
 export type ProjectCoordinatorCoordinatorSessionBindingRecord = z.infer<
   typeof projectCoordinatorCoordinatorSessionBindingRecordSchema
@@ -939,6 +988,12 @@ export type ProjectCoordinatorSessionBinding = z.infer<
 export type ProjectCoordinatorSessionProjection = z.infer<
   typeof projectCoordinatorSessionProjectionSchema
 >
+export type ProjectCoordinatorPendingActivation = z.infer<
+  typeof projectCoordinatorPendingActivationSchema
+>
+export type ProjectCoordinatorOrdinarySession = z.infer<
+  typeof projectCoordinatorOrdinarySessionSchema
+>
 export type ProjectCoordinatorProject = z.infer<typeof projectCoordinatorProjectSchema>
 export type ProjectCoordinatorWorkspace = z.infer<typeof projectCoordinatorWorkspaceSchema>
 export type ProjectCoordinatorWorkspaceReadInput = z.infer<
@@ -947,8 +1002,14 @@ export type ProjectCoordinatorWorkspaceReadInput = z.infer<
 export type ProjectCoordinatorProjectCreateInput = z.infer<
   typeof projectCoordinatorProjectCreateInputSchema
 >
+export type ProjectCoordinatorProjectCreateReceipt = z.infer<
+  typeof projectCoordinatorProjectCreateReceiptSchema
+>
 export type ProjectCoordinatorProjectCreateResult = z.infer<
   typeof projectCoordinatorProjectCreateResultSchema
+>
+export type ProjectCoordinatorActivationAcknowledgeInput = z.infer<
+  typeof projectCoordinatorActivationAcknowledgeInputSchema
 >
 export type ProjectCoordinatorArtifactReviewPrepareInput = z.infer<
   typeof projectCoordinatorArtifactReviewPrepareInputSchema
@@ -999,6 +1060,9 @@ export type ProjectCoordinatorWorkflowPrepareInput = z.infer<
 export type ProjectCoordinatorWorkflowContinueInput = z.infer<
   typeof projectCoordinatorWorkflowContinueInputSchema
 >
+export type ProjectCoordinatorTaskOfferReassignInput = z.infer<
+  typeof projectCoordinatorTaskOfferReassignInputSchema
+>
 export type ProjectCoordinatorMembershipAcceptInput = z.infer<
   typeof projectCoordinatorMembershipAcceptInputSchema
 >
@@ -1007,9 +1071,6 @@ export type ProjectCoordinatorContentRecoveryObserveLinkInput = z.infer<
 >
 export type ProjectCoordinatorContentRecoveryAbandonInput = z.infer<
   typeof projectCoordinatorContentRecoveryAbandonInputSchema
->
-export type ProjectCoordinatorContentRecoveryRetrySuccessorInput = z.infer<
-  typeof projectCoordinatorContentRecoveryRetrySuccessorInputSchema
 >
 export type ProjectCoordinatorMembershipAddInput = z.infer<
   typeof projectCoordinatorMembershipAddInputSchema

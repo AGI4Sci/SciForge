@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-collaboration",
-  "version": "5.1.0",
+  "version": "6.0.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -24,9 +24,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "4.1.0",
+    "@sciforge/collaboration-contracts": "5.0.0",
     "@sciforge/domain-content-space": "^5.0.0",
-    "@sciforge/domain-identity-access": "^3.0.1",
+    "@sciforge/domain-identity-access": "^4.0.0",
     "@sciforge/domain-sdk": "^0.2.3",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

@@ -150,7 +150,8 @@ const authenticatedCloudTransportDescriptor = defineDomainMainInternalServiceDes
   contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
   allowedConsumerModuleIds: [
     'sciforge.collaboration',
-    'sciforge.project-coordinator'
+    'sciforge.project-coordinator',
+    'sciforge.opencontent-connector'
   ]
 })
 

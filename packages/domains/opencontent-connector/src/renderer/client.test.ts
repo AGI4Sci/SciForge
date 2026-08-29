@@ -93,7 +93,7 @@ describe('OpenContent connection renderer client', () => {
 
     expect(invoke).toHaveBeenNthCalledWith(1, {
       actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
-      effect: 'read',
+      effect: 'external-write',
       inputSchema: openContentConnectionTargetInputSchema,
       outputSchema: openContentConnectionResultSchema
     }, { providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF }, {

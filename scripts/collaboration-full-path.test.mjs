@@ -11,6 +11,7 @@ import {
   canonicalProjectContentProvisioningAttestationFactualPayloadBytes,
   canonicalProjectContentProvisioningAttestationSignatureBytes,
   canonicalProvisionedMemberSetBytes,
+  DEFAULT_TASK_OFFER_TTL_MS,
   PROJECT_COORDINATION_COLLECTIONS
 } from '../packages/collaboration-contracts/src/index.ts'
 import {
@@ -40,12 +41,18 @@ import {
 import { DurableCloudOutbox } from '../packages/domains/collaboration/src/main/outbox.ts'
 import { CollaborationTaskAdapter } from '../packages/domains/collaboration/src/main/task-adapter.ts'
 import {
+  createIdentityAgentCloudRuntime
+} from '../packages/domains/identity-access/src/main/agent-cloud-runtime.ts'
+import {
   createProjectCoordinatorActionPort,
   createProjectCoordinatorCloudWorkspacePort
 } from '../packages/domains/project-coordinator/src/ports.ts'
 import {
   createProjectCoordinatorContinuationPort
 } from '../packages/domains/project-coordinator/src/continuation.ts'
+import {
+  createProjectCoordinatorTaskOfferReassignmentPort
+} from '../packages/domains/project-coordinator/src/task-offer-reassignment.ts'
 import {
   ProjectCoordinatorStateStore
 } from '../packages/domains/project-coordinator/src/state.ts'
@@ -63,7 +70,8 @@ import {
 } from '../test-fixtures/collaboration/fake-adapters.mjs'
 
 async function waitUntil(predicate, label) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
     if (await predicate()) return
     await new Promise((resolve) => setImmediate(resolve))
   }
@@ -264,12 +272,19 @@ test('10.2 canonical Fake provider → server → fixed desktop Session → serv
   assert.equal(agentExecution.requests.length, 1)
 })
 
-test('Cloud file Plan survives same-profile Coordinator restart and uniquely continues its dependent Task', async (t) => {
+test('one canonical Project chain covers offline expiry renewal, reject, timeout, retry, dependency transfer, restart, and completion', async (t) => {
   const clock = new FakeClock()
   const repository = new FakeCollaborationRepository()
   const service = new CollaborationService({ repository, now: clock.now })
   const owner = await seedOidcUserDevice(repository, 'Assignment Owner', clock.now())
-  const worker = await seedOidcUserDevice(repository, 'Assignment Worker', clock.now())
+  const workerA = await seedOidcUserDevice(repository, 'Assignment Worker A', clock.now())
+  const workerADevice2 = await seedAdditionalOidcDevice(
+    repository,
+    workerA,
+    'Assignment Worker A Device 2',
+    clock.now()
+  )
+  const workerB = await seedOidcUserDevice(repository, 'Assignment Worker B', clock.now())
   const capabilities = ['research.execute']
   const ownerRegistration = await registerAgent(
     service,
@@ -277,11 +292,23 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     capabilities,
     'assignment-owner'
   )
-  const workerRegistration = await registerAgent(
+  const workerARegistration = await registerAgent(
     service,
-    worker,
+    workerA,
     capabilities,
-    'assignment-worker'
+    'assignment-worker-a'
+  )
+  const workerADevice2Registration = await registerAgent(
+    service,
+    workerADevice2,
+    capabilities,
+    'assignment-worker-a-device-2'
+  )
+  const workerBRegistration = await registerAgent(
+    service,
+    workerB,
+    capabilities,
+    'assignment-worker-b'
   )
   const signing = generateKeyPairSync('ed25519')
   const publicJwk = signing.publicKey.export({ format: 'jwk' })
@@ -314,40 +341,60 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
       observedAt: clock.now().toISOString()
     })
   )
-  const workerProviderFact = await service.publishProviderDirectoryPrincipalFact(
-    worker.user,
+  const workerAProviderFact = await service.publishProviderDirectoryPrincipalFact(
+    workerA.user,
     fullPathProviderFactCommand({
-      deviceId: worker.deviceId,
+      deviceId: workerA.deviceId,
       expectedDeviceRevision: 1,
-      principalId: 'full-path-worker-principal',
-      requestId: 'req_full_path_worker_provider_fact',
-      idempotencyKey: 'idem_full_path_worker_provider_fact',
+      principalId: 'full-path-worker-a-principal',
+      requestId: 'req_full_path_worker_a_provider_fact',
+      idempotencyKey: 'idem_full_path_worker_a_provider_fact',
+      observedAt: clock.now().toISOString()
+    })
+  )
+  const workerBProviderFact = await service.publishProviderDirectoryPrincipalFact(
+    workerB.user,
+    fullPathProviderFactCommand({
+      deviceId: workerB.deviceId,
+      expectedDeviceRevision: 1,
+      principalId: 'full-path-worker-b-principal',
+      requestId: 'req_full_path_worker_b_provider_fact',
+      idempotencyKey: 'idem_full_path_worker_b_provider_fact',
       observedAt: clock.now().toISOString()
     })
   )
   const coordinator = fakeAgentActor(ownerRegistration.registered.agent)
-  const workerAgent = fakeAgentActor(workerRegistration.registered.agent)
-  const workerHeartbeat = await service.heartbeatAgent(workerAgent, {
-    expectedRevision: workerRegistration.registered.agent.revision,
-    connectionStatus: 'online',
+  const workerAAgent = fakeAgentActor(workerARegistration.registered.agent)
+  const workerADevice2Agent = fakeAgentActor(workerADevice2Registration.registered.agent)
+  const workerBAgent = fakeAgentActor(workerBRegistration.registered.agent)
+  let workerAHeartbeat = await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerAAgent,
     capabilities,
-    idempotencyKey: 'idem_full_path_worker_heartbeat'
+    key: 'worker_a_initial'
   })
-  await service.publishWorkerAvailability(workerAgent, {
-    protocolVersion: '1.0',
-    type: 'worker.availability.publish',
-    requestId: 'req_full_path_worker_availability',
-    idempotencyKey: 'idem_full_path_worker_availability',
-    agentId: workerAgent.agentId,
-    expectedAgentRevision: workerHeartbeat.revision,
-    connectionStatus: 'online',
-    lastHeartbeatAt: workerHeartbeat.lastSeenAt,
-    runtimeReadiness: 'ready',
-    runtimeCapabilityTags: capabilities,
-    acceptsNewOffers: true,
-    activeTaskCount: 0,
-    observedAt: clock.now().toISOString()
+  let workerADevice2Heartbeat = await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerADevice2Agent,
+    capabilities,
+    key: 'worker_a_device_2_initial'
   })
+  let workerBHeartbeat = await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerBAgent,
+    capabilities,
+    key: 'worker_b_initial'
+  })
+  assert.notEqual(workerAAgent.agentId, workerADevice2Agent.agentId)
+  assert.notEqual(workerAAgent.deviceId, workerADevice2Agent.deviceId)
+  assert.equal(workerAHeartbeat.connectionStatus, 'online')
+  assert.equal(workerADevice2Heartbeat.connectionStatus, 'online')
 
   const created = await service.createProject(coordinator, {
     protocolVersion: '1.0',
@@ -356,11 +403,11 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     idempotencyKey: 'idem_full_path_assignment_project',
     createIntentId: 'pct_FullPathAssignment01',
     displayName: 'Cloud assignment Project',
-    goal: 'Deliver one User-targeted Task through the production Worker path.',
+    goal: 'Deliver two dependent file Tasks through the canonical multi-User Worker path.',
     budget: { maxTasks: 4, maxTasksPerRound: 4, maxTaskRetries: 1, maxCoordinationRounds: 2 }
   })
   const tasks = [{
-    workerUserId: worker.userId,
+    workerUserId: workerA.userId,
     planItemId: 'item_full_path_worker',
     title: 'Execute assigned work',
     objective: 'Return one reviewable bounded result.',
@@ -368,7 +415,7 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     dependencyPlanItemIds: [],
     requiredCapabilityTags: capabilities,
     fileIntent: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       inputs: [{
         kind: 'content-space.input-file',
         locator: {
@@ -381,6 +428,7 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
         expectedSemanticRevision: null,
         expectedMediaType: 'text/markdown'
       }],
+      dependencyInputs: [],
       output: {
         kind: 'content-space.output-new',
         target: 'project-binding-root',
@@ -391,14 +439,30 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
       }
     }
   }, {
-    workerUserId: worker.userId,
+    workerUserId: workerB.userId,
     planItemId: 'item_full_path_dependent',
     title: 'Summarize accepted work',
     objective: 'Use the accepted root result to produce the final bounded summary.',
     completionCriteria: ['Cloud receives one dependent TaskResult'],
     dependencyPlanItemIds: ['item_full_path_worker'],
     requiredCapabilityTags: capabilities,
-    fileIntent: null
+    fileIntent: {
+      schemaVersion: 2,
+      inputs: [],
+      dependencyInputs: [{
+        planItemId: 'item_full_path_worker',
+        outputIndex: 0,
+        destinationName: 'accepted-agenda-summary.md'
+      }],
+      output: {
+        kind: 'content-space.output-new',
+        target: 'project-binding-root',
+        mode: 'upload-new',
+        fileName: 'project-summary.md',
+        mediaType: 'text/markdown',
+        maxBytes: 1_000_000
+      }
+    }
   }]
   const planFacts = {
     projectId: created.project.projectId,
@@ -407,7 +471,7 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     supersedesProjectPlanId: null,
     sourceInputLocators: [],
     tasks,
-    rationale: 'One explicit Worker User owns this Plan item.',
+    rationale: 'Worker A owns the root Task and Worker B consumes its accepted file output.',
     runtimeProvenance: {
       runtimeId: 'codex',
       modelId: null,
@@ -446,28 +510,31 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
         providerPrincipalFactId: ownerProviderFact.providerPrincipalFactId,
         expectedFactRevision: ownerProviderFact.revision
       }, {
-        userId: worker.userId,
-        providerPrincipalFactId: workerProviderFact.providerPrincipalFactId,
-        expectedFactRevision: workerProviderFact.revision
+        userId: workerA.userId,
+        providerPrincipalFactId: workerAProviderFact.providerPrincipalFactId,
+        expectedFactRevision: workerAProviderFact.revision
+      }, {
+        userId: workerB.userId,
+        providerPrincipalFactId: workerBProviderFact.providerPrincipalFactId,
+        expectedFactRevision: workerBProviderFact.revision
       }]
     }
   })
-  const invitation = await repository.getProjectMember(afterSubmit.projectId, worker.userId)
-  const beforeAcceptance = await repository.getProject(afterSubmit.projectId)
-  assert.ok(invitation)
-  assert.ok(beforeAcceptance)
-  const acceptedMembership = await service.acceptProjectMembership(worker.user, {
-    protocolVersion: '1.0',
-    type: 'project.membership.accept',
-    requestId: 'req_full_path_assignment_member_accept',
-    idempotencyKey: 'idem_full_path_assignment_member_accept',
-    projectId: beforeAcceptance.projectId,
-    projectMembershipId: invitation.projectMembershipId,
-    expectedProjectRevision: beforeAcceptance.revision,
-    expectedMembershipRevision: invitation.revision,
-    projectPlanId: confirmed.projectPlanId,
-    expectedPlanRevision: confirmed.revision,
-    planDigest: confirmed.planDigest
+  await acceptFullPathMembership({
+    service,
+    repository,
+    identity: workerA,
+    projectId: afterSubmit.projectId,
+    confirmedPlan: confirmed,
+    key: 'worker_a'
+  })
+  const acceptedMembership = await acceptFullPathMembership({
+    service,
+    repository,
+    identity: workerB,
+    projectId: afterSubmit.projectId,
+    confirmedPlan: confirmed,
+    key: 'worker_b'
   })
   const attestedContent = await provisionFullPathTeamRoot({
     service,
@@ -530,32 +597,74 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
   await ownerStore.transact((draft) => {
     draft.agents.push(toAgent(ownerRegistration.registered.agent))
   })
+  let coordinatorAuthorityReady = false
+  const ownerIdentityStatus = () => ({
+    state: 'ready',
+    baseUrl,
+    userId: owner.userId,
+    deviceId: owner.deviceId,
+    deviceRevision: 2
+  })
+  const ownerIdentityRuntime = {
+    authenticatedCloudTransportStatus: ownerIdentityStatus,
+    revalidateCurrentDevice: async () => ownerIdentityStatus(),
+    executeAuthenticatedCloud: async () => {
+      throw new Error('The full-path Coordinator uses exact Agent authority.')
+    }
+  }
+  const ownerAgentAuthority = JSON.stringify({
+    version: 1,
+    agentId: coordinator.agentId,
+    userId: owner.userId,
+    deviceId: owner.deviceId,
+    generation: ownerRegistration.registered.agent.credentialGeneration,
+    authority: ownerRegistration.credential
+  })
+  const ownerAgentVault = {
+    read: async (ref) => (
+      ref.kind === 'agent-credential' && ref.agentId === coordinator.agentId
+        ? ownerAgentAuthority
+        : null
+    ),
+    write: async () => { throw new Error('The seeded Agent authority must not be replaced.') },
+    has: async (ref) => ref.kind === 'agent-credential' && ref.agentId === coordinator.agentId,
+    remove: async () => { throw new Error('The seeded Agent authority must not be removed.') }
+  }
+  const ownerAgentCloudRuntime = createIdentityAgentCloudRuntime({
+    getRuntime: () => coordinatorAuthorityReady ? ownerIdentityRuntime : null,
+    vault: ownerAgentVault,
+    getRuntimeReadiness: async () => ({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: capabilities
+    })
+  })
   const createOwnerOutbox = (localStore) => new DurableCloudOutbox({
     store: localStore,
-    agentCloudRuntime: {
-      authorityStatus: async (agentId) => ({
-        state: 'ready',
-        agentId,
-        userId: owner.userId,
-        deviceId: owner.deviceId,
-        generation: ownerRegistration.registered.agent.credentialGeneration,
-        runtimeId: 'codex',
-        capabilityTags: capabilities
-      }),
-      execute: async ({ request }) => postCloudCommand(
-        baseUrl,
-        ownerRegistration.credential,
-        request
-      )
-    },
+    agentCloudRuntime: ownerAgentCloudRuntime,
     localAgentId: () => coordinator.agentId,
     now: clock.now
   })
   const ownerOutbox = createOwnerOutbox(ownerStore)
-  const coordinatorCloudCommands = {
-    execute: (request) => ownerOutbox.enqueueAndWait('coordinator.command', request),
+  const createCoordinatorCloudCommands = (cloudOutbox) => ({
+    execute: (request) => cloudOutbox.enqueueAndWait('coordinator.command', request),
+    resume: async (idempotencyKey, validateCommand) => {
+      const replay = await cloudOutbox.resumeAndWait(
+        'coordinator.command',
+        idempotencyKey,
+        validateCommand
+      )
+      return replay === null
+        ? null
+        : { command: replay.request, response: replay.response }
+    },
     subscribe: () => () => undefined
-  }
+  })
+  const coordinatorCloudCommands = createCoordinatorCloudCommands(ownerOutbox)
+  const reassignment = createProjectCoordinatorTaskOfferReassignmentPort({
+    workspace: workspacePort,
+    coordinatorCloudCommands
+  })
   const continuation = createProjectCoordinatorContinuationPort({
     workspace: workspacePort,
     coordinatorCloudCommands,
@@ -590,11 +699,74 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
       backgroundContinuationFailures.push(error)
     }
   })
-  await continuation.reconcileProject(active.projectId)
+  const initialContinuation = continuation.reconcileProject(active.projectId)
+  await waitUntil(
+    () => ownerStore.snapshot().outbox.some(({ body }) => body.type === 'task.offer.create'),
+    'offline continuation command to enter the durable outbox'
+  )
+  await ownerOutbox.waitForIdle()
+  const staleOfferCommand = ownerStore.snapshot().outbox.find(({ body }) => (
+    body.type === 'task.offer.create'
+  ))
+  assert.ok(staleOfferCommand)
+  assert.equal(staleOfferCommand.state, 'pending')
+  assert.equal((await repository.listTasksByProject(active.projectId, null, 10)).length, 0)
+  assert.equal((await repository.listTaskOffersByProject(active.projectId, null, 10)).length, 0)
+
+  clock.tick(DEFAULT_TASK_OFFER_TTL_MS + 1)
+  workerAHeartbeat = await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerAAgent,
+    capabilities,
+    key: 'worker_a_after_offline_offer_expiry'
+  })
+  workerADevice2Heartbeat = await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerADevice2Agent,
+    capabilities,
+    key: 'worker_a_device_2_after_offline_offer_expiry'
+  })
+  workerBHeartbeat = await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerBAgent,
+    capabilities,
+    key: 'worker_b_after_offline_offer_expiry'
+  })
+  coordinatorAuthorityReady = true
+  ownerOutbox.wake()
+  await initialContinuation
+
+  const continuationOfferCommands = ownerStore.snapshot().outbox.filter(({ body }) => (
+    body.type === 'task.offer.create'
+  ))
+  assert.equal(continuationOfferCommands.length, 2)
+  assert.deepEqual(continuationOfferCommands.map(({ state }) => state), [
+    'delivered',
+    'delivered'
+  ])
+  assert.equal(continuationOfferCommands[0].response?.type, 'rest.error')
+  assert.equal(continuationOfferCommands[0].response?.error.code, 'expired')
+  assert.equal(
+    continuationOfferCommands[0].response?.error.message,
+    'A Task offer expiry must be in the future.'
+  )
+  assert.equal(continuationOfferCommands[1].response?.type, 'rest.collection')
+  assert.ok(continuationOfferCommands[0].body.offerExpiresAt <= clock.now().toISOString())
+  assert.ok(continuationOfferCommands[1].body.offerExpiresAt > clock.now().toISOString())
+  assert.notEqual(
+    continuationOfferCommands[0].idempotencyKey,
+    continuationOfferCommands[1].idempotencyKey
+  )
   const rootOffers = await repository.listTaskOffersByProject(active.projectId, null, 10)
   assert.equal(rootOffers.length, 1)
   const offered = { offer: rootOffers[0] }
-  assert.equal(offered.offer.workerUserId, worker.userId)
+  assert.equal(offered.offer.workerUserId, workerA.userId)
   assert.equal(offered.offer.executionId, null)
   const offeredTasks = await repository.listTasksByProject(active.projectId, null, 10)
   const offeredRootTask = offeredTasks.find(({ taskId }) => taskId === offered.offer.taskId)
@@ -606,153 +778,347 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     'Cloud must bind the logical file declaration to the attested binding at offer time.'
   )
 
-  const executeWorkerCommand = (request) => postCloudCommand(
+  const workerAHarness = await createFullPathWorkerHarness({
     baseUrl,
-    workerRegistration.credential,
-    request
+    registration: workerARegistration,
+    heartbeat: workerAHeartbeat,
+    worker: workerA,
+    workerAgent: workerAAgent,
+    capabilities,
+    clock,
+    key: 'worker-a'
+  })
+  const workerADevice2Harness = await createFullPathWorkerHarness({
+    baseUrl,
+    registration: workerADevice2Registration,
+    heartbeat: workerADevice2Heartbeat,
+    worker: workerADevice2,
+    workerAgent: workerADevice2Agent,
+    capabilities,
+    clock,
+    key: 'worker-a-device-2'
+  })
+  const workerBHarness = await createFullPathWorkerHarness({
+    baseUrl,
+    registration: workerBRegistration,
+    heartbeat: workerBHeartbeat,
+    worker: workerB,
+    workerAgent: workerBAgent,
+    capabilities,
+    clock,
+    key: 'worker-b',
+    runtimeFailures: 1
+  })
+  const workerAInbox = await service.pullInbox(workerAAgent, { afterSequence: 0, limit: 20 })
+  const offeredMessage = workerAInbox.messages.find((message) => (
+    message.payload.type === 'task.offered' &&
+    message.payload.taskOfferId === offered.offer.taskOfferId
+  ))
+  const workerADevice2Inbox = await service.pullInbox(
+    workerADevice2Agent,
+    { afterSequence: 0, limit: 20 }
   )
-  const agentCloudRuntime = {
-    authorityStatus: async (agentId) => ({
-      state: 'ready',
-      agentId,
-      userId: worker.userId,
-      deviceId: worker.deviceId,
-      generation: workerRegistration.registered.agent.credentialGeneration,
-      runtimeId: 'codex',
-      capabilityTags: capabilities
-    }),
-    execute: async ({ request }) => executeWorkerCommand(request)
-  }
-  const backend = new FakeCollaborationStateBackend()
-  const store = new CollaborationLocalStore(backend)
-  await store.open()
-  await store.transact((draft) => {
-    draft.agents.push(toAgent(workerHeartbeat))
-  })
-  const outbox = new DurableCloudOutbox({
-    store,
-    agentCloudRuntime,
-    localAgentId: () => workerAgent.agentId,
-    now: clock.now
-  })
-  let runtimeSessionOrdinal = 0
-  let contentInvocationOrdinal = 0
-  const contentOperations = []
-  const adapter = new CollaborationTaskAdapter({
-    store,
-    connection: { executeAsAgent: executeWorkerCommand },
-    outbox,
-    agentExecution: {
-      runtimeReadiness: async () => ({
-        state: 'ready',
-        runtimeId: 'codex',
-        capabilityTags: capabilities
-      }),
-      prepareSession: async () => {
-        runtimeSessionOrdinal += 1
-        return {
-          runtimeId: 'codex',
-          threadId: `thread-full-path-worker-${runtimeSessionOrdinal}`
-        }
-      },
-      run: async ({ runtimeId, threadId, metadata }) => {
-        const currentRun = store.snapshot().taskRuns.find(({ offer }) => (
-          offer.executionId === metadata.executionId
-        ))
-        if (currentRun?.execution?.fileIntent) {
-          assert.equal(
-            currentRun.externalJournal.filter(({ operation, state }) => (
-              operation === 'download' && state === 'observed_success'
-            )).length,
-            1,
-            'Runtime may start only after the exact input download is observed.'
-          )
-        }
-        return {
-          runtimeId,
-          threadId,
-          turnId: `turn-${metadata.executionId}`,
-          state: 'completed',
-          text: JSON.stringify({
-            schemaVersion: 1,
-            outcome: 'completed',
-            summary: `Worker completed ${metadata.taskId}.`
-          })
-        }
-      }
-    },
-    capabilities: {
-      invoke: async (contract, input, options) => {
-        contentInvocationOrdinal += 1
-        if (contract.actionId === CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.actionId) {
-          contentOperations.push(`preflight:${input.operation}`)
-          return contract.outputSchema.parse(fullPathContentPreflightResult({
-            ordinal: contentInvocationOrdinal,
-            worker,
-            workspaceId: options?.workspaceId,
-            input
-          }))
-        }
-        if (contract.actionId === CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT.actionId) {
-          contentOperations.push('download')
-          return contract.outputSchema.parse(fullPathContentDownloadResult({
-            ordinal: contentInvocationOrdinal,
-            worker,
-            workspaceId: options?.workspaceId,
-            input,
-            observedAt: clock.now().toISOString()
-          }))
-        }
-        if (contract.actionId === CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT.actionId) {
-          contentOperations.push('upload-new')
-          return contract.outputSchema.parse(fullPathContentUploadResult({
-            ordinal: contentInvocationOrdinal,
-            worker,
-            workspaceId: options?.workspaceId,
-            input,
-            observedAt: clock.now().toISOString()
-          }))
-        }
-        throw new Error(`Unexpected Content Space operation ${contract.actionId}.`)
-      },
-      createApprovedBatch: () => {
-        throw new Error('Worker file transfer must not create a provisioning approval batch.')
-      }
-    },
-    localAgentId: () => workerAgent.agentId,
-    workspaceRootForExecution: (executionId) => `/tmp/sciforge-full-path-${executionId}`,
-    now: clock.now
-  })
-  const workerInbox = await service.pullInbox(workerAgent, { afterSequence: 0, limit: 20 })
-  const offeredMessage = workerInbox.messages.find((message) => (
+  const offeredMessageOnDevice2 = workerADevice2Inbox.messages.find((message) => (
     message.payload.type === 'task.offered' &&
     message.payload.taskOfferId === offered.offer.taskOfferId
   ))
   assert.ok(offeredMessage)
-  await adapter.handleInbox(toInboxMessage(offeredMessage))
-  await adapter.waitForIdle()
-  assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
-  await adapter.decideOffer(offered.offer.taskOfferId, { decision: 'accept' })
-  await adapter.waitForIdle()
-  await outbox.waitForIdle()
-
-  const executions = await repository.listTaskExecutionsByProject(active.projectId, null, 10)
-  assert.equal(executions.length, 1)
-  assert.equal(executions[0].assigneeUserId, worker.userId)
-  assert.equal(executions[0].assigneeAgentId, workerAgent.agentId)
-  assert.equal(executions[0].fileIntent?.bindingRevision, attestedContent.binding.revision)
-  assert.equal(executions[0].fence.bindingRevision, attestedContent.binding.revision)
-  assert.equal(store.snapshot().taskRuns.length, 1)
+  assert.ok(offeredMessageOnDevice2)
+  await workerAHarness.adapter.handleInbox(toInboxMessage(offeredMessage))
+  await workerADevice2Harness.adapter.handleInbox(toInboxMessage(offeredMessageOnDevice2))
+  await workerAHarness.adapter.waitForIdle()
+  await workerADevice2Harness.adapter.waitForIdle()
+  assert.equal(workerAHarness.store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
   assert.equal(
-    store.snapshot().taskRuns[0].state,
-    'completed',
-    JSON.stringify({
-      error: store.snapshot().taskRuns[0].error,
-      contentOperations,
-      externalJournal: store.snapshot().taskRuns[0].externalJournal
-    })
+    workerADevice2Harness.store.snapshot().pendingTaskOffers[0]?.state,
+    'awaiting-manual'
   )
-  const [completedRootRun] = store.snapshot().taskRuns
+  await workerAHarness.adapter.decideOffer(offered.offer.taskOfferId, { decision: 'reject' })
+  await workerAHarness.adapter.waitForIdle()
+  await workerAHarness.outbox.waitForIdle()
+
+  const rejectedOffer = await repository.getTaskOffer(offered.offer.taskOfferId)
+  const rejectedTask = await repository.getTask(offered.offer.taskId)
+  assert.ok(rejectedOffer)
+  assert.ok(rejectedTask)
+  assert.equal(rejectedOffer.state, 'rejected')
+  assert.equal(rejectedOffer.reassignmentTaskRevision, rejectedTask.revision)
+  assert.equal(rejectedTask.status, 'revision_requested')
+  assert.equal(rejectedTask.executionCount, 0)
+  assert.deepEqual(
+    await repository.listTaskExecutionsByProject(active.projectId, null, 10),
+    []
+  )
+  assert.equal(workerAHarness.store.snapshot().pendingTaskOffers[0]?.state, 'closed')
+  assert.equal(workerAHarness.metrics.runtimeSessionCount, 0)
+  const workerADevice2ClosureInbox = await service.pullInbox(workerADevice2Agent, {
+    afterSequence: offeredMessageOnDevice2.sequence,
+    limit: 20
+  })
+  const workerADevice2Closure = workerADevice2ClosureInbox.messages.find((message) => (
+    message.payload.type === 'task.offer.closed' &&
+    message.payload.audience === 'worker' &&
+    message.payload.outcome === 'rejected' &&
+    message.payload.taskOfferId === rejectedOffer.taskOfferId
+  ))
+  assert.ok(workerADevice2Closure)
+  await workerADevice2Harness.adapter.handleInbox(toInboxMessage(workerADevice2Closure))
+  assert.deepEqual(
+    workerADevice2Harness.store.snapshot().pendingTaskOffers.map((pending) => ({
+      taskOfferId: pending.taskOfferId,
+      state: pending.state,
+      currentTaskRevision: pending.currentTaskRevision,
+      offerRevision: pending.offerRevision
+    })),
+    [{
+      taskOfferId: rejectedOffer.taskOfferId,
+      state: 'closed',
+      currentTaskRevision: rejectedTask.revision,
+      offerRevision: rejectedOffer.revision
+    }],
+    'The same transactional rejection must synchronously close Device 2 without a local claim.'
+  )
+  await assert.rejects(
+    workerADevice2Harness.adapter.decideOffer(rejectedOffer.taskOfferId, { decision: 'accept' }),
+    /Only an offer awaiting a manual decision/u
+  )
+  const lateClaim = await postRejectedCloudCommand(
+    baseUrl,
+    workerADevice2Registration.credential,
+    {
+      protocolVersion: '1.0',
+      type: 'task.offer.accept',
+      requestId: 'req_full_path_worker_a_device_2_late_claim',
+      idempotencyKey: 'idem_full_path_worker_a_device_2_late_claim',
+      taskOfferId: rejectedOffer.taskOfferId,
+      taskId: rejectedTask.taskId,
+      expectedTaskRevision: offeredRootTask.revision,
+      expectedOfferRevision: offered.offer.revision
+    }
+  )
+  assert.equal(lateClaim.status, 409)
+  assert.equal(lateClaim.body.type, 'rest.error')
+  assert.equal(lateClaim.body.error.code, 'revision_conflict')
+  assert.equal(workerADevice2Harness.metrics.runtimeSessionCount, 0)
+  assert.deepEqual(
+    await repository.listTaskExecutionsByProject(active.projectId, null, 10),
+    []
+  )
+
+  const coordinatorInboxAfterReject = await service.pullInbox(coordinator, {
+    afterSequence: 0,
+    limit: 100
+  })
+  const rejectAttention = coordinatorInboxAfterReject.messages.find((message) => (
+    message.payload.type === 'task.offer.closed' &&
+    message.payload.audience === 'coordinator' &&
+    message.payload.outcome === 'rejected' &&
+    message.payload.taskOfferId === rejectedOffer.taskOfferId
+  ))
+  assert.ok(rejectAttention)
+  const reassignCommandsBeforeRejectAttention = coordinatorReassignCommandCount(ownerStore)
+  await actions.handleInbox(toInboxMessage(rejectAttention))
+  assert.equal(
+    coordinatorReassignCommandCount(ownerStore),
+    reassignCommandsBeforeRejectAttention,
+    'Reject attention is consumed as fresh Cloud evidence before the explicit reassign action.'
+  )
+
+  const rejectReassignmentInput = {
+    projectId: active.projectId,
+    taskId: rejectedTask.taskId,
+    previousTaskOfferId: rejectedOffer.taskOfferId,
+    workerUserId: workerB.userId,
+    offerExpiresAt: new Date(clock.now().getTime() + DEFAULT_TASK_OFFER_TTL_MS).toISOString(),
+    nextOutputFileName: 'agenda-summary.reassigned.md'
+  }
+  let workspace = await reassignment.reassign(
+    rejectReassignmentInput,
+    'idem_full_path_reassign_after_reject'
+  )
+  const offersAfterRejectReassignment = await repository.listTaskOffersByProject(
+    active.projectId,
+    null,
+    10
+  )
+  assert.equal(offersAfterRejectReassignment.length, 2)
+  assert.deepEqual(
+    await reassignment.reassign(
+      rejectReassignmentInput,
+      'idem_full_path_reassign_after_reject'
+    ),
+    workspace,
+    'Replaying the canonical reassign entry must recover the same successor facts.'
+  )
+  assert.equal(
+    (await repository.listTaskOffersByProject(active.projectId, null, 10)).length,
+    2
+  )
+  const timedOutOffer = offersAfterRejectReassignment.find(({ taskOfferId }) => (
+    taskOfferId !== rejectedOffer.taskOfferId
+  ))
+  assert.ok(timedOutOffer)
+  assert.equal(timedOutOffer.state, 'pending')
+  assert.equal(timedOutOffer.executionId, null)
+  assert.equal(
+    Date.parse(timedOutOffer.expiresAt) - Date.parse(timedOutOffer.offeredAt),
+    DEFAULT_TASK_OFFER_TTL_MS
+  )
+  assert.equal((await repository.listTaskExecutionsByProject(active.projectId, null, 10)).length, 0)
+
+  clock.tick(DEFAULT_TASK_OFFER_TTL_MS + 1)
+  assert.equal(await service.expireTaskOffers(), 1)
+  assert.equal(await service.expireTaskOffers(), 0)
+  const expiredOffer = await repository.getTaskOffer(timedOutOffer.taskOfferId)
+  const taskAfterTimeout = await repository.getTask(timedOutOffer.taskId)
+  assert.ok(expiredOffer)
+  assert.ok(taskAfterTimeout)
+  assert.equal(expiredOffer.state, 'timed_out')
+  assert.equal(expiredOffer.reassignmentTaskRevision, taskAfterTimeout.revision)
+  assert.equal(taskAfterTimeout.status, 'revision_requested')
+  assert.equal(taskAfterTimeout.executionCount, 0)
+  const coordinatorInboxAfterTimeout = await service.pullInbox(coordinator, {
+    afterSequence: rejectAttention.sequence,
+    limit: 100
+  })
+  const timeoutAttention = coordinatorInboxAfterTimeout.messages.find((message) => (
+    message.payload.type === 'task.offer.closed' &&
+    message.payload.audience === 'coordinator' &&
+    message.payload.outcome === 'timed_out' &&
+    message.payload.taskOfferId === expiredOffer.taskOfferId
+  ))
+  assert.ok(timeoutAttention)
+  const reassignCommandsBeforeTimeoutAttention = coordinatorReassignCommandCount(ownerStore)
+  await actions.handleInbox(toInboxMessage(timeoutAttention))
+  assert.equal(
+    coordinatorReassignCommandCount(ownerStore),
+    reassignCommandsBeforeTimeoutAttention,
+    'Timeout attention is consumed as fresh Cloud evidence before the explicit reassign action.'
+  )
+  await publishFullPathWorkerReady({
+    service,
+    repository,
+    clock,
+    workerAgent: workerBAgent,
+    capabilities,
+    key: 'worker_b_after_timeout'
+  })
+
+  await reassignment.reassign({
+    projectId: active.projectId,
+    taskId: taskAfterTimeout.taskId,
+    previousTaskOfferId: expiredOffer.taskOfferId,
+    workerUserId: workerB.userId,
+    offerExpiresAt: new Date(clock.now().getTime() + DEFAULT_TASK_OFFER_TTL_MS).toISOString(),
+    nextOutputFileName: 'agenda-summary.timeout-retry.md'
+  }, 'idem_full_path_reassign_after_timeout')
+  const offersAfterTimeout = await repository.listTaskOffersByProject(active.projectId, null, 10)
+  const failingOffer = offersAfterTimeout.find(({ taskOfferId }) => (
+    ![rejectedOffer.taskOfferId, expiredOffer.taskOfferId].includes(taskOfferId)
+  ))
+  assert.ok(failingOffer)
+  assert.equal(failingOffer.state, 'pending')
+  assert.equal(failingOffer.executionId, null)
+
+  const workerBInbox = await service.pullInbox(workerBAgent, { afterSequence: 0, limit: 50 })
+  const failingOfferMessage = workerBInbox.messages.find((message) => (
+    message.payload.type === 'task.offered' &&
+    message.payload.taskOfferId === failingOffer.taskOfferId
+  ))
+  assert.ok(failingOfferMessage)
+  await workerBHarness.adapter.handleInbox(toInboxMessage(failingOfferMessage))
+  await workerBHarness.adapter.waitForIdle()
+  assert.equal(
+    workerBHarness.store.snapshot().pendingTaskOffers.find(({ taskOfferId }) => (
+      taskOfferId === failingOffer.taskOfferId
+    ))?.state,
+    'awaiting-manual'
+  )
+  await workerBHarness.adapter.decideOffer(failingOffer.taskOfferId, { decision: 'accept' })
+  await workerBHarness.adapter.waitForIdle()
+  await workerBHarness.outbox.waitForIdle()
+
+  const [failedRun] = workerBHarness.store.snapshot().taskRuns
+  assert.ok(failedRun)
+  assert.equal(failedRun.state, 'failed')
+  assert.equal(failedRun.execution?.state, 'failed')
+  assert.equal(failedRun.execution?.fence.status, 'fenced')
+  assert.equal(failedRun.execution?.fence.reason, 'execution_failed')
+  const failedTask = await repository.getTask(failingOffer.taskId)
+  assert.ok(failedTask)
+  assert.equal(failedTask.status, 'revision_requested')
+  assert.equal(failedTask.completedAt, null)
+  assert.equal(failedTask.executionCount, 1)
+  const coordinatorInboxAfterFailure = await service.pullInbox(coordinator, {
+    afterSequence: timeoutAttention.sequence,
+    limit: 100
+  })
+  const failureAttention = coordinatorInboxAfterFailure.messages.find((message) => (
+    message.payload.type === 'task.execution.failed' &&
+    message.payload.taskId === failedTask.taskId &&
+    message.payload.executionId === failedRun.offer.executionId
+  ))
+  assert.ok(failureAttention)
+  const reassignCommandsBeforeFailureAttention = coordinatorReassignCommandCount(ownerStore)
+  await actions.handleInbox(toInboxMessage(failureAttention))
+  assert.equal(
+    coordinatorReassignCommandCount(ownerStore),
+    reassignCommandsBeforeFailureAttention,
+    'Failure attention is consumed as fresh fenced Cloud evidence before explicit reassign.'
+  )
+
+  await reassignment.reassign({
+    projectId: active.projectId,
+    taskId: failedTask.taskId,
+    previousTaskOfferId: failingOffer.taskOfferId,
+    workerUserId: workerB.userId,
+    offerExpiresAt: new Date(clock.now().getTime() + DEFAULT_TASK_OFFER_TTL_MS).toISOString(),
+    nextOutputFileName: 'agenda-summary.final.md'
+  }, 'idem_full_path_reassign_after_failure')
+  const allRootOffers = await repository.listTaskOffersByProject(active.projectId, null, 10)
+  const finalRootOffer = allRootOffers.find(({ taskOfferId }) => (
+    ![
+      rejectedOffer.taskOfferId,
+      expiredOffer.taskOfferId,
+      failingOffer.taskOfferId
+    ].includes(taskOfferId)
+  ))
+  assert.ok(finalRootOffer)
+  assert.equal(finalRootOffer.state, 'pending')
+  assert.equal(finalRootOffer.executionId, null)
+
+  const finalRootInbox = await service.pullInbox(workerBAgent, { afterSequence: 0, limit: 100 })
+  const finalRootMessage = finalRootInbox.messages.find((message) => (
+    message.payload.type === 'task.offered' &&
+    message.payload.taskOfferId === finalRootOffer.taskOfferId
+  ))
+  assert.ok(finalRootMessage)
+  await workerBHarness.adapter.handleInbox(toInboxMessage(finalRootMessage))
+  await workerBHarness.adapter.waitForIdle()
+  await workerBHarness.adapter.decideOffer(finalRootOffer.taskOfferId, { decision: 'accept' })
+  await workerBHarness.adapter.waitForIdle()
+  await workerBHarness.outbox.waitForIdle()
+
+  const rootExecutions = await repository.listTaskExecutionsByProject(active.projectId, null, 10)
+  assert.equal(rootExecutions.length, 2)
+  assert.equal(new Set(rootExecutions.map(({ executionId }) => executionId)).size, 2)
+  const failedExecution = rootExecutions.find(({ state }) => state === 'failed')
+  const submittedRootExecution = rootExecutions.find(({ state }) => state === 'result_submitted')
+  assert.ok(failedExecution)
+  assert.ok(submittedRootExecution)
+  assert.notEqual(submittedRootExecution.executionId, failedExecution.executionId)
+  assert.equal(failedExecution.fence.status, 'fenced')
+  assert.equal(submittedRootExecution.fence.reason, 'result_submitted')
+  assert.equal(submittedRootExecution.assigneeUserId, workerB.userId)
+  assert.equal(submittedRootExecution.assigneeAgentId, workerBAgent.agentId)
+  assert.equal(submittedRootExecution.fileIntent?.bindingRevision, attestedContent.binding.revision)
+  assert.equal(submittedRootExecution.fence.bindingRevision, attestedContent.binding.revision)
+  assert.equal(workerBHarness.store.snapshot().taskRuns.length, 2)
+  const completedRootRun = workerBHarness.store.snapshot().taskRuns.find(({ state }) => (
+    state === 'completed'
+  ))
+  assert.ok(completedRootRun)
+  assert.notEqual(completedRootRun.threadId, failedRun.threadId)
   assert.deepEqual(
     completedRootRun.externalJournal.map(({ operation, state }) => ({ operation, state })),
     [
@@ -760,21 +1126,36 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
       { operation: 'upload_new', state: 'observed_success' }
     ]
   )
-  assert.equal(contentOperations.filter((operation) => operation === 'download').length, 1)
-  assert.equal(contentOperations.filter((operation) => operation === 'upload-new').length, 1)
-  assert.ok(contentOperations.indexOf('download') < contentOperations.indexOf('upload-new'))
-  assert.deepEqual(
-    store.snapshot().outbox.filter(({ body }) => body.type === 'task.offer.accept').map(({ state }) => state),
-    ['delivered']
+  assert.equal(
+    workerBHarness.metrics.contentOperations.filter((operation) => operation === 'download').length,
+    2
   )
-  await adapter.handleInbox(toInboxMessage(offeredMessage))
-  await adapter.waitForIdle()
-  assert.equal((await repository.listTaskExecutionsByProject(active.projectId, null, 10)).length, 1)
+  assert.equal(
+    workerBHarness.metrics.contentOperations.filter((operation) => operation === 'upload-new').length,
+    1
+  )
+  assert.deepEqual(
+    workerBHarness.store.snapshot().outbox
+      .filter(({ body }) => body.type === 'task.offer.accept')
+      .map(({ state }) => state),
+    ['delivered', 'delivered']
+  )
+  assert.equal(workerBHarness.metrics.runtimeSessionCount, 2)
 
-  let workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
-  assert.equal(workspace.projects[0].plan.plan.tasks[0].workerUserId, worker.userId)
-  assert.equal(workspace.projects[0].workerGroups.length, 1)
-  assert.equal(workspace.projects[0].workerGroups[0].userId, worker.userId)
+  workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
+  assert.equal(workspace.projects[0].plan.plan.tasks[0].workerUserId, workerA.userId)
+  assert.equal(workspace.projects[0].plan.plan.tasks[1].workerUserId, workerB.userId)
+  assert.deepEqual(
+    workspace.projects[0].workerGroups.map(({ userId }) => userId).sort(),
+    [workerB.userId]
+  )
+  assert.deepEqual(
+    workspace.projects[0].provisioning.memberships
+      .filter(({ state }) => state === 'active')
+      .map(({ userId }) => userId)
+      .sort(),
+    [owner.userId, workerA.userId, workerB.userId].sort()
+  )
   const rootTask = workspace.projects[0].tasks.find(({ task }) => (
     task.taskId === offered.offer.taskId
   ))
@@ -809,10 +1190,7 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
   const restartedOwnerStore = new CollaborationLocalStore(ownerBackend)
   await restartedOwnerStore.open()
   const restartedOwnerOutbox = createOwnerOutbox(restartedOwnerStore)
-  const restartedCoordinatorCloudCommands = {
-    execute: (request) => restartedOwnerOutbox.enqueueAndWait('coordinator.command', request),
-    subscribe: () => () => undefined
-  }
+  const restartedCoordinatorCloudCommands = createCoordinatorCloudCommands(restartedOwnerOutbox)
   const restartedContinuation = createProjectCoordinatorContinuationPort({
     workspace: workspacePort,
     coordinatorCloudCommands: restartedCoordinatorCloudCommands,
@@ -834,44 +1212,78 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
   ])
 
   await waitUntil(async () => (
-    (await repository.listTaskOffersByProject(active.projectId, null, 10)).length === 2
+    (await repository.listTaskOffersByProject(active.projectId, null, 10)).length === 5
   ), 'dependent Task offer after accepted root result')
   assert.deepEqual(
     backgroundContinuationFailures.map((failure) => failure.message),
     ['simulated Coordinator process restart after Cloud review commit']
   )
   const continuedOffers = await repository.listTaskOffersByProject(active.projectId, null, 10)
-  const dependentOffer = continuedOffers.find(({ taskOfferId }) => (
-    taskOfferId !== offered.offer.taskOfferId
+  const dependentOffer = continuedOffers.find(({ taskId }) => (
+    taskId !== offered.offer.taskId
   ))
   assert.ok(dependentOffer)
-  const continuedInbox = await service.pullInbox(workerAgent, { afterSequence: 0, limit: 50 })
+  workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
+  const concreteDependentTask = workspace.projects[0].tasks.find(({ task }) => (
+    task.taskId === dependentOffer.taskId
+  ))
+  assert.ok(concreteDependentTask?.task.fileIntent)
+  assert.deepEqual(concreteDependentTask.task.fileIntent.inputs, [{
+    kind: 'content-space.input-file',
+    locator: rootSubmission.outputs[0].locator,
+    destinationName: 'accepted-agenda-summary.md',
+    expectedSemanticRevision: null,
+    expectedMediaType: null
+  }])
+  assert.equal('dependencyInputs' in concreteDependentTask.task.fileIntent, false)
+  assert.equal(concreteDependentTask.task.fileIntent.output.fileName, 'project-summary.md')
+
+  const continuedInbox = await service.pullInbox(workerBAgent, { afterSequence: 0, limit: 100 })
   const dependentMessage = continuedInbox.messages.find((message) => (
     message.payload.type === 'task.offered' &&
     message.payload.taskOfferId === dependentOffer.taskOfferId
   ))
   assert.ok(dependentMessage)
-  await adapter.handleInbox(toInboxMessage(dependentMessage))
-  await adapter.waitForIdle()
+  await workerBHarness.adapter.handleInbox(toInboxMessage(dependentMessage))
+  await workerBHarness.adapter.waitForIdle()
   assert.equal(
-    store.snapshot().pendingTaskOffers.find(({ taskOfferId }) => (
+    workerBHarness.store.snapshot().pendingTaskOffers.find(({ taskOfferId }) => (
       taskOfferId === dependentOffer.taskOfferId
     ))?.state,
     'awaiting-manual'
   )
-  await adapter.decideOffer(dependentOffer.taskOfferId, { decision: 'accept' })
-  await adapter.waitForIdle()
-  await outbox.waitForIdle()
+  await workerBHarness.adapter.decideOffer(dependentOffer.taskOfferId, { decision: 'accept' })
+  await workerBHarness.adapter.waitForIdle()
+  await workerBHarness.outbox.waitForIdle()
 
   const completedExecutions = await repository.listTaskExecutionsByProject(
     active.projectId,
     null,
     10
   )
-  assert.equal(completedExecutions.length, 2)
-  assert.equal(new Set(completedExecutions.map(({ executionId }) => executionId)).size, 2)
-  assert.equal(store.snapshot().taskRuns.length, 2)
-  assert.ok(store.snapshot().taskRuns.every(({ state }) => state === 'completed'))
+  assert.equal(completedExecutions.length, 3)
+  assert.equal(new Set(completedExecutions.map(({ executionId }) => executionId)).size, 3)
+  assert.equal(workerBHarness.store.snapshot().taskRuns.length, 3)
+  assert.deepEqual(
+    workerBHarness.store.snapshot().taskRuns.map(({ state }) => state).sort(),
+    ['completed', 'completed', 'failed']
+  )
+  assert.equal(workerBHarness.metrics.runtimeSessionCount, 3)
+  assert.equal(
+    workerBHarness.metrics.contentOperations.filter((operation) => operation === 'download').length,
+    3
+  )
+  assert.equal(
+    workerBHarness.metrics.contentOperations.filter((operation) => operation === 'upload-new').length,
+    2
+  )
+  assert.deepEqual(
+    workerBHarness.metrics.downloadedLocators.filter((locator) => (
+      stableDigest(locator) === rootSubmission.outputs[0].locatorDigest
+    )),
+    [rootSubmission.outputs[0].locator],
+    'Worker B must download the concrete locator resolved from Task A outputs[0].'
+  )
 
   workspace = await workspacePort.readWorkspace({ projectId: active.projectId })
   const dependentTask = workspace.projects[0].tasks.find(({ task }) => (
@@ -888,7 +1300,7 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
   const project = workspace.projects[0]
   assert.equal(project.tasks.length, 2)
   assert.ok(project.tasks.every(({ task }) => task.status === 'completed'))
-  assert.equal((await repository.listTaskOffersByProject(active.projectId, null, 10)).length, 2)
+  assert.equal((await repository.listTaskOffersByProject(active.projectId, null, 10)).length, 5)
   const acceptedResultSubmissionIds = project.reviews
     .filter(({ decision }) => decision?.decision === 'accept')
     .map(({ submission }) => submission.resultSubmissionId)
@@ -914,7 +1326,9 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     completedProject.records.map(({ kind }) => kind).sort(),
     ['observation', 'observation', 'summary']
   )
-  assert.equal(runtimeSessionOrdinal, 2)
+  assert.equal(workerAHarness.metrics.runtimeSessionCount, 0)
+  assert.equal(workerADevice2Harness.metrics.runtimeSessionCount, 0)
+  assert.equal(workerBHarness.metrics.runtimeSessionCount, 3)
   const coordinatorCommands = restartedOwnerStore.snapshot().outbox
     .filter(({ kind }) => kind === 'coordinator.command')
   assert.ok(coordinatorCommands.every(({ state }) => state === 'delivered'))
@@ -922,6 +1336,10 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     coordinatorCommands.map(({ body }) => body.type),
     [
       'task.offer.create',
+      'task.offer.create',
+      'task.offer.reassign',
+      'task.offer.reassign',
+      'task.offer.reassign',
       'task.result.review',
       'task.offer.create',
       'task.result.review',
@@ -929,10 +1347,251 @@ test('Cloud file Plan survives same-profile Coordinator restart and uniquely con
     ]
   )
 
-  adapter.stop()
-  outbox.stop()
+  workerAHarness.adapter.stop()
+  workerAHarness.outbox.stop()
+  workerADevice2Harness.adapter.stop()
+  workerADevice2Harness.outbox.stop()
+  workerBHarness.adapter.stop()
+  workerBHarness.outbox.stop()
   restartedOwnerOutbox.stop()
 })
+
+async function seedAdditionalOidcDevice(repository, identity, label, at) {
+  const suffix = stableDigest(`${identity.userId}:${label}`).slice(0, 24)
+  const deviceId = `dev_${suffix}`
+  const signing = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' })
+  const timestamp = at.toISOString()
+  await repository.transaction((tx) => tx.insertDevice({
+    deviceId,
+    userId: identity.userId,
+    installationId: `ins_${suffix}`,
+    displayName: label,
+    platform: { os: 'macos', arch: 'arm64', appVersion: '0.1.0-test' },
+    publicKeyJwk: {
+      kty: 'OKP',
+      crv: 'Ed25519',
+      alg: 'EdDSA',
+      use: 'sig',
+      kid: `device-${suffix}`,
+      x: signing.x
+    },
+    capabilitySummary: ['research.execute'],
+    status: 'active',
+    revision: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }))
+  return {
+    user: identity.user,
+    userId: identity.userId,
+    deviceId
+  }
+}
+
+function coordinatorReassignCommandCount(store) {
+  return store.snapshot().outbox.filter(({ kind, body }) => (
+    kind === 'coordinator.command' && body.type === 'task.offer.reassign'
+  )).length
+}
+
+async function publishFullPathWorkerReady({
+  service,
+  repository,
+  clock,
+  workerAgent,
+  capabilities,
+  key
+}) {
+  const currentAgent = await repository.getAgent(workerAgent.agentId)
+  assert.ok(currentAgent)
+  const heartbeat = await service.heartbeatAgent(workerAgent, {
+    expectedRevision: currentAgent.revision,
+    connectionStatus: 'online',
+    capabilities,
+    idempotencyKey: `idem_full_path_${key}_heartbeat`
+  })
+  await service.publishWorkerAvailability(workerAgent, {
+    protocolVersion: '1.0',
+    type: 'worker.availability.publish',
+    requestId: `req_full_path_${key}_availability`,
+    idempotencyKey: `idem_full_path_${key}_availability`,
+    agentId: workerAgent.agentId,
+    expectedAgentRevision: heartbeat.revision,
+    connectionStatus: 'online',
+    lastHeartbeatAt: heartbeat.lastSeenAt,
+    runtimeReadiness: 'ready',
+    runtimeCapabilityTags: capabilities,
+    acceptsNewOffers: true,
+    activeTaskCount: 0,
+    observedAt: clock.now().toISOString()
+  })
+  return heartbeat
+}
+
+async function acceptFullPathMembership({
+  service,
+  repository,
+  identity,
+  projectId,
+  confirmedPlan,
+  key
+}) {
+  const invitation = await repository.getProjectMember(projectId, identity.userId)
+  const project = await repository.getProject(projectId)
+  assert.ok(invitation)
+  assert.ok(project)
+  return service.acceptProjectMembership(identity.user, {
+    protocolVersion: '1.0',
+    type: 'project.membership.accept',
+    requestId: `req_full_path_${key}_member_accept`,
+    idempotencyKey: `idem_full_path_${key}_member_accept`,
+    projectId,
+    projectMembershipId: invitation.projectMembershipId,
+    expectedProjectRevision: project.revision,
+    expectedMembershipRevision: invitation.revision,
+    projectPlanId: confirmedPlan.projectPlanId,
+    expectedPlanRevision: confirmedPlan.revision,
+    planDigest: confirmedPlan.planDigest
+  })
+}
+
+async function createFullPathWorkerHarness({
+  baseUrl,
+  registration,
+  heartbeat,
+  worker,
+  workerAgent,
+  capabilities,
+  clock,
+  key,
+  runtimeFailures = 0
+}) {
+  const executeWorkerCommand = (request) => postCloudCommand(
+    baseUrl,
+    registration.credential,
+    request
+  )
+  const store = new CollaborationLocalStore(new FakeCollaborationStateBackend())
+  await store.open()
+  await store.transact((draft) => {
+    draft.agents.push(toAgent(heartbeat))
+  })
+  const outbox = new DurableCloudOutbox({
+    store,
+    agentCloudRuntime: {
+      authorityStatus: async (agentId) => ({
+        state: 'ready',
+        agentId,
+        userId: worker.userId,
+        deviceId: worker.deviceId,
+        generation: registration.registered.agent.credentialGeneration,
+        runtimeId: 'codex',
+        capabilityTags: capabilities
+      }),
+      execute: async ({ request }) => executeWorkerCommand(request)
+    },
+    localAgentId: () => workerAgent.agentId,
+    now: clock.now
+  })
+  const metrics = {
+    runtimeSessionCount: 0,
+    contentInvocationCount: 0,
+    contentOperations: [],
+    downloadedLocators: []
+  }
+  let runtimeFailuresRemaining = runtimeFailures
+  const adapter = new CollaborationTaskAdapter({
+    store,
+    connection: { executeAsAgent: executeWorkerCommand },
+    outbox,
+    agentExecution: {
+      runtimeReadiness: async () => ({
+        state: 'ready',
+        runtimeId: 'codex',
+        capabilityTags: capabilities
+      }),
+      prepareSession: async () => {
+        metrics.runtimeSessionCount += 1
+        return {
+          runtimeId: 'codex',
+          threadId: `thread-full-path-${key}-${metrics.runtimeSessionCount}`
+        }
+      },
+      run: async ({ runtimeId, threadId, metadata }) => {
+        const currentRun = store.snapshot().taskRuns.find(({ offer }) => (
+          offer.executionId === metadata.executionId
+        ))
+        if (currentRun?.execution?.fileIntent) {
+          assert.equal(
+            currentRun.externalJournal.filter(({ operation, state }) => (
+              operation === 'download' && state === 'observed_success'
+            )).length,
+            currentRun.execution.fileIntent.inputs.length,
+            'Runtime may start only after every exact input download is observed.'
+          )
+        }
+        if (runtimeFailuresRemaining > 0) {
+          runtimeFailuresRemaining -= 1
+          throw new Error('simulated retryable Worker Runtime failure')
+        }
+        return {
+          runtimeId,
+          threadId,
+          turnId: `turn-${metadata.executionId}`,
+          state: 'completed',
+          text: JSON.stringify({
+            schemaVersion: 1,
+            outcome: 'completed',
+            summary: `Worker completed ${metadata.taskId}.`
+          })
+        }
+      }
+    },
+    capabilities: {
+      invoke: async (contract, input, options) => {
+        metrics.contentInvocationCount += 1
+        if (contract.actionId === CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.actionId) {
+          metrics.contentOperations.push(`preflight:${input.operation}`)
+          return contract.outputSchema.parse(fullPathContentPreflightResult({
+            ordinal: metrics.contentInvocationCount,
+            worker,
+            workspaceId: options?.workspaceId,
+            input
+          }))
+        }
+        if (contract.actionId === CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT.actionId) {
+          metrics.contentOperations.push('download')
+          metrics.downloadedLocators.push(structuredClone(input.candidate))
+          return contract.outputSchema.parse(fullPathContentDownloadResult({
+            ordinal: metrics.contentInvocationCount,
+            worker,
+            workspaceId: options?.workspaceId,
+            input,
+            observedAt: clock.now().toISOString()
+          }))
+        }
+        if (contract.actionId === CONTENT_SPACE_SYSTEM_UPLOAD_NEW_CONTRACT.actionId) {
+          metrics.contentOperations.push('upload-new')
+          return contract.outputSchema.parse(fullPathContentUploadResult({
+            ordinal: metrics.contentInvocationCount,
+            worker,
+            workspaceId: options?.workspaceId,
+            input,
+            observedAt: clock.now().toISOString()
+          }))
+        }
+        throw new Error(`Unexpected Content Space operation ${contract.actionId}.`)
+      },
+      createApprovedBatch: () => {
+        throw new Error('Worker file transfer must not create a provisioning approval batch.')
+      }
+    },
+    localAgentId: () => workerAgent.agentId,
+    workspaceRootForExecution: (executionId) => `/tmp/sciforge-full-path-${key}-${executionId}`,
+    now: clock.now
+  })
+  return { adapter, outbox, store, metrics }
+}
 
 function fullPathProviderFactCommand({
   deviceId,
@@ -1344,6 +2003,16 @@ async function registerAgent(service, identity, capabilities, key) {
 }
 
 async function postCloudCommand(baseUrl, token, command, oidc = false) {
+  const { response, body } = await sendCloudCommand(baseUrl, token, command)
+  assert.equal(
+    response.status,
+    200,
+    `${oidc ? 'OIDC' : 'Agent'} command failed for ${JSON.stringify(command)}: ${JSON.stringify(body)}`
+  )
+  return body
+}
+
+async function sendCloudCommand(baseUrl, token, command) {
   const response = await fetch(`${baseUrl}/v1/commands`, {
     method: 'POST',
     headers: {
@@ -1356,10 +2025,26 @@ async function postCloudCommand(baseUrl, token, command, oidc = false) {
     body: JSON.stringify(command)
   })
   const body = await response.json()
-  assert.equal(
+  return { response, body }
+}
+
+async function postRejectedCloudCommand(baseUrl, token, command) {
+  const response = await fetch(`${baseUrl}/v1/commands`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      ...('idempotencyKey' in command
+        ? { 'idempotency-key': command.idempotencyKey }
+        : {})
+    },
+    body: JSON.stringify(command)
+  })
+  const body = await response.json()
+  assert.notEqual(
     response.status,
     200,
-    `${oidc ? 'OIDC' : 'Agent'} command failed for ${JSON.stringify(command)}: ${JSON.stringify(body)}`
+    `Cloud unexpectedly accepted a stale command: ${JSON.stringify(command)}`
   )
-  return body
+  return { status: response.status, body }
 }

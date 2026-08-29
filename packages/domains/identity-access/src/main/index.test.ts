@@ -60,7 +60,11 @@ describe('Identity main contributions', () => {
     expect(register).toHaveBeenCalledWith(expect.objectContaining({
       serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
       contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
-      allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.project-coordinator']
+      allowedConsumerModuleIds: [
+        'sciforge.collaboration',
+        'sciforge.project-coordinator',
+        'sciforge.opencontent-connector'
+      ]
     }))
     expect(entry.contributions[3]).toMatchObject({
       id: 'identity-access.authenticated-cloud-transport',
@@ -69,7 +73,11 @@ describe('Identity main contributions', () => {
         location: 'main.internal-service-descriptor',
         serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
         contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
-        allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.project-coordinator']
+        allowedConsumerModuleIds: [
+          'sciforge.collaboration',
+          'sciforge.project-coordinator',
+          'sciforge.opencontent-connector'
+        ]
       }
     })
     expect(register).toHaveBeenCalledWith(expect.objectContaining({

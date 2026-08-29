@@ -469,7 +469,8 @@ export type StoredTaskOffer = {
   projectId: string
   workerUserId: string
   offeredByCoordinatorAgentId: string
-  state: 'pending' | 'accepted' | 'withdrawn' | 'timed_out'
+  state: 'pending' | 'accepted' | 'rejected' | 'withdrawn' | 'timed_out'
+  reassignmentTaskRevision: number | null
   offeredAt: string
   expiresAt: string
   respondedAt: string | null

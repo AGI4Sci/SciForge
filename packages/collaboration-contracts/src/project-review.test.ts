@@ -79,8 +79,9 @@ describe('Project plan, result review and final summary', () => {
       dependencyPlanItemIds: [],
       requiredCapabilityTags: ['content.read', 'content.write'],
       fileIntent: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         inputs: [],
+        dependencyInputs: [],
         output: {
           kind: 'content-space.output-new',
           target: 'project-binding-root',
@@ -92,6 +93,10 @@ describe('Project plan, result review and final summary', () => {
       }
     }
     expect(projectPlanSchema.shape.tasks.element.safeParse(fileTask).success).toBe(true)
+    expect(projectPlanSchema.shape.tasks.element.safeParse({
+      ...fileTask,
+      fileIntent: { ...fileTask.fileIntent, schemaVersion: 1 }
+    }).success).toBe(false)
     expect(projectPlanSchema.shape.tasks.element.safeParse({
       ...fileTask,
       fileIntent: { ...fileTask.fileIntent, bindingRevision: 1 }
@@ -137,6 +142,123 @@ describe('Project plan, result review and final summary', () => {
       confirmedAt: null,
       supersededAt: null
     }).success).toBe(false)
+  })
+
+  it('allows dependency file inputs only from direct file Task dependencies', () => {
+    const fileDeclaration = (fileName: string) => ({
+      schemaVersion: 2 as const,
+      inputs: [],
+      dependencyInputs: [],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName,
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    })
+    const task = {
+      workerUserId: TEST_IDS.secondUserId,
+      title: 'Produce one dependency result',
+      objective: 'Produce one independently reviewable result.',
+      completionCriteria: ['One result is reviewable.'],
+      requiredCapabilityTags: ['runtime.text']
+    }
+    const source = {
+      ...task,
+      planItemId: 'item_dependency_file_source',
+      dependencyPlanItemIds: [],
+      fileIntent: fileDeclaration('source.md')
+    }
+    const bridge = {
+      ...task,
+      planItemId: 'item_dependency_file_bridge',
+      dependencyPlanItemIds: [source.planItemId],
+      fileIntent: fileDeclaration('bridge.md')
+    }
+    const textSource = {
+      ...task,
+      planItemId: 'item_dependency_text_source',
+      dependencyPlanItemIds: [],
+      fileIntent: null
+    }
+    const consumer = (
+      dependencyPlanItemIds: readonly string[],
+      selectedPlanItemId: string,
+      planItemId = 'item_dependency_consumer'
+    ) => ({
+      ...task,
+      planItemId,
+      dependencyPlanItemIds: [...dependencyPlanItemIds],
+      fileIntent: {
+        ...fileDeclaration(`${planItemId}.md`),
+        dependencyInputs: [{
+          planItemId: selectedPlanItemId,
+          outputIndex: 0,
+          destinationName: 'selected-source.md'
+        }]
+      }
+    })
+    const planWith = (tasks: readonly unknown[]) => ({
+      ...metadata,
+      type: 'project_plan',
+      projectPlanId: TEST_IDS.projectPlanId,
+      projectId: TEST_IDS.projectId,
+      state: 'awaiting_confirmation',
+      planRevision: 1,
+      sourceInputLocators: [],
+      tasks,
+      rationale: 'Dependency file selectors are validated before Cloud submit.',
+      runtimeProvenance: {
+        runtimeId: 'runtime-local',
+        modelId: null,
+        generatedByCoordinatorAgentId: TEST_IDS.agentId,
+        generatedAt: TEST_TIMESTAMP
+      },
+      planDigest: TEST_HASH,
+      submittedAt: TEST_TIMESTAMP,
+      confirmedByUserId: null,
+      confirmedAt: null,
+      supersededAt: null
+    })
+
+    expect(projectPlanSchema.safeParse(planWith([
+      source,
+      consumer([source.planItemId], source.planItemId)
+    ])).success).toBe(true)
+
+    const invalidCases = [{
+      tasks: [
+        source,
+        bridge,
+        consumer([bridge.planItemId], source.planItemId)
+      ],
+      expectedIssue: 'A dependency input must select a direct Task dependency.'
+    }, {
+      tasks: [
+        source,
+        consumer(
+          ['item_dependency_self'],
+          'item_dependency_self',
+          'item_dependency_self'
+        )
+      ],
+      expectedIssue: 'A plan item cannot depend on itself.'
+    }, {
+      tasks: [
+        textSource,
+        consumer([textSource.planItemId], textSource.planItemId)
+      ],
+      expectedIssue: 'A dependency input must select output from a file Task.'
+    }]
+    for (const { tasks, expectedIssue } of invalidCases) {
+      const parsed = projectPlanSchema.safeParse(planWith(tasks))
+      expect(parsed.success).toBe(false)
+      if (!parsed.success) {
+        expect(parsed.error.issues.map(({ message }) => message)).toContain(expectedIssue)
+      }
+    }
   })
 
   it('uses immutable result submission and explicit accept/request-revision decisions', () => {

@@ -188,7 +188,7 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
     'project-coordinator.workflow.continue',
     'project-coordinator.content-recovery.observe-link',
     'project-coordinator.content-recovery.abandon',
-    'project-coordinator.content-recovery.retry-successor',
+    'project-coordinator.task-offer.reassign',
     'project-coordinator.membership.add',
     'project-coordinator.membership.accept',
     'project-coordinator.membership.remove',
@@ -200,6 +200,10 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
     'project-coordinator.project.complete'
   ])
   assert.equal(new Set(REQUIRED_CAPABILITY_IDS).size, REQUIRED_CAPABILITY_IDS.length)
+  assert.equal(
+    REQUIRED_CAPABILITY_IDS.includes('project-coordinator.content-recovery.retry-successor'),
+    false
+  )
   for (const capabilityId of [
     ...IDENTITY_SMOKE_CAPABILITY_IDS,
     ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,

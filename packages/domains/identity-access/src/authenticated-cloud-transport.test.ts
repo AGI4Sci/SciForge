@@ -174,7 +174,8 @@ describe('authenticated Cloud transport contract', () => {
         state: 'ready',
         baseUrl: 'https://cloud.example.test',
         userId: 'usr_CloudUser000001',
-        deviceId: 'dev_CloudDevice0001'
+        deviceId: 'dev_CloudDevice0001',
+        deviceRevision: 1
       }),
       execute: async (request) => ({
         contractVersion: 1,
@@ -191,7 +192,8 @@ describe('authenticated Cloud transport contract', () => {
       state: 'ready',
       baseUrl: 'https://cloud.example.test',
       userId: 'usr_CloudUser000001',
-      deviceId: 'dev_CloudDevice0001'
+      deviceId: 'dev_CloudDevice0001',
+      deviceRevision: 1
     })
     await expect(transport.execute({
       contractVersion: 1,
@@ -204,7 +206,8 @@ describe('authenticated Cloud transport contract', () => {
         state: 'ready',
         baseUrl: 'https://cloud.example.test',
         userId: 'usr_CloudUser000001',
-        deviceId: 'dev_CloudDevice0001'
+        deviceId: 'dev_CloudDevice0001',
+        deviceRevision: 1
       }),
       execute: async () => ({
         contractVersion: 1,

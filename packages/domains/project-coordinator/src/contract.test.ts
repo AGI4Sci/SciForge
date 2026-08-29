@@ -3,15 +3,17 @@ import test from 'node:test'
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
+  projectCoordinatorActivationAcknowledgeInputSchema,
   projectCoordinatorActivationSchema,
   projectCoordinatorArtifactReviewPrepareInputSchema,
   projectCoordinatorArtifactReviewPreparedSchema,
   projectCoordinatorContentRecoveryAbandonInputSchema,
   projectCoordinatorContentRecoveryObserveLinkInputSchema,
-  projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorPlanDraftGenerateResultSchema,
+  projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorTaskOfferReassignInputSchema,
   projectCoordinatorWorkflowContinueInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceSchema
@@ -253,6 +255,36 @@ test('activation accepts only an exact Project focus and bounded workspace view'
   }))
 })
 
+test('Project create result binds one fresh ordinary Session and explicit UI activation', () => {
+  const result = {
+    createIntentId: 'pct_ProjectCreate001',
+    createdProjectId: 'prj_Project000001',
+    workspace: fixture,
+    coordinatorSession: {
+      projectId: 'prj_Project000001',
+      runtimeId: 'codex-runtime',
+      threadId: 'thread-project-create-1'
+    },
+    activationRequestId: 'pca_Activation0001'
+  }
+  const parsed = projectCoordinatorProjectCreateResultSchema.parse(result)
+  assert.equal(parsed.createdProjectId, result.createdProjectId)
+  assert.deepEqual(parsed.coordinatorSession, result.coordinatorSession)
+  assert.equal(parsed.activationRequestId, result.activationRequestId)
+  assert.deepEqual(projectCoordinatorActivationAcknowledgeInputSchema.parse({
+    activationRequestId: result.activationRequestId
+  }), {
+    activationRequestId: result.activationRequestId
+  })
+  assert.throws(() => projectCoordinatorProjectCreateResultSchema.parse({
+    ...result,
+    coordinatorSession: {
+      ...result.coordinatorSession,
+      projectId: 'prj_OtherProject001'
+    }
+  }), /bind the exact new Project/u)
+})
+
 test('Coordinator transfer HCI selects only a successor identity and cannot claim Cloud authority facts', () => {
   const input = {
     projectId: 'prj_Project000001',
@@ -399,25 +431,45 @@ test('Task output recovery HCI supplies only the visible action identity or an a
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
     'project-coordinator.content-recovery.abandon'
   )
+})
 
-  const retry = {
+test('Task offer reassignment is the only successor-offer capability', () => {
+  const reassign = {
     projectId: 'prj_Project000001',
-    recoveryActionId: 'rca_TaskRecovery001',
+    taskId: 'tsk_RecoveryTask001',
+    previousTaskOfferId: 'ofr_RecoveryOffer001',
     workerUserId: 'usr_Worker000001',
     nextOutputFileName: 'architecture-review.recovery-2.md',
     offerExpiresAt: '2026-08-27T09:00:00.000Z'
   }
-  assert.deepEqual(projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse(retry), retry)
-  assert.throws(() => projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse({
-    ...retry,
+  assert.deepEqual(projectCoordinatorTaskOfferReassignInputSchema.parse(reassign), reassign)
+  const { nextOutputFileName: _omittedOutputFileName, ...textReassign } = reassign
+  assert.deepEqual(
+    projectCoordinatorTaskOfferReassignInputSchema.parse(textReassign),
+    textReassign
+  )
+  assert.equal(
+    'nextOutputFileName' in projectCoordinatorTaskOfferReassignInputSchema.parse(textReassign),
+    false
+  )
+  assert.throws(() => projectCoordinatorTaskOfferReassignInputSchema.parse({
+    ...reassign,
+    recoveryActionId: 'rca_TaskRecovery001'
+  }))
+  assert.throws(() => projectCoordinatorTaskOfferReassignInputSchema.parse({
+    ...reassign,
     previousExecutionId: 'exe_CallerChosen001'
   }))
-  assert.throws(() => projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse({
-    ...retry,
+  assert.throws(() => projectCoordinatorTaskOfferReassignInputSchema.parse({
+    ...reassign,
     expectedTaskRevision: 7
   }))
   assert.equal(
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
-    'project-coordinator.content-recovery.retry-successor'
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign,
+    'project-coordinator.task-offer.reassign'
+  )
+  assert.deepEqual(
+    Object.values(PROJECT_COORDINATOR_CAPABILITY_IDS).filter((id) => id.includes('reassign')),
+    ['project-coordinator.task-offer.reassign']
   )
 })

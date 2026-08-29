@@ -31,6 +31,11 @@ export type ProjectCoordinatorPlanningTaskReadiness = Readonly<{
   scope: TaskAuthorityScope
 }>
 
+type ProjectCoordinatorTaskRequirements = Readonly<{
+  fileIntent: unknown | null
+  requiredCapabilityTags: readonly string[]
+}>
+
 /**
  * Prospective planning is intentionally distinct from execution eligibility.
  * A draft has no invited Membership or TaskAuthority rows yet; a paused
@@ -74,6 +79,16 @@ export function projectCoordinatorPlanningTaskReadiness(
   project: ProjectCoordinatorProject,
   view: ProjectWorkerAvailabilityView,
   task: ProjectPlanTaskDeclaration,
+  observedAt: string
+): ProjectCoordinatorPlanningTaskReadiness {
+  return projectCoordinatorTaskRequirementReadiness(project, view, task, observedAt)
+}
+
+/** Shared readiness check for both Plan declarations and current Cloud Tasks. */
+export function projectCoordinatorTaskRequirementReadiness(
+  project: ProjectCoordinatorProject,
+  view: ProjectWorkerAvailabilityView,
+  task: ProjectCoordinatorTaskRequirements,
   observedAt: string
 ): ProjectCoordinatorPlanningTaskReadiness {
   const scope = task.fileIntent === null ? 'text_tasks' : 'file_tasks'

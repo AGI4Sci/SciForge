@@ -41,6 +41,9 @@ export type ClaudeCodeStoredThread = {
   latestTurnId?: string
   latestUserMessageId?: string
   latestTurnStatus?: AgentRuntimeTurn['status']
+  relation?: AgentRuntimeThread['relation']
+  threadSource?: string
+  sidebarVisibility?: AgentRuntimeThread['sidebarVisibility']
 }
 
 export type ClaudeCodeThreadStoreSnapshot = {
@@ -82,6 +85,9 @@ export class ClaudeCodeThreadStore {
     latestTurnId?: string
     latestUserMessageId?: string
     latestTurnStatus?: AgentRuntimeTurn['status']
+    relation?: AgentRuntimeThread['relation']
+    threadSource?: string
+    sidebarVisibility?: AgentRuntimeThread['sidebarVisibility']
   }): Promise<ClaudeCodeStoredThread> {
     return this.enqueue(async () => this.upsertNow(input))
   }
@@ -109,6 +115,9 @@ export class ClaudeCodeThreadStore {
     latestTurnId?: string
     latestUserMessageId?: string
     latestTurnStatus?: AgentRuntimeTurn['status']
+    relation?: AgentRuntimeThread['relation']
+    threadSource?: string
+    sidebarVisibility?: AgentRuntimeThread['sidebarVisibility']
   }): Promise<ClaudeCodeStoredThread> {
     const guiThreadId = input.guiThreadId.trim()
     if (!guiThreadId) throw new Error('Claude Code GUI thread id is required.')
@@ -137,7 +146,16 @@ export class ClaudeCodeThreadStore {
         : existing?.latestUserMessageId ? { latestUserMessageId: existing.latestUserMessageId } : {}),
       ...(input.latestTurnStatus !== undefined
         ? { latestTurnStatus: input.latestTurnStatus }
-        : existing?.latestTurnStatus ? { latestTurnStatus: existing.latestTurnStatus } : {})
+        : existing?.latestTurnStatus ? { latestTurnStatus: existing.latestTurnStatus } : {}),
+      ...(input.relation !== undefined
+        ? { relation: input.relation }
+        : existing?.relation ? { relation: existing.relation } : {}),
+      ...(nonEmpty(input.threadSource, existing?.threadSource ?? '')
+        ? { threadSource: nonEmpty(input.threadSource, existing?.threadSource ?? '') }
+        : {}),
+      ...(input.sidebarVisibility !== undefined
+        ? { sidebarVisibility: input.sidebarVisibility }
+        : existing?.sidebarVisibility ? { sidebarVisibility: existing.sidebarVisibility } : {})
     }
     const threads = [...snapshot.threads]
     if (existingIndex >= 0) threads[existingIndex] = next
@@ -387,7 +405,10 @@ export function storedThreadToRuntimeThread(thread: ClaudeCodeStoredThread): Age
     latestTurnId: thread.latestTurnId,
     latestTurnStatus: thread.latestTurnStatus,
     backendThreadId: thread.claudeSessionId || undefined,
-    hasUserMessage: Boolean(thread.latestUserMessageId)
+    hasUserMessage: Boolean(thread.latestUserMessageId),
+    relation: thread.relation,
+    threadSource: thread.threadSource,
+    sidebarVisibility: thread.sidebarVisibility
   }
 }
 
@@ -574,8 +595,23 @@ function normalizeThread(raw: unknown): ClaudeCodeStoredThread | null {
     latestSeq: numberValue(record.latestSeq),
     ...(stringValue(record.latestTurnId) ? { latestTurnId: stringValue(record.latestTurnId) } : {}),
     ...(stringValue(record.latestUserMessageId) ? { latestUserMessageId: stringValue(record.latestUserMessageId) } : {}),
-    ...(isTurnStatus(record.latestTurnStatus) ? { latestTurnStatus: record.latestTurnStatus } : {})
+    ...(isTurnStatus(record.latestTurnStatus) ? { latestTurnStatus: record.latestTurnStatus } : {}),
+    ...(isThreadRelation(record.relation) ? { relation: record.relation } : {}),
+    ...(stringValue(record.threadSource) ? { threadSource: stringValue(record.threadSource) } : {}),
+    ...(isSidebarVisibility(record.sidebarVisibility)
+      ? { sidebarVisibility: record.sidebarVisibility }
+      : {})
   }
+}
+
+function isThreadRelation(value: unknown): value is NonNullable<AgentRuntimeThread['relation']> {
+  return value === 'primary' || value === 'fork' || value === 'side'
+}
+
+function isSidebarVisibility(
+  value: unknown
+): value is NonNullable<AgentRuntimeThread['sidebarVisibility']> {
+  return value === 'main' || value === 'side' || value === 'hidden'
 }
 
 function parseStoredEvent(line: string): ClaudeCodeStoredEvent | null {

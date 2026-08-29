@@ -15,7 +15,7 @@ import {
 
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 4,
     lastInboxSequence: 8,
     user: userPrincipalFixture,
@@ -80,7 +80,7 @@ test('obsolete local Collaboration state fails with an explicit recovery boundar
   const store = new CollaborationLocalStore(new MemoryBackend({ schemaVersion: 1 }))
   await assert.rejects(
     store.open(),
-    /not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud/u
+    /not schema version 2 or 3; clear the obsolete local Collaboration state and reconnect to Cloud/u
   )
 })
 

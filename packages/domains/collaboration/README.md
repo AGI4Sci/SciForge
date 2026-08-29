@@ -44,7 +44,7 @@ AgentRuntime/Capability Broker 路径负责。普通手机身份不会生成桌�
 自动接单、本地 journal、execution fence 与重启恢复继续由本包拥有，不形成第二条 Cloud
 认证或 Task 执行路径。
 
-本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@4.0.0`
+本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@6.0.0`
 internal service，仅授权 `sciforge.project-coordinator` 消费。其闭集包含 Plan/Offer、统一
 HumanNeeded、TaskResult review、Project decision 与 final summary 命令；不包含 target User
 `human.answer`，调用者也不能传入 Agent、route、header 或 credential。服务把命令绑定到当前
@@ -53,7 +53,9 @@ HumanNeeded、TaskResult review、Project decision 与 final summary 命令；�
 `coordinator_project` HumanAnswer
 只投递给 Project Coordinator，`worker_execution` HumanAnswer 仍只进入 Worker adapter；没有
 owner 时 Inbox 处理 fail closed，消息不会被静默 ACK。严格 Cloud revision/fence 错误会随该
-outbox entry 持久化并幂等返回；非严格 upstream body 不会写入 journal。
+outbox entry 持久化并幂等返回；同一调用可按 exact idempotency key 恢复原命令及其严格
+response，且 consumer 必须在 failed entry 被重试前校验原命令仍匹配本次调用；该路径不派生
+第二个写入或幂等域，非严格 upstream body 也不会写入 journal。
 
 Task 派发的 canonical 路径是：Coordinator 只提交 `workerUserId`，Cloud 创建一个尚无
 `executionId` 的 User-level Task Offer 并广播给该 User 当前 eligible 的 Device Agent；第一台成功

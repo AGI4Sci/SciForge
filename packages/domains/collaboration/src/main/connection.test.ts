@@ -504,7 +504,8 @@ function userTransport(
       state: 'ready',
       baseUrl,
       userId: TEST_IDS.userId,
-      deviceId: TEST_IDS.deviceId
+      deviceId: TEST_IDS.deviceId,
+      deviceRevision: 1
     }),
     execute: async (input) => {
       assert.equal(input.operationId, AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID)

@@ -112,7 +112,7 @@ const commands = [
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '4.1.0')
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '6.0.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
     'project.create',
     'project.plan.submit',
@@ -228,28 +228,70 @@ test('service parses both commands and Cloud responses at the public boundary', 
     })
   }
   let received: unknown
+  let resumedIdempotencyKey: string | undefined
   const service = defineCoordinatorCloudCommandService({
     execute: async (command) => {
       received = command
       return response
+    },
+    resume: async (idempotencyKey, validateCommand) => {
+      resumedIdempotencyKey = idempotencyKey
+      validateCommand(commands[2])
+      return { command: commands[2], response }
     },
     subscribe: () => () => undefined
   })
 
   assert.deepEqual(await service.execute(commands[2]), response)
   assert.deepEqual(received, commands[2])
+  let validatedReplay: unknown
+  assert.deepEqual(await service.resume(commands[2].idempotencyKey, (command) => {
+    validatedReplay = command
+  }), {
+    command: commands[2],
+    response
+  })
+  assert.equal(resumedIdempotencyKey, commands[2].idempotencyKey)
+  assert.deepEqual(validatedReplay, commands[2])
   await assert.rejects(
     service.execute({ ...commands[2], route: '/v1/internal/write' } as never)
   )
+  await assert.rejects(service.resume('retry', () => undefined))
 
   const invalidResponseService = defineCoordinatorCloudCommandService({
     execute: async () => ({
       ...response,
       rawUpstreamBody: { internalDebug: 'must-not-be-retained' }
     } as never),
+    resume: async () => null,
     subscribe: () => () => undefined
   })
   await assert.rejects(invalidResponseService.execute(commands[2]))
+
+  const invalidReplayService = defineCoordinatorCloudCommandService({
+    execute: async () => response,
+    resume: async (_idempotencyKey, validateCommand) => {
+      validateCommand(commands[2])
+      return {
+        command: commands[2],
+        response: { ...response, requestId: 'req_Reque0000002' }
+      }
+    },
+    subscribe: () => () => undefined
+  })
+  await assert.rejects(
+    invalidReplayService.resume(commands[2].idempotencyKey, () => undefined)
+  )
+
+  const unvalidatedReplayService = defineCoordinatorCloudCommandService({
+    execute: async () => response,
+    resume: async () => ({ command: commands[2], response }),
+    subscribe: () => () => undefined
+  })
+  await assert.rejects(
+    unvalidatedReplayService.resume(commands[2].idempotencyKey, () => undefined),
+    /was not validated before resumption/u
+  )
 })
 
 test('service exposes one strict Coordinator Agent Inbox subscription boundary', async () => {
@@ -257,6 +299,7 @@ test('service exposes one strict Coordinator Agent Inbox subscription boundary',
   let disposed = false
   const service = defineCoordinatorCloudCommandService({
     execute: async () => { throw new Error('unused') },
+    resume: async () => null,
     subscribe: (handler) => {
       upstreamHandler = handler
       return () => { disposed = true }

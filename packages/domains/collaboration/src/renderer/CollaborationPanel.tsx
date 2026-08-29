@@ -1895,7 +1895,7 @@ export function ProjectsSection({
   projects: readonly ProjectView[]
   participant?: ParticipantView
   busy: boolean
-  onTaskOfferDecision: (taskOfferId: string, decision: 'accept' | 'dismiss') => void
+  onTaskOfferDecision: (taskOfferId: string, decision: 'accept' | 'reject' | 'dismiss') => void
 }>): ReactElement {
   const { t } = useTranslation('common')
   return (
@@ -1955,7 +1955,7 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
   task: CollaborationTaskView
   participant?: ParticipantView
   busy: boolean
-  onOfferDecision: (taskOfferId: string, decision: 'accept' | 'dismiss') => void
+  onOfferDecision: (taskOfferId: string, decision: 'accept' | 'reject' | 'dismiss') => void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const agent = participant?.agents.find(({ agentId }) => agentId === task.assigneeAgentId)
@@ -1993,6 +1993,14 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
             onClick={() => onOfferDecision(task.taskOfferId, 'accept')}
           >
             {t('collaborationTaskAccept')}
+          </button>
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            disabled={busy}
+            onClick={() => onOfferDecision(task.taskOfferId, 'reject')}
+          >
+            {t('collaborationTaskReject')}
           </button>
           <button
             type="button"

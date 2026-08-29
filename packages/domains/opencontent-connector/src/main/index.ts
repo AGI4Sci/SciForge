@@ -2,6 +2,11 @@ import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  type AuthenticatedCloudTransport
+} from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import {
   defineProviderInstanceDirectoryEntry,
   providerInstanceDirectoryEntryContributionContractSchema
 } from '@sciforge/domain-sdk/provider-composition'
@@ -30,6 +35,7 @@ import {
   type OpenContentCapabilityFactoryContribution
 } from './connection-capabilities.js'
 import { createOpenContentConnectionService } from './connection-service.js'
+import { createOpenContentProviderPrincipalPublisher } from './provider-principal-publisher.js'
 import { createOpenContentClient } from './opencontent-client.js'
 import { createOpenContentPrivateAccountRuntime } from './provider-credential-runtime.js'
 import { createOpenContentTeamAdministration } from './team-administration.js'
@@ -88,6 +94,12 @@ export function createDomainMainEntry(
     accounts,
     getRuntime
   })
+  const providerPrincipalPublisher = createOpenContentProviderPrincipalPublisher(
+    () => host.internalServices!.acquire<AuthenticatedCloudTransport>(
+      AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+      AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION
+    )
+  )
   const deployment = resolveOpenContentDeploymentConfiguration(
     host,
     instance.providerInstanceRef
@@ -156,7 +168,8 @@ export function createDomainMainEntry(
         value: createOpenContentCapabilityFactory({
           defineCapability: (options) => host.defineCapability(options),
           providerInstanceRef: instance.providerInstanceRef,
-          connections
+          connections,
+          providerPrincipalPublisher
         })
       },
       {

@@ -656,7 +656,7 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(error, /Typed permission error/u)
 })
 
-test('renders explicit claim and local-dismiss controls only for a manual Worker offer', () => {
+test('renders explicit claim, User rejection, and local-dismiss controls only for a manual Worker offer', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
@@ -679,6 +679,7 @@ test('renders explicit claim and local-dismiss controls only for a manual Worker
   )
   assert.match(html, /data-task-offer-decision="true"/u)
   assert.match(html, /collaborationTaskAccept/u)
+  assert.match(html, /collaborationTaskReject/u)
   assert.match(html, /collaborationTaskDismiss/u)
 })
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { taskExecutionPreflightSchema } from './cloud-state-protocol.js'
-import { restRequestSchema } from './protocol.js'
+import { restRequestSchema, taskOfferClosedPayloadSchema } from './protocol.js'
 import { checkCoordinatorAuthorityEpoch } from './rules.js'
-import { taskExecutionSchema } from './task-execution.js'
+import { taskExecutionSchema, taskOfferSchema } from './task-execution.js'
 import { TEST_IDS, TEST_LATER_TIMESTAMP, TEST_TIMESTAMP } from './testing.js'
 
 const openFence = {
@@ -41,6 +41,25 @@ const acceptedExecution = {
   acceptedAt: TEST_TIMESTAMP,
   startedAt: null,
   terminalAt: null,
+  revision: 1,
+  createdAt: TEST_TIMESTAMP,
+  updatedAt: TEST_TIMESTAMP
+}
+
+const pendingOffer = {
+  schemaVersion: 1 as const,
+  type: 'task_offer' as const,
+  taskOfferId: TEST_IDS.taskOfferId,
+  projectId: TEST_IDS.projectId,
+  taskId: TEST_IDS.taskId,
+  executionId: null,
+  workerUserId: TEST_IDS.secondUserId,
+  offeredByCoordinatorAgentId: TEST_IDS.agentId,
+  state: 'pending' as const,
+  reassignmentTaskRevision: null,
+  offeredAt: TEST_TIMESTAMP,
+  expiresAt: TEST_LATER_TIMESTAMP,
+  respondedAt: null,
   revision: 1,
   createdAt: TEST_TIMESTAMP,
   updatedAt: TEST_TIMESTAMP
@@ -193,6 +212,59 @@ describe('Task execution attempts and fences', () => {
       ...allowed,
       device: { ...allowed.device, status: 'revoked' }
     }).success).toBe(false)
+  })
+})
+
+describe('Task offer lifecycle', () => {
+  it('requires an explicit reassignment revision field and fences it to unclaimed terminal offers', () => {
+    expect(taskOfferSchema.parse(pendingOffer)).toEqual(pendingOffer)
+    const { reassignmentTaskRevision: _omitted, ...withoutReassignmentTaskRevision } = pendingOffer
+    expect(taskOfferSchema.safeParse(withoutReassignmentTaskRevision).success).toBe(false)
+
+    const rejected = {
+      ...pendingOffer,
+      state: 'rejected' as const,
+      reassignmentTaskRevision: 2,
+      respondedAt: TEST_LATER_TIMESTAMP,
+      revision: 2,
+      updatedAt: TEST_LATER_TIMESTAMP
+    }
+    expect(taskOfferSchema.parse(rejected).reassignmentTaskRevision).toBe(2)
+    expect(taskOfferSchema.safeParse({
+      ...rejected,
+      state: 'accepted',
+      executionId: TEST_IDS.executionId
+    }).success).toBe(false)
+  })
+
+  it('accepts the exact Worker rejection command and closed notification shape', () => {
+    const reject = {
+      protocolVersion: '1.0' as const,
+      type: 'task.offer.reject' as const,
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_offer_reject_0001',
+      taskOfferId: TEST_IDS.taskOfferId,
+      taskId: TEST_IDS.taskId,
+      expectedTaskRevision: 1,
+      expectedOfferRevision: 1
+    }
+    expect(restRequestSchema.parse(reject)).toEqual(reject)
+    expect(restRequestSchema.safeParse({ ...reject, reason: 'Not available.' }).success).toBe(false)
+
+    const closed = {
+      protocolVersion: '1.0' as const,
+      type: 'task.offer.closed' as const,
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      taskOfferId: TEST_IDS.taskOfferId,
+      audience: 'coordinator' as const,
+      outcome: 'rejected' as const,
+      taskRevision: 2,
+      offerRevision: 2
+    }
+    expect(taskOfferClosedPayloadSchema.parse(closed)).toEqual(closed)
+    const { taskRevision: _taskRevision, ...withoutTaskRevision } = closed
+    expect(taskOfferClosedPayloadSchema.safeParse(withoutTaskRevision).success).toBe(false)
   })
 })
 

@@ -17,9 +17,9 @@ export const PROJECT_TRANSITIONS = {
 
 export const TASK_TRANSITIONS = {
   planned: ['offered', 'cancelled'],
-  offered: ['in_progress', 'failed', 'cancelled'],
-  in_progress: ['needs_human', 'awaiting_review', 'manual_recovery_required', 'failed', 'cancelled'],
-  needs_human: ['in_progress', 'failed', 'cancelled'],
+  offered: ['in_progress', 'revision_requested', 'failed', 'cancelled'],
+  in_progress: ['needs_human', 'awaiting_review', 'revision_requested', 'manual_recovery_required', 'failed', 'cancelled'],
+  needs_human: ['in_progress', 'revision_requested', 'failed', 'cancelled'],
   awaiting_review: ['completed', 'revision_requested', 'manual_recovery_required', 'cancelled'],
   revision_requested: ['offered', 'cancelled'],
   manual_recovery_required: ['awaiting_review', 'revision_requested', 'cancelled'],
@@ -42,8 +42,9 @@ export const TASK_EXECUTION_TRANSITIONS = {
 } as const
 
 export const TASK_OFFER_TRANSITIONS = {
-  pending: ['accepted', 'withdrawn', 'timed_out'],
+  pending: ['accepted', 'rejected', 'withdrawn', 'timed_out'],
   accepted: [],
+  rejected: [],
   withdrawn: [],
   timed_out: []
 } as const

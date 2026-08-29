@@ -81,7 +81,7 @@ export const PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS = Object.freeze([
   'project-coordinator.workflow.continue',
   'project-coordinator.content-recovery.observe-link',
   'project-coordinator.content-recovery.abandon',
-  'project-coordinator.content-recovery.retry-successor',
+  'project-coordinator.task-offer.reassign',
   'project-coordinator.membership.add',
   'project-coordinator.membership.accept',
   'project-coordinator.membership.remove',

@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-coordinator",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -9,7 +9,6 @@
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
-    "./ports": "./src/ports.ts",
     "./renderer": "./src/renderer/index.tsx"
   },
   "files": [
@@ -23,10 +22,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "4.1.0",
-    "@sciforge/domain-collaboration": "^5.1.0",
+    "@sciforge/collaboration-contracts": "5.0.0",
+    "@sciforge/domain-collaboration": "^6.0.0",
     "@sciforge/domain-content-space": "^5.0.0",
-    "@sciforge/domain-identity-access": "^3.0.2",
+    "@sciforge/domain-identity-access": "^4.0.0",
     "@sciforge/domain-sdk": "^0.2.11",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
@@ -37,6 +36,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.11.2",
     "react-dom": "^19.0.0",
     "tsx": "^4.22.4",
     "typescript": "^5.8.2"

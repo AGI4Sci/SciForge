@@ -14,7 +14,10 @@ describe('frozen state machines', () => {
     expect(canTransition('project', 'draft', 'active')).toBe(true)
     expect(canTransition('project', 'completed', 'active')).toBe(false)
     expect(canTransition('task', 'offered', 'in_progress')).toBe(true)
+    expect(canTransition('task', 'offered', 'revision_requested')).toBe(true)
     expect(canTransition('task', 'offered', 'awaiting_review')).toBe(false)
+    expect(canTransition('task_offer', 'pending', 'rejected')).toBe(true)
+    expect(canTransition('task_offer', 'rejected', 'accepted')).toBe(false)
     expect(canTransition('projection', 'closed', 'active')).toBe(false)
   })
 

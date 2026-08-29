@@ -4,13 +4,16 @@ import test from 'node:test'
 import {
   bindTaskFileDeclaration,
   createCollaborationError,
+  DEFAULT_TASK_OFFER_TTL_MS,
   restResponseSchema,
+  taskExecutionSchema,
   taskOfferSchema,
   taskSchema,
   type ProjectPlan,
   type ProjectPlanTask,
   type RestRequest,
-  type RestResponse
+  type RestResponse,
+  type TaskFileIntent
 } from '@sciforge/collaboration-contracts'
 import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts/node'
 import {
@@ -121,6 +124,7 @@ test('concurrent and replayed reconciliation serializes one canonical offer per 
   let workspace = continuationWorkspace(parallelPlan)
   const commands: Array<Extract<RestRequest, { type: 'task.offer.create' }>> = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    resume: async () => null,
     execute: async (command) => {
       if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
       commands.push(command)
@@ -174,12 +178,202 @@ test('concurrent and replayed reconciliation serializes one canonical offer per 
   assert.equal(workspace.projects[0]?.tasks.length, 2)
 })
 
+test('a failed durable continuation attempt renews its exact command identity after expiry', async () => {
+  const currentPlan = confirmedPlan([rootItem])
+  let workspace = continuationWorkspace(currentPlan)
+  let currentTime = new Date(TEST_TIMESTAMP)
+  const commands: Array<Extract<RestRequest, { type: 'task.offer.create' }>> = []
+  const durableBodies = new Map<string, string>()
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: {
+      resume: async () => null,
+      execute: async (command) => {
+        if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
+        const { requestId: _requestId, ...businessBody } = command
+        const serializedBody = JSON.stringify(businessBody)
+        const durableBody = durableBodies.get(command.idempotencyKey)
+        if (durableBody !== undefined && durableBody !== serializedBody) {
+          throw new Error('Outbox idempotency key was reused for a different command.')
+        }
+        durableBodies.set(command.idempotencyKey, serializedBody)
+        commands.push(command)
+        if (commands.length <= 2) throw new Error('Injected offline delivery failure.')
+
+        const response = offerResponse(command, currentPlan)
+        workspace = workspaceWithCreatedOffer(workspace, response)
+        return response
+      },
+      subscribe: () => () => undefined
+    },
+    requestId: () => `req_ContinuationExpiry${String(commands.length + 1).padStart(2, '0')}`,
+    now: () => currentTime
+  })
+
+  await assert.rejects(
+    continuation.reconcileProject(TEST_IDS.projectId),
+    /Injected offline delivery failure/u
+  )
+  await assert.rejects(
+    continuation.reconcileProject(TEST_IDS.projectId),
+    /Injected offline delivery failure/u
+  )
+  assert.equal(commands[0]?.idempotencyKey, commands[1]?.idempotencyKey)
+  assert.equal(commands[0]?.offerExpiresAt, commands[1]?.offerExpiresAt)
+  currentTime = new Date(currentTime.getTime() + DEFAULT_TASK_OFFER_TTL_MS + 1)
+
+  const reconciled = await continuation.reconcileProject(TEST_IDS.projectId)
+
+  assert.equal(commands.length, 3)
+  assert.notEqual(commands[1]?.offerExpiresAt, commands[2]?.offerExpiresAt)
+  assert.notEqual(commands[1]?.idempotencyKey, commands[2]?.idempotencyKey)
+  assert.equal(reconciled.projects[0]?.tasks.length, 1)
+  assert.equal(reconciled.projects[0]?.offers.length, 1)
+})
+
+test('expired continuation delivery renewal is bounded for one canonical Plan item', async () => {
+  const currentPlan = confirmedPlan([rootItem])
+  const workspace = continuationWorkspace(currentPlan)
+  let currentTime = new Date(TEST_TIMESTAMP)
+  const commands: Array<Extract<RestRequest, { type: 'task.offer.create' }>> = []
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: {
+      resume: async () => null,
+      execute: async (command) => {
+        if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
+        commands.push(command)
+        currentTime = new Date(Date.parse(command.offerExpiresAt) + 1)
+        return restResponseSchema.parse({
+          protocolVersion: '1.0',
+          type: 'rest.error',
+          requestId: command.requestId,
+          error: createCollaborationError(
+            'expired',
+            'A Task offer expiry must be in the future.',
+            { requestId: command.requestId }
+          )
+        })
+      },
+      subscribe: () => () => undefined
+    },
+    requestId: () => `req_ContinuationBound${String(commands.length + 1).padStart(2, '0')}`,
+    now: () => currentTime
+  })
+
+  await assert.rejects(
+    continuation.reconcileProject(TEST_IDS.projectId),
+    /Task offer expiry must be in the future/u
+  )
+  assert.equal(commands.length, 4)
+  assert.equal(new Set(commands.map(({ idempotencyKey }) => idempotencyKey)).size, 4)
+})
+
+test('an unrelated validation error is terminal even when its offer body aged out in flight', async () => {
+  const currentPlan = confirmedPlan([rootItem])
+  const workspace = continuationWorkspace(currentPlan)
+  let currentTime = new Date(TEST_TIMESTAMP)
+  let attempts = 0
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: {
+      resume: async () => null,
+      execute: async (command) => {
+        if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
+        attempts += 1
+        currentTime = new Date(Date.parse(command.offerExpiresAt) + 1)
+        return restResponseSchema.parse({
+          protocolVersion: '1.0',
+          type: 'rest.error',
+          requestId: command.requestId,
+          error: createCollaborationError(
+            'validation_error',
+            'The selected Plan item is invalid.',
+            { requestId: command.requestId }
+          )
+        })
+      },
+      subscribe: () => () => undefined
+    },
+    now: () => currentTime
+  })
+
+  await assert.rejects(
+    continuation.reconcileProject(TEST_IDS.projectId),
+    /selected Plan item is invalid/u
+  )
+  assert.equal(attempts, 1)
+})
+
+test('a response-lost committed continuation attempt converges through the canonical Task fence', async () => {
+  const currentPlan = confirmedPlan([rootItem])
+  let workspace = continuationWorkspace(currentPlan)
+  let currentTime = new Date(TEST_TIMESTAMP)
+  let committedResponse: Extract<RestResponse, { type: 'rest.collection' }> | null = null
+  const commands: Array<Extract<RestRequest, { type: 'task.offer.create' }>> = []
+  const durableBodies = new Map<string, string>()
+  const continuation = createProjectCoordinatorContinuationPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: {
+      resume: async () => null,
+      execute: async (command) => {
+        if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
+        const { requestId: _requestId, ...businessBody } = command
+        const serializedBody = JSON.stringify(businessBody)
+        const durableBody = durableBodies.get(command.idempotencyKey)
+        if (durableBody !== undefined && durableBody !== serializedBody) {
+          throw new Error('Outbox idempotency key was reused for a different command.')
+        }
+        durableBodies.set(command.idempotencyKey, serializedBody)
+        commands.push(command)
+        if (committedResponse === null) {
+          committedResponse = offerResponse(command, currentPlan)
+          throw new Error('Injected response loss after Cloud commit.')
+        }
+        return restResponseSchema.parse({
+          protocolVersion: '1.0',
+          type: 'rest.error',
+          requestId: command.requestId,
+          error: createCollaborationError(
+            'identity_conflict',
+            'This confirmed plan item already has its canonical Task.',
+            { requestId: command.requestId }
+          )
+        })
+      },
+      subscribe: () => () => undefined
+    },
+    requestId: () => `req_ContinuationResponseLoss${String(commands.length + 1).padStart(2, '0')}`,
+    now: () => currentTime
+  })
+
+  await assert.rejects(
+    continuation.reconcileProject(TEST_IDS.projectId),
+    /Injected response loss after Cloud commit/u
+  )
+  currentTime = new Date(currentTime.getTime() + DEFAULT_TASK_OFFER_TTL_MS + 1)
+  await assert.rejects(
+    continuation.reconcileProject(TEST_IDS.projectId),
+    /identity_conflict/u
+  )
+
+  assert.ok(committedResponse)
+  workspace = workspaceWithCreatedOffer(workspace, committedResponse)
+  const reconciled = await continuation.reconcileProject(TEST_IDS.projectId)
+
+  assert.equal(commands.length, 2)
+  assert.notEqual(commands[0]?.idempotencyKey, commands[1]?.idempotencyKey)
+  assert.equal(reconciled.projects[0]?.tasks.length, 1)
+  assert.equal(reconciled.projects[0]?.offers.length, 1)
+})
+
 test('reconciliation stops on stale Cloud authority instead of fabricating local progress', async () => {
   const workspace = continuationWorkspace(confirmedPlan([rootItem]))
   let writes = 0
   const continuation = createProjectCoordinatorContinuationPort({
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
     coordinatorCloudCommands: {
+      resume: async () => null,
       execute: async (command) => {
         writes += 1
         return restResponseSchema.parse({
@@ -212,6 +406,7 @@ test('reconciliation reads the Worker User only from the Cloud-confirmed Plan', 
   const continuation = createProjectCoordinatorContinuationPort({
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
     coordinatorCloudCommands: {
+      resume: async () => null,
       execute: async (command) => {
         commandCount += 1
         assert.equal(command.type, 'task.offer.create')
@@ -237,6 +432,7 @@ test('a successful write must become visible before reconciliation dispatches ag
   const continuation = createProjectCoordinatorContinuationPort({
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
     coordinatorCloudCommands: {
+      resume: async () => null,
       execute: async (command) => {
         if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
         writes += 1
@@ -259,8 +455,9 @@ test('continuation accepts only the current Team-root binding of a logical file 
     ...rootItem,
     planItemId: 'item_file_collect',
     fileIntent: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       inputs: [],
+      dependencyInputs: [],
       output: {
         kind: 'content-space.output-new',
         target: 'project-binding-root',
@@ -276,6 +473,7 @@ test('continuation accepts only the current Team-root binding of a logical file 
   const continuation = createProjectCoordinatorContinuationPort({
     workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
     coordinatorCloudCommands: {
+      resume: async () => null,
       execute: async (command) => {
         if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
         const response = offerResponse(command, currentPlan)
@@ -313,6 +511,166 @@ test('continuation accepts only the current Team-root binding of a logical file 
     reconciled.projects[0]?.plan?.plan.tasks[0]?.fileIntent,
     fileItem.fileIntent
   )
+})
+
+test('continuation accepts Cloud dependency locators only with the exact Plan input shape', async () => {
+  const sourceItem: ProjectPlanTask = {
+    ...rootItem,
+    planItemId: 'item_file_dependency_source',
+    title: 'Produce dependency files',
+    fileIntent: {
+      schemaVersion: 2,
+      inputs: [],
+      dependencyInputs: [],
+      output: {
+        kind: 'content-space.output-new',
+        target: 'project-binding-root',
+        mode: 'upload-new',
+        fileName: 'dependency-source.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    }
+  }
+  const staticInput = {
+    kind: 'content-space.input-file' as const,
+    locator: {
+      contractVersion: 1 as const,
+      kind: 'content-space.file-reference' as const,
+      authority: 'provider.instance.alpha',
+      identity: { fileId: 'static-plan-input' }
+    },
+    destinationName: 'static.csv',
+    expectedSemanticRevision: 'semantic-revision-1',
+    expectedMediaType: 'text/csv'
+  }
+  const dependencyInputs = [{
+    planItemId: sourceItem.planItemId,
+    outputIndex: 0,
+    destinationName: 'dependency-zero.md'
+  }, {
+    planItemId: sourceItem.planItemId,
+    outputIndex: 1,
+    destinationName: 'dependency-one.md'
+  }]
+  const consumerItem: ProjectPlanTask = {
+    ...dependentItem,
+    planItemId: 'item_file_dependency_consumer',
+    title: 'Consume dependency files',
+    dependencyPlanItemIds: [sourceItem.planItemId],
+    fileIntent: {
+      schemaVersion: 2,
+      inputs: [staticInput],
+      dependencyInputs,
+      output: {
+        kind: 'content-space.output-new',
+        target: 'project-binding-root',
+        mode: 'upload-new',
+        fileName: 'dependency-consumer.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    }
+  }
+  const currentPlan = confirmedPlan([sourceItem, consumerItem])
+  const cloudDependencyInputs: TaskFileIntent['inputs'] = [{
+    kind: 'content-space.input-file',
+    locator: {
+      contractVersion: 1,
+      kind: 'content-space.file-reference',
+      authority: 'opencontent.run0',
+      identity: { fileId: 'accepted-output-zero' }
+    },
+    destinationName: dependencyInputs[0]!.destinationName,
+    expectedSemanticRevision: null,
+    expectedMediaType: null
+  }, {
+    kind: 'content-space.input-file',
+    locator: {
+      contractVersion: 1,
+      kind: 'content-space.file-reference',
+      authority: 'opencontent.run0',
+      identity: { fileId: 'accepted-output-one' }
+    },
+    destinationName: dependencyInputs[1]!.destinationName,
+    expectedSemanticRevision: null,
+    expectedMediaType: null
+  }]
+  const exactInputs: TaskFileIntent['inputs'] = [staticInput, ...cloudDependencyInputs]
+
+  const reconcile = async (
+    returnedInputs: TaskFileIntent['inputs']
+  ): Promise<ProjectCoordinatorWorkspace> => {
+    let workspace = dependencyContinuationWorkspace(currentPlan, sourceItem)
+    const continuation = createProjectCoordinatorContinuationPort({
+      workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+      coordinatorCloudCommands: {
+        resume: async () => null,
+        execute: async (command) => {
+          if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
+          const response = withTaskFileInputs(
+            offerResponse(command, currentPlan, cloudDependencyInputs),
+            returnedInputs
+          )
+          const task = response.items.find((item) => item.type === 'task')
+          const offer = response.items.find((item) => item.type === 'task_offer')
+          if (!task || task.type !== 'task' || !offer || offer.type !== 'task_offer') {
+            throw new Error('Fixture did not produce a Task and TaskOffer.')
+          }
+          workspace = projectCoordinatorWorkspaceSchema.parse({
+            ...workspace,
+            projects: [{
+              ...workspace.projects[0]!,
+              project: {
+                ...workspace.projects[0]!.project,
+                revision: workspace.projects[0]!.project.revision + 1,
+                updatedAt: TEST_LATER_TIMESTAMP
+              },
+              tasks: [...workspace.projects[0]!.tasks, { task, executions: [] }],
+              offers: [offer]
+            }]
+          })
+          return response
+        },
+        subscribe: () => () => undefined
+      },
+      now: () => new Date(TEST_TIMESTAMP)
+    })
+    return continuation.reconcileProject(TEST_IDS.projectId)
+  }
+
+  const reconciled = await reconcile(exactInputs)
+  const createdIntent = reconciled.projects[0]?.tasks.find(({ task }) => (
+    task.taskId === canonicalTaskIdForPlanItem(currentPlan.projectPlanId, consumerItem.planItemId)
+  ))?.task.fileIntent
+  assert.deepEqual(createdIntent?.inputs.slice(0, 1), [staticInput])
+  assert.deepEqual(createdIntent?.inputs.slice(1), cloudDependencyInputs)
+  assert.deepEqual(
+    reconciled.projects[0]?.plan?.plan.tasks[1]?.fileIntent?.dependencyInputs,
+    dependencyInputs
+  )
+  assert.equal('locator' in dependencyInputs[0]!, false)
+
+  const rejectedInputs: ReadonlyArray<readonly [string, TaskFileIntent['inputs']]> = [[
+    'dependency input count',
+    exactInputs.slice(0, -1)
+  ], [
+    'dependency destination order',
+    [staticInput, cloudDependencyInputs[1]!, cloudDependencyInputs[0]!]
+  ], [
+    'static input prefix position',
+    [cloudDependencyInputs[0]!, staticInput, cloudDependencyInputs[1]!]
+  ], [
+    'static input prefix content',
+    [{ ...staticInput, expectedMediaType: null }, ...cloudDependencyInputs]
+  ]]
+  for (const [label, returnedInputs] of rejectedInputs) {
+    await assert.rejects(
+      reconcile(returnedInputs),
+      /exact selected Plan Task offer/u,
+      label
+    )
+  }
 })
 
 function confirmedPlan(tasks: readonly ProjectPlanTask[]): ProjectPlan {
@@ -498,9 +856,117 @@ function fileContinuationWorkspace(currentPlan: ProjectPlan): ProjectCoordinator
   })
 }
 
+function dependencyContinuationWorkspace(
+  currentPlan: ProjectPlan,
+  sourceItem: ProjectPlanTask
+): ProjectCoordinatorWorkspace {
+  if (sourceItem.fileIntent === null) throw new Error('Dependency source must be a file Task.')
+  const workspace = fileContinuationWorkspace(currentPlan)
+  const taskId = canonicalTaskIdForPlanItem(currentPlan.projectPlanId, sourceItem.planItemId)
+  const executionId = 'exe_ContinuationSource01'
+  const executionFileIntent = {
+    schemaVersion: 1 as const,
+    type: 'task_execution_file_intent' as const,
+    projectId: TEST_IDS.projectId,
+    taskId,
+    executionId,
+    assignmentTaskRevision: 1,
+    bindingRevision: FILE_BINDING_REVISION,
+    declarationDigest: TEST_HASH,
+    inputs: [],
+    output: {
+      rootResourceRefId: 'rrf_ContinuationRoot01',
+      fileName: sourceItem.fileIntent.output.fileName,
+      mediaType: sourceItem.fileIntent.output.mediaType,
+      maxBytes: sourceItem.fileIntent.output.maxBytes
+    }
+  }
+  const sourceTask = taskSchema.parse({
+    schemaVersion: 1,
+    type: 'task',
+    taskId,
+    projectId: TEST_IDS.projectId,
+    createdByCoordinatorAgentId: TEST_IDS.agentId,
+    title: sourceItem.title,
+    objective: sourceItem.objective,
+    completionCriteria: sourceItem.completionCriteria,
+    dependencyTaskIds: [],
+    requiredCapabilityTags: sourceItem.requiredCapabilityTags,
+    fileIntent: bindTaskFileDeclaration(sourceItem.fileIntent, FILE_BINDING_REVISION),
+    currentExecutionId: executionId,
+    currentExecutionState: 'completed',
+    status: 'completed',
+    executionCount: 1,
+    maxRetries: projectFixture.budget.maxTaskRetries,
+    completedAt: TEST_LATER_TIMESTAMP,
+    revision: 4,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  const sourceExecution = taskExecutionSchema.parse({
+    schemaVersion: 1,
+    type: 'task_execution',
+    projectId: TEST_IDS.projectId,
+    taskId,
+    executionId,
+    attempt: 1,
+    offeredByCoordinatorAgentId: TEST_IDS.agentId,
+    assigneeUserId: TEST_IDS.secondUserId,
+    assigneeAgentId: TEST_IDS.secondAgentId,
+    assigneeDeviceId: 'dev_ContinuationWorker01',
+    state: 'completed',
+    stateRevision: 4,
+    fence: {
+      schemaVersion: 1,
+      executionId,
+      assigneeUserId: TEST_IDS.secondUserId,
+      assigneeAgentId: TEST_IDS.secondAgentId,
+      assigneeDeviceId: 'dev_ContinuationWorker01',
+      assignmentTaskRevision: 1,
+      projectExecutionAuthorityEpoch: projectFixture.executionAuthorityEpoch,
+      userTaskAuthorityEpoch: 1,
+      bindingRevision: FILE_BINDING_REVISION,
+      status: 'fenced',
+      reason: 'completed',
+      fencedAt: TEST_LATER_TIMESTAMP
+    },
+    fileIntent: executionFileIntent,
+    currentResultSubmissionId: 'rsu_ContinuationSource01',
+    offeredAt: TEST_TIMESTAMP,
+    acceptedAt: TEST_TIMESTAMP,
+    startedAt: TEST_TIMESTAMP,
+    terminalAt: TEST_LATER_TIMESTAMP,
+    revision: 4,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  return projectCoordinatorWorkspaceSchema.parse({
+    ...workspace,
+    projects: [{
+      ...workspace.projects[0]!,
+      tasks: [{ task: sourceTask, executions: [sourceExecution] }]
+    }]
+  })
+}
+
+function withTaskFileInputs(
+  response: Extract<RestResponse, { type: 'rest.collection' }>,
+  inputs: TaskFileIntent['inputs']
+): Extract<RestResponse, { type: 'rest.collection' }> {
+  return restResponseSchema.parse({
+    ...response,
+    items: response.items.map((item) => {
+      if (item.type !== 'task') return item
+      if (item.fileIntent === null) throw new Error('Fixture Task must carry a file intent.')
+      return { ...item, fileIntent: { ...item.fileIntent, inputs } }
+    })
+  }) as Extract<RestResponse, { type: 'rest.collection' }>
+}
+
 function offerResponse(
   command: Extract<RestRequest, { type: 'task.offer.create' }>,
-  currentPlan: ProjectPlan
+  currentPlan: ProjectPlan,
+  dependencyInputs: readonly TaskFileIntent['inputs'][number][] = []
 ): Extract<RestResponse, { type: 'rest.collection' }> {
   const item = currentPlan.tasks.find(({ planItemId }) => planItemId === command.planItemId)
   if (!item) throw new Error('Unknown Plan item.')
@@ -520,7 +986,7 @@ function offerResponse(
     requiredCapabilityTags: item.requiredCapabilityTags,
     fileIntent: item.fileIntent === null
       ? null
-      : bindTaskFileDeclaration(item.fileIntent, FILE_BINDING_REVISION),
+      : bindTaskFileDeclaration(item.fileIntent, FILE_BINDING_REVISION, dependencyInputs),
     currentExecutionId: null,
     currentExecutionState: null,
     status: 'offered',
@@ -541,6 +1007,7 @@ function offerResponse(
     workerUserId: item.workerUserId,
     offeredByCoordinatorAgentId: TEST_IDS.agentId,
     state: 'pending',
+    reassignmentTaskRevision: null,
     offeredAt: TEST_TIMESTAMP,
     expiresAt: command.offerExpiresAt,
     respondedAt: null,
@@ -554,4 +1021,28 @@ function offerResponse(
     requestId: command.requestId,
     items: [task, offer]
   }) as Extract<RestResponse, { type: 'rest.collection' }>
+}
+
+function workspaceWithCreatedOffer(
+  workspace: ProjectCoordinatorWorkspace,
+  response: Extract<RestResponse, { type: 'rest.collection' }>
+): ProjectCoordinatorWorkspace {
+  const task = response.items.find((item) => item.type === 'task')
+  const offer = response.items.find((item) => item.type === 'task_offer')
+  if (!task || task.type !== 'task' || !offer || offer.type !== 'task_offer') {
+    throw new Error('Fixture did not produce a Task and TaskOffer.')
+  }
+  return projectCoordinatorWorkspaceSchema.parse({
+    ...workspace,
+    projects: [{
+      ...workspace.projects[0]!,
+      project: {
+        ...workspace.projects[0]!.project,
+        revision: workspace.projects[0]!.project.revision + 1,
+        updatedAt: TEST_LATER_TIMESTAMP
+      },
+      tasks: [...workspace.projects[0]!.tasks, { task, executions: [] }],
+      offers: [...workspace.projects[0]!.offers, offer]
+    }]
+  })
 }

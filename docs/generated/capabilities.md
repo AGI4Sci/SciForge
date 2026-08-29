@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **292**
+Registered actions: **293**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -68,10 +68,10 @@ Registered actions: **292**
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
-| `collaboration.status.read` | 1.0.0 | ui | read | none | global |
+| `collaboration.status.read` | 1.1.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
-| `collaboration.task.list` | 1.0.0 | ui | read | none | global |
-| `collaboration.task.offer.decide` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.task.list` | 1.1.0 | ui | read | none | global |
+| `collaboration.task.offer.decide` | 1.1.0 | ui | external-write | confirmation | global |
 | `collaboration.worker.acceptance-policy.update` | 1.0.0 | ui | external-write | confirmation | global |
 | `content-space.agent-admin-add-member` | 2.0.0 | agent, system | external-write | confirmation | resource |
 | `content-space.agent-admin-create-space` | 1.0.0 | agent, system | external-write | none | resource |
@@ -185,9 +185,9 @@ Registered actions: **292**
 | `identity.local.list-accounts` | 1.0.0 | ui | read | none | global |
 | `identity.local.rename-account` | 1.0.0 | ui | external-write | none | global |
 | `identity.local.select-account` | 1.0.0 | ui | external-write | none | global |
-| `opencontent.connection.bind` | 2.0.0 | ui | external-write | none | global |
-| `opencontent.connection.status` | 2.0.0 | ui | read | none | global |
-| `opencontent.connection.unbind` | 2.0.0 | ui | external-write | none | global |
+| `opencontent.connection.bind` | 3.0.0 | ui | external-write | none | global |
+| `opencontent.connection.status` | 3.0.0 | ui | external-write | none | global |
+| `opencontent.connection.unbind` | 3.0.0 | ui | external-write | none | global |
 | `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
@@ -199,27 +199,28 @@ Registered actions: **292**
 | `paper-radar.sync-biorxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-profile` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `project-coordinator.artifact-review.prepare` | 1.0.0 | ui, agent | read | none | global |
-| `project-coordinator.content-recovery.abandon` | 1.0.0 | ui, agent | destructive | confirmation | global |
-| `project-coordinator.content-recovery.observe-link` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.content-recovery.retry-successor` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.coordinator.transfer` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.human-needed.answer` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.human-needed.create` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.membership.accept` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.membership.add` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.membership.remove` | 1.0.0 | ui, agent | destructive | confirmation | global |
-| `project-coordinator.plan-draft.edit` | 1.0.0 | ui, agent | workspace-write | none | global |
-| `project-coordinator.plan-draft.generate` | 2.0.0 | ui, agent | workspace-write | none | global |
-| `project-coordinator.plan-draft.read` | 1.0.0 | ui, agent | read | none | global |
-| `project-coordinator.plan.confirm` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.plan.submit` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.project.complete` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.project.create` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.result.review` | 1.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.session-projection.read` | 1.0.0 | ui, agent | read | none | global |
-| `project-coordinator.workflow.continue` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.content-recovery.abandon` | 2.0.0 | ui, agent | destructive | confirmation | global |
+| `project-coordinator.content-recovery.observe-link` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.coordinator.transfer` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.human-needed.answer` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.human-needed.create` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.membership.accept` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.membership.add` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.membership.remove` | 2.0.0 | ui, agent | destructive | confirmation | global |
+| `project-coordinator.plan-draft.edit` | 2.0.0 | ui, agent | workspace-write | none | global |
+| `project-coordinator.plan-draft.generate` | 3.0.0 | ui, agent | workspace-write | none | global |
+| `project-coordinator.plan-draft.read` | 2.0.0 | ui, agent | read | none | global |
+| `project-coordinator.plan.confirm` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.plan.submit` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.project-activation.acknowledge` | 1.0.0 | ui | workspace-write | none | global |
+| `project-coordinator.project.complete` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.project.create` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.result.review` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.session-projection.read` | 2.0.0 | ui, agent | read | none | global |
+| `project-coordinator.task-offer.reassign` | 1.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.workflow.continue` | 2.0.0 | ui, agent | external-write | confirmation | global |
 | `project-coordinator.workflow.prepare` | 1.0.0 | ui, agent | read | none | global |
-| `project-coordinator.workspace.read` | 1.0.0 | ui, agent | read | none | global |
+| `project-coordinator.workspace.read` | 2.0.0 | ui, agent | read | none | global |
 | `project-dag.evidence-preview.resolve` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `project-dag.goal.save` | 1.0.0 | ui, agent, system | compute | none | workspace |
 | `project-dag.update` | 1.0.0 | ui, agent, system | compute | none | workspace |
@@ -19204,7 +19205,7 @@ Explicitly renames, pauses, resumes, closes, or relinks a stable projection.
 
 Reads the non-secret participant, connection, projection, queue, Project, and Task status.
 
-- Version: `1.0.0`
+- Version: `1.1.0`
 - Audiences: ui
 - Effect: `read`
 - Approval: none
@@ -20057,6 +20058,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                       "offered",
                       "awaiting-manual",
                       "accepting",
+                      "rejecting",
                       "running",
                       "needs-human",
                       "submitting",
@@ -20456,7 +20458,7 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
 
 Reads local canonical cloud Task projections and restart reconciliation state.
 
-- Version: `1.0.0`
+- Version: `1.1.0`
 - Audiences: ui
 - Effect: `read`
 - Approval: none
@@ -20486,6 +20488,7 @@ Reads local canonical cloud Task projections and restart reconciliation state.
             "offered",
             "awaiting-manual",
             "accepting",
+            "rejecting",
             "running",
             "needs-human",
             "submitting",
@@ -20566,6 +20569,7 @@ Reads local canonical cloud Task projections and restart reconciliation state.
                 "offered",
                 "awaiting-manual",
                 "accepting",
+                "rejecting",
                 "running",
                 "needs-human",
                 "submitting",
@@ -20643,9 +20647,9 @@ Reads local canonical cloud Task projections and restart reconciliation state.
 
 ## `collaboration.task.offer.decide`
 
-Claims one User-targeted offer or dismisses it only on this exact local Agent Device.
+Claims one User-targeted offer on this Device, rejects it for the Worker User across Devices, or dismisses it only on this Device.
 
-- Version: `1.0.0`
+- Version: `1.1.0`
 - Audiences: ui
 - Effect: `external-write`
 - Approval: confirmation
@@ -20687,6 +20691,25 @@ Claims one User-targeted offer or dismisses it only on this exact local Agent De
         "properties": {
           "decision": {
             "const": "dismiss",
+            "type": "string"
+          },
+          "taskOfferId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "taskOfferId",
+          "decision"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "const": "reject",
             "type": "string"
           },
           "taskOfferId": {
@@ -73309,7 +73332,7 @@ Selects an existing display-only Local Account on this installation.
 
 Validates and binds one existing OpenContent account to the current Principal.
 
-- Version: `2.0.0`
+- Version: `3.0.0`
 - Audiences: ui
 - Effect: `external-write`
 - Approval: none
@@ -73613,11 +73636,11 @@ Validates and binds one existing OpenContent account to the current Principal.
 
 ## `opencontent.connection.status`
 
-Reads the current Principal connection status for OpenContent.
+Reads and synchronizes the current Principal connection status for OpenContent.
 
-- Version: `2.0.0`
+- Version: `3.0.0`
 - Audiences: ui
-- Effect: `read`
+- Effect: `external-write`
 - Approval: none
 - Scope: global
 
@@ -73626,7 +73649,7 @@ Reads the current Principal connection status for OpenContent.
 ```json
 {
   "concurrency": {
-    "idempotency": "none",
+    "idempotency": "required",
     "revision": "none"
   },
   "contractVersion": 3,
@@ -73908,7 +73931,7 @@ Reads the current Principal connection status for OpenContent.
 
 Removes this Principal-bound, node-local OpenContent Session Token.
 
-- Version: `2.0.0`
+- Version: `3.0.0`
 - Audiences: ui
 - Effect: `external-write`
 - Approval: none
@@ -76100,7 +76123,7 @@ Re-reads the exact current Cloud submission and binding before returning one Hos
 
 Fences the unresolved execution permanently from freshly read Cloud CAS facts without manufacturing a successful Provider observation.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `destructive`
 - Approval: confirmation
@@ -76558,6 +76581,18 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -76583,6 +76618,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -76623,6 +76659,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -77019,6 +77056,36 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -77026,6 +77093,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -77114,6 +77182,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -77150,13 +77219,14 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -80213,6 +80283,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -80235,6 +80306,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -80502,6 +80574,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -80590,6 +80663,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -81782,7 +81856,7 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
 
 Re-reads the current recovery tuple, invokes the canonical Content Space exact observation, and links only the Host-derived portable output facts.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -82234,6 +82308,18 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -82259,6 +82345,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -82299,6 +82386,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -82695,6 +82783,36 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -82702,6 +82820,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -82790,6 +82909,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -82826,13 +82946,14 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -85889,6 +86010,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -85911,6 +86033,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -86178,6 +86301,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -86266,6 +86390,7 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -87454,5704 +87579,11 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
 }
 ```
 
-## `project-coordinator.content-recovery.retry-successor`
-
-Re-reads the completed abandon facts and asks only the current Coordinator Agent to issue a new fenced execution with a new no-overwrite filename.
-
-- Version: `1.0.0`
-- Audiences: ui, agent
-- Effect: `external-write`
-- Approval: confirmation
-- Scope: global
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "required",
-    "revision": "none"
-  },
-  "contractVersion": 3,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "nextOutputFileName": {
-        "maxLength": 128,
-        "minLength": 1,
-        "type": "string"
-      },
-      "offerExpiresAt": {
-        "format": "date-time",
-        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-        "type": "string"
-      },
-      "projectId": {
-        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-        "type": "string"
-      },
-      "recoveryActionId": {
-        "pattern": "^rca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-        "type": "string"
-      },
-      "workerUserId": {
-        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-        "type": "string"
-      }
-    },
-    "readOnly": true,
-    "required": [
-      "projectId",
-      "recoveryActionId",
-      "workerUserId",
-      "nextOutputFileName",
-      "offerExpiresAt"
-    ],
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "definitions": {
-      "__schema0": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      }
-    },
-    "properties": {
-      "availableWorkerUsers": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "displayName": {
-              "maxLength": 200,
-              "minLength": 1,
-              "type": "string"
-            },
-            "userId": {
-              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-              "type": "string"
-            }
-          },
-          "readOnly": true,
-          "required": [
-            "userId",
-            "displayName"
-          ],
-          "type": "object"
-        },
-        "maxItems": 1000,
-        "type": "array"
-      },
-      "connection": {
-        "oneOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "deviceId": {
-                "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                "type": "string"
-              },
-              "state": {
-                "const": "ready",
-                "type": "string"
-              },
-              "userId": {
-                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                "type": "string"
-              }
-            },
-            "readOnly": true,
-            "required": [
-              "state",
-              "userId",
-              "deviceId"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "state": {
-                "const": "identity_required",
-                "type": "string"
-              }
-            },
-            "readOnly": true,
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "reason": {
-                "maxLength": 2000,
-                "minLength": 1,
-                "type": "string"
-              },
-              "state": {
-                "const": "device_required",
-                "type": "string"
-              }
-            },
-            "readOnly": true,
-            "required": [
-              "state",
-              "reason"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "reason": {
-                "maxLength": 2000,
-                "minLength": 1,
-                "type": "string"
-              },
-              "state": {
-                "const": "cloud_unavailable",
-                "type": "string"
-              }
-            },
-            "readOnly": true,
-            "required": [
-              "state",
-              "reason"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "focusedProjectId": {
-        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-        "type": "string"
-      },
-      "observedAt": {
-        "format": "date-time",
-        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-        "type": "string"
-      },
-      "projects": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "coordinatorTransferFeedback": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "coordinatorAgentId": {
-                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "coordinatorAuthorityEpoch": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "disposition": {
-                      "enum": [
-                        "authority_transferred_out",
-                        "authority_transferred_in"
-                      ],
-                      "type": "string"
-                    },
-                    "inboxMessageId": {
-                      "pattern": "^ibx_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "observedAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                      "type": "string"
-                    },
-                    "previousCoordinatorAgentId": {
-                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "projectId": {
-                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "projectRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "recipientAgentId": {
-                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    }
-                  },
-                  "readOnly": true,
-                  "required": [
-                    "projectId",
-                    "inboxMessageId",
-                    "recipientAgentId",
-                    "previousCoordinatorAgentId",
-                    "coordinatorAgentId",
-                    "coordinatorAuthorityEpoch",
-                    "projectRevision",
-                    "disposition",
-                    "observedAt"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "finalSummary": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "acceptedResultSubmissionIds": {
-                      "items": {
-                        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "maxItems": 10000,
-                      "minItems": 1,
-                      "type": "array"
-                    },
-                    "completedAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                      "type": "string"
-                    },
-                    "confirmedPlanRevision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "createdAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                      "type": "string"
-                    },
-                    "createdByCoordinatorAgentId": {
-                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "createdByUserId": {
-                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "projectId": {
-                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "projectPlanId": {
-                      "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "projectRecordId": {
-                      "pattern": "^rec_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                      "type": "string"
-                    },
-                    "revision": {
-                      "maximum": 9007199254740991,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "schemaVersion": {
-                      "const": 1,
-                      "type": "number"
-                    },
-                    "summary": {
-                      "maxLength": 32000,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "type": {
-                      "const": "project_final_summary",
-                      "type": "string"
-                    },
-                    "updatedAt": {
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "schemaVersion",
-                    "revision",
-                    "createdAt",
-                    "updatedAt",
-                    "type",
-                    "projectId",
-                    "projectRecordId",
-                    "projectPlanId",
-                    "confirmedPlanRevision",
-                    "acceptedResultSubmissionIds",
-                    "summary",
-                    "createdByUserId",
-                    "createdByCoordinatorAgentId",
-                    "completedAt"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "memberUsers": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "observedAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "projectId": {
-                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "revision": {
-                    "maximum": 9007199254740991,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "status": {
-                    "enum": [
-                      "active",
-                      "suspended",
-                      "revoked"
-                    ],
-                    "type": "string"
-                  },
-                  "type": {
-                    "const": "project_user_label_fact",
-                    "type": "string"
-                  },
-                  "userId": {
-                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "schemaVersion",
-                  "type",
-                  "projectId",
-                  "userId",
-                  "displayName",
-                  "status",
-                  "revision",
-                  "observedAt"
-                ],
-                "type": "object"
-              },
-              "maxItems": 1000,
-              "type": "array"
-            },
-            "offers": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "createdAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "executionId": {
-                    "anyOf": [
-                      {
-                        "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "expiresAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "offeredAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "offeredByCoordinatorAgentId": {
-                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "projectId": {
-                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "respondedAt": {
-                    "anyOf": [
-                      {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "revision": {
-                    "maximum": 9007199254740991,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "state": {
-                    "enum": [
-                      "pending",
-                      "accepted",
-                      "withdrawn",
-                      "timed_out"
-                    ],
-                    "type": "string"
-                  },
-                  "taskId": {
-                    "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "taskOfferId": {
-                    "pattern": "^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "type": {
-                    "const": "task_offer",
-                    "type": "string"
-                  },
-                  "updatedAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "workerUserId": {
-                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "schemaVersion",
-                  "revision",
-                  "createdAt",
-                  "updatedAt",
-                  "type",
-                  "taskOfferId",
-                  "projectId",
-                  "taskId",
-                  "executionId",
-                  "workerUserId",
-                  "offeredByCoordinatorAgentId",
-                  "state",
-                  "offeredAt",
-                  "expiresAt",
-                  "respondedAt"
-                ],
-                "type": "object"
-              },
-              "maxItems": 10000,
-              "type": "array"
-            },
-            "pendingHumanNeeded": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "confirmableAction": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "actionDigest": {
-                            "pattern": "^[a-f0-9]{64}$",
-                            "type": "string"
-                          },
-                          "actionType": {
-                            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                            "type": "string"
-                          },
-                          "effect": {
-                            "enum": [
-                              "workspace-write",
-                              "external-write",
-                              "destructive"
-                            ],
-                            "type": "string"
-                          },
-                          "safeSummary": {
-                            "maxLength": 500,
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "actionType",
-                          "safeSummary",
-                          "effect",
-                          "actionDigest"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "context": {
-                    "oneOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "executionId": {
-                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "scope": {
-                            "const": "worker_execution",
-                            "type": "string"
-                          },
-                          "taskId": {
-                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "scope",
-                          "taskId",
-                          "executionId"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "coordinatorAuthorityEpoch": {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          "scope": {
-                            "const": "coordinator_project",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "scope",
-                          "coordinatorAuthorityEpoch"
-                        ],
-                        "type": "object"
-                      }
-                    ]
-                  },
-                  "createdAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "expiresAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "humanRequestId": {
-                    "pattern": "^hrq_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "projectId": {
-                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "prompt": {
-                    "maxLength": 32000,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "requestedByAgentId": {
-                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "requiredAssurance": {
-                    "enum": [
-                      "basic",
-                      "verified",
-                      "strong"
-                    ],
-                    "type": "string"
-                  },
-                  "revision": {
-                    "maximum": 9007199254740991,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "status": {
-                    "enum": [
-                      "pending",
-                      "answered",
-                      "expired",
-                      "cancelled"
-                    ],
-                    "type": "string"
-                  },
-                  "targetUserId": {
-                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "type": {
-                    "const": "human_needed",
-                    "type": "string"
-                  },
-                  "updatedAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "schemaVersion",
-                  "revision",
-                  "createdAt",
-                  "updatedAt",
-                  "type",
-                  "humanRequestId",
-                  "projectId",
-                  "context",
-                  "targetUserId",
-                  "requestedByAgentId",
-                  "requiredAssurance",
-                  "prompt",
-                  "confirmableAction",
-                  "status",
-                  "expiresAt"
-                ],
-                "type": "object"
-              },
-              "maxItems": 10000,
-              "type": "array"
-            },
-            "plan": {
-              "anyOf": [
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "plan": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "confirmedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "confirmedByUserId": {
-                          "anyOf": [
-                            {
-                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "createdAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "planDigest": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "planRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "projectId": {
-                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "projectPlanId": {
-                          "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "rationale": {
-                          "maxLength": 32000,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "revision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "runtimeProvenance": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "generatedAt": {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            "generatedByCoordinatorAgentId": {
-                              "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "modelId": {
-                              "anyOf": [
-                                {
-                                  "maxLength": 256,
-                                  "minLength": 1,
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "runtimeId": {
-                              "maxLength": 128,
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "runtimeId",
-                            "modelId",
-                            "generatedByCoordinatorAgentId",
-                            "generatedAt"
-                          ],
-                          "type": "object"
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "sourceInputLocators": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "authority": {
-                                "maxLength": 256,
-                                "minLength": 1,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                "type": "string"
-                              },
-                              "contractVersion": {
-                                "const": 1,
-                                "type": "number"
-                              },
-                              "identity": {
-                                "additionalProperties": {
-                                  "$ref": "#/definitions/__schema0"
-                                },
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "type": "object"
-                              },
-                              "kind": {
-                                "enum": [
-                                  "content-space.file-reference",
-                                  "content-space.container-reference",
-                                  "content-space.artifact-reference"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "contractVersion",
-                              "kind",
-                              "authority",
-                              "identity"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 100,
-                          "type": "array"
-                        },
-                        "state": {
-                          "enum": [
-                            "draft",
-                            "awaiting_confirmation",
-                            "confirmed",
-                            "superseded"
-                          ],
-                          "type": "string"
-                        },
-                        "submittedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "supersededAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "tasks": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "completionCriteria": {
-                                "items": {
-                                  "maxLength": 2000,
-                                  "minLength": 1,
-                                  "type": "string"
-                                },
-                                "maxItems": 100,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "dependencyPlanItemIds": {
-                                "items": {
-                                  "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                },
-                                "maxItems": 1000,
-                                "type": "array"
-                              },
-                              "fileIntent": {
-                                "anyOf": [
-                                  {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "inputs": {
-                                        "items": {
-                                          "additionalProperties": false,
-                                          "properties": {
-                                            "destinationName": {
-                                              "maxLength": 128,
-                                              "minLength": 1,
-                                              "type": "string"
-                                            },
-                                            "expectedMediaType": {
-                                              "anyOf": [
-                                                {
-                                                  "maxLength": 256,
-                                                  "minLength": 1,
-                                                  "type": "string"
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            },
-                                            "expectedSemanticRevision": {
-                                              "anyOf": [
-                                                {
-                                                  "maxLength": 256,
-                                                  "minLength": 1,
-                                                  "type": "string"
-                                                },
-                                                {
-                                                  "type": "null"
-                                                }
-                                              ]
-                                            },
-                                            "kind": {
-                                              "const": "content-space.input-file",
-                                              "type": "string"
-                                            },
-                                            "locator": {
-                                              "additionalProperties": false,
-                                              "properties": {
-                                                "authority": {
-                                                  "maxLength": 256,
-                                                  "minLength": 1,
-                                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                                  "type": "string"
-                                                },
-                                                "contractVersion": {
-                                                  "const": 1,
-                                                  "type": "number"
-                                                },
-                                                "identity": {
-                                                  "additionalProperties": {
-                                                    "$ref": "#/definitions/__schema0"
-                                                  },
-                                                  "propertyNames": {
-                                                    "type": "string"
-                                                  },
-                                                  "type": "object"
-                                                },
-                                                "kind": {
-                                                  "enum": [
-                                                    "content-space.file-reference",
-                                                    "content-space.container-reference",
-                                                    "content-space.artifact-reference"
-                                                  ],
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "contractVersion",
-                                                "kind",
-                                                "authority",
-                                                "identity"
-                                              ],
-                                              "type": "object"
-                                            }
-                                          },
-                                          "required": [
-                                            "kind",
-                                            "locator",
-                                            "destinationName",
-                                            "expectedSemanticRevision",
-                                            "expectedMediaType"
-                                          ],
-                                          "type": "object"
-                                        },
-                                        "maxItems": 100,
-                                        "type": "array"
-                                      },
-                                      "output": {
-                                        "additionalProperties": false,
-                                        "properties": {
-                                          "fileName": {
-                                            "maxLength": 128,
-                                            "minLength": 1,
-                                            "type": "string"
-                                          },
-                                          "kind": {
-                                            "const": "content-space.output-new",
-                                            "type": "string"
-                                          },
-                                          "maxBytes": {
-                                            "maximum": 1073741824,
-                                            "minimum": 1,
-                                            "type": "integer"
-                                          },
-                                          "mediaType": {
-                                            "maxLength": 256,
-                                            "minLength": 1,
-                                            "type": "string"
-                                          },
-                                          "mode": {
-                                            "const": "upload-new",
-                                            "type": "string"
-                                          },
-                                          "target": {
-                                            "const": "project-binding-root",
-                                            "type": "string"
-                                          }
-                                        },
-                                        "required": [
-                                          "kind",
-                                          "target",
-                                          "mode",
-                                          "fileName",
-                                          "mediaType",
-                                          "maxBytes"
-                                        ],
-                                        "type": "object"
-                                      },
-                                      "schemaVersion": {
-                                        "const": 1,
-                                        "type": "number"
-                                      }
-                                    },
-                                    "required": [
-                                      "schemaVersion",
-                                      "inputs",
-                                      "output"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "objective": {
-                                "maxLength": 32000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "planItemId": {
-                                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              "requiredCapabilityTags": {
-                                "items": {
-                                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                                  "type": "string"
-                                },
-                                "maxItems": 256,
-                                "type": "array"
-                              },
-                              "title": {
-                                "maxLength": 200,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "workerUserId": {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "planItemId",
-                              "title",
-                              "objective",
-                              "completionCriteria",
-                              "dependencyPlanItemIds",
-                              "requiredCapabilityTags",
-                              "fileIntent",
-                              "workerUserId"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 1000,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "type": {
-                          "const": "project_plan",
-                          "type": "string"
-                        },
-                        "updatedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "revision",
-                        "createdAt",
-                        "updatedAt",
-                        "type",
-                        "projectPlanId",
-                        "projectId",
-                        "state",
-                        "planRevision",
-                        "sourceInputLocators",
-                        "tasks",
-                        "rationale",
-                        "runtimeProvenance",
-                        "planDigest",
-                        "submittedAt",
-                        "confirmedByUserId",
-                        "confirmedAt",
-                        "supersededAt"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "readOnly": true,
-                  "required": [
-                    "plan"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "project": {
-              "additionalProperties": false,
-              "properties": {
-                "budget": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "maxCoordinationRounds": {
-                      "maximum": 10000,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "maxTaskRetries": {
-                      "maximum": 100,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "maxTasks": {
-                      "maximum": 10000,
-                      "minimum": 1,
-                      "type": "integer"
-                    },
-                    "maxTasksPerRound": {
-                      "maximum": 1000,
-                      "minimum": 1,
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "maxTasks",
-                    "maxTasksPerRound",
-                    "maxCoordinationRounds",
-                    "maxTaskRetries"
-                  ],
-                  "type": "object"
-                },
-                "contentMode": {
-                  "enum": [
-                    "none",
-                    "required"
-                  ],
-                  "type": "string"
-                },
-                "coordinatorAgentId": {
-                  "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                  "type": "string"
-                },
-                "coordinatorAuthorityEpoch": {
-                  "maximum": 9007199254740991,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "createdAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                  "type": "string"
-                },
-                "displayName": {
-                  "maxLength": 200,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "executionAuthorityEpoch": {
-                  "maximum": 9007199254740991,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "goal": {
-                  "maxLength": 32000,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "ownerUserId": {
-                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                  "type": "string"
-                },
-                "projectId": {
-                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                  "type": "string"
-                },
-                "revision": {
-                  "maximum": 9007199254740991,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "schemaVersion": {
-                  "const": 1,
-                  "type": "number"
-                },
-                "status": {
-                  "enum": [
-                    "draft",
-                    "active",
-                    "paused",
-                    "completed",
-                    "cancelled"
-                  ],
-                  "type": "string"
-                },
-                "type": {
-                  "const": "project",
-                  "type": "string"
-                },
-                "updatedAt": {
-                  "format": "date-time",
-                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "schemaVersion",
-                "revision",
-                "createdAt",
-                "updatedAt",
-                "type",
-                "projectId",
-                "ownerUserId",
-                "displayName",
-                "goal",
-                "coordinatorAgentId",
-                "coordinatorAuthorityEpoch",
-                "executionAuthorityEpoch",
-                "contentMode",
-                "status",
-                "budget"
-              ],
-              "type": "object"
-            },
-            "provisioning": {
-              "additionalProperties": false,
-              "properties": {
-                "attestation": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "createdAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "deviceSignature": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "canonicalPayloadDigest": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "deviceId": {
-                              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "deviceKeyId": {
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-                              "type": "string"
-                            },
-                            "deviceKeyRevision": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "factRevision": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "issuedAt": {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            "observedAt": {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            "purpose": {
-                              "const": "project-content-provisioning-attestation",
-                              "type": "string"
-                            },
-                            "signature": {
-                              "maxLength": 128,
-                              "minLength": 86,
-                              "type": "string"
-                            },
-                            "signatureAlgorithm": {
-                              "const": "Ed25519",
-                              "type": "string"
-                            },
-                            "userId": {
-                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "purpose",
-                            "userId",
-                            "deviceId",
-                            "deviceKeyId",
-                            "deviceKeyRevision",
-                            "signatureAlgorithm",
-                            "canonicalPayloadDigest",
-                            "factRevision",
-                            "observedAt",
-                            "issuedAt",
-                            "signature"
-                          ],
-                          "type": "object"
-                        },
-                        "format": {
-                          "const": "sciforge.project-content-provisioning-attestation.v1",
-                          "type": "string"
-                        },
-                        "memberObservations": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "observationDigest": {
-                                "pattern": "^[a-f0-9]{64}$",
-                                "type": "string"
-                              },
-                              "observedAt": {
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                "type": "string"
-                              },
-                              "presence": {
-                                "enum": [
-                                  "present",
-                                  "absent"
-                                ],
-                                "type": "string"
-                              },
-                              "principal": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "principalId": {
-                                    "maxLength": 512,
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "principalKind": {
-                                    "const": "user",
-                                    "type": "string"
-                                  },
-                                  "providerInstance": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "providerInstanceRef": {
-                                        "maxLength": 256,
-                                        "minLength": 3,
-                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                        "type": "string"
-                                      },
-                                      "schemaVersion": {
-                                        "const": 1,
-                                        "type": "number"
-                                      },
-                                      "type": {
-                                        "const": "provider_instance_reference",
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "schemaVersion",
-                                      "type",
-                                      "providerInstanceRef"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  "schemaVersion": {
-                                    "const": 1,
-                                    "type": "number"
-                                  },
-                                  "type": {
-                                    "const": "provider_directory_principal_reference",
-                                    "type": "string"
-                                  }
-                                },
-                                "required": [
-                                  "schemaVersion",
-                                  "type",
-                                  "providerInstance",
-                                  "principalKind",
-                                  "principalId"
-                                ],
-                                "type": "object"
-                              },
-                              "providerPrincipalFactId": {
-                                "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              "snapshottedFactRevision": {
-                                "maximum": 9007199254740991,
-                                "minimum": 1,
-                                "type": "integer"
-                              },
-                              "userId": {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "userId",
-                              "providerPrincipalFactId",
-                              "snapshottedFactRevision",
-                              "principal",
-                              "presence",
-                              "observationDigest",
-                              "observedAt"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 1000,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "memberSetDigest": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "observationCompletedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "observationStartedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "observedOperations": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "kind": {
-                                "enum": [
-                                  "create_shared_container",
-                                  "observe_root",
-                                  "list_members",
-                                  "add_member",
-                                  "remove_member",
-                                  "download_check",
-                                  "upload_new",
-                                  "observe_output"
-                                ],
-                                "type": "string"
-                              },
-                              "observedAt": {
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                "type": "string"
-                              },
-                              "operationId": {
-                                "maxLength": 128,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "operationRevision": {
-                                "maximum": 9007199254740991,
-                                "minimum": 1,
-                                "type": "integer"
-                              },
-                              "outcome": {
-                                "enum": [
-                                  "observed_success",
-                                  "observed_absent",
-                                  "observed_failure",
-                                  "outcome_unknown",
-                                  "unauthorized"
-                                ],
-                                "type": "string"
-                              },
-                              "receiptDigest": {
-                                "anyOf": [
-                                  {
-                                    "pattern": "^[a-f0-9]{64}$",
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "requestDigest": {
-                                "pattern": "^[a-f0-9]{64}$",
-                                "type": "string"
-                              },
-                              "safeFailureCode": {
-                                "anyOf": [
-                                  {
-                                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                                    "type": "string"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "subjectPrincipal": {
-                                "anyOf": [
-                                  {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "principalId": {
-                                        "maxLength": 512,
-                                        "minLength": 1,
-                                        "type": "string"
-                                      },
-                                      "principalKind": {
-                                        "const": "user",
-                                        "type": "string"
-                                      },
-                                      "providerInstance": {
-                                        "additionalProperties": false,
-                                        "properties": {
-                                          "providerInstanceRef": {
-                                            "maxLength": 256,
-                                            "minLength": 3,
-                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                            "type": "string"
-                                          },
-                                          "schemaVersion": {
-                                            "const": 1,
-                                            "type": "number"
-                                          },
-                                          "type": {
-                                            "const": "provider_instance_reference",
-                                            "type": "string"
-                                          }
-                                        },
-                                        "required": [
-                                          "schemaVersion",
-                                          "type",
-                                          "providerInstanceRef"
-                                        ],
-                                        "type": "object"
-                                      },
-                                      "schemaVersion": {
-                                        "const": 1,
-                                        "type": "number"
-                                      },
-                                      "type": {
-                                        "const": "provider_directory_principal_reference",
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "schemaVersion",
-                                      "type",
-                                      "providerInstance",
-                                      "principalKind",
-                                      "principalId"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "operationId",
-                              "operationRevision",
-                              "kind",
-                              "subjectPrincipal",
-                              "requestDigest",
-                              "receiptDigest",
-                              "outcome",
-                              "safeFailureCode",
-                              "observedAt"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 2000,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "ownerUserId": {
-                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "principalIdentityRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "projectId": {
-                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "providerBindingAttestationDigest": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "providerInstance": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "providerInstanceRef": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                              "type": "string"
-                            },
-                            "schemaVersion": {
-                              "const": 1,
-                              "type": "number"
-                            },
-                            "type": {
-                              "const": "provider_instance_reference",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "schemaVersion",
-                            "type",
-                            "providerInstanceRef"
-                          ],
-                          "type": "object"
-                        },
-                        "provisioningAttestationId": {
-                          "pattern": "^pca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "provisioningIntentId": {
-                          "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "provisioningRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "revision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "rootLocator": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "authority": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                              "type": "string"
-                            },
-                            "contractVersion": {
-                              "const": 1,
-                              "type": "number"
-                            },
-                            "identity": {
-                              "additionalProperties": {
-                                "$ref": "#/definitions/__schema0"
-                              },
-                              "propertyNames": {
-                                "type": "string"
-                              },
-                              "type": "object"
-                            },
-                            "kind": {
-                              "enum": [
-                                "content-space.file-reference",
-                                "content-space.container-reference",
-                                "content-space.artifact-reference"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "contractVersion",
-                            "kind",
-                            "authority",
-                            "identity"
-                          ],
-                          "type": "object"
-                        },
-                        "rootLocatorDigest": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "type": {
-                          "const": "project_content_provisioning_attestation",
-                          "type": "string"
-                        },
-                        "updatedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "revision",
-                        "createdAt",
-                        "updatedAt",
-                        "type",
-                        "format",
-                        "provisioningAttestationId",
-                        "projectId",
-                        "provisioningIntentId",
-                        "provisioningRevision",
-                        "ownerUserId",
-                        "principalIdentityRevision",
-                        "providerBindingAttestationDigest",
-                        "providerInstance",
-                        "rootLocator",
-                        "rootLocatorDigest",
-                        "observedOperations",
-                        "memberObservations",
-                        "memberSetDigest",
-                        "observationStartedAt",
-                        "observationCompletedAt",
-                        "deviceSignature"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "binding": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "activatedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "attestationDigest": {
-                          "anyOf": [
-                            {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "attestationId": {
-                          "anyOf": [
-                            {
-                              "pattern": "^pca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "closedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "contentOwnerUserId": {
-                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "createdAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "degradedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "projectContentBindingId": {
-                          "pattern": "^pcb_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "projectId": {
-                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "providerInstance": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "providerInstanceRef": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                              "type": "string"
-                            },
-                            "schemaVersion": {
-                              "const": 1,
-                              "type": "number"
-                            },
-                            "type": {
-                              "const": "provider_instance_reference",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "schemaVersion",
-                            "type",
-                            "providerInstanceRef"
-                          ],
-                          "type": "object"
-                        },
-                        "provisioningIntentId": {
-                          "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "provisioningRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "revision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "rootLocator": {
-                          "anyOf": [
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "authority": {
-                                  "maxLength": 256,
-                                  "minLength": 1,
-                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                  "type": "string"
-                                },
-                                "contractVersion": {
-                                  "const": 1,
-                                  "type": "number"
-                                },
-                                "identity": {
-                                  "additionalProperties": {
-                                    "$ref": "#/definitions/__schema0"
-                                  },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
-                                  "type": "object"
-                                },
-                                "kind": {
-                                  "enum": [
-                                    "content-space.file-reference",
-                                    "content-space.container-reference",
-                                    "content-space.artifact-reference"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "contractVersion",
-                                "kind",
-                                "authority",
-                                "identity"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "rootLocatorDigest": {
-                          "anyOf": [
-                            {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "status": {
-                          "enum": [
-                            "provisioning",
-                            "active",
-                            "degraded",
-                            "closed"
-                          ],
-                          "type": "string"
-                        },
-                        "statusReason": {
-                          "anyOf": [
-                            {
-                              "enum": [
-                                "provisioning_incomplete",
-                                "provider_unavailable",
-                                "owner_access_lost",
-                                "rebind_required",
-                                "content_owner_transfer_pending",
-                                "project_archived",
-                                "project_deleted",
-                                "owner_requested"
-                              ],
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "type": {
-                          "const": "project_content_space_binding",
-                          "type": "string"
-                        },
-                        "updatedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "revision",
-                        "createdAt",
-                        "updatedAt",
-                        "type",
-                        "projectContentBindingId",
-                        "projectId",
-                        "contentOwnerUserId",
-                        "providerInstance",
-                        "rootLocator",
-                        "rootLocatorDigest",
-                        "provisioningIntentId",
-                        "provisioningRevision",
-                        "attestationId",
-                        "attestationDigest",
-                        "status",
-                        "statusReason",
-                        "activatedAt",
-                        "degradedAt",
-                        "closedAt"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "contentReadiness": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "bindingRevision": {
-                        "anyOf": [
-                          {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "effectiveAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "lastObservationId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^pob_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "providerInstance": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "providerInstanceRef": {
-                            "maxLength": 256,
-                            "minLength": 3,
-                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                            "type": "string"
-                          },
-                          "schemaVersion": {
-                            "const": 1,
-                            "type": "number"
-                          },
-                          "type": {
-                            "const": "provider_instance_reference",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "schemaVersion",
-                          "type",
-                          "providerInstanceRef"
-                        ],
-                        "type": "object"
-                      },
-                      "providerPrincipal": {
-                        "anyOf": [
-                          {
-                            "additionalProperties": false,
-                            "properties": {
-                              "principalId": {
-                                "maxLength": 512,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "principalKind": {
-                                "const": "user",
-                                "type": "string"
-                              },
-                              "providerInstance": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "providerInstanceRef": {
-                                    "maxLength": 256,
-                                    "minLength": 3,
-                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                    "type": "string"
-                                  },
-                                  "schemaVersion": {
-                                    "const": 1,
-                                    "type": "number"
-                                  },
-                                  "type": {
-                                    "const": "provider_instance_reference",
-                                    "type": "string"
-                                  }
-                                },
-                                "required": [
-                                  "schemaVersion",
-                                  "type",
-                                  "providerInstanceRef"
-                                ],
-                                "type": "object"
-                              },
-                              "schemaVersion": {
-                                "const": 1,
-                                "type": "number"
-                              },
-                              "type": {
-                                "const": "provider_directory_principal_reference",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "schemaVersion",
-                              "type",
-                              "providerInstance",
-                              "principalKind",
-                              "principalId"
-                            ],
-                            "type": "object"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "providerPrincipalFactId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "reason": {
-                        "anyOf": [
-                          {
-                            "enum": [
-                              "identity_missing",
-                              "provisioning_pending",
-                              "provider_member_absent",
-                              "provider_unavailable",
-                              "provider_unauthorized",
-                              "binding_degraded",
-                              "content_owner_lost_root"
-                            ],
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "snapshottedFactRevision": {
-                        "anyOf": [
-                          {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "state": {
-                        "enum": [
-                          "missing_identity",
-                          "pending",
-                          "ready",
-                          "degraded"
-                        ],
-                        "type": "string"
-                      },
-                      "type": {
-                        "const": "project_content_readiness",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "projectId",
-                      "userId",
-                      "providerInstance",
-                      "state",
-                      "reason",
-                      "providerPrincipalFactId",
-                      "snapshottedFactRevision",
-                      "providerPrincipal",
-                      "bindingRevision",
-                      "lastObservationId",
-                      "effectiveAt"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 1000,
-                  "type": "array"
-                },
-                "externalOperationJournal": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "contentRecoveryJournalEntryId": {
-                        "pattern": "^crj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "dispatchedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "executionId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "logicalInvocationId": {
-                        "maxLength": 128,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "observationDigest": {
-                        "anyOf": [
-                          {
-                            "pattern": "^[a-f0-9]{64}$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "operation": {
-                        "enum": [
-                          "create_shared_container",
-                          "list_members",
-                          "add_member",
-                          "remove_member",
-                          "observe_root",
-                          "download",
-                          "upload_new",
-                          "observe_output"
-                        ],
-                        "type": "string"
-                      },
-                      "preparedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "preparedExecutionRevision": {
-                        "anyOf": [
-                          {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "preparedTaskRevision": {
-                        "anyOf": [
-                          {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "provisioningIntentId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "provisioningRevision": {
-                        "anyOf": [
-                          {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "receiptDigest": {
-                        "anyOf": [
-                          {
-                            "pattern": "^[a-f0-9]{64}$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "requestDigest": {
-                        "pattern": "^[a-f0-9]{64}$",
-                        "type": "string"
-                      },
-                      "resolvedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "safeFailureCode": {
-                        "anyOf": [
-                          {
-                            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "scope": {
-                        "enum": [
-                          "project_provisioning",
-                          "project_membership",
-                          "task_content_transfer"
-                        ],
-                        "type": "string"
-                      },
-                      "state": {
-                        "enum": [
-                          "prepared",
-                          "dispatched",
-                          "observed_success",
-                          "observed_failure",
-                          "outcome_unknown",
-                          "abandoned"
-                        ],
-                        "type": "string"
-                      },
-                      "taskId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "type": {
-                        "const": "external_operation_recovery_journal_entry",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "contentRecoveryJournalEntryId",
-                      "scope",
-                      "projectId",
-                      "taskId",
-                      "executionId",
-                      "preparedTaskRevision",
-                      "preparedExecutionRevision",
-                      "provisioningIntentId",
-                      "provisioningRevision",
-                      "logicalInvocationId",
-                      "operation",
-                      "state",
-                      "requestDigest",
-                      "receiptDigest",
-                      "observationDigest",
-                      "safeFailureCode",
-                      "preparedAt",
-                      "dispatchedAt",
-                      "resolvedAt"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 10000,
-                  "type": "array"
-                },
-                "intent": {
-                  "anyOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "containerDisplayName": {
-                          "maxLength": 200,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "contentOwnerUserId": {
-                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "createdAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "createdByOwnerUserId": {
-                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "currentBindingRevision": {
-                          "anyOf": [
-                            {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "currentRootLocator": {
-                          "anyOf": [
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "authority": {
-                                  "maxLength": 256,
-                                  "minLength": 1,
-                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                  "type": "string"
-                                },
-                                "contractVersion": {
-                                  "const": 1,
-                                  "type": "number"
-                                },
-                                "identity": {
-                                  "additionalProperties": {
-                                    "$ref": "#/definitions/__schema0"
-                                  },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
-                                  "type": "object"
-                                },
-                                "kind": {
-                                  "enum": [
-                                    "content-space.file-reference",
-                                    "content-space.container-reference",
-                                    "content-space.artifact-reference"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "contractVersion",
-                                "kind",
-                                "authority",
-                                "identity"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "desiredMembers": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "principal": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "principalId": {
-                                    "maxLength": 512,
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "principalKind": {
-                                    "const": "user",
-                                    "type": "string"
-                                  },
-                                  "providerInstance": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "providerInstanceRef": {
-                                        "maxLength": 256,
-                                        "minLength": 3,
-                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                        "type": "string"
-                                      },
-                                      "schemaVersion": {
-                                        "const": 1,
-                                        "type": "number"
-                                      },
-                                      "type": {
-                                        "const": "provider_instance_reference",
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "schemaVersion",
-                                      "type",
-                                      "providerInstanceRef"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  "schemaVersion": {
-                                    "const": 1,
-                                    "type": "number"
-                                  },
-                                  "type": {
-                                    "const": "provider_directory_principal_reference",
-                                    "type": "string"
-                                  }
-                                },
-                                "required": [
-                                  "schemaVersion",
-                                  "type",
-                                  "providerInstance",
-                                  "principalKind",
-                                  "principalId"
-                                ],
-                                "type": "object"
-                              },
-                              "providerPrincipalFactId": {
-                                "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              "snapshottedFactRevision": {
-                                "maximum": 9007199254740991,
-                                "minimum": 1,
-                                "type": "integer"
-                              },
-                              "userId": {
-                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "userId",
-                              "providerPrincipalFactId",
-                              "snapshottedFactRevision",
-                              "principal"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 1000,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "intentDigest": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "kind": {
-                          "enum": [
-                            "initial_provisioning",
-                            "membership_change",
-                            "reconcile",
-                            "rebind",
-                            "content_owner_transfer"
-                          ],
-                          "type": "string"
-                        },
-                        "projectId": {
-                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "providerInstance": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "providerInstanceRef": {
-                              "maxLength": 256,
-                              "minLength": 3,
-                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                              "type": "string"
-                            },
-                            "schemaVersion": {
-                              "const": 1,
-                              "type": "number"
-                            },
-                            "type": {
-                              "const": "provider_instance_reference",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "schemaVersion",
-                            "type",
-                            "providerInstanceRef"
-                          ],
-                          "type": "object"
-                        },
-                        "provisioningIntentId": {
-                          "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "provisioningRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "revision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "state": {
-                          "enum": [
-                            "pending",
-                            "in_progress",
-                            "awaiting_attestation",
-                            "manual_recovery_required",
-                            "completed",
-                            "superseded",
-                            "cancelled"
-                          ],
-                          "type": "string"
-                        },
-                        "type": {
-                          "const": "project_content_provisioning_intent",
-                          "type": "string"
-                        },
-                        "updatedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "revision",
-                        "createdAt",
-                        "updatedAt",
-                        "type",
-                        "provisioningIntentId",
-                        "projectId",
-                        "provisioningRevision",
-                        "kind",
-                        "state",
-                        "createdByOwnerUserId",
-                        "contentOwnerUserId",
-                        "providerInstance",
-                        "desiredMembers",
-                        "containerDisplayName",
-                        "currentRootLocator",
-                        "currentBindingRevision",
-                        "intentDigest"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "memberships": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "activatedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "authorityEpoch": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "projectMembershipId": {
-                        "pattern": "^pmb_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "removalRequestedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "removalRequestedByUserId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "removedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "state": {
-                        "enum": [
-                          "invited",
-                          "pending_membership",
-                          "active",
-                          "membership_removal_pending",
-                          "removed"
-                        ],
-                        "type": "string"
-                      },
-                      "type": {
-                        "const": "project_membership",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "projectMembershipId",
-                      "projectId",
-                      "userId",
-                      "state",
-                      "authorityEpoch",
-                      "activatedAt",
-                      "removalRequestedAt",
-                      "removalRequestedByUserId",
-                      "removedAt"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 1000,
-                  "type": "array"
-                },
-                "providerMembershipObservations": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "bindingRevision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "evidenceDigest": {
-                        "pattern": "^[a-f0-9]{64}$",
-                        "type": "string"
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "observerAgentId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "observerDeviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "observerUserId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "outcome": {
-                        "enum": [
-                          "present",
-                          "absent",
-                          "unavailable",
-                          "unauthorized"
-                        ],
-                        "type": "string"
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "providerObservationId": {
-                        "pattern": "^pob_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "providerPrincipal": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "principalId": {
-                            "maxLength": 512,
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "principalKind": {
-                            "const": "user",
-                            "type": "string"
-                          },
-                          "providerInstance": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "providerInstanceRef": {
-                                "maxLength": 256,
-                                "minLength": 3,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                "type": "string"
-                              },
-                              "schemaVersion": {
-                                "const": 1,
-                                "type": "number"
-                              },
-                              "type": {
-                                "const": "provider_instance_reference",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "schemaVersion",
-                              "type",
-                              "providerInstanceRef"
-                            ],
-                            "type": "object"
-                          },
-                          "schemaVersion": {
-                            "const": 1,
-                            "type": "number"
-                          },
-                          "type": {
-                            "const": "provider_directory_principal_reference",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "schemaVersion",
-                          "type",
-                          "providerInstance",
-                          "principalKind",
-                          "principalId"
-                        ],
-                        "type": "object"
-                      },
-                      "providerPrincipalFactId": {
-                        "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "provisioningAttestationId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^pca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "provisioningRevision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "snapshottedFactRevision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "source": {
-                        "enum": [
-                          "provisioning_attestation",
-                          "explicit_reconcile",
-                          "download_check",
-                          "upload_new"
-                        ],
-                        "type": "string"
-                      },
-                      "type": {
-                        "const": "project_provider_membership_observation",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "providerObservationId",
-                      "projectId",
-                      "userId",
-                      "providerPrincipalFactId",
-                      "snapshottedFactRevision",
-                      "providerPrincipal",
-                      "bindingRevision",
-                      "provisioningRevision",
-                      "source",
-                      "outcome",
-                      "observerUserId",
-                      "observerDeviceId",
-                      "observerAgentId",
-                      "provisioningAttestationId",
-                      "evidenceDigest",
-                      "observedAt"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 10000,
-                  "type": "array"
-                },
-                "providerPrincipalFacts": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "observedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "principalIdentityRevision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "providerBindingAttestationDigest": {
-                        "pattern": "^[a-f0-9]{64}$",
-                        "type": "string"
-                      },
-                      "providerPrincipal": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "principalId": {
-                            "maxLength": 512,
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "principalKind": {
-                            "const": "user",
-                            "type": "string"
-                          },
-                          "providerInstance": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "providerInstanceRef": {
-                                "maxLength": 256,
-                                "minLength": 3,
-                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                "type": "string"
-                              },
-                              "schemaVersion": {
-                                "const": 1,
-                                "type": "number"
-                              },
-                              "type": {
-                                "const": "provider_instance_reference",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "schemaVersion",
-                              "type",
-                              "providerInstanceRef"
-                            ],
-                            "type": "object"
-                          },
-                          "schemaVersion": {
-                            "const": 1,
-                            "type": "number"
-                          },
-                          "type": {
-                            "const": "provider_directory_principal_reference",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "schemaVersion",
-                          "type",
-                          "providerInstance",
-                          "principalKind",
-                          "principalId"
-                        ],
-                        "type": "object"
-                      },
-                      "providerPrincipalFactId": {
-                        "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "publishedByDeviceId": {
-                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "readiness": {
-                        "enum": [
-                          "ready",
-                          "degraded"
-                        ],
-                        "type": "string"
-                      },
-                      "readinessReason": {
-                        "anyOf": [
-                          {
-                            "enum": [
-                              "provider_binding_changed",
-                              "provider_unavailable",
-                              "provider_unauthorized"
-                            ],
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "type": {
-                        "const": "provider_directory_principal_fact",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "userId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "providerPrincipalFactId",
-                      "userId",
-                      "providerPrincipal",
-                      "principalIdentityRevision",
-                      "providerBindingAttestationDigest",
-                      "publishedByDeviceId",
-                      "readiness",
-                      "readinessReason",
-                      "observedAt"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 1000,
-                  "type": "array"
-                },
-                "recoveryActions": {
-                  "items": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "action": {
-                        "enum": [
-                          "resume_provisioning",
-                          "reconcile_provider_membership",
-                          "reconcile_exact_output",
-                          "link_observed_output",
-                          "abandon_execution",
-                          "rebind_content_root",
-                          "reprovision_content_root",
-                          "change_content_owner"
-                        ],
-                        "type": "string"
-                      },
-                      "audience": {
-                        "enum": [
-                          "owner",
-                          "coordinator"
-                        ],
-                        "type": "string"
-                      },
-                      "availableAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "completedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "executionId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "journalEntryId": {
-                        "pattern": "^crj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "recoveryActionId": {
-                        "pattern": "^rca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "requiresFreshObservation": {
-                        "type": "boolean"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "safeSummary": {
-                        "maxLength": 500,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "status": {
-                        "enum": [
-                          "available",
-                          "completed",
-                          "withdrawn"
-                        ],
-                        "type": "string"
-                      },
-                      "taskId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "type": {
-                        "const": "visible_recovery_action",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "recoveryActionId",
-                      "projectId",
-                      "taskId",
-                      "executionId",
-                      "journalEntryId",
-                      "audience",
-                      "action",
-                      "status",
-                      "requiresFreshObservation",
-                      "safeSummary",
-                      "availableAt",
-                      "completedAt"
-                    ],
-                    "type": "object"
-                  },
-                  "maxItems": 1000,
-                  "type": "array"
-                }
-              },
-              "readOnly": true,
-              "required": [
-                "intent",
-                "attestation",
-                "binding",
-                "memberships",
-                "providerPrincipalFacts",
-                "contentReadiness",
-                "providerMembershipObservations",
-                "externalOperationJournal",
-                "recoveryActions"
-              ],
-              "type": "object"
-            },
-            "records": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "acceptedAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "acceptedByAgentId": {
-                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "acceptedByUserId": {
-                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "authorAgentId": {
-                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "authorUserId": {
-                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "body": {
-                    "maxLength": 32000,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "createdAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  },
-                  "kind": {
-                    "enum": [
-                      "observation",
-                      "decision",
-                      "summary"
-                    ],
-                    "type": "string"
-                  },
-                  "projectId": {
-                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "projectRecordId": {
-                    "pattern": "^rec_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  },
-                  "revision": {
-                    "maximum": 9007199254740991,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "sourceHumanAnswerId": {
-                    "anyOf": [
-                      {
-                        "pattern": "^han_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sourceResultSubmissionId": {
-                    "anyOf": [
-                      {
-                        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "sourceRevision": {
-                    "maximum": 9007199254740991,
-                    "minimum": 1,
-                    "type": "integer"
-                  },
-                  "sourceTaskId": {
-                    "anyOf": [
-                      {
-                        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "status": {
-                    "const": "accepted",
-                    "type": "string"
-                  },
-                  "type": {
-                    "const": "project_record",
-                    "type": "string"
-                  },
-                  "updatedAt": {
-                    "format": "date-time",
-                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "schemaVersion",
-                  "revision",
-                  "createdAt",
-                  "updatedAt",
-                  "type",
-                  "projectRecordId",
-                  "projectId",
-                  "kind",
-                  "status",
-                  "body",
-                  "authorUserId",
-                  "authorAgentId",
-                  "sourceTaskId",
-                  "sourceResultSubmissionId",
-                  "sourceHumanAnswerId",
-                  "sourceRevision",
-                  "acceptedByUserId",
-                  "acceptedByAgentId",
-                  "acceptedAt"
-                ],
-                "type": "object"
-              },
-              "maxItems": 10000,
-              "type": "array"
-            },
-            "reviews": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "decision": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "acceptedProjectRecordId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^rec_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "createdAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "decidedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "decidedByCoordinatorAgentId": {
-                            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "decidedByUserId": {
-                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "decision": {
-                            "enum": [
-                              "accept",
-                              "request_revision"
-                            ],
-                            "type": "string"
-                          },
-                          "executionId": {
-                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "instruction": {
-                            "anyOf": [
-                              {
-                                "maxLength": 32000,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "nextTaskOfferId": {
-                            "anyOf": [
-                              {
-                                "pattern": "^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "projectId": {
-                            "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "resultSubmissionId": {
-                            "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "reviewDecisionId": {
-                            "pattern": "^rvw_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "reviewedResultRevision": {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          "revision": {
-                            "maximum": 9007199254740991,
-                            "minimum": 1,
-                            "type": "integer"
-                          },
-                          "schemaVersion": {
-                            "const": 1,
-                            "type": "number"
-                          },
-                          "taskId": {
-                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          "type": {
-                            "const": "task_review_decision",
-                            "type": "string"
-                          },
-                          "updatedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "schemaVersion",
-                          "revision",
-                          "createdAt",
-                          "updatedAt",
-                          "type",
-                          "reviewDecisionId",
-                          "projectId",
-                          "taskId",
-                          "executionId",
-                          "resultSubmissionId",
-                          "reviewedResultRevision",
-                          "decidedByUserId",
-                          "decidedByCoordinatorAgentId",
-                          "decision",
-                          "instruction",
-                          "acceptedProjectRecordId",
-                          "nextTaskOfferId",
-                          "decidedAt"
-                        ],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "submission": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "executionId": {
-                        "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "outputs": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "assignmentTaskRevision": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "bindingRevision": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "executionId": {
-                              "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "locator": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "authority": {
-                                  "maxLength": 256,
-                                  "minLength": 1,
-                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                  "type": "string"
-                                },
-                                "contractVersion": {
-                                  "const": 1,
-                                  "type": "number"
-                                },
-                                "identity": {
-                                  "additionalProperties": {
-                                    "$ref": "#/definitions/__schema0"
-                                  },
-                                  "propertyNames": {
-                                    "type": "string"
-                                  },
-                                  "type": "object"
-                                },
-                                "kind": {
-                                  "enum": [
-                                    "content-space.file-reference",
-                                    "content-space.container-reference",
-                                    "content-space.artifact-reference"
-                                  ],
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "contractVersion",
-                                "kind",
-                                "authority",
-                                "identity"
-                              ],
-                              "type": "object"
-                            },
-                            "locatorDigest": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "observationDigest": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "preflightObservationDigest": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "rootLocatorDigest": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "transferReceiptDigest": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "executionId",
-                            "assignmentTaskRevision",
-                            "locator",
-                            "locatorDigest",
-                            "rootLocatorDigest",
-                            "bindingRevision",
-                            "transferReceiptDigest",
-                            "observationDigest",
-                            "preflightObservationDigest"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 100,
-                        "type": "array"
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "recoveryJournalEntryIds": {
-                        "items": {
-                          "pattern": "^crj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "maxItems": 100,
-                        "type": "array"
-                      },
-                      "resultSubmissionId": {
-                        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "runtimeProvenance": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "completedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          "modelId": {
-                            "anyOf": [
-                              {
-                                "maxLength": 256,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "runtimeId": {
-                            "maxLength": 128,
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "startedAt": {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "runtimeId",
-                          "modelId",
-                          "startedAt",
-                          "completedAt"
-                        ],
-                        "type": "object"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "submissionDigest": {
-                        "pattern": "^[a-f0-9]{64}$",
-                        "type": "string"
-                      },
-                      "submittedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "submittedByAgentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "submittedByUserId": {
-                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "submittedExecutionRevision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "submittedTaskRevision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "summary": {
-                        "maxLength": 32000,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "taskId": {
-                        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "type": {
-                        "const": "task_result_submission",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "resultSubmissionId",
-                      "projectId",
-                      "taskId",
-                      "executionId",
-                      "submittedTaskRevision",
-                      "submittedExecutionRevision",
-                      "submittedByUserId",
-                      "submittedByAgentId",
-                      "summary",
-                      "runtimeProvenance",
-                      "outputs",
-                      "recoveryJournalEntryIds",
-                      "submittedAt",
-                      "submissionDigest"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "submission",
-                  "decision"
-                ],
-                "type": "object"
-              },
-              "maxItems": 10000,
-              "type": "array"
-            },
-            "tasks": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "executions": {
-                    "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "acceptedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "assigneeAgentId": {
-                          "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "assigneeDeviceId": {
-                          "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "assigneeUserId": {
-                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "attempt": {
-                          "maximum": 101,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "createdAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "currentResultSubmissionId": {
-                          "anyOf": [
-                            {
-                              "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "executionId": {
-                          "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "fence": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "assigneeAgentId": {
-                              "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "assigneeDeviceId": {
-                              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "assigneeUserId": {
-                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "assignmentTaskRevision": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "bindingRevision": {
-                              "anyOf": [
-                                {
-                                  "maximum": 9007199254740991,
-                                  "minimum": 1,
-                                  "type": "integer"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "executionId": {
-                              "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "fencedAt": {
-                              "anyOf": [
-                                {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "projectExecutionAuthorityEpoch": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "reason": {
-                              "anyOf": [
-                                {
-                                  "enum": [
-                                    "result_submitted",
-                                    "reassigned",
-                                    "device_revoked",
-                                    "agent_revoked",
-                                    "membership_removal_pending",
-                                    "membership_removed",
-                                    "project_paused",
-                                    "project_terminal",
-                                    "execution_failed",
-                                    "execution_cancelled",
-                                    "manual_recovery_required",
-                                    "manual_recovery_abandoned",
-                                    "completed"
-                                  ],
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "schemaVersion": {
-                              "const": 1,
-                              "type": "number"
-                            },
-                            "status": {
-                              "enum": [
-                                "open",
-                                "fenced"
-                              ],
-                              "type": "string"
-                            },
-                            "userTaskAuthorityEpoch": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "schemaVersion",
-                            "executionId",
-                            "assigneeUserId",
-                            "assigneeAgentId",
-                            "assigneeDeviceId",
-                            "assignmentTaskRevision",
-                            "projectExecutionAuthorityEpoch",
-                            "userTaskAuthorityEpoch",
-                            "bindingRevision",
-                            "status",
-                            "reason",
-                            "fencedAt"
-                          ],
-                          "type": "object"
-                        },
-                        "fileIntent": {
-                          "anyOf": [
-                            {
-                              "additionalProperties": false,
-                              "properties": {
-                                "assignmentTaskRevision": {
-                                  "maximum": 9007199254740991,
-                                  "minimum": 1,
-                                  "type": "integer"
-                                },
-                                "bindingRevision": {
-                                  "maximum": 9007199254740991,
-                                  "minimum": 1,
-                                  "type": "integer"
-                                },
-                                "declarationDigest": {
-                                  "pattern": "^[a-f0-9]{64}$",
-                                  "type": "string"
-                                },
-                                "executionId": {
-                                  "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                },
-                                "inputs": {
-                                  "items": {
-                                    "additionalProperties": false,
-                                    "properties": {
-                                      "destinationName": {
-                                        "maxLength": 128,
-                                        "minLength": 1,
-                                        "type": "string"
-                                      },
-                                      "resourceRefId": {
-                                        "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "resourceRefId",
-                                      "destinationName"
-                                    ],
-                                    "type": "object"
-                                  },
-                                  "maxItems": 100,
-                                  "type": "array"
-                                },
-                                "output": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "fileName": {
-                                      "maxLength": 128,
-                                      "minLength": 1,
-                                      "type": "string"
-                                    },
-                                    "maxBytes": {
-                                      "maximum": 1073741824,
-                                      "minimum": 1,
-                                      "type": "integer"
-                                    },
-                                    "mediaType": {
-                                      "maxLength": 256,
-                                      "minLength": 1,
-                                      "type": "string"
-                                    },
-                                    "rootResourceRefId": {
-                                      "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "rootResourceRefId",
-                                    "fileName",
-                                    "mediaType",
-                                    "maxBytes"
-                                  ],
-                                  "type": "object"
-                                },
-                                "projectId": {
-                                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                },
-                                "schemaVersion": {
-                                  "const": 1,
-                                  "type": "number"
-                                },
-                                "taskId": {
-                                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                },
-                                "type": {
-                                  "const": "task_execution_file_intent",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "schemaVersion",
-                                "type",
-                                "projectId",
-                                "taskId",
-                                "executionId",
-                                "assignmentTaskRevision",
-                                "bindingRevision",
-                                "declarationDigest",
-                                "inputs",
-                                "output"
-                              ],
-                              "type": "object"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "offeredAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        },
-                        "offeredByCoordinatorAgentId": {
-                          "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "projectId": {
-                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "revision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "schemaVersion": {
-                          "const": 1,
-                          "type": "number"
-                        },
-                        "startedAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "state": {
-                          "enum": [
-                            "accepted",
-                            "running",
-                            "needs_human",
-                            "result_submitted",
-                            "manual_recovery_required",
-                            "completed",
-                            "failed",
-                            "cancelled",
-                            "revoked",
-                            "superseded"
-                          ],
-                          "type": "string"
-                        },
-                        "stateRevision": {
-                          "maximum": 9007199254740991,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "taskId": {
-                          "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "terminalAt": {
-                          "anyOf": [
-                            {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "type": {
-                          "const": "task_execution",
-                          "type": "string"
-                        },
-                        "updatedAt": {
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "schemaVersion",
-                        "revision",
-                        "createdAt",
-                        "updatedAt",
-                        "type",
-                        "projectId",
-                        "taskId",
-                        "executionId",
-                        "attempt",
-                        "offeredByCoordinatorAgentId",
-                        "assigneeUserId",
-                        "assigneeAgentId",
-                        "assigneeDeviceId",
-                        "state",
-                        "stateRevision",
-                        "fence",
-                        "fileIntent",
-                        "currentResultSubmissionId",
-                        "offeredAt",
-                        "acceptedAt",
-                        "startedAt",
-                        "terminalAt"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 101,
-                    "type": "array"
-                  },
-                  "task": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "completedAt": {
-                        "anyOf": [
-                          {
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "completionCriteria": {
-                        "items": {
-                          "maxLength": 2000,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 100,
-                        "minItems": 1,
-                        "type": "array"
-                      },
-                      "createdAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      },
-                      "createdByCoordinatorAgentId": {
-                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "currentExecutionId": {
-                        "anyOf": [
-                          {
-                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "currentExecutionState": {
-                        "anyOf": [
-                          {
-                            "enum": [
-                              "accepted",
-                              "running",
-                              "needs_human",
-                              "result_submitted",
-                              "manual_recovery_required",
-                              "completed",
-                              "failed",
-                              "cancelled",
-                              "revoked",
-                              "superseded"
-                            ],
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "dependencyTaskIds": {
-                        "items": {
-                          "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        "maxItems": 1000,
-                        "type": "array"
-                      },
-                      "executionCount": {
-                        "maximum": 101,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "fileIntent": {
-                        "anyOf": [
-                          {
-                            "additionalProperties": false,
-                            "properties": {
-                              "bindingRevision": {
-                                "maximum": 9007199254740991,
-                                "minimum": 1,
-                                "type": "integer"
-                              },
-                              "inputs": {
-                                "items": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "destinationName": {
-                                      "maxLength": 128,
-                                      "minLength": 1,
-                                      "type": "string"
-                                    },
-                                    "expectedMediaType": {
-                                      "anyOf": [
-                                        {
-                                          "maxLength": 256,
-                                          "minLength": 1,
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "expectedSemanticRevision": {
-                                      "anyOf": [
-                                        {
-                                          "maxLength": 256,
-                                          "minLength": 1,
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "kind": {
-                                      "const": "content-space.input-file",
-                                      "type": "string"
-                                    },
-                                    "locator": {
-                                      "additionalProperties": false,
-                                      "properties": {
-                                        "authority": {
-                                          "maxLength": 256,
-                                          "minLength": 1,
-                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                          "type": "string"
-                                        },
-                                        "contractVersion": {
-                                          "const": 1,
-                                          "type": "number"
-                                        },
-                                        "identity": {
-                                          "additionalProperties": {
-                                            "$ref": "#/definitions/__schema0"
-                                          },
-                                          "propertyNames": {
-                                            "type": "string"
-                                          },
-                                          "type": "object"
-                                        },
-                                        "kind": {
-                                          "enum": [
-                                            "content-space.file-reference",
-                                            "content-space.container-reference",
-                                            "content-space.artifact-reference"
-                                          ],
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [
-                                        "contractVersion",
-                                        "kind",
-                                        "authority",
-                                        "identity"
-                                      ],
-                                      "type": "object"
-                                    }
-                                  },
-                                  "required": [
-                                    "kind",
-                                    "locator",
-                                    "destinationName",
-                                    "expectedSemanticRevision",
-                                    "expectedMediaType"
-                                  ],
-                                  "type": "object"
-                                },
-                                "maxItems": 100,
-                                "type": "array"
-                              },
-                              "output": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "fileName": {
-                                    "maxLength": 128,
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "kind": {
-                                    "const": "content-space.output-new",
-                                    "type": "string"
-                                  },
-                                  "maxBytes": {
-                                    "maximum": 1073741824,
-                                    "minimum": 1,
-                                    "type": "integer"
-                                  },
-                                  "mediaType": {
-                                    "maxLength": 256,
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "mode": {
-                                    "const": "upload-new",
-                                    "type": "string"
-                                  },
-                                  "target": {
-                                    "const": "project-binding-root",
-                                    "type": "string"
-                                  }
-                                },
-                                "required": [
-                                  "kind",
-                                  "target",
-                                  "mode",
-                                  "fileName",
-                                  "mediaType",
-                                  "maxBytes"
-                                ],
-                                "type": "object"
-                              },
-                              "schemaVersion": {
-                                "const": 1,
-                                "type": "number"
-                              }
-                            },
-                            "required": [
-                              "schemaVersion",
-                              "inputs",
-                              "output",
-                              "bindingRevision"
-                            ],
-                            "type": "object"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "maxRetries": {
-                        "maximum": 100,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "objective": {
-                        "maxLength": 32000,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "projectId": {
-                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "requiredCapabilityTags": {
-                        "items": {
-                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                          "type": "string"
-                        },
-                        "maxItems": 256,
-                        "type": "array"
-                      },
-                      "revision": {
-                        "maximum": 9007199254740991,
-                        "minimum": 1,
-                        "type": "integer"
-                      },
-                      "schemaVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "status": {
-                        "enum": [
-                          "planned",
-                          "offered",
-                          "in_progress",
-                          "needs_human",
-                          "awaiting_review",
-                          "revision_requested",
-                          "manual_recovery_required",
-                          "completed",
-                          "failed",
-                          "cancelled"
-                        ],
-                        "type": "string"
-                      },
-                      "taskId": {
-                        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                        "type": "string"
-                      },
-                      "title": {
-                        "maxLength": 200,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "type": {
-                        "const": "task",
-                        "type": "string"
-                      },
-                      "updatedAt": {
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "schemaVersion",
-                      "revision",
-                      "createdAt",
-                      "updatedAt",
-                      "type",
-                      "taskId",
-                      "projectId",
-                      "createdByCoordinatorAgentId",
-                      "title",
-                      "objective",
-                      "completionCriteria",
-                      "dependencyTaskIds",
-                      "requiredCapabilityTags",
-                      "fileIntent",
-                      "currentExecutionId",
-                      "currentExecutionState",
-                      "status",
-                      "executionCount",
-                      "maxRetries",
-                      "completedAt"
-                    ],
-                    "type": "object"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "task",
-                  "executions"
-                ],
-                "type": "object"
-              },
-              "maxItems": 10000,
-              "type": "array"
-            },
-            "workerGroups": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "agents": {
-                    "items": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "displayName": {
-                          "maxLength": 200,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "projectAvailability": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "agentId": {
-                              "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "availability": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "acceptsNewOffers": {
-                                  "type": "boolean"
-                                },
-                                "activeTaskCount": {
-                                  "maximum": 10000,
-                                  "minimum": 0,
-                                  "type": "integer"
-                                },
-                                "agentActive": {
-                                  "type": "boolean"
-                                },
-                                "agentId": {
-                                  "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                },
-                                "connectionStatus": {
-                                  "enum": [
-                                    "online",
-                                    "offline"
-                                  ],
-                                  "type": "string"
-                                },
-                                "createdAt": {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                "deviceActive": {
-                                  "type": "boolean"
-                                },
-                                "deviceId": {
-                                  "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                },
-                                "expiresAt": {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                "lastHeartbeatAt": {
-                                  "anyOf": [
-                                    {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "observedAt": {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                "revision": {
-                                  "maximum": 9007199254740991,
-                                  "minimum": 1,
-                                  "type": "integer"
-                                },
-                                "runtimeCapabilityTags": {
-                                  "items": {
-                                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
-                                    "type": "string"
-                                  },
-                                  "maxItems": 256,
-                                  "type": "array"
-                                },
-                                "runtimeReadiness": {
-                                  "enum": [
-                                    "ready",
-                                    "unavailable"
-                                  ],
-                                  "type": "string"
-                                },
-                                "schemaVersion": {
-                                  "const": 1,
-                                  "type": "number"
-                                },
-                                "type": {
-                                  "const": "worker_availability_projection",
-                                  "type": "string"
-                                },
-                                "updatedAt": {
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                  "type": "string"
-                                },
-                                "userId": {
-                                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "schemaVersion",
-                                "revision",
-                                "createdAt",
-                                "updatedAt",
-                                "type",
-                                "userId",
-                                "agentId",
-                                "deviceId",
-                                "agentActive",
-                                "deviceActive",
-                                "connectionStatus",
-                                "lastHeartbeatAt",
-                                "runtimeReadiness",
-                                "runtimeCapabilityTags",
-                                "acceptsNewOffers",
-                                "activeTaskCount",
-                                "observedAt",
-                                "expiresAt"
-                              ],
-                              "type": "object"
-                            },
-                            "contentReadiness": {
-                              "anyOf": [
-                                {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "bindingRevision": {
-                                      "anyOf": [
-                                        {
-                                          "maximum": 9007199254740991,
-                                          "minimum": 1,
-                                          "type": "integer"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "createdAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "effectiveAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "lastObservationId": {
-                                      "anyOf": [
-                                        {
-                                          "pattern": "^pob_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "projectId": {
-                                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    },
-                                    "providerInstance": {
-                                      "additionalProperties": false,
-                                      "properties": {
-                                        "providerInstanceRef": {
-                                          "maxLength": 256,
-                                          "minLength": 3,
-                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                          "type": "string"
-                                        },
-                                        "schemaVersion": {
-                                          "const": 1,
-                                          "type": "number"
-                                        },
-                                        "type": {
-                                          "const": "provider_instance_reference",
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [
-                                        "schemaVersion",
-                                        "type",
-                                        "providerInstanceRef"
-                                      ],
-                                      "type": "object"
-                                    },
-                                    "providerPrincipal": {
-                                      "anyOf": [
-                                        {
-                                          "additionalProperties": false,
-                                          "properties": {
-                                            "principalId": {
-                                              "maxLength": 512,
-                                              "minLength": 1,
-                                              "type": "string"
-                                            },
-                                            "principalKind": {
-                                              "const": "user",
-                                              "type": "string"
-                                            },
-                                            "providerInstance": {
-                                              "additionalProperties": false,
-                                              "properties": {
-                                                "providerInstanceRef": {
-                                                  "maxLength": 256,
-                                                  "minLength": 3,
-                                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                                  "type": "string"
-                                                },
-                                                "schemaVersion": {
-                                                  "const": 1,
-                                                  "type": "number"
-                                                },
-                                                "type": {
-                                                  "const": "provider_instance_reference",
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "required": [
-                                                "schemaVersion",
-                                                "type",
-                                                "providerInstanceRef"
-                                              ],
-                                              "type": "object"
-                                            },
-                                            "schemaVersion": {
-                                              "const": 1,
-                                              "type": "number"
-                                            },
-                                            "type": {
-                                              "const": "provider_directory_principal_reference",
-                                              "type": "string"
-                                            }
-                                          },
-                                          "required": [
-                                            "schemaVersion",
-                                            "type",
-                                            "providerInstance",
-                                            "principalKind",
-                                            "principalId"
-                                          ],
-                                          "type": "object"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "providerPrincipalFactId": {
-                                      "anyOf": [
-                                        {
-                                          "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "reason": {
-                                      "anyOf": [
-                                        {
-                                          "enum": [
-                                            "identity_missing",
-                                            "provisioning_pending",
-                                            "provider_member_absent",
-                                            "provider_unavailable",
-                                            "provider_unauthorized",
-                                            "binding_degraded",
-                                            "content_owner_lost_root"
-                                          ],
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "revision": {
-                                      "maximum": 9007199254740991,
-                                      "minimum": 1,
-                                      "type": "integer"
-                                    },
-                                    "schemaVersion": {
-                                      "const": 1,
-                                      "type": "number"
-                                    },
-                                    "snapshottedFactRevision": {
-                                      "anyOf": [
-                                        {
-                                          "maximum": 9007199254740991,
-                                          "minimum": 1,
-                                          "type": "integer"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "state": {
-                                      "enum": [
-                                        "missing_identity",
-                                        "pending",
-                                        "ready",
-                                        "degraded"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "type": {
-                                      "const": "project_content_readiness",
-                                      "type": "string"
-                                    },
-                                    "updatedAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "userId": {
-                                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "schemaVersion",
-                                    "revision",
-                                    "createdAt",
-                                    "updatedAt",
-                                    "type",
-                                    "projectId",
-                                    "userId",
-                                    "providerInstance",
-                                    "state",
-                                    "reason",
-                                    "providerPrincipalFactId",
-                                    "snapshottedFactRevision",
-                                    "providerPrincipal",
-                                    "bindingRevision",
-                                    "lastObservationId",
-                                    "effectiveAt"
-                                  ],
-                                  "type": "object"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "membership": {
-                              "anyOf": [
-                                {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "activatedAt": {
-                                      "anyOf": [
-                                        {
-                                          "format": "date-time",
-                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "authorityEpoch": {
-                                      "maximum": 9007199254740991,
-                                      "minimum": 1,
-                                      "type": "integer"
-                                    },
-                                    "createdAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "projectId": {
-                                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    },
-                                    "projectMembershipId": {
-                                      "pattern": "^pmb_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    },
-                                    "removalRequestedAt": {
-                                      "anyOf": [
-                                        {
-                                          "format": "date-time",
-                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "removalRequestedByUserId": {
-                                      "anyOf": [
-                                        {
-                                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "removedAt": {
-                                      "anyOf": [
-                                        {
-                                          "format": "date-time",
-                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "revision": {
-                                      "maximum": 9007199254740991,
-                                      "minimum": 1,
-                                      "type": "integer"
-                                    },
-                                    "schemaVersion": {
-                                      "const": 1,
-                                      "type": "number"
-                                    },
-                                    "state": {
-                                      "enum": [
-                                        "invited",
-                                        "pending_membership",
-                                        "active",
-                                        "membership_removal_pending",
-                                        "removed"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "type": {
-                                      "const": "project_membership",
-                                      "type": "string"
-                                    },
-                                    "updatedAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "userId": {
-                                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "schemaVersion",
-                                    "revision",
-                                    "createdAt",
-                                    "updatedAt",
-                                    "type",
-                                    "projectMembershipId",
-                                    "projectId",
-                                    "userId",
-                                    "state",
-                                    "authorityEpoch",
-                                    "activatedAt",
-                                    "removalRequestedAt",
-                                    "removalRequestedByUserId",
-                                    "removedAt"
-                                  ],
-                                  "type": "object"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "observedAt": {
-                              "format": "date-time",
-                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                              "type": "string"
-                            },
-                            "projectId": {
-                              "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            },
-                            "providerPrincipalFact": {
-                              "anyOf": [
-                                {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "createdAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "observedAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "principalIdentityRevision": {
-                                      "maximum": 9007199254740991,
-                                      "minimum": 1,
-                                      "type": "integer"
-                                    },
-                                    "providerBindingAttestationDigest": {
-                                      "pattern": "^[a-f0-9]{64}$",
-                                      "type": "string"
-                                    },
-                                    "providerPrincipal": {
-                                      "additionalProperties": false,
-                                      "properties": {
-                                        "principalId": {
-                                          "maxLength": 512,
-                                          "minLength": 1,
-                                          "type": "string"
-                                        },
-                                        "principalKind": {
-                                          "const": "user",
-                                          "type": "string"
-                                        },
-                                        "providerInstance": {
-                                          "additionalProperties": false,
-                                          "properties": {
-                                            "providerInstanceRef": {
-                                              "maxLength": 256,
-                                              "minLength": 3,
-                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                                              "type": "string"
-                                            },
-                                            "schemaVersion": {
-                                              "const": 1,
-                                              "type": "number"
-                                            },
-                                            "type": {
-                                              "const": "provider_instance_reference",
-                                              "type": "string"
-                                            }
-                                          },
-                                          "required": [
-                                            "schemaVersion",
-                                            "type",
-                                            "providerInstanceRef"
-                                          ],
-                                          "type": "object"
-                                        },
-                                        "schemaVersion": {
-                                          "const": 1,
-                                          "type": "number"
-                                        },
-                                        "type": {
-                                          "const": "provider_directory_principal_reference",
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [
-                                        "schemaVersion",
-                                        "type",
-                                        "providerInstance",
-                                        "principalKind",
-                                        "principalId"
-                                      ],
-                                      "type": "object"
-                                    },
-                                    "providerPrincipalFactId": {
-                                      "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    },
-                                    "publishedByDeviceId": {
-                                      "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    },
-                                    "readiness": {
-                                      "enum": [
-                                        "ready",
-                                        "degraded"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "readinessReason": {
-                                      "anyOf": [
-                                        {
-                                          "enum": [
-                                            "provider_binding_changed",
-                                            "provider_unavailable",
-                                            "provider_unauthorized"
-                                          ],
-                                          "type": "string"
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    },
-                                    "revision": {
-                                      "maximum": 9007199254740991,
-                                      "minimum": 1,
-                                      "type": "integer"
-                                    },
-                                    "schemaVersion": {
-                                      "const": 1,
-                                      "type": "number"
-                                    },
-                                    "type": {
-                                      "const": "provider_directory_principal_fact",
-                                      "type": "string"
-                                    },
-                                    "updatedAt": {
-                                      "format": "date-time",
-                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                      "type": "string"
-                                    },
-                                    "userId": {
-                                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "schemaVersion",
-                                    "revision",
-                                    "createdAt",
-                                    "updatedAt",
-                                    "type",
-                                    "providerPrincipalFactId",
-                                    "userId",
-                                    "providerPrincipal",
-                                    "principalIdentityRevision",
-                                    "providerBindingAttestationDigest",
-                                    "publishedByDeviceId",
-                                    "readiness",
-                                    "readinessReason",
-                                    "observedAt"
-                                  ],
-                                  "type": "object"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "providerPrincipalSnapshotStatus": {
-                              "enum": [
-                                "not_applicable",
-                                "missing",
-                                "match",
-                                "stale"
-                              ],
-                              "type": "string"
-                            },
-                            "revision": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "schemaVersion": {
-                              "const": 1,
-                              "type": "number"
-                            },
-                            "taskAuthorities": {
-                              "items": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "authorityEpoch": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 1,
-                                    "type": "integer"
-                                  },
-                                  "createdAt": {
-                                    "format": "date-time",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                    "type": "string"
-                                  },
-                                  "effectiveAt": {
-                                    "format": "date-time",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                    "type": "string"
-                                  },
-                                  "projectId": {
-                                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                    "type": "string"
-                                  },
-                                  "reason": {
-                                    "anyOf": [
-                                      {
-                                        "enum": [
-                                          "project_paused",
-                                          "project_terminal",
-                                          "invitation_pending",
-                                          "membership_pending",
-                                          "membership_removal_pending",
-                                          "membership_removed",
-                                          "content_identity_missing",
-                                          "content_not_ready",
-                                          "content_binding_degraded"
-                                        ],
-                                        "type": "string"
-                                      },
-                                      {
-                                        "type": "null"
-                                      }
-                                    ]
-                                  },
-                                  "revision": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 1,
-                                    "type": "integer"
-                                  },
-                                  "schemaVersion": {
-                                    "const": 1,
-                                    "type": "number"
-                                  },
-                                  "scope": {
-                                    "enum": [
-                                      "text_tasks",
-                                      "file_tasks"
-                                    ],
-                                    "type": "string"
-                                  },
-                                  "state": {
-                                    "enum": [
-                                      "eligible",
-                                      "suspended",
-                                      "fenced"
-                                    ],
-                                    "type": "string"
-                                  },
-                                  "taskAuthorityId": {
-                                    "pattern": "^tau_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                    "type": "string"
-                                  },
-                                  "type": {
-                                    "const": "task_authority",
-                                    "type": "string"
-                                  },
-                                  "updatedAt": {
-                                    "format": "date-time",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-                                    "type": "string"
-                                  },
-                                  "userId": {
-                                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                                    "type": "string"
-                                  }
-                                },
-                                "required": [
-                                  "schemaVersion",
-                                  "revision",
-                                  "createdAt",
-                                  "updatedAt",
-                                  "type",
-                                  "taskAuthorityId",
-                                  "projectId",
-                                  "userId",
-                                  "scope",
-                                  "state",
-                                  "authorityEpoch",
-                                  "reason",
-                                  "effectiveAt"
-                                ],
-                                "type": "object"
-                              },
-                              "maxItems": 2,
-                              "type": "array"
-                            },
-                            "type": {
-                              "const": "project_worker_availability_view",
-                              "type": "string"
-                            },
-                            "userId": {
-                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "schemaVersion",
-                            "type",
-                            "projectId",
-                            "userId",
-                            "agentId",
-                            "revision",
-                            "availability",
-                            "membership",
-                            "taskAuthorities",
-                            "providerPrincipalFact",
-                            "providerPrincipalSnapshotStatus",
-                            "contentReadiness",
-                            "observedAt"
-                          ],
-                          "type": "object"
-                        }
-                      },
-                      "readOnly": true,
-                      "required": [
-                        "displayName",
-                        "projectAvailability"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 64,
-                    "type": "array"
-                  },
-                  "displayName": {
-                    "maxLength": 200,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "userId": {
-                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                    "type": "string"
-                  }
-                },
-                "readOnly": true,
-                "required": [
-                  "userId",
-                  "displayName",
-                  "agents"
-                ],
-                "type": "object"
-              },
-              "maxItems": 1000,
-              "type": "array"
-            }
-          },
-          "readOnly": true,
-          "required": [
-            "project",
-            "coordinatorTransferFeedback",
-            "plan",
-            "memberUsers",
-            "workerGroups",
-            "tasks",
-            "offers",
-            "reviews",
-            "pendingHumanNeeded",
-            "records",
-            "finalSummary",
-            "provisioning"
-          ],
-          "type": "object"
-        },
-        "maxItems": 1000,
-        "type": "array"
-      },
-      "providerPrincipalFacts": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "createdAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-              "type": "string"
-            },
-            "observedAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-              "type": "string"
-            },
-            "principalIdentityRevision": {
-              "maximum": 9007199254740991,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "providerBindingAttestationDigest": {
-              "pattern": "^[a-f0-9]{64}$",
-              "type": "string"
-            },
-            "providerPrincipal": {
-              "additionalProperties": false,
-              "properties": {
-                "principalId": {
-                  "maxLength": 512,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "principalKind": {
-                  "const": "user",
-                  "type": "string"
-                },
-                "providerInstance": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "providerInstanceRef": {
-                      "maxLength": 256,
-                      "minLength": 3,
-                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                      "type": "string"
-                    },
-                    "schemaVersion": {
-                      "const": 1,
-                      "type": "number"
-                    },
-                    "type": {
-                      "const": "provider_instance_reference",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "schemaVersion",
-                    "type",
-                    "providerInstanceRef"
-                  ],
-                  "type": "object"
-                },
-                "schemaVersion": {
-                  "const": 1,
-                  "type": "number"
-                },
-                "type": {
-                  "const": "provider_directory_principal_reference",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "schemaVersion",
-                "type",
-                "providerInstance",
-                "principalKind",
-                "principalId"
-              ],
-              "type": "object"
-            },
-            "providerPrincipalFactId": {
-              "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-              "type": "string"
-            },
-            "publishedByDeviceId": {
-              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-              "type": "string"
-            },
-            "readiness": {
-              "enum": [
-                "ready",
-                "degraded"
-              ],
-              "type": "string"
-            },
-            "readinessReason": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "provider_binding_changed",
-                    "provider_unavailable",
-                    "provider_unauthorized"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "revision": {
-              "maximum": 9007199254740991,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "schemaVersion": {
-              "const": 1,
-              "type": "number"
-            },
-            "type": {
-              "const": "provider_directory_principal_fact",
-              "type": "string"
-            },
-            "updatedAt": {
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-              "type": "string"
-            },
-            "userId": {
-              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-              "type": "string"
-            }
-          },
-          "required": [
-            "schemaVersion",
-            "revision",
-            "createdAt",
-            "updatedAt",
-            "type",
-            "providerPrincipalFactId",
-            "userId",
-            "providerPrincipal",
-            "principalIdentityRevision",
-            "providerBindingAttestationDigest",
-            "publishedByDeviceId",
-            "readiness",
-            "readinessReason",
-            "observedAt"
-          ],
-          "type": "object"
-        },
-        "maxItems": 10000,
-        "type": "array"
-      }
-    },
-    "readOnly": true,
-    "required": [
-      "connection",
-      "observedAt",
-      "availableWorkerUsers",
-      "providerPrincipalFacts",
-      "projects"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [],
-  "tags": [
-    "project",
-    "content",
-    "recovery",
-    "successor",
-    "execution-fence"
-  ],
-  "title": "Approve a freshly named recovery successor"
-}
-```
-
 ## `project-coordinator.coordinator.transfer`
 
 Lets the authenticated Project Owner select another exact ready Agent that they own; main derives all Cloud CAS facts and the old Coordinator is fenced atomically.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -93603,6 +88035,18 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -93628,6 +88072,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -93668,6 +88113,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -94064,6 +88510,36 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -94071,6 +88547,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -94159,6 +88636,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -94195,13 +88673,14 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -97258,6 +91737,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -97280,6 +91760,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -97547,6 +92028,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -97635,6 +92117,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -98827,7 +93310,7 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
 
 Submits the exact target Project member User answer through the OIDC User path.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -99298,6 +93781,18 @@ Submits the exact target Project member User answer through the OIDC User path.
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -99323,6 +93818,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -99363,6 +93859,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -99759,6 +94256,36 @@ Submits the exact target Project member User answer through the OIDC User path.
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -99766,6 +94293,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -99854,6 +94382,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -99890,13 +94419,14 @@ Submits the exact target Project member User answer through the OIDC User path.
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -102953,6 +97483,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -102975,6 +97506,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -103242,6 +97774,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -103330,6 +97863,7 @@ Submits the exact target Project member User answer through the OIDC User path.
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -104520,7 +99054,7 @@ Submits the exact target Project member User answer through the OIDC User path.
 
 Creates one Project-scoped HumanNeeded for an explicit active member User through the current Coordinator Agent.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -105004,6 +99538,18 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -105029,6 +99575,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -105069,6 +99616,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -105465,6 +100013,36 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -105472,6 +100050,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -105560,6 +100139,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -105596,13 +100176,14 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -108659,6 +103240,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -108681,6 +103263,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -108948,6 +103531,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -109036,6 +103620,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -110226,7 +104811,7 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
 
 Lets only the exact invited OIDC User accept the exact current confirmed Plan before Team readiness.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -110706,6 +105291,18 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -110731,6 +105328,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -110771,6 +105369,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -111167,6 +105766,36 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -111174,6 +105803,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -111262,6 +105892,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -111298,13 +105929,14 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -114361,6 +108993,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -114383,6 +109016,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -114650,6 +109284,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -114738,6 +109373,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -115929,7 +110565,7 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
 
 Creates only an OIDC User invitation; it grants no Task or Team authority before that exact User accepts the confirmed Plan.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -116412,6 +111048,18 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -116437,6 +111085,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -116477,6 +111126,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -116873,6 +111523,36 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -116880,6 +111560,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -116968,6 +111649,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -117004,13 +111686,14 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -120067,6 +114750,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -120089,6 +114773,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -120356,6 +115041,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -120444,6 +115130,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -121634,7 +116321,7 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
 
 Fences Cloud Task Authority first; content-required membership remains removal-pending until Provider absence is observed and signed.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `destructive`
 - Approval: confirmation
@@ -122098,6 +116785,18 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -122123,6 +116822,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -122163,6 +116863,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -122559,6 +117260,36 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -122566,6 +117297,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -122654,6 +117386,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -122690,13 +117423,14 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -125753,6 +120487,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -125775,6 +120510,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -126042,6 +120778,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -126130,6 +120867,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -127321,7 +122059,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
 
 CAS-updates Plan items and exact visible Worker Agent choices.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `workspace-write`
 - Approval: none
@@ -127462,6 +122200,36 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                 {
                   "additionalProperties": false,
                   "properties": {
+                    "dependencyInputs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "destinationName": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[\\x20-\\x7e]+$",
+                            "type": "string"
+                          },
+                          "outputIndex": {
+                            "maximum": 99,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "planItemId": {
+                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "planItemId",
+                          "outputIndex",
+                          "destinationName"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
                     "inputs": {
                       "items": {
                         "additionalProperties": false,
@@ -127469,6 +122237,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                           "destinationName": {
                             "maxLength": 128,
                             "minLength": 1,
+                            "pattern": "^[\\x20-\\x7e]+$",
                             "type": "string"
                           },
                           "expectedMediaType": {
@@ -127557,6 +122326,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                         "fileName": {
                           "maxLength": 128,
                           "minLength": 1,
+                          "pattern": "^[\\x20-\\x7e]+$",
                           "type": "string"
                         },
                         "kind": {
@@ -127593,13 +122363,14 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                       "type": "object"
                     },
                     "schemaVersion": {
-                      "const": 1,
+                      "const": 2,
                       "type": "number"
                     }
                   },
                   "required": [
                     "schemaVersion",
                     "inputs",
+                    "dependencyInputs",
                     "output"
                   ],
                   "type": "object"
@@ -127892,6 +122663,36 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                 {
                   "additionalProperties": false,
                   "properties": {
+                    "dependencyInputs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "destinationName": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[\\x20-\\x7e]+$",
+                            "type": "string"
+                          },
+                          "outputIndex": {
+                            "maximum": 99,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "planItemId": {
+                            "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "planItemId",
+                          "outputIndex",
+                          "destinationName"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
                     "inputs": {
                       "items": {
                         "additionalProperties": false,
@@ -127899,6 +122700,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                           "destinationName": {
                             "maxLength": 128,
                             "minLength": 1,
+                            "pattern": "^[\\x20-\\x7e]+$",
                             "type": "string"
                           },
                           "expectedMediaType": {
@@ -127987,6 +122789,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                         "fileName": {
                           "maxLength": 128,
                           "minLength": 1,
+                          "pattern": "^[\\x20-\\x7e]+$",
                           "type": "string"
                         },
                         "kind": {
@@ -128023,13 +122826,14 @@ CAS-updates Plan items and exact visible Worker Agent choices.
                       "type": "object"
                     },
                     "schemaVersion": {
-                      "const": 1,
+                      "const": 2,
                       "type": "number"
                     }
                   },
                   "required": [
                     "schemaVersion",
                     "inputs",
+                    "dependencyInputs",
                     "output"
                   ],
                   "type": "object"
@@ -128115,7 +122919,7 @@ CAS-updates Plan items and exact visible Worker Agent choices.
 
 Runs the configured local Agent Runtime and persists one reviewable non-secret draft.
 
-- Version: `2.0.0`
+- Version: `3.0.0`
 - Audiences: ui, agent
 - Effect: `workspace-write`
 - Approval: none
@@ -128479,6 +123283,36 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
                         {
                           "additionalProperties": false,
                           "properties": {
+                            "dependencyInputs": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "destinationName": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
+                                    "type": "string"
+                                  },
+                                  "outputIndex": {
+                                    "maximum": 99,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "planItemId": {
+                                    "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "planItemId",
+                                  "outputIndex",
+                                  "destinationName"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 100,
+                              "type": "array"
+                            },
                             "inputs": {
                               "items": {
                                 "additionalProperties": false,
@@ -128486,6 +123320,7 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
                                   "destinationName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "expectedMediaType": {
@@ -128574,6 +123409,7 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
                                 "fileName": {
                                   "maxLength": 128,
                                   "minLength": 1,
+                                  "pattern": "^[\\x20-\\x7e]+$",
                                   "type": "string"
                                 },
                                 "kind": {
@@ -128610,13 +123446,14 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
                               "type": "object"
                             },
                             "schemaVersion": {
-                              "const": 1,
+                              "const": 2,
                               "type": "number"
                             }
                           },
                           "required": [
                             "schemaVersion",
                             "inputs",
+                            "dependencyInputs",
                             "output"
                           ],
                           "type": "object"
@@ -128740,7 +123577,7 @@ Runs the configured local Agent Runtime and persists one reviewable non-secret d
 
 Reads the package-owned non-secret draft for one exact Project.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `read`
 - Approval: none
@@ -128972,6 +123809,36 @@ Reads the package-owned non-secret draft for one exact Project.
                     {
                       "additionalProperties": false,
                       "properties": {
+                        "dependencyInputs": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "destinationName": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[\\x20-\\x7e]+$",
+                                "type": "string"
+                              },
+                              "outputIndex": {
+                                "maximum": 99,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "planItemId": {
+                                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "planItemId",
+                              "outputIndex",
+                              "destinationName"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        },
                         "inputs": {
                           "items": {
                             "additionalProperties": false,
@@ -128979,6 +123846,7 @@ Reads the package-owned non-secret draft for one exact Project.
                               "destinationName": {
                                 "maxLength": 128,
                                 "minLength": 1,
+                                "pattern": "^[\\x20-\\x7e]+$",
                                 "type": "string"
                               },
                               "expectedMediaType": {
@@ -129067,6 +123935,7 @@ Reads the package-owned non-secret draft for one exact Project.
                             "fileName": {
                               "maxLength": 128,
                               "minLength": 1,
+                              "pattern": "^[\\x20-\\x7e]+$",
                               "type": "string"
                             },
                             "kind": {
@@ -129103,13 +123972,14 @@ Reads the package-owned non-secret draft for one exact Project.
                           "type": "object"
                         },
                         "schemaVersion": {
-                          "const": 1,
+                          "const": 2,
                           "type": "number"
                         }
                       },
                       "required": [
                         "schemaVersion",
                         "inputs",
+                        "dependencyInputs",
                         "output"
                       ],
                       "type": "object"
@@ -129233,7 +124103,7 @@ Reads the package-owned non-secret draft for one exact Project.
 
 Confirms the exact immutable Plan; invitations, Team readiness, activation, and dispatch remain gated by the canonical Project workflow.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -129832,6 +124702,18 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -129857,6 +124739,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -129897,6 +124780,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -130293,6 +125177,36 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -130300,6 +125214,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -130388,6 +125303,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -130424,13 +125340,14 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -133487,6 +128404,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -133509,6 +128427,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -133776,6 +128695,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -133864,6 +128784,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -135054,7 +129975,7 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
 
 Submits the immutable digest through the current Coordinator Agent durable Cloud command service.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -135335,6 +130256,36 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                     {
                       "additionalProperties": false,
                       "properties": {
+                        "dependencyInputs": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "destinationName": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "pattern": "^[\\x20-\\x7e]+$",
+                                "type": "string"
+                              },
+                              "outputIndex": {
+                                "maximum": 99,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "planItemId": {
+                                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "planItemId",
+                              "outputIndex",
+                              "destinationName"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        },
                         "inputs": {
                           "items": {
                             "additionalProperties": false,
@@ -135342,6 +130293,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                               "destinationName": {
                                 "maxLength": 128,
                                 "minLength": 1,
+                                "pattern": "^[\\x20-\\x7e]+$",
                                 "type": "string"
                               },
                               "expectedMediaType": {
@@ -135430,6 +130382,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                             "fileName": {
                               "maxLength": 128,
                               "minLength": 1,
+                              "pattern": "^[\\x20-\\x7e]+$",
                               "type": "string"
                             },
                             "kind": {
@@ -135466,13 +130419,14 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                           "type": "object"
                         },
                         "schemaVersion": {
-                          "const": 1,
+                          "const": 2,
                           "type": "number"
                         }
                       },
                       "required": [
                         "schemaVersion",
                         "inputs",
+                        "dependencyInputs",
                         "output"
                       ],
                       "type": "object"
@@ -135940,6 +130894,18 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                         "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                         "type": "string"
                       },
+                      "reassignmentTaskRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "respondedAt": {
                         "anyOf": [
                           {
@@ -135965,6 +130931,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                         "enum": [
                           "pending",
                           "accepted",
+                          "rejected",
                           "withdrawn",
                           "timed_out"
                         ],
@@ -136005,6 +130972,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                       "workerUserId",
                       "offeredByCoordinatorAgentId",
                       "state",
+                      "reassignmentTaskRevision",
                       "offeredAt",
                       "expiresAt",
                       "respondedAt"
@@ -136401,6 +131369,36 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                       {
                                         "additionalProperties": false,
                                         "properties": {
+                                          "dependencyInputs": {
+                                            "items": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "destinationName": {
+                                                  "maxLength": 128,
+                                                  "minLength": 1,
+                                                  "pattern": "^[\\x20-\\x7e]+$",
+                                                  "type": "string"
+                                                },
+                                                "outputIndex": {
+                                                  "maximum": 99,
+                                                  "minimum": 0,
+                                                  "type": "integer"
+                                                },
+                                                "planItemId": {
+                                                  "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "planItemId",
+                                                "outputIndex",
+                                                "destinationName"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "maxItems": 100,
+                                            "type": "array"
+                                          },
                                           "inputs": {
                                             "items": {
                                               "additionalProperties": false,
@@ -136408,6 +131406,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                                 "destinationName": {
                                                   "maxLength": 128,
                                                   "minLength": 1,
+                                                  "pattern": "^[\\x20-\\x7e]+$",
                                                   "type": "string"
                                                 },
                                                 "expectedMediaType": {
@@ -136496,6 +131495,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                               "fileName": {
                                                 "maxLength": 128,
                                                 "minLength": 1,
+                                                "pattern": "^[\\x20-\\x7e]+$",
                                                 "type": "string"
                                               },
                                               "kind": {
@@ -136532,13 +131532,14 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                             "type": "object"
                                           },
                                           "schemaVersion": {
-                                            "const": 1,
+                                            "const": 2,
                                             "type": "number"
                                           }
                                         },
                                         "required": [
                                           "schemaVersion",
                                           "inputs",
+                                          "dependencyInputs",
                                           "output"
                                         ],
                                         "type": "object"
@@ -139595,6 +134596,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                           "destinationName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "resourceRefId": {
@@ -139617,6 +134619,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                         "fileName": {
                                           "maxLength": 128,
                                           "minLength": 1,
+                                          "pattern": "^[\\x20-\\x7e]+$",
                                           "type": "string"
                                         },
                                         "maxBytes": {
@@ -139884,6 +134887,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                         "destinationName": {
                                           "maxLength": 128,
                                           "minLength": 1,
+                                          "pattern": "^[\\x20-\\x7e]+$",
                                           "type": "string"
                                         },
                                         "expectedMediaType": {
@@ -139972,6 +134976,7 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                                       "fileName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "kind": {
@@ -141166,11 +136171,71 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
 }
 ```
 
+## `project-coordinator.project-activation.acknowledge`
+
+Acknowledges local selection and overview opening for an exact created Coordinator Session.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `workspace-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "activationRequestId": {
+        "pattern": "^pca_[A-Za-z0-9]{12,64}$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "activationRequestId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "acknowledged": {
+        "const": true,
+        "type": "boolean"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "acknowledged"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project",
+    "session",
+    "activation",
+    "acknowledgement"
+  ],
+  "title": "Acknowledge Project Session activation"
+}
+```
+
 ## `project-coordinator.project.complete`
 
 Submits the Coordinator final summary and atomically completes the Project.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -141662,6 +136727,18 @@ Submits the Coordinator final summary and atomically completes the Project.
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -141687,6 +136764,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -141727,6 +136805,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -142123,6 +137202,36 @@ Submits the Coordinator final summary and atomically completes the Project.
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -142130,6 +137239,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -142218,6 +137328,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -142254,13 +137365,14 @@ Submits the Coordinator final summary and atomically completes the Project.
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -145317,6 +140429,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -145339,6 +140452,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -145606,6 +140720,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -145694,6 +140809,7 @@ Submits the Coordinator final summary and atomically completes the Project.
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -146883,9 +141999,9 @@ Submits the Coordinator final summary and atomically completes the Project.
 
 ## `project-coordinator.project.create`
 
-Creates one Cloud-authoritative Project for the current OIDC Owner and returns exact Desktop focus.
+Creates one Cloud-authoritative Project and a fresh reviewable Coordinator Session.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -146997,6 +142113,36 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
       }
     },
     "properties": {
+      "activationRequestId": {
+        "pattern": "^pca_[A-Za-z0-9]{12,64}$",
+        "type": "string"
+      },
+      "coordinatorSession": {
+        "additionalProperties": false,
+        "properties": {
+          "projectId": {
+            "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "readOnly": true,
+        "required": [
+          "runtimeId",
+          "threadId",
+          "projectId"
+        ],
+        "type": "object"
+      },
       "createIntentId": {
         "pattern": "^pct_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
         "type": "string"
@@ -147388,6 +142534,18 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                         "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                         "type": "string"
                       },
+                      "reassignmentTaskRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "respondedAt": {
                         "anyOf": [
                           {
@@ -147413,6 +142571,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                         "enum": [
                           "pending",
                           "accepted",
+                          "rejected",
                           "withdrawn",
                           "timed_out"
                         ],
@@ -147453,6 +142612,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                       "workerUserId",
                       "offeredByCoordinatorAgentId",
                       "state",
+                      "reassignmentTaskRevision",
                       "offeredAt",
                       "expiresAt",
                       "respondedAt"
@@ -147849,6 +143009,36 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                       {
                                         "additionalProperties": false,
                                         "properties": {
+                                          "dependencyInputs": {
+                                            "items": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "destinationName": {
+                                                  "maxLength": 128,
+                                                  "minLength": 1,
+                                                  "pattern": "^[\\x20-\\x7e]+$",
+                                                  "type": "string"
+                                                },
+                                                "outputIndex": {
+                                                  "maximum": 99,
+                                                  "minimum": 0,
+                                                  "type": "integer"
+                                                },
+                                                "planItemId": {
+                                                  "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "planItemId",
+                                                "outputIndex",
+                                                "destinationName"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "maxItems": 100,
+                                            "type": "array"
+                                          },
                                           "inputs": {
                                             "items": {
                                               "additionalProperties": false,
@@ -147856,6 +143046,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                                 "destinationName": {
                                                   "maxLength": 128,
                                                   "minLength": 1,
+                                                  "pattern": "^[\\x20-\\x7e]+$",
                                                   "type": "string"
                                                 },
                                                 "expectedMediaType": {
@@ -147944,6 +143135,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                               "fileName": {
                                                 "maxLength": 128,
                                                 "minLength": 1,
+                                                "pattern": "^[\\x20-\\x7e]+$",
                                                 "type": "string"
                                               },
                                               "kind": {
@@ -147980,13 +143172,14 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                             "type": "object"
                                           },
                                           "schemaVersion": {
-                                            "const": 1,
+                                            "const": 2,
                                             "type": "number"
                                           }
                                         },
                                         "required": [
                                           "schemaVersion",
                                           "inputs",
+                                          "dependencyInputs",
                                           "output"
                                         ],
                                         "type": "object"
@@ -151043,6 +146236,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                           "destinationName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "resourceRefId": {
@@ -151065,6 +146259,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                         "fileName": {
                                           "maxLength": 128,
                                           "minLength": 1,
+                                          "pattern": "^[\\x20-\\x7e]+$",
                                           "type": "string"
                                         },
                                         "maxBytes": {
@@ -151332,6 +146527,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                         "destinationName": {
                                           "maxLength": 128,
                                           "minLength": 1,
+                                          "pattern": "^[\\x20-\\x7e]+$",
                                           "type": "string"
                                         },
                                         "expectedMediaType": {
@@ -151420,6 +146616,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
                                       "fileName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "kind": {
@@ -152601,7 +147798,9 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
     "required": [
       "createIntentId",
       "createdProjectId",
-      "workspace"
+      "workspace",
+      "coordinatorSession",
+      "activationRequestId"
     ],
     "type": "object"
   },
@@ -152619,7 +147818,7 @@ Creates one Cloud-authoritative Project for the current OIDC Owner and returns e
 
 Accepts one immutable result or requests a fresh fenced revision execution.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `external-write`
 - Approval: confirmation
@@ -152736,6 +147935,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                     "destinationName": {
                       "maxLength": 128,
                       "minLength": 1,
+                      "pattern": "^[\\x20-\\x7e]+$",
                       "type": "string"
                     },
                     "expectedMediaType": {
@@ -152824,6 +148024,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                   "fileName": {
                     "maxLength": 128,
                     "minLength": 1,
+                    "pattern": "^[\\x20-\\x7e]+$",
                     "type": "string"
                   },
                   "kind": {
@@ -153349,6 +148550,18 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -153374,6 +148587,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -153414,6 +148628,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -153810,6 +149025,36 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -153817,6 +149062,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -153905,6 +149151,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -153941,13 +149188,14 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -157004,6 +152252,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -157026,6 +152275,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -157293,6 +152543,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -157381,6 +152632,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -158571,7 +153823,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
 
 Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `read`
 - Approval: none
@@ -158815,6 +154067,58 @@ Reads current-Principal-filtered ordinary Session bindings derived from durable 
         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
         "type": "string"
       },
+      "pendingActivations": {
+        "default": [],
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "activationRequestId": {
+              "pattern": "^pca_[A-Za-z0-9]{12,64}$",
+              "type": "string"
+            },
+            "coordinatorSession": {
+              "additionalProperties": false,
+              "properties": {
+                "runtimeId": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "threadId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "runtimeId",
+                "threadId"
+              ],
+              "type": "object"
+            },
+            "projectId": {
+              "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "requestedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "activationRequestId",
+            "projectId",
+            "coordinatorSession",
+            "requestedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
       "schemaVersion": {
         "const": 1,
         "type": "number"
@@ -158824,7 +154128,8 @@ Reads current-Principal-filtered ordinary Session bindings derived from durable 
     "required": [
       "schemaVersion",
       "observedAt",
-      "bindings"
+      "bindings",
+      "pendingActivations"
     ],
     "type": "object"
   },
@@ -158840,9 +154145,9 @@ Reads current-Principal-filtered ordinary Session bindings derived from durable 
 }
 ```
 
-## `project-coordinator.workflow.continue`
+## `project-coordinator.task-offer.reassign`
 
-Executes the exact confirmed workflow, including finite Team operations when required, then verifies readiness before activation and initial Task dispatch.
+Re-reads the current revision-requested Task and creates one successor User-level offer from package-derived Cloud CAS and file-intent facts.
 
 - Version: `1.0.0`
 - Audiences: ui, agent
@@ -158862,296 +154167,49 @@ Executes the exact confirmed workflow, including finite Team operations when req
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
-    "definitions": {
-      "__schema0": {
+    "properties": {
+      "nextOutputFileName": {
         "anyOf": [
           {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[\\x20-\\x7e]+$",
             "type": "string"
           },
           {
-            "type": "number"
-          },
-          {
-            "type": "boolean"
-          },
-          {
             "type": "null"
-          },
-          {
-            "items": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
           }
         ]
-      }
-    },
-    "properties": {
-      "expectedCoordinatorAuthorityEpoch": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
       },
-      "expectedExecutionAuthorityEpoch": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
+      "offerExpiresAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
       },
-      "expectedPlanRevision": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "expectedProjectRevision": {
-        "maximum": 9007199254740991,
-        "minimum": 1,
-        "type": "integer"
-      },
-      "planDigest": {
-        "pattern": "^[a-f0-9]{64}$",
+      "previousTaskOfferId": {
+        "pattern": "^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
         "type": "string"
       },
       "projectId": {
         "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
         "type": "string"
       },
-      "projectPlanId": {
-        "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+      "taskId": {
+        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
         "type": "string"
       },
-      "provisioning": {
-        "anyOf": [
-          {
-            "additionalProperties": false,
-            "properties": {
-              "attemptId": {
-                "maxLength": 96,
-                "minLength": 12,
-                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]{10,94}[A-Za-z0-9])$",
-                "type": "string"
-              },
-              "confirmedPlanDigest": {
-                "pattern": "^[a-f0-9]{64}$",
-                "type": "string"
-              },
-              "containerDisplayName": {
-                "maxLength": 200,
-                "minLength": 1,
-                "type": "string"
-              },
-              "currentRootLocator": {
-                "anyOf": [
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "authority": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                        "type": "string"
-                      },
-                      "contractVersion": {
-                        "const": 1,
-                        "type": "number"
-                      },
-                      "identity": {
-                        "additionalProperties": {
-                          "$ref": "#/definitions/__schema0"
-                        },
-                        "propertyNames": {
-                          "type": "string"
-                        },
-                        "type": "object"
-                      },
-                      "kind": {
-                        "enum": [
-                          "content-space.file-reference",
-                          "content-space.container-reference",
-                          "content-space.artifact-reference"
-                        ],
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "contractVersion",
-                      "kind",
-                      "authority",
-                      "identity"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "expectedProjectRevision": {
-                "maximum": 9007199254740991,
-                "minimum": 1,
-                "type": "integer"
-              },
-              "expectedProvisioningIntentRevision": {
-                "maximum": 9007199254740991,
-                "minimum": 1,
-                "type": "integer"
-              },
-              "expectedProvisioningRevision": {
-                "maximum": 9007199254740991,
-                "minimum": 1,
-                "type": "integer"
-              },
-              "intentDigest": {
-                "pattern": "^[a-f0-9]{64}$",
-                "type": "string"
-              },
-              "operations": {
-                "items": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "actionId": {
-                      "maxLength": 256,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "kind": {
-                      "enum": [
-                        "authorize_provider",
-                        "authorize_root",
-                        "create_shared_container",
-                        "observe_root",
-                        "list_members",
-                        "add_member",
-                        "remove_member"
-                      ],
-                      "type": "string"
-                    },
-                    "operationId": {
-                      "maxLength": 128,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "userId": {
-                      "anyOf": [
-                        {
-                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "readOnly": true,
-                  "required": [
-                    "operationId",
-                    "actionId",
-                    "kind",
-                    "userId"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 64,
-                "minItems": 1,
-                "type": "array"
-              },
-              "projectId": {
-                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                "type": "string"
-              },
-              "providerInstance": {
-                "additionalProperties": false,
-                "properties": {
-                  "providerInstanceRef": {
-                    "maxLength": 256,
-                    "minLength": 3,
-                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
-                    "type": "string"
-                  },
-                  "schemaVersion": {
-                    "const": 1,
-                    "type": "number"
-                  },
-                  "type": {
-                    "const": "provider_instance_reference",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "schemaVersion",
-                  "type",
-                  "providerInstanceRef"
-                ],
-                "type": "object"
-              },
-              "provisioningIntentId": {
-                "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
-                "type": "string"
-              },
-              "rootStrategy": {
-                "enum": [
-                  "create",
-                  "reauthorize"
-                ],
-                "type": "string"
-              }
-            },
-            "readOnly": true,
-            "required": [
-              "projectId",
-              "provisioningIntentId",
-              "expectedProjectRevision",
-              "expectedProvisioningRevision",
-              "expectedProvisioningIntentRevision",
-              "intentDigest",
-              "attemptId",
-              "rootStrategy",
-              "providerInstance",
-              "containerDisplayName",
-              "currentRootLocator",
-              "operations",
-              "confirmedPlanDigest"
-            ],
-            "type": "object"
-          },
-          {
-            "type": "null"
-          }
-        ]
-      },
-      "purpose": {
-        "enum": [
-          "launch",
-          "team_reconcile"
-        ],
-        "type": "string"
-      },
-      "workflowDigest": {
-        "pattern": "^[a-f0-9]{64}$",
+      "workerUserId": {
+        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
         "type": "string"
       }
     },
     "readOnly": true,
     "required": [
       "projectId",
-      "projectPlanId",
-      "expectedProjectRevision",
-      "expectedCoordinatorAuthorityEpoch",
-      "expectedExecutionAuthorityEpoch",
-      "expectedPlanRevision",
-      "planDigest",
-      "purpose",
-      "provisioning",
-      "workflowDigest"
+      "taskId",
+      "previousTaskOfferId",
+      "workerUserId",
+      "offerExpiresAt"
     ],
     "type": "object"
   },
@@ -159572,6 +154630,18 @@ Executes the exact confirmed workflow, including finite Team operations when req
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -159597,6 +154667,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -159637,6 +154708,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -160033,6 +155105,36 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -160040,6 +155142,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -160128,6 +155231,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -160164,13 +155268,14 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -163227,6 +158332,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -163249,6 +158355,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -163516,6 +158623,7 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -163604,6 +158712,6009 @@ Executes the exact confirmed workflow, including finite Team operations when req
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "const": "content-space.output-new",
+                                    "type": "string"
+                                  },
+                                  "maxBytes": {
+                                    "maximum": 1073741824,
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "mediaType": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "mode": {
+                                    "const": "upload-new",
+                                    "type": "string"
+                                  },
+                                  "target": {
+                                    "const": "project-binding-root",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "target",
+                                  "mode",
+                                  "fileName",
+                                  "mediaType",
+                                  "maxBytes"
+                                ],
+                                "type": "object"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "inputs",
+                              "output",
+                              "bindingRevision"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxRetries": {
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "objective": {
+                        "maxLength": 32000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "requiredCapabilityTags": {
+                        "items": {
+                          "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                          "type": "string"
+                        },
+                        "maxItems": 256,
+                        "type": "array"
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "status": {
+                        "enum": [
+                          "planned",
+                          "offered",
+                          "in_progress",
+                          "needs_human",
+                          "awaiting_review",
+                          "revision_requested",
+                          "manual_recovery_required",
+                          "completed",
+                          "failed",
+                          "cancelled"
+                        ],
+                        "type": "string"
+                      },
+                      "taskId": {
+                        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "title": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "task",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "taskId",
+                      "projectId",
+                      "createdByCoordinatorAgentId",
+                      "title",
+                      "objective",
+                      "completionCriteria",
+                      "dependencyTaskIds",
+                      "requiredCapabilityTags",
+                      "fileIntent",
+                      "currentExecutionId",
+                      "currentExecutionState",
+                      "status",
+                      "executionCount",
+                      "maxRetries",
+                      "completedAt"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "task",
+                  "executions"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            },
+            "workerGroups": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "agents": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "displayName": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "projectAvailability": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "agentId": {
+                              "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "availability": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "acceptsNewOffers": {
+                                  "type": "boolean"
+                                },
+                                "activeTaskCount": {
+                                  "maximum": 10000,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "agentActive": {
+                                  "type": "boolean"
+                                },
+                                "agentId": {
+                                  "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "connectionStatus": {
+                                  "enum": [
+                                    "online",
+                                    "offline"
+                                  ],
+                                  "type": "string"
+                                },
+                                "createdAt": {
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                  "type": "string"
+                                },
+                                "deviceActive": {
+                                  "type": "boolean"
+                                },
+                                "deviceId": {
+                                  "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "expiresAt": {
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                  "type": "string"
+                                },
+                                "lastHeartbeatAt": {
+                                  "anyOf": [
+                                    {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "observedAt": {
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                  "type": "string"
+                                },
+                                "revision": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "runtimeCapabilityTags": {
+                                  "items": {
+                                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                                    "type": "string"
+                                  },
+                                  "maxItems": 256,
+                                  "type": "array"
+                                },
+                                "runtimeReadiness": {
+                                  "enum": [
+                                    "ready",
+                                    "unavailable"
+                                  ],
+                                  "type": "string"
+                                },
+                                "schemaVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                },
+                                "type": {
+                                  "const": "worker_availability_projection",
+                                  "type": "string"
+                                },
+                                "updatedAt": {
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                  "type": "string"
+                                },
+                                "userId": {
+                                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "revision",
+                                "createdAt",
+                                "updatedAt",
+                                "type",
+                                "userId",
+                                "agentId",
+                                "deviceId",
+                                "agentActive",
+                                "deviceActive",
+                                "connectionStatus",
+                                "lastHeartbeatAt",
+                                "runtimeReadiness",
+                                "runtimeCapabilityTags",
+                                "acceptsNewOffers",
+                                "activeTaskCount",
+                                "observedAt",
+                                "expiresAt"
+                              ],
+                              "type": "object"
+                            },
+                            "contentReadiness": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bindingRevision": {
+                                      "anyOf": [
+                                        {
+                                          "maximum": 9007199254740991,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "createdAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "effectiveAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "lastObservationId": {
+                                      "anyOf": [
+                                        {
+                                          "pattern": "^pob_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "projectId": {
+                                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    },
+                                    "providerInstance": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "providerInstanceRef": {
+                                          "maxLength": 256,
+                                          "minLength": 3,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                          "type": "string"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        },
+                                        "type": {
+                                          "const": "provider_instance_reference",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "type",
+                                        "providerInstanceRef"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "providerPrincipal": {
+                                      "anyOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "principalId": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "type": "string"
+                                            },
+                                            "principalKind": {
+                                              "const": "user",
+                                              "type": "string"
+                                            },
+                                            "providerInstance": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "providerInstanceRef": {
+                                                  "maxLength": 256,
+                                                  "minLength": 3,
+                                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                                  "type": "string"
+                                                },
+                                                "schemaVersion": {
+                                                  "const": 1,
+                                                  "type": "number"
+                                                },
+                                                "type": {
+                                                  "const": "provider_instance_reference",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "schemaVersion",
+                                                "type",
+                                                "providerInstanceRef"
+                                              ],
+                                              "type": "object"
+                                            },
+                                            "schemaVersion": {
+                                              "const": 1,
+                                              "type": "number"
+                                            },
+                                            "type": {
+                                              "const": "provider_directory_principal_reference",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "schemaVersion",
+                                            "type",
+                                            "providerInstance",
+                                            "principalKind",
+                                            "principalId"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "providerPrincipalFactId": {
+                                      "anyOf": [
+                                        {
+                                          "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "reason": {
+                                      "anyOf": [
+                                        {
+                                          "enum": [
+                                            "identity_missing",
+                                            "provisioning_pending",
+                                            "provider_member_absent",
+                                            "provider_unavailable",
+                                            "provider_unauthorized",
+                                            "binding_degraded",
+                                            "content_owner_lost_root"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "revision": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "schemaVersion": {
+                                      "const": 1,
+                                      "type": "number"
+                                    },
+                                    "snapshottedFactRevision": {
+                                      "anyOf": [
+                                        {
+                                          "maximum": 9007199254740991,
+                                          "minimum": 1,
+                                          "type": "integer"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "missing_identity",
+                                        "pending",
+                                        "ready",
+                                        "degraded"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "project_content_readiness",
+                                      "type": "string"
+                                    },
+                                    "updatedAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "userId": {
+                                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "revision",
+                                    "createdAt",
+                                    "updatedAt",
+                                    "type",
+                                    "projectId",
+                                    "userId",
+                                    "providerInstance",
+                                    "state",
+                                    "reason",
+                                    "providerPrincipalFactId",
+                                    "snapshottedFactRevision",
+                                    "providerPrincipal",
+                                    "bindingRevision",
+                                    "lastObservationId",
+                                    "effectiveAt"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "membership": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "activatedAt": {
+                                      "anyOf": [
+                                        {
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "authorityEpoch": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "createdAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "projectId": {
+                                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    },
+                                    "projectMembershipId": {
+                                      "pattern": "^pmb_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    },
+                                    "removalRequestedAt": {
+                                      "anyOf": [
+                                        {
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "removalRequestedByUserId": {
+                                      "anyOf": [
+                                        {
+                                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "removedAt": {
+                                      "anyOf": [
+                                        {
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "revision": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "schemaVersion": {
+                                      "const": 1,
+                                      "type": "number"
+                                    },
+                                    "state": {
+                                      "enum": [
+                                        "invited",
+                                        "pending_membership",
+                                        "active",
+                                        "membership_removal_pending",
+                                        "removed"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "const": "project_membership",
+                                      "type": "string"
+                                    },
+                                    "updatedAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "userId": {
+                                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "revision",
+                                    "createdAt",
+                                    "updatedAt",
+                                    "type",
+                                    "projectMembershipId",
+                                    "projectId",
+                                    "userId",
+                                    "state",
+                                    "authorityEpoch",
+                                    "activatedAt",
+                                    "removalRequestedAt",
+                                    "removalRequestedByUserId",
+                                    "removedAt"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "observedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "projectId": {
+                              "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "providerPrincipalFact": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "createdAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "observedAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "principalIdentityRevision": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "providerBindingAttestationDigest": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "providerPrincipal": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "principalId": {
+                                          "maxLength": 512,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "principalKind": {
+                                          "const": "user",
+                                          "type": "string"
+                                        },
+                                        "providerInstance": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "providerInstanceRef": {
+                                              "maxLength": 256,
+                                              "minLength": 3,
+                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                              "type": "string"
+                                            },
+                                            "schemaVersion": {
+                                              "const": 1,
+                                              "type": "number"
+                                            },
+                                            "type": {
+                                              "const": "provider_instance_reference",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "schemaVersion",
+                                            "type",
+                                            "providerInstanceRef"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "schemaVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        },
+                                        "type": {
+                                          "const": "provider_directory_principal_reference",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "schemaVersion",
+                                        "type",
+                                        "providerInstance",
+                                        "principalKind",
+                                        "principalId"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "providerPrincipalFactId": {
+                                      "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    },
+                                    "publishedByDeviceId": {
+                                      "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    },
+                                    "readiness": {
+                                      "enum": [
+                                        "ready",
+                                        "degraded"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "readinessReason": {
+                                      "anyOf": [
+                                        {
+                                          "enum": [
+                                            "provider_binding_changed",
+                                            "provider_unavailable",
+                                            "provider_unauthorized"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "revision": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "schemaVersion": {
+                                      "const": 1,
+                                      "type": "number"
+                                    },
+                                    "type": {
+                                      "const": "provider_directory_principal_fact",
+                                      "type": "string"
+                                    },
+                                    "updatedAt": {
+                                      "format": "date-time",
+                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                      "type": "string"
+                                    },
+                                    "userId": {
+                                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "schemaVersion",
+                                    "revision",
+                                    "createdAt",
+                                    "updatedAt",
+                                    "type",
+                                    "providerPrincipalFactId",
+                                    "userId",
+                                    "providerPrincipal",
+                                    "principalIdentityRevision",
+                                    "providerBindingAttestationDigest",
+                                    "publishedByDeviceId",
+                                    "readiness",
+                                    "readinessReason",
+                                    "observedAt"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "providerPrincipalSnapshotStatus": {
+                              "enum": [
+                                "not_applicable",
+                                "missing",
+                                "match",
+                                "stale"
+                              ],
+                              "type": "string"
+                            },
+                            "revision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "taskAuthorities": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "authorityEpoch": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "createdAt": {
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                    "type": "string"
+                                  },
+                                  "effectiveAt": {
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                    "type": "string"
+                                  },
+                                  "projectId": {
+                                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                    "type": "string"
+                                  },
+                                  "reason": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "project_paused",
+                                          "project_terminal",
+                                          "invitation_pending",
+                                          "membership_pending",
+                                          "membership_removal_pending",
+                                          "membership_removed",
+                                          "content_identity_missing",
+                                          "content_not_ready",
+                                          "content_binding_degraded"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "revision": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "scope": {
+                                    "enum": [
+                                      "text_tasks",
+                                      "file_tasks"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "enum": [
+                                      "eligible",
+                                      "suspended",
+                                      "fenced"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "taskAuthorityId": {
+                                    "pattern": "^tau_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "const": "task_authority",
+                                    "type": "string"
+                                  },
+                                  "updatedAt": {
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                    "type": "string"
+                                  },
+                                  "userId": {
+                                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "revision",
+                                  "createdAt",
+                                  "updatedAt",
+                                  "type",
+                                  "taskAuthorityId",
+                                  "projectId",
+                                  "userId",
+                                  "scope",
+                                  "state",
+                                  "authorityEpoch",
+                                  "reason",
+                                  "effectiveAt"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 2,
+                              "type": "array"
+                            },
+                            "type": {
+                              "const": "project_worker_availability_view",
+                              "type": "string"
+                            },
+                            "userId": {
+                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "type",
+                            "projectId",
+                            "userId",
+                            "agentId",
+                            "revision",
+                            "availability",
+                            "membership",
+                            "taskAuthorities",
+                            "providerPrincipalFact",
+                            "providerPrincipalSnapshotStatus",
+                            "contentReadiness",
+                            "observedAt"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "readOnly": true,
+                      "required": [
+                        "displayName",
+                        "projectAvailability"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "userId",
+                  "displayName",
+                  "agents"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "project",
+            "coordinatorTransferFeedback",
+            "plan",
+            "memberUsers",
+            "workerGroups",
+            "tasks",
+            "offers",
+            "reviews",
+            "pendingHumanNeeded",
+            "records",
+            "finalSummary",
+            "provisioning"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1000,
+        "type": "array"
+      },
+      "providerPrincipalFacts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "observedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "principalIdentityRevision": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "providerBindingAttestationDigest": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "providerPrincipal": {
+              "additionalProperties": false,
+              "properties": {
+                "principalId": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "principalKind": {
+                  "const": "user",
+                  "type": "string"
+                },
+                "providerInstance": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "providerInstanceRef": {
+                      "maxLength": 256,
+                      "minLength": 3,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                      "type": "string"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "type": {
+                      "const": "provider_instance_reference",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "type",
+                    "providerInstanceRef"
+                  ],
+                  "type": "object"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "type": {
+                  "const": "provider_directory_principal_reference",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "type",
+                "providerInstance",
+                "principalKind",
+                "principalId"
+              ],
+              "type": "object"
+            },
+            "providerPrincipalFactId": {
+              "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "publishedByDeviceId": {
+              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            },
+            "readiness": {
+              "enum": [
+                "ready",
+                "degraded"
+              ],
+              "type": "string"
+            },
+            "readinessReason": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "provider_binding_changed",
+                    "provider_unavailable",
+                    "provider_unauthorized"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "schemaVersion": {
+              "const": 1,
+              "type": "number"
+            },
+            "type": {
+              "const": "provider_directory_principal_fact",
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "userId": {
+              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "revision",
+            "createdAt",
+            "updatedAt",
+            "type",
+            "providerPrincipalFactId",
+            "userId",
+            "providerPrincipal",
+            "principalIdentityRevision",
+            "providerBindingAttestationDigest",
+            "publishedByDeviceId",
+            "readiness",
+            "readinessReason",
+            "observedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "connection",
+      "observedAt",
+      "availableWorkerUsers",
+      "providerPrincipalFacts",
+      "projects"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project",
+    "task",
+    "offer",
+    "reassignment"
+  ],
+  "title": "Reassign Task offer"
+}
+```
+
+## `project-coordinator.workflow.continue`
+
+Executes the exact confirmed workflow, including finite Team operations when required, then verifies readiness before activation and initial Task dispatch.
+
+- Version: `2.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "expectedCoordinatorAuthorityEpoch": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "expectedExecutionAuthorityEpoch": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "expectedPlanRevision": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "expectedProjectRevision": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "planDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "projectId": {
+        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "projectPlanId": {
+        "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "provisioning": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attemptId": {
+                "maxLength": 96,
+                "minLength": 12,
+                "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:-]{10,94}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "confirmedPlanDigest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "containerDisplayName": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "currentRootLocator": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "authority": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                        "type": "string"
+                      },
+                      "contractVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "identity": {
+                        "additionalProperties": {
+                          "$ref": "#/definitions/__schema0"
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "kind": {
+                        "enum": [
+                          "content-space.file-reference",
+                          "content-space.container-reference",
+                          "content-space.artifact-reference"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contractVersion",
+                      "kind",
+                      "authority",
+                      "identity"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "expectedProjectRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "expectedProvisioningIntentRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "expectedProvisioningRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "intentDigest": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actionId": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "authorize_provider",
+                        "authorize_root",
+                        "create_shared_container",
+                        "observe_root",
+                        "list_members",
+                        "add_member",
+                        "remove_member"
+                      ],
+                      "type": "string"
+                    },
+                    "operationId": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "userId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "operationId",
+                    "actionId",
+                    "kind",
+                    "userId"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "providerInstance": {
+                "additionalProperties": false,
+                "properties": {
+                  "providerInstanceRef": {
+                    "maxLength": 256,
+                    "minLength": 3,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "type": {
+                    "const": "provider_instance_reference",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "providerInstanceRef"
+                ],
+                "type": "object"
+              },
+              "provisioningIntentId": {
+                "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "rootStrategy": {
+                "enum": [
+                  "create",
+                  "reauthorize"
+                ],
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "projectId",
+              "provisioningIntentId",
+              "expectedProjectRevision",
+              "expectedProvisioningRevision",
+              "expectedProvisioningIntentRevision",
+              "intentDigest",
+              "attemptId",
+              "rootStrategy",
+              "providerInstance",
+              "containerDisplayName",
+              "currentRootLocator",
+              "operations",
+              "confirmedPlanDigest"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "purpose": {
+        "enum": [
+          "launch",
+          "team_reconcile"
+        ],
+        "type": "string"
+      },
+      "workflowDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "projectId",
+      "projectPlanId",
+      "expectedProjectRevision",
+      "expectedCoordinatorAuthorityEpoch",
+      "expectedExecutionAuthorityEpoch",
+      "expectedPlanRevision",
+      "planDigest",
+      "purpose",
+      "provisioning",
+      "workflowDigest"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "availableWorkerUsers": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "displayName": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            "userId": {
+              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "userId",
+            "displayName"
+          ],
+          "type": "object"
+        },
+        "maxItems": 1000,
+        "type": "array"
+      },
+      "connection": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "deviceId": {
+                "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "state": {
+                "const": "ready",
+                "type": "string"
+              },
+              "userId": {
+                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "userId",
+              "deviceId"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "const": "identity_required",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "device_required",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "const": "cloud_unavailable",
+                "type": "string"
+              }
+            },
+            "readOnly": true,
+            "required": [
+              "state",
+              "reason"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "focusedProjectId": {
+        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      },
+      "observedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "projects": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "coordinatorTransferFeedback": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coordinatorAgentId": {
+                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "coordinatorAuthorityEpoch": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "disposition": {
+                      "enum": [
+                        "authority_transferred_out",
+                        "authority_transferred_in"
+                      ],
+                      "type": "string"
+                    },
+                    "inboxMessageId": {
+                      "pattern": "^ibx_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "previousCoordinatorAgentId": {
+                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "projectRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "recipientAgentId": {
+                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "projectId",
+                    "inboxMessageId",
+                    "recipientAgentId",
+                    "previousCoordinatorAgentId",
+                    "coordinatorAgentId",
+                    "coordinatorAuthorityEpoch",
+                    "projectRevision",
+                    "disposition",
+                    "observedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "finalSummary": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acceptedResultSubmissionIds": {
+                      "items": {
+                        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "maxItems": 10000,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "completedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "confirmedPlanRevision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "createdAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    "createdByCoordinatorAgentId": {
+                      "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "createdByUserId": {
+                      "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "projectId": {
+                      "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "projectPlanId": {
+                      "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "projectRecordId": {
+                      "pattern": "^rec_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    "revision": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "schemaVersion": {
+                      "const": 1,
+                      "type": "number"
+                    },
+                    "summary": {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "project_final_summary",
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "revision",
+                    "createdAt",
+                    "updatedAt",
+                    "type",
+                    "projectId",
+                    "projectRecordId",
+                    "projectPlanId",
+                    "confirmedPlanRevision",
+                    "acceptedResultSubmissionIds",
+                    "summary",
+                    "createdByUserId",
+                    "createdByCoordinatorAgentId",
+                    "completedAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "memberUsers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "displayName": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "observedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_user_label_fact",
+                    "type": "string"
+                  },
+                  "userId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "type",
+                  "projectId",
+                  "userId",
+                  "displayName",
+                  "status",
+                  "revision",
+                  "observedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
+            "offers": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "executionId": {
+                    "anyOf": [
+                      {
+                        "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "expiresAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "offeredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "offeredByCoordinatorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "respondedAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "state": {
+                    "enum": [
+                      "pending",
+                      "accepted",
+                      "rejected",
+                      "withdrawn",
+                      "timed_out"
+                    ],
+                    "type": "string"
+                  },
+                  "taskId": {
+                    "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "taskOfferId": {
+                    "pattern": "^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "task_offer",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "workerUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "revision",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "taskOfferId",
+                  "projectId",
+                  "taskId",
+                  "executionId",
+                  "workerUserId",
+                  "offeredByCoordinatorAgentId",
+                  "state",
+                  "reassignmentTaskRevision",
+                  "offeredAt",
+                  "expiresAt",
+                  "respondedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            },
+            "pendingHumanNeeded": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirmableAction": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actionDigest": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "actionType": {
+                            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                            "type": "string"
+                          },
+                          "effect": {
+                            "enum": [
+                              "workspace-write",
+                              "external-write",
+                              "destructive"
+                            ],
+                            "type": "string"
+                          },
+                          "safeSummary": {
+                            "maxLength": 500,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "actionType",
+                          "safeSummary",
+                          "effect",
+                          "actionDigest"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "context": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "executionId": {
+                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "scope": {
+                            "const": "worker_execution",
+                            "type": "string"
+                          },
+                          "taskId": {
+                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "scope",
+                          "taskId",
+                          "executionId"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "coordinatorAuthorityEpoch": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "scope": {
+                            "const": "coordinator_project",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "scope",
+                          "coordinatorAuthorityEpoch"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "expiresAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "humanRequestId": {
+                    "pattern": "^hrq_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "maxLength": 32000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "requestedByAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "requiredAssurance": {
+                    "enum": [
+                      "basic",
+                      "verified",
+                      "strong"
+                    ],
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "answered",
+                      "expired",
+                      "cancelled"
+                    ],
+                    "type": "string"
+                  },
+                  "targetUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "human_needed",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "revision",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "humanRequestId",
+                  "projectId",
+                  "context",
+                  "targetUserId",
+                  "requestedByAgentId",
+                  "requiredAssurance",
+                  "prompt",
+                  "confirmableAction",
+                  "status",
+                  "expiresAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            },
+            "plan": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "plan": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "confirmedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "confirmedByUserId": {
+                          "anyOf": [
+                            {
+                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "planDigest": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "planRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "projectId": {
+                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "projectPlanId": {
+                          "pattern": "^pln_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "rationale": {
+                          "maxLength": 32000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "revision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "runtimeProvenance": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "generatedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "generatedByCoordinatorAgentId": {
+                              "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "modelId": {
+                              "anyOf": [
+                                {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "runtimeId": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "runtimeId",
+                            "modelId",
+                            "generatedByCoordinatorAgentId",
+                            "generatedAt"
+                          ],
+                          "type": "object"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "sourceInputLocators": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "authority": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                "type": "string"
+                              },
+                              "contractVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "identity": {
+                                "additionalProperties": {
+                                  "$ref": "#/definitions/__schema0"
+                                },
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "type": "object"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "content-space.file-reference",
+                                  "content-space.container-reference",
+                                  "content-space.artifact-reference"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "contractVersion",
+                              "kind",
+                              "authority",
+                              "identity"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        },
+                        "state": {
+                          "enum": [
+                            "draft",
+                            "awaiting_confirmation",
+                            "confirmed",
+                            "superseded"
+                          ],
+                          "type": "string"
+                        },
+                        "submittedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "supersededAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "tasks": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "completionCriteria": {
+                                "items": {
+                                  "maxLength": 2000,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 100,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "dependencyPlanItemIds": {
+                                "items": {
+                                  "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "maxItems": 1000,
+                                "type": "array"
+                              },
+                              "fileIntent": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
+                                      "inputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "expectedMediaType": {
+                                              "anyOf": [
+                                                {
+                                                  "maxLength": 256,
+                                                  "minLength": 1,
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "expectedSemanticRevision": {
+                                              "anyOf": [
+                                                {
+                                                  "maxLength": 256,
+                                                  "minLength": 1,
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "kind": {
+                                              "const": "content-space.input-file",
+                                              "type": "string"
+                                            },
+                                            "locator": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "authority": {
+                                                  "maxLength": 256,
+                                                  "minLength": 1,
+                                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                                  "type": "string"
+                                                },
+                                                "contractVersion": {
+                                                  "const": 1,
+                                                  "type": "number"
+                                                },
+                                                "identity": {
+                                                  "additionalProperties": {
+                                                    "$ref": "#/definitions/__schema0"
+                                                  },
+                                                  "propertyNames": {
+                                                    "type": "string"
+                                                  },
+                                                  "type": "object"
+                                                },
+                                                "kind": {
+                                                  "enum": [
+                                                    "content-space.file-reference",
+                                                    "content-space.container-reference",
+                                                    "content-space.artifact-reference"
+                                                  ],
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "contractVersion",
+                                                "kind",
+                                                "authority",
+                                                "identity"
+                                              ],
+                                              "type": "object"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "locator",
+                                            "destinationName",
+                                            "expectedSemanticRevision",
+                                            "expectedMediaType"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
+                                      "output": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "fileName": {
+                                            "maxLength": 128,
+                                            "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
+                                            "type": "string"
+                                          },
+                                          "kind": {
+                                            "const": "content-space.output-new",
+                                            "type": "string"
+                                          },
+                                          "maxBytes": {
+                                            "maximum": 1073741824,
+                                            "minimum": 1,
+                                            "type": "integer"
+                                          },
+                                          "mediaType": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "type": "string"
+                                          },
+                                          "mode": {
+                                            "const": "upload-new",
+                                            "type": "string"
+                                          },
+                                          "target": {
+                                            "const": "project-binding-root",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "kind",
+                                          "target",
+                                          "mode",
+                                          "fileName",
+                                          "mediaType",
+                                          "maxBytes"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 2,
+                                        "type": "number"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "inputs",
+                                      "dependencyInputs",
+                                      "output"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "objective": {
+                                "maxLength": 32000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "planItemId": {
+                                "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              },
+                              "requiredCapabilityTags": {
+                                "items": {
+                                  "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 256,
+                                "type": "array"
+                              },
+                              "title": {
+                                "maxLength": 200,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "workerUserId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "planItemId",
+                              "title",
+                              "objective",
+                              "completionCriteria",
+                              "dependencyPlanItemIds",
+                              "requiredCapabilityTags",
+                              "fileIntent",
+                              "workerUserId"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "project_plan",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "type",
+                        "projectPlanId",
+                        "projectId",
+                        "state",
+                        "planRevision",
+                        "sourceInputLocators",
+                        "tasks",
+                        "rationale",
+                        "runtimeProvenance",
+                        "planDigest",
+                        "submittedAt",
+                        "confirmedByUserId",
+                        "confirmedAt",
+                        "supersededAt"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "readOnly": true,
+                  "required": [
+                    "plan"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "project": {
+              "additionalProperties": false,
+              "properties": {
+                "budget": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "maxCoordinationRounds": {
+                      "maximum": 10000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "maxTaskRetries": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "maxTasks": {
+                      "maximum": 10000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "maxTasksPerRound": {
+                      "maximum": 1000,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "maxTasks",
+                    "maxTasksPerRound",
+                    "maxCoordinationRounds",
+                    "maxTaskRetries"
+                  ],
+                  "type": "object"
+                },
+                "contentMode": {
+                  "enum": [
+                    "none",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                "coordinatorAgentId": {
+                  "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "coordinatorAuthorityEpoch": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "displayName": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "executionAuthorityEpoch": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "goal": {
+                  "maxLength": 32000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "ownerUserId": {
+                  "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "revision": {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "schemaVersion": {
+                  "const": 1,
+                  "type": "number"
+                },
+                "status": {
+                  "enum": [
+                    "draft",
+                    "active",
+                    "paused",
+                    "completed",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "const": "project",
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "revision",
+                "createdAt",
+                "updatedAt",
+                "type",
+                "projectId",
+                "ownerUserId",
+                "displayName",
+                "goal",
+                "coordinatorAgentId",
+                "coordinatorAuthorityEpoch",
+                "executionAuthorityEpoch",
+                "contentMode",
+                "status",
+                "budget"
+              ],
+              "type": "object"
+            },
+            "provisioning": {
+              "additionalProperties": false,
+              "properties": {
+                "attestation": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "deviceSignature": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "canonicalPayloadDigest": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "deviceId": {
+                              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "deviceKeyId": {
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                              "type": "string"
+                            },
+                            "deviceKeyRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "factRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "issuedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "observedAt": {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            "purpose": {
+                              "const": "project-content-provisioning-attestation",
+                              "type": "string"
+                            },
+                            "signature": {
+                              "maxLength": 128,
+                              "minLength": 86,
+                              "type": "string"
+                            },
+                            "signatureAlgorithm": {
+                              "const": "Ed25519",
+                              "type": "string"
+                            },
+                            "userId": {
+                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "purpose",
+                            "userId",
+                            "deviceId",
+                            "deviceKeyId",
+                            "deviceKeyRevision",
+                            "signatureAlgorithm",
+                            "canonicalPayloadDigest",
+                            "factRevision",
+                            "observedAt",
+                            "issuedAt",
+                            "signature"
+                          ],
+                          "type": "object"
+                        },
+                        "format": {
+                          "const": "sciforge.project-content-provisioning-attestation.v1",
+                          "type": "string"
+                        },
+                        "memberObservations": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "observationDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "observedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "presence": {
+                                "enum": [
+                                  "present",
+                                  "absent"
+                                ],
+                                "type": "string"
+                              },
+                              "principal": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "principalId": {
+                                    "maxLength": 512,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "principalKind": {
+                                    "const": "user",
+                                    "type": "string"
+                                  },
+                                  "providerInstance": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "providerInstanceRef": {
+                                        "maxLength": 256,
+                                        "minLength": 3,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "type": {
+                                        "const": "provider_instance_reference",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "type",
+                                      "providerInstanceRef"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "type": {
+                                    "const": "provider_directory_principal_reference",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "type",
+                                  "providerInstance",
+                                  "principalKind",
+                                  "principalId"
+                                ],
+                                "type": "object"
+                              },
+                              "providerPrincipalFactId": {
+                                "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              },
+                              "snapshottedFactRevision": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "userId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "userId",
+                              "providerPrincipalFactId",
+                              "snapshottedFactRevision",
+                              "principal",
+                              "presence",
+                              "observationDigest",
+                              "observedAt"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "memberSetDigest": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "observationCompletedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "observationStartedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "observedOperations": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "enum": [
+                                  "create_shared_container",
+                                  "observe_root",
+                                  "list_members",
+                                  "add_member",
+                                  "remove_member",
+                                  "download_check",
+                                  "upload_new",
+                                  "observe_output"
+                                ],
+                                "type": "string"
+                              },
+                              "observedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "operationId": {
+                                "maxLength": 128,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "operationRevision": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "outcome": {
+                                "enum": [
+                                  "observed_success",
+                                  "observed_absent",
+                                  "observed_failure",
+                                  "outcome_unknown",
+                                  "unauthorized"
+                                ],
+                                "type": "string"
+                              },
+                              "receiptDigest": {
+                                "anyOf": [
+                                  {
+                                    "pattern": "^[a-f0-9]{64}$",
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "requestDigest": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "safeFailureCode": {
+                                "anyOf": [
+                                  {
+                                    "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "subjectPrincipal": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "principalId": {
+                                        "maxLength": 512,
+                                        "minLength": 1,
+                                        "type": "string"
+                                      },
+                                      "principalKind": {
+                                        "const": "user",
+                                        "type": "string"
+                                      },
+                                      "providerInstance": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "providerInstanceRef": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                            "type": "string"
+                                          },
+                                          "schemaVersion": {
+                                            "const": 1,
+                                            "type": "number"
+                                          },
+                                          "type": {
+                                            "const": "provider_instance_reference",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "schemaVersion",
+                                          "type",
+                                          "providerInstanceRef"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "type": {
+                                        "const": "provider_directory_principal_reference",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "type",
+                                      "providerInstance",
+                                      "principalKind",
+                                      "principalId"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "operationId",
+                              "operationRevision",
+                              "kind",
+                              "subjectPrincipal",
+                              "requestDigest",
+                              "receiptDigest",
+                              "outcome",
+                              "safeFailureCode",
+                              "observedAt"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 2000,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "ownerUserId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "principalIdentityRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "projectId": {
+                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "providerBindingAttestationDigest": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "providerInstance": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "providerInstanceRef": {
+                              "maxLength": 256,
+                              "minLength": 3,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                              "type": "string"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "type": {
+                              "const": "provider_instance_reference",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "type",
+                            "providerInstanceRef"
+                          ],
+                          "type": "object"
+                        },
+                        "provisioningAttestationId": {
+                          "pattern": "^pca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "provisioningIntentId": {
+                          "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "provisioningRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "revision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "rootLocator": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "authority": {
+                              "maxLength": 256,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                              "type": "string"
+                            },
+                            "contractVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "identity": {
+                              "additionalProperties": {
+                                "$ref": "#/definitions/__schema0"
+                              },
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "kind": {
+                              "enum": [
+                                "content-space.file-reference",
+                                "content-space.container-reference",
+                                "content-space.artifact-reference"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "contractVersion",
+                            "kind",
+                            "authority",
+                            "identity"
+                          ],
+                          "type": "object"
+                        },
+                        "rootLocatorDigest": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "type": {
+                          "const": "project_content_provisioning_attestation",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "type",
+                        "format",
+                        "provisioningAttestationId",
+                        "projectId",
+                        "provisioningIntentId",
+                        "provisioningRevision",
+                        "ownerUserId",
+                        "principalIdentityRevision",
+                        "providerBindingAttestationDigest",
+                        "providerInstance",
+                        "rootLocator",
+                        "rootLocatorDigest",
+                        "observedOperations",
+                        "memberObservations",
+                        "memberSetDigest",
+                        "observationStartedAt",
+                        "observationCompletedAt",
+                        "deviceSignature"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "binding": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "activatedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "attestationDigest": {
+                          "anyOf": [
+                            {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "attestationId": {
+                          "anyOf": [
+                            {
+                              "pattern": "^pca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "closedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "contentOwnerUserId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "degradedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "projectContentBindingId": {
+                          "pattern": "^pcb_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "projectId": {
+                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "providerInstance": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "providerInstanceRef": {
+                              "maxLength": 256,
+                              "minLength": 3,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                              "type": "string"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "type": {
+                              "const": "provider_instance_reference",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "type",
+                            "providerInstanceRef"
+                          ],
+                          "type": "object"
+                        },
+                        "provisioningIntentId": {
+                          "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "provisioningRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "revision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "rootLocator": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "authority": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                },
+                                "contractVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                },
+                                "identity": {
+                                  "additionalProperties": {
+                                    "$ref": "#/definitions/__schema0"
+                                  },
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "content-space.file-reference",
+                                    "content-space.container-reference",
+                                    "content-space.artifact-reference"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "contractVersion",
+                                "kind",
+                                "authority",
+                                "identity"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rootLocatorDigest": {
+                          "anyOf": [
+                            {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "status": {
+                          "enum": [
+                            "provisioning",
+                            "active",
+                            "degraded",
+                            "closed"
+                          ],
+                          "type": "string"
+                        },
+                        "statusReason": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "provisioning_incomplete",
+                                "provider_unavailable",
+                                "owner_access_lost",
+                                "rebind_required",
+                                "content_owner_transfer_pending",
+                                "project_archived",
+                                "project_deleted",
+                                "owner_requested"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "type": {
+                          "const": "project_content_space_binding",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "type",
+                        "projectContentBindingId",
+                        "projectId",
+                        "contentOwnerUserId",
+                        "providerInstance",
+                        "rootLocator",
+                        "rootLocatorDigest",
+                        "provisioningIntentId",
+                        "provisioningRevision",
+                        "attestationId",
+                        "attestationDigest",
+                        "status",
+                        "statusReason",
+                        "activatedAt",
+                        "degradedAt",
+                        "closedAt"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "contentReadiness": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bindingRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "effectiveAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "lastObservationId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^pob_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "providerInstance": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "providerInstanceRef": {
+                            "maxLength": 256,
+                            "minLength": 3,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                            "type": "string"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "type": {
+                            "const": "provider_instance_reference",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "type",
+                          "providerInstanceRef"
+                        ],
+                        "type": "object"
+                      },
+                      "providerPrincipal": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "principalId": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "principalKind": {
+                                "const": "user",
+                                "type": "string"
+                              },
+                              "providerInstance": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "providerInstanceRef": {
+                                    "maxLength": 256,
+                                    "minLength": 3,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                    "type": "string"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "type": {
+                                    "const": "provider_instance_reference",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "type",
+                                  "providerInstanceRef"
+                                ],
+                                "type": "object"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "type": {
+                                "const": "provider_directory_principal_reference",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "type",
+                              "providerInstance",
+                              "principalKind",
+                              "principalId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "providerPrincipalFactId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "reason": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "identity_missing",
+                              "provisioning_pending",
+                              "provider_member_absent",
+                              "provider_unavailable",
+                              "provider_unauthorized",
+                              "binding_degraded",
+                              "content_owner_lost_root"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "snapshottedFactRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "state": {
+                        "enum": [
+                          "missing_identity",
+                          "pending",
+                          "ready",
+                          "degraded"
+                        ],
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "project_content_readiness",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "projectId",
+                      "userId",
+                      "providerInstance",
+                      "state",
+                      "reason",
+                      "providerPrincipalFactId",
+                      "snapshottedFactRevision",
+                      "providerPrincipal",
+                      "bindingRevision",
+                      "lastObservationId",
+                      "effectiveAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "externalOperationJournal": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "contentRecoveryJournalEntryId": {
+                        "pattern": "^crj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "dispatchedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "executionId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "logicalInvocationId": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "observationDigest": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "operation": {
+                        "enum": [
+                          "create_shared_container",
+                          "list_members",
+                          "add_member",
+                          "remove_member",
+                          "observe_root",
+                          "download",
+                          "upload_new",
+                          "observe_output"
+                        ],
+                        "type": "string"
+                      },
+                      "preparedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "preparedExecutionRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "preparedTaskRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "provisioningIntentId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "provisioningRevision": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "receiptDigest": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "requestDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "resolvedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "safeFailureCode": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "scope": {
+                        "enum": [
+                          "project_provisioning",
+                          "project_membership",
+                          "task_content_transfer"
+                        ],
+                        "type": "string"
+                      },
+                      "state": {
+                        "enum": [
+                          "prepared",
+                          "dispatched",
+                          "observed_success",
+                          "observed_failure",
+                          "outcome_unknown",
+                          "abandoned"
+                        ],
+                        "type": "string"
+                      },
+                      "taskId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": {
+                        "const": "external_operation_recovery_journal_entry",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "contentRecoveryJournalEntryId",
+                      "scope",
+                      "projectId",
+                      "taskId",
+                      "executionId",
+                      "preparedTaskRevision",
+                      "preparedExecutionRevision",
+                      "provisioningIntentId",
+                      "provisioningRevision",
+                      "logicalInvocationId",
+                      "operation",
+                      "state",
+                      "requestDigest",
+                      "receiptDigest",
+                      "observationDigest",
+                      "safeFailureCode",
+                      "preparedAt",
+                      "dispatchedAt",
+                      "resolvedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10000,
+                  "type": "array"
+                },
+                "intent": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "containerDisplayName": {
+                          "maxLength": 200,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "contentOwnerUserId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "createdByOwnerUserId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "currentBindingRevision": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "currentRootLocator": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "authority": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                },
+                                "contractVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                },
+                                "identity": {
+                                  "additionalProperties": {
+                                    "$ref": "#/definitions/__schema0"
+                                  },
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "content-space.file-reference",
+                                    "content-space.container-reference",
+                                    "content-space.artifact-reference"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "contractVersion",
+                                "kind",
+                                "authority",
+                                "identity"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "desiredMembers": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "principal": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "principalId": {
+                                    "maxLength": 512,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "principalKind": {
+                                    "const": "user",
+                                    "type": "string"
+                                  },
+                                  "providerInstance": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "providerInstanceRef": {
+                                        "maxLength": 256,
+                                        "minLength": 3,
+                                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                        "type": "string"
+                                      },
+                                      "schemaVersion": {
+                                        "const": 1,
+                                        "type": "number"
+                                      },
+                                      "type": {
+                                        "const": "provider_instance_reference",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "schemaVersion",
+                                      "type",
+                                      "providerInstanceRef"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "schemaVersion": {
+                                    "const": 1,
+                                    "type": "number"
+                                  },
+                                  "type": {
+                                    "const": "provider_directory_principal_reference",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "schemaVersion",
+                                  "type",
+                                  "providerInstance",
+                                  "principalKind",
+                                  "principalId"
+                                ],
+                                "type": "object"
+                              },
+                              "providerPrincipalFactId": {
+                                "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              },
+                              "snapshottedFactRevision": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "userId": {
+                                "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "userId",
+                              "providerPrincipalFactId",
+                              "snapshottedFactRevision",
+                              "principal"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "intentDigest": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": [
+                            "initial_provisioning",
+                            "membership_change",
+                            "reconcile",
+                            "rebind",
+                            "content_owner_transfer"
+                          ],
+                          "type": "string"
+                        },
+                        "projectId": {
+                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "providerInstance": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "providerInstanceRef": {
+                              "maxLength": 256,
+                              "minLength": 3,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                              "type": "string"
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "type": {
+                              "const": "provider_instance_reference",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "type",
+                            "providerInstanceRef"
+                          ],
+                          "type": "object"
+                        },
+                        "provisioningIntentId": {
+                          "pattern": "^pci_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "provisioningRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "revision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "state": {
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "awaiting_attestation",
+                            "manual_recovery_required",
+                            "completed",
+                            "superseded",
+                            "cancelled"
+                          ],
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "project_content_provisioning_intent",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "type",
+                        "provisioningIntentId",
+                        "projectId",
+                        "provisioningRevision",
+                        "kind",
+                        "state",
+                        "createdByOwnerUserId",
+                        "contentOwnerUserId",
+                        "providerInstance",
+                        "desiredMembers",
+                        "containerDisplayName",
+                        "currentRootLocator",
+                        "currentBindingRevision",
+                        "intentDigest"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "memberships": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "activatedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "authorityEpoch": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "projectMembershipId": {
+                        "pattern": "^pmb_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "removalRequestedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "removalRequestedByUserId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "removedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "state": {
+                        "enum": [
+                          "invited",
+                          "pending_membership",
+                          "active",
+                          "membership_removal_pending",
+                          "removed"
+                        ],
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "project_membership",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "projectMembershipId",
+                      "projectId",
+                      "userId",
+                      "state",
+                      "authorityEpoch",
+                      "activatedAt",
+                      "removalRequestedAt",
+                      "removalRequestedByUserId",
+                      "removedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "providerMembershipObservations": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "bindingRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "evidenceDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "observedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "observerAgentId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "observerDeviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "observerUserId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "outcome": {
+                        "enum": [
+                          "present",
+                          "absent",
+                          "unavailable",
+                          "unauthorized"
+                        ],
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "providerObservationId": {
+                        "pattern": "^pob_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "providerPrincipal": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "principalId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "principalKind": {
+                            "const": "user",
+                            "type": "string"
+                          },
+                          "providerInstance": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "providerInstanceRef": {
+                                "maxLength": 256,
+                                "minLength": 3,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "type": {
+                                "const": "provider_instance_reference",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "type",
+                              "providerInstanceRef"
+                            ],
+                            "type": "object"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "type": {
+                            "const": "provider_directory_principal_reference",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "type",
+                          "providerInstance",
+                          "principalKind",
+                          "principalId"
+                        ],
+                        "type": "object"
+                      },
+                      "providerPrincipalFactId": {
+                        "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "provisioningAttestationId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^pca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "provisioningRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "snapshottedFactRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "source": {
+                        "enum": [
+                          "provisioning_attestation",
+                          "explicit_reconcile",
+                          "download_check",
+                          "upload_new"
+                        ],
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "project_provider_membership_observation",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "providerObservationId",
+                      "projectId",
+                      "userId",
+                      "providerPrincipalFactId",
+                      "snapshottedFactRevision",
+                      "providerPrincipal",
+                      "bindingRevision",
+                      "provisioningRevision",
+                      "source",
+                      "outcome",
+                      "observerUserId",
+                      "observerDeviceId",
+                      "observerAgentId",
+                      "provisioningAttestationId",
+                      "evidenceDigest",
+                      "observedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10000,
+                  "type": "array"
+                },
+                "providerPrincipalFacts": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "observedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "principalIdentityRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "providerBindingAttestationDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "providerPrincipal": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "principalId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "principalKind": {
+                            "const": "user",
+                            "type": "string"
+                          },
+                          "providerInstance": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "providerInstanceRef": {
+                                "maxLength": 256,
+                                "minLength": 3,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                "type": "string"
+                              },
+                              "schemaVersion": {
+                                "const": 1,
+                                "type": "number"
+                              },
+                              "type": {
+                                "const": "provider_instance_reference",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "schemaVersion",
+                              "type",
+                              "providerInstanceRef"
+                            ],
+                            "type": "object"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "type": {
+                            "const": "provider_directory_principal_reference",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "type",
+                          "providerInstance",
+                          "principalKind",
+                          "principalId"
+                        ],
+                        "type": "object"
+                      },
+                      "providerPrincipalFactId": {
+                        "pattern": "^ppf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "publishedByDeviceId": {
+                        "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "readiness": {
+                        "enum": [
+                          "ready",
+                          "degraded"
+                        ],
+                        "type": "string"
+                      },
+                      "readinessReason": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "provider_binding_changed",
+                              "provider_unavailable",
+                              "provider_unauthorized"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "type": {
+                        "const": "provider_directory_principal_fact",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "userId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "providerPrincipalFactId",
+                      "userId",
+                      "providerPrincipal",
+                      "principalIdentityRevision",
+                      "providerBindingAttestationDigest",
+                      "publishedByDeviceId",
+                      "readiness",
+                      "readinessReason",
+                      "observedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                },
+                "recoveryActions": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "action": {
+                        "enum": [
+                          "resume_provisioning",
+                          "reconcile_provider_membership",
+                          "reconcile_exact_output",
+                          "link_observed_output",
+                          "abandon_execution",
+                          "rebind_content_root",
+                          "reprovision_content_root",
+                          "change_content_owner"
+                        ],
+                        "type": "string"
+                      },
+                      "audience": {
+                        "enum": [
+                          "owner",
+                          "coordinator"
+                        ],
+                        "type": "string"
+                      },
+                      "availableAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "completedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "executionId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "journalEntryId": {
+                        "pattern": "^crj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "recoveryActionId": {
+                        "pattern": "^rca_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "requiresFreshObservation": {
+                        "type": "boolean"
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "safeSummary": {
+                        "maxLength": 500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "status": {
+                        "enum": [
+                          "available",
+                          "completed",
+                          "withdrawn"
+                        ],
+                        "type": "string"
+                      },
+                      "taskId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": {
+                        "const": "visible_recovery_action",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "recoveryActionId",
+                      "projectId",
+                      "taskId",
+                      "executionId",
+                      "journalEntryId",
+                      "audience",
+                      "action",
+                      "status",
+                      "requiresFreshObservation",
+                      "safeSummary",
+                      "availableAt",
+                      "completedAt"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "type": "array"
+                }
+              },
+              "readOnly": true,
+              "required": [
+                "intent",
+                "attestation",
+                "binding",
+                "memberships",
+                "providerPrincipalFacts",
+                "contentReadiness",
+                "providerMembershipObservations",
+                "externalOperationJournal",
+                "recoveryActions"
+              ],
+              "type": "object"
+            },
+            "records": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "acceptedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "acceptedByAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "acceptedByUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "authorAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "authorUserId": {
+                    "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "body": {
+                    "maxLength": 32000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "observation",
+                      "decision",
+                      "summary"
+                    ],
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "projectRecordId": {
+                    "pattern": "^rec_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "revision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "schemaVersion": {
+                    "const": 1,
+                    "type": "number"
+                  },
+                  "sourceHumanAnswerId": {
+                    "anyOf": [
+                      {
+                        "pattern": "^han_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sourceResultSubmissionId": {
+                    "anyOf": [
+                      {
+                        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sourceRevision": {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "sourceTaskId": {
+                    "anyOf": [
+                      {
+                        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "const": "accepted",
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "project_record",
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schemaVersion",
+                  "revision",
+                  "createdAt",
+                  "updatedAt",
+                  "type",
+                  "projectRecordId",
+                  "projectId",
+                  "kind",
+                  "status",
+                  "body",
+                  "authorUserId",
+                  "authorAgentId",
+                  "sourceTaskId",
+                  "sourceResultSubmissionId",
+                  "sourceHumanAnswerId",
+                  "sourceRevision",
+                  "acceptedByUserId",
+                  "acceptedByAgentId",
+                  "acceptedAt"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            },
+            "reviews": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "decision": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "acceptedProjectRecordId": {
+                            "anyOf": [
+                              {
+                                "pattern": "^rec_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "createdAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "decidedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "decidedByCoordinatorAgentId": {
+                            "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "decidedByUserId": {
+                            "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "decision": {
+                            "enum": [
+                              "accept",
+                              "request_revision"
+                            ],
+                            "type": "string"
+                          },
+                          "executionId": {
+                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "instruction": {
+                            "anyOf": [
+                              {
+                                "maxLength": 32000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "nextTaskOfferId": {
+                            "anyOf": [
+                              {
+                                "pattern": "^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectId": {
+                            "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "resultSubmissionId": {
+                            "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "reviewDecisionId": {
+                            "pattern": "^rvw_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "reviewedResultRevision": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "revision": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "schemaVersion": {
+                            "const": 1,
+                            "type": "number"
+                          },
+                          "taskId": {
+                            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "task_review_decision",
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "schemaVersion",
+                          "revision",
+                          "createdAt",
+                          "updatedAt",
+                          "type",
+                          "reviewDecisionId",
+                          "projectId",
+                          "taskId",
+                          "executionId",
+                          "resultSubmissionId",
+                          "reviewedResultRevision",
+                          "decidedByUserId",
+                          "decidedByCoordinatorAgentId",
+                          "decision",
+                          "instruction",
+                          "acceptedProjectRecordId",
+                          "nextTaskOfferId",
+                          "decidedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "submission": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "executionId": {
+                        "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "outputs": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assignmentTaskRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "bindingRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "executionId": {
+                              "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "locator": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "authority": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                  "type": "string"
+                                },
+                                "contractVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                },
+                                "identity": {
+                                  "additionalProperties": {
+                                    "$ref": "#/definitions/__schema0"
+                                  },
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "type": "object"
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "content-space.file-reference",
+                                    "content-space.container-reference",
+                                    "content-space.artifact-reference"
+                                  ],
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "contractVersion",
+                                "kind",
+                                "authority",
+                                "identity"
+                              ],
+                              "type": "object"
+                            },
+                            "locatorDigest": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "observationDigest": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "preflightObservationDigest": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "rootLocatorDigest": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "transferReceiptDigest": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "executionId",
+                            "assignmentTaskRevision",
+                            "locator",
+                            "locatorDigest",
+                            "rootLocatorDigest",
+                            "bindingRevision",
+                            "transferReceiptDigest",
+                            "observationDigest",
+                            "preflightObservationDigest"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "projectId": {
+                        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "recoveryJournalEntryIds": {
+                        "items": {
+                          "pattern": "^crj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "resultSubmissionId": {
+                        "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "revision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "runtimeProvenance": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "completedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "modelId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "runtimeId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "startedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "runtimeId",
+                          "modelId",
+                          "startedAt",
+                          "completedAt"
+                        ],
+                        "type": "object"
+                      },
+                      "schemaVersion": {
+                        "const": 1,
+                        "type": "number"
+                      },
+                      "submissionDigest": {
+                        "pattern": "^[a-f0-9]{64}$",
+                        "type": "string"
+                      },
+                      "submittedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "submittedByAgentId": {
+                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "submittedByUserId": {
+                        "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "submittedExecutionRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "submittedTaskRevision": {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "summary": {
+                        "maxLength": 32000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "taskId": {
+                        "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "task_result_submission",
+                        "type": "string"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "schemaVersion",
+                      "revision",
+                      "createdAt",
+                      "updatedAt",
+                      "type",
+                      "resultSubmissionId",
+                      "projectId",
+                      "taskId",
+                      "executionId",
+                      "submittedTaskRevision",
+                      "submittedExecutionRevision",
+                      "submittedByUserId",
+                      "submittedByAgentId",
+                      "summary",
+                      "runtimeProvenance",
+                      "outputs",
+                      "recoveryJournalEntryIds",
+                      "submittedAt",
+                      "submissionDigest"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "readOnly": true,
+                "required": [
+                  "submission",
+                  "decision"
+                ],
+                "type": "object"
+              },
+              "maxItems": 10000,
+              "type": "array"
+            },
+            "tasks": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "executions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "acceptedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "assigneeAgentId": {
+                          "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "assigneeDeviceId": {
+                          "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "assigneeUserId": {
+                          "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "attempt": {
+                          "maximum": 101,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "currentResultSubmissionId": {
+                          "anyOf": [
+                            {
+                              "pattern": "^rsu_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "executionId": {
+                          "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "fence": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assigneeAgentId": {
+                              "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "assigneeDeviceId": {
+                              "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "assigneeUserId": {
+                              "pattern": "^usr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "assignmentTaskRevision": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "bindingRevision": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "executionId": {
+                              "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                              "type": "string"
+                            },
+                            "fencedAt": {
+                              "anyOf": [
+                                {
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "projectExecutionAuthorityEpoch": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "reason": {
+                              "anyOf": [
+                                {
+                                  "enum": [
+                                    "result_submitted",
+                                    "reassigned",
+                                    "device_revoked",
+                                    "agent_revoked",
+                                    "membership_removal_pending",
+                                    "membership_removed",
+                                    "project_paused",
+                                    "project_terminal",
+                                    "execution_failed",
+                                    "execution_cancelled",
+                                    "manual_recovery_required",
+                                    "manual_recovery_abandoned",
+                                    "completed"
+                                  ],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "schemaVersion": {
+                              "const": 1,
+                              "type": "number"
+                            },
+                            "status": {
+                              "enum": [
+                                "open",
+                                "fenced"
+                              ],
+                              "type": "string"
+                            },
+                            "userTaskAuthorityEpoch": {
+                              "maximum": 9007199254740991,
+                              "minimum": 1,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "schemaVersion",
+                            "executionId",
+                            "assigneeUserId",
+                            "assigneeAgentId",
+                            "assigneeDeviceId",
+                            "assignmentTaskRevision",
+                            "projectExecutionAuthorityEpoch",
+                            "userTaskAuthorityEpoch",
+                            "bindingRevision",
+                            "status",
+                            "reason",
+                            "fencedAt"
+                          ],
+                          "type": "object"
+                        },
+                        "fileIntent": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "assignmentTaskRevision": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "bindingRevision": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                },
+                                "declarationDigest": {
+                                  "pattern": "^[a-f0-9]{64}$",
+                                  "type": "string"
+                                },
+                                "executionId": {
+                                  "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "inputs": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "destinationName": {
+                                        "maxLength": 128,
+                                        "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
+                                        "type": "string"
+                                      },
+                                      "resourceRefId": {
+                                        "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "resourceRefId",
+                                      "destinationName"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "maxItems": 100,
+                                  "type": "array"
+                                },
+                                "output": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "fileName": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
+                                      "type": "string"
+                                    },
+                                    "maxBytes": {
+                                      "maximum": 1073741824,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "mediaType": {
+                                      "maxLength": 256,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "rootResourceRefId": {
+                                      "pattern": "^rrf_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "rootResourceRefId",
+                                    "fileName",
+                                    "mediaType",
+                                    "maxBytes"
+                                  ],
+                                  "type": "object"
+                                },
+                                "projectId": {
+                                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "schemaVersion": {
+                                  "const": 1,
+                                  "type": "number"
+                                },
+                                "taskId": {
+                                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "const": "task_execution_file_intent",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "schemaVersion",
+                                "type",
+                                "projectId",
+                                "taskId",
+                                "executionId",
+                                "assignmentTaskRevision",
+                                "bindingRevision",
+                                "declarationDigest",
+                                "inputs",
+                                "output"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "offeredAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "offeredByCoordinatorAgentId": {
+                          "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "projectId": {
+                          "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "revision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "schemaVersion": {
+                          "const": 1,
+                          "type": "number"
+                        },
+                        "startedAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "state": {
+                          "enum": [
+                            "accepted",
+                            "running",
+                            "needs_human",
+                            "result_submitted",
+                            "manual_recovery_required",
+                            "completed",
+                            "failed",
+                            "cancelled",
+                            "revoked",
+                            "superseded"
+                          ],
+                          "type": "string"
+                        },
+                        "stateRevision": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "taskId": {
+                          "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "terminalAt": {
+                          "anyOf": [
+                            {
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "type": {
+                          "const": "task_execution",
+                          "type": "string"
+                        },
+                        "updatedAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "schemaVersion",
+                        "revision",
+                        "createdAt",
+                        "updatedAt",
+                        "type",
+                        "projectId",
+                        "taskId",
+                        "executionId",
+                        "attempt",
+                        "offeredByCoordinatorAgentId",
+                        "assigneeUserId",
+                        "assigneeAgentId",
+                        "assigneeDeviceId",
+                        "state",
+                        "stateRevision",
+                        "fence",
+                        "fileIntent",
+                        "currentResultSubmissionId",
+                        "offeredAt",
+                        "acceptedAt",
+                        "startedAt",
+                        "terminalAt"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 101,
+                    "type": "array"
+                  },
+                  "task": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "completedAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "completionCriteria": {
+                        "items": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "createdByCoordinatorAgentId": {
+                        "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                        "type": "string"
+                      },
+                      "currentExecutionId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "currentExecutionState": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "accepted",
+                              "running",
+                              "needs_human",
+                              "result_submitted",
+                              "manual_recovery_required",
+                              "completed",
+                              "failed",
+                              "cancelled",
+                              "revoked",
+                              "superseded"
+                            ],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "dependencyTaskIds": {
+                        "items": {
+                          "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                          "type": "string"
+                        },
+                        "maxItems": 1000,
+                        "type": "array"
+                      },
+                      "executionCount": {
+                        "maximum": 101,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "fileIntent": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "bindingRevision": {
+                                "maximum": 9007199254740991,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "inputs": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "destinationName": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
+                                      "type": "string"
+                                    },
+                                    "expectedMediaType": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 256,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "expectedSemanticRevision": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 256,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "kind": {
+                                      "const": "content-space.input-file",
+                                      "type": "string"
+                                    },
+                                    "locator": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "authority": {
+                                          "maxLength": 256,
+                                          "minLength": 1,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,255}$",
+                                          "type": "string"
+                                        },
+                                        "contractVersion": {
+                                          "const": 1,
+                                          "type": "number"
+                                        },
+                                        "identity": {
+                                          "additionalProperties": {
+                                            "$ref": "#/definitions/__schema0"
+                                          },
+                                          "propertyNames": {
+                                            "type": "string"
+                                          },
+                                          "type": "object"
+                                        },
+                                        "kind": {
+                                          "enum": [
+                                            "content-space.file-reference",
+                                            "content-space.container-reference",
+                                            "content-space.artifact-reference"
+                                          ],
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "contractVersion",
+                                        "kind",
+                                        "authority",
+                                        "identity"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "locator",
+                                    "destinationName",
+                                    "expectedSemanticRevision",
+                                    "expectedMediaType"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 100,
+                                "type": "array"
+                              },
+                              "output": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "fileName": {
+                                    "maxLength": 128,
+                                    "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {
@@ -165139,7 +166250,7 @@ Prepares the only production workflow from confirmed Plan and accepted invitatio
 
 Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, reviews, and content provisioning state.
 
-- Version: `1.0.0`
+- Version: `2.0.0`
 - Audiences: ui, agent
 - Effect: `read`
 - Approval: none
@@ -165583,6 +166694,18 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                     "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "reassignmentTaskRevision": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "respondedAt": {
                     "anyOf": [
                       {
@@ -165608,6 +166731,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                     "enum": [
                       "pending",
                       "accepted",
+                      "rejected",
                       "withdrawn",
                       "timed_out"
                     ],
@@ -165648,6 +166772,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                   "workerUserId",
                   "offeredByCoordinatorAgentId",
                   "state",
+                  "reassignmentTaskRevision",
                   "offeredAt",
                   "expiresAt",
                   "respondedAt"
@@ -166044,6 +167169,36 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                   {
                                     "additionalProperties": false,
                                     "properties": {
+                                      "dependencyInputs": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "destinationName": {
+                                              "maxLength": 128,
+                                              "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
+                                              "type": "string"
+                                            },
+                                            "outputIndex": {
+                                              "maximum": 99,
+                                              "minimum": 0,
+                                              "type": "integer"
+                                            },
+                                            "planItemId": {
+                                              "pattern": "^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "planItemId",
+                                            "outputIndex",
+                                            "destinationName"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "maxItems": 100,
+                                        "type": "array"
+                                      },
                                       "inputs": {
                                         "items": {
                                           "additionalProperties": false,
@@ -166051,6 +167206,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                             "destinationName": {
                                               "maxLength": 128,
                                               "minLength": 1,
+                                              "pattern": "^[\\x20-\\x7e]+$",
                                               "type": "string"
                                             },
                                             "expectedMediaType": {
@@ -166139,6 +167295,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                           "fileName": {
                                             "maxLength": 128,
                                             "minLength": 1,
+                                            "pattern": "^[\\x20-\\x7e]+$",
                                             "type": "string"
                                           },
                                           "kind": {
@@ -166175,13 +167332,14 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                         "type": "object"
                                       },
                                       "schemaVersion": {
-                                        "const": 1,
+                                        "const": 2,
                                         "type": "number"
                                       }
                                     },
                                     "required": [
                                       "schemaVersion",
                                       "inputs",
+                                      "dependencyInputs",
                                       "output"
                                     ],
                                     "type": "object"
@@ -169238,6 +170396,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                       "destinationName": {
                                         "maxLength": 128,
                                         "minLength": 1,
+                                        "pattern": "^[\\x20-\\x7e]+$",
                                         "type": "string"
                                       },
                                       "resourceRefId": {
@@ -169260,6 +170419,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                     "fileName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "maxBytes": {
@@ -169527,6 +170687,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                     "destinationName": {
                                       "maxLength": 128,
                                       "minLength": 1,
+                                      "pattern": "^[\\x20-\\x7e]+$",
                                       "type": "string"
                                     },
                                     "expectedMediaType": {
@@ -169615,6 +170776,7 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
                                   "fileName": {
                                     "maxLength": 128,
                                     "minLength": 1,
+                                    "pattern": "^[\\x20-\\x7e]+$",
                                     "type": "string"
                                   },
                                   "kind": {

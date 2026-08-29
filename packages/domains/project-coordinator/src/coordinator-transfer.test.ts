@@ -33,7 +33,8 @@ test('Owner transfer derives every Cloud CAS fact from the exact fresh Owner Age
       state: 'ready',
       baseUrl: 'https://cloud.run0.invalid/',
       userId: projectFixture.ownerUserId,
-      deviceId: TEST_IDS.deviceId
+      deviceId: TEST_IDS.deviceId,
+      deviceRevision: 1
     }),
     execute: async ({ payload }) => {
       const command = payload as RestRequest
@@ -272,6 +273,7 @@ function memorySettings(): DomainMainPackageSettingsHost {
 function unusedCoordinatorCommands(): CoordinatorCloudCommandService {
   return {
     execute: async () => { throw new Error('Transfer must use the OIDC Owner transport.') },
+    resume: async () => null,
     subscribe: () => () => undefined
   }
 }

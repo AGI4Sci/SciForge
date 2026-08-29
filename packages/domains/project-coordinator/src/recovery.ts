@@ -5,8 +5,6 @@ import {
   cloudResourceRefSchema,
   externalOperationRecoveryJournalEntrySchema,
   taskExecutionSchema,
-  taskOfferReassignCommandSchema,
-  taskOfferSchema,
   taskRecoveryAbandonCommandSchema,
   taskRecoveryLinkObservedOutputCommandSchema,
   taskRecoveryObservedOutputSchema,
@@ -14,9 +12,6 @@ import {
   visibleRecoveryActionSchema,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
-import type {
-  CoordinatorCloudCommandService
-} from '@sciforge/domain-collaboration/coordinator-cloud-command'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
   type AuthenticatedCloudTransport
@@ -29,11 +24,9 @@ import type { DomainMainSystemCapabilityInvoker } from '@sciforge/domain-sdk/hos
 import {
   projectCoordinatorContentRecoveryAbandonInputSchema,
   projectCoordinatorContentRecoveryObserveLinkInputSchema,
-  projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorContentRecoveryAbandonInput,
   type ProjectCoordinatorContentRecoveryObserveLinkInput,
-  type ProjectCoordinatorContentRecoveryRetrySuccessorInput,
   type ProjectCoordinatorProject,
   type ProjectCoordinatorWorkspace
 } from './contract.js'
@@ -51,10 +44,6 @@ export type ProjectCoordinatorRecoveryPort = Readonly<{
     input: ProjectCoordinatorContentRecoveryAbandonInput,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorWorkspace>
-  retrySuccessor(
-    input: ProjectCoordinatorContentRecoveryRetrySuccessorInput,
-    idempotencyKey: string
-  ): Promise<ProjectCoordinatorWorkspace>
 }>
 
 type RecoveryTuple = Readonly<{
@@ -68,21 +57,9 @@ type RecoveryTuple = Readonly<{
   expectedName: string
 }>
 
-type RecoverySuccessorTuple = Readonly<{
-  workspace: ProjectCoordinatorWorkspace
-  project: ProjectCoordinatorProject
-  task: ProjectCoordinatorProject['tasks'][number]['task']
-  execution: ProjectCoordinatorProject['tasks'][number]['executions'][number]
-  action: ProjectCoordinatorProject['provisioning']['recoveryActions'][number]
-  journal: ProjectCoordinatorProject['provisioning']['externalOperationJournal'][number]
-  previousOffer: ProjectCoordinatorProject['offers'][number]
-  workerUserId: string
-}>
-
 export function createProjectCoordinatorRecoveryPort(options: Readonly<{
   workspace: WorkspaceReader
   transport: AuthenticatedCloudTransport
-  coordinatorCloudCommands: CoordinatorCloudCommandService
   getCapabilities(): DomainMainSystemCapabilityInvoker
   workspaceRoot: string | (() => string)
   requestId?: () => `req_${string}`
@@ -186,70 +163,6 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
       journal,
       binding,
       expectedName: execution.fileIntent.output.fileName
-    })
-  }
-
-  const readSuccessorTuple = async (
-    input: ProjectCoordinatorContentRecoveryRetrySuccessorInput
-  ): Promise<RecoverySuccessorTuple> => {
-    const workspace = projectCoordinatorWorkspaceSchema.parse(
-      await options.workspace.readWorkspace({ projectId: input.projectId })
-    )
-    const project = requireOwnerProject(workspace, input.projectId)
-    const action = project.provisioning.recoveryActions.find(({ recoveryActionId }) => (
-      recoveryActionId === input.recoveryActionId
-    ))
-    if (!action || action.status !== 'completed' || action.audience !== 'coordinator' ||
-      action.taskId === null || action.executionId === null) {
-      throw new Error('The exact completed Task recovery action is unavailable.')
-    }
-    const taskView = project.tasks.find(({ task }) => task.taskId === action.taskId)
-    const execution = taskView?.executions.find(({ executionId }) => (
-      executionId === action.executionId
-    ))
-    const journal = project.provisioning.externalOperationJournal.find(
-      ({ contentRecoveryJournalEntryId }) => (
-        contentRecoveryJournalEntryId === action.journalEntryId
-      )
-    )
-    if (!taskView || !execution || !journal ||
-      taskView.task.currentExecutionId !== execution.executionId ||
-      journal.projectId !== input.projectId ||
-      journal.taskId !== taskView.task.taskId ||
-      journal.executionId !== execution.executionId ||
-      journal.scope !== 'task_content_transfer') {
-      throw new Error('The completed recovery action does not bind the current Task execution.')
-    }
-    if (taskView.task.status !== 'revision_requested' ||
-      execution.state !== 'cancelled' ||
-      execution.fence.status !== 'fenced' ||
-      execution.fence.reason !== 'manual_recovery_abandoned' ||
-      taskView.task.fileIntent === null ||
-      execution.fileIntent === null ||
-      execution.fileIntent.output.fileName !== taskView.task.fileIntent.output.fileName ||
-      execution.fileIntent.bindingRevision !== taskView.task.fileIntent.bindingRevision ||
-      !['abandoned', 'observed_failure'].includes(journal.state)) {
-      throw new Error('Only one exact abandoned file execution may receive a successor retry.')
-    }
-    if (input.nextOutputFileName === taskView.task.fileIntent.output.fileName ||
-      taskView.executions.some(({ fileIntent }) => (
-        fileIntent?.output.fileName === input.nextOutputFileName
-      ))) {
-      throw new Error('A recovery successor requires a new no-overwrite output filename.')
-    }
-    const previousOffer = project.offers.find(({ executionId }) => executionId === execution.executionId)
-    if (!previousOffer || previousOffer.state !== 'accepted') {
-      throw new Error('The abandoned execution does not resolve to its claimed User-level offer.')
-    }
-    return Object.freeze({
-      workspace,
-      project,
-      task: taskView.task,
-      execution,
-      action,
-      journal,
-      previousOffer,
-      workerUserId: input.workerUserId
     })
   }
 
@@ -405,52 +318,6 @@ export function createProjectCoordinatorRecoveryPort(options: Readonly<{
         throw new Error('The abandoned execution was not observed in fresh Cloud facts.')
       }
       return fresh
-    },
-
-    retrySuccessor: async (rawInput, idempotencyKey) => {
-      const input = projectCoordinatorContentRecoveryRetrySuccessorInputSchema.parse(rawInput)
-      const current = await readSuccessorTuple(input)
-      const nextFileIntent = {
-        ...current.task.fileIntent!,
-        output: {
-          ...current.task.fileIntent!.output,
-          fileName: input.nextOutputFileName
-        }
-      }
-      const command = taskOfferReassignCommandSchema.parse({
-        protocolVersion: CURRENT_PROTOCOL_VERSION,
-        requestId: requestId(),
-        type: 'task.offer.reassign',
-        idempotencyKey,
-        taskId: current.task.taskId,
-        previousTaskOfferId: current.previousOffer.taskOfferId,
-        expectedPreviousOfferRevision: current.previousOffer.revision,
-        expectedProjectRevision: current.project.project.revision,
-        expectedTaskRevision: current.task.revision,
-        expectedCoordinatorAuthorityEpoch:
-          current.project.project.coordinatorAuthorityEpoch,
-        expectedExecutionAuthorityEpoch:
-          current.project.project.executionAuthorityEpoch,
-        workerUserId: current.workerUserId,
-        offerExpiresAt: input.offerExpiresAt,
-        nextFileIntent
-      })
-      const response = await options.coordinatorCloudCommands.execute(command)
-      const successorOfferId = requireExactSuccessorResponse(
-        response,
-        current,
-        nextFileIntent
-      )
-      const fresh = projectCoordinatorWorkspaceSchema.parse(
-        await options.workspace.readWorkspace({ projectId: input.projectId })
-      )
-      requireFreshSuccessorWorkspace(
-        fresh,
-        current,
-        successorOfferId,
-        nextFileIntent
-      )
-      return fresh
     }
   })
 }
@@ -591,68 +458,6 @@ function requireExactAbandonResponse(
     !action || action.revision !== current.action.revision + 1 ||
     action.status !== 'completed') {
     throw new Error('Cloud did not return the exact abandoned recovery facts.')
-  }
-}
-
-function requireExactSuccessorResponse(
-  response: RestResponse,
-  current: RecoverySuccessorTuple,
-  nextFileIntent: NonNullable<RecoverySuccessorTuple['task']['fileIntent']>
-): string {
-  if (response.type === 'rest.error') {
-    throw new Error(
-      `Recovery successor failed: ${response.error.code}: ${response.error.message}`
-    )
-  }
-  if (response.type !== 'rest.collection') {
-    throw new Error(`Recovery successor returned ${response.type}.`)
-  }
-  const task = findParsed(response.items, taskSchema, ({ taskId }) => (
-    taskId === current.task.taskId
-  ))
-  const offer = findParsed(response.items, taskOfferSchema, (candidate) => (
-    candidate.taskId === current.task.taskId && candidate.taskOfferId !== current.previousOffer.taskOfferId
-  ))
-  if (!task || task.revision !== current.task.revision + 1 ||
-    task.currentExecutionId !== null ||
-    task.currentExecutionState !== null ||
-    task.status !== 'offered' ||
-    task.executionCount !== current.task.executionCount ||
-    stableDigest(task.fileIntent) !== stableDigest(nextFileIntent) ||
-    !offer || offer.state !== 'pending' || offer.executionId !== null ||
-    offer.workerUserId !== current.workerUserId) {
-    throw new Error('Cloud did not return the exact freshly named User-level successor offer.')
-  }
-  return offer.taskOfferId
-}
-
-function requireFreshSuccessorWorkspace(
-  workspace: ProjectCoordinatorWorkspace,
-  current: RecoverySuccessorTuple,
-  successorOfferId: string,
-  nextFileIntent: NonNullable<RecoverySuccessorTuple['task']['fileIntent']>
-): void {
-  const project = requireOwnerProject(workspace, current.project.project.projectId)
-  const taskView = project.tasks.find(({ task }) => task.taskId === current.task.taskId)
-  const oldExecution = taskView?.executions.find(({ executionId }) => (
-    executionId === current.execution.executionId
-  ))
-  const successorOffer = project.offers.find(({ taskOfferId }) => taskOfferId === successorOfferId)
-  const action = project.provisioning.recoveryActions.find(({ recoveryActionId }) => (
-    recoveryActionId === current.action.recoveryActionId
-  ))
-  if (!taskView || taskView.task.currentExecutionId !== null ||
-    taskView.task.currentExecutionState !== null ||
-    taskView.task.status !== 'offered' ||
-    taskView.task.executionCount !== current.task.executionCount ||
-    stableDigest(taskView.task.fileIntent) !== stableDigest(nextFileIntent) ||
-    !successorOffer || successorOffer.workerUserId !== current.workerUserId ||
-    successorOffer.executionId !== null || successorOffer.state !== 'pending' ||
-    !oldExecution || oldExecution.state !== 'cancelled' ||
-    oldExecution.fence.status !== 'fenced' ||
-    oldExecution.fence.reason !== 'manual_recovery_abandoned' ||
-    action?.status !== 'completed') {
-    throw new Error('The fresh Cloud workspace did not retain the fenced old execution and User-level successor offer.')
   }
 }
 

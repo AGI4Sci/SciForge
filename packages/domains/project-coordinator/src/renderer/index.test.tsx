@@ -11,6 +11,7 @@ import {
   WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION,
   WORKBENCH_WORKSPACE_SECTION_LOCATION
 } from '@sciforge/domain-sdk/renderer'
+import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts'
 import type { ProjectCoordinatorProject } from '../contract.js'
 
 import {
@@ -56,6 +57,11 @@ import {
   collectProjectCoordinatorWorkspaceSections,
   type ProjectCoordinatorWorkspaceSection
 } from './workspace-sections.js'
+
+const MEETING_PLAN_TASK_ID = canonicalTaskIdForPlanItem(
+  'pln_MeetingPlan001',
+  'item_meeting_summary'
+)
 
 test('renderer entry owns one generic Workbench surface without Identity UI contributions', () => {
   const opened: unknown[] = []
@@ -264,10 +270,12 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
+      acknowledgeProjectActivation: async () => { throw new Error('unused') },
       readSessionProjection: async () => ({
         schemaVersion: 1 as const,
         observedAt: '2026-08-24T09:00:00.000Z',
-        bindings: []
+        bindings: [],
+        pendingActivations: []
       }),
       readPlanDraft: async () => null,
       generatePlanDraft: async () => { throw new Error('unused') },
@@ -276,12 +284,12 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
       confirmPlan: async () => { throw new Error('unused') },
       prepareWorkflow: async () => { throw new Error('unused') },
       continueWorkflow: async () => { throw new Error('unused') },
+      reassignTaskOffer: async () => { throw new Error('unused') },
       addMember: async () => { throw new Error('unused') },
       acceptInvitation: async () => { throw new Error('unused') },
       removeMember: async () => { throw new Error('unused') },
       observeAndLinkRecovery: async () => { throw new Error('unused') },
       abandonRecovery: async () => { throw new Error('unused') },
-      retryRecoverySuccessor: async () => { throw new Error('unused') },
       createHumanNeeded: async () => { throw new Error('unused') },
       answerHumanNeeded: async () => { throw new Error('unused') },
       transferCoordinator: async () => { throw new Error('unused') },
@@ -590,6 +598,95 @@ test('Task assignment renders unpublished, pending User offer, and claimed Agent
   assert.match(markup, /Member Desktop/u)
 })
 
+test('generic Task HCI exposes reassignment for an accepted fenced file execution', () => {
+  const project = planningProjectFixture('paused')
+  const source = decisionProjectFixture('review').tasks[0]!
+  const timestamp = project.project.updatedAt
+  const task = {
+    ...source.task,
+    fileIntent: {
+      schemaVersion: 1 as const,
+      bindingRevision: 3,
+      inputs: [{
+        kind: 'content-space.input-file' as const,
+        locator: {
+          contractVersion: 1 as const,
+          kind: 'content-space.file-reference' as const,
+          authority: 'opencontent.run0',
+          identity: { fileId: 'provider-input-analysis-001' }
+        },
+        destinationName: 'source-analysis.md',
+        expectedSemanticRevision: 'provider-revision-7',
+        expectedMediaType: 'text/markdown'
+      }],
+      output: {
+        kind: 'content-space.output-new' as const,
+        target: 'project-binding-root' as const,
+        mode: 'upload-new' as const,
+        fileName: 'analysis.revision-1.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    },
+    currentExecutionState: 'cancelled' as const,
+    status: 'revision_requested' as const,
+    completedAt: null,
+    revision: 4
+  }
+  const execution = {
+    ...source.executions[0]!,
+    state: 'cancelled' as const,
+    stateRevision: 5,
+    fence: {
+      status: 'fenced' as const,
+      reason: 'execution_cancelled' as const,
+      fencedAt: timestamp
+    },
+    currentResultSubmissionId: null,
+    terminalAt: timestamp,
+    revision: 5
+  }
+  const snapshot = {
+    ...project,
+    project: {
+      ...project.project,
+      contentMode: 'required' as const,
+      status: 'active' as const
+    },
+    tasks: [{ task, executions: [execution] }],
+    offers: [{
+      schemaVersion: 1 as const,
+      type: 'task_offer' as const,
+      taskOfferId: 'ofr_ReassignOffer001',
+      projectId: project.project.projectId,
+      taskId: task.taskId,
+      executionId: execution.executionId,
+      workerUserId: execution.assigneeUserId,
+      offeredByCoordinatorAgentId: project.project.coordinatorAgentId,
+      state: 'accepted' as const,
+      reassignmentTaskRevision: null,
+      offeredAt: timestamp,
+      expiresAt: '2026-08-25T02:08:00.000Z',
+      respondedAt: timestamp,
+      revision: 2,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }]
+  } as unknown as ProjectCoordinatorProject
+
+  const markup = renderToStaticMarkup(createElement(TasksSection, {
+    project: snapshot,
+    canReassign: true,
+    onReassign: () => undefined
+  }))
+
+  assert.match(markup, new RegExp(`data-task-offer-reassignment="${MEETING_PLAN_TASK_ID}"`, 'u'))
+  assert.match(markup, /name="reassign-worker-user"/u)
+  assert.match(markup, /name="reassign-output-file-name"/u)
+  assert.match(markup, /name="reassign-offer-expires-at"/u)
+  assert.match(markup, /projectCoordinatorReassignTask/u)
+})
+
 test('completed Project meeting package includes only accepted records and artifact refs', () => {
   const base = decisionProjectFixture('completion')
   const acceptedResultId = base.reviews[0]!.submission.resultSubmissionId
@@ -776,7 +873,7 @@ test('result artifact navigation materializes through main and opens the generic
   }>
   const selection = {
     projectId: 'prj_ProjectCreated01',
-    taskId: 'tsk_MeetingTask001',
+    taskId: MEETING_PLAN_TASK_ID,
     executionId: 'exe_MeetingExec001',
     resultSubmissionId: 'rsu_MeetingResult01',
     submissionDigest: 'b'.repeat(64),
@@ -838,7 +935,7 @@ test('renderer decision HCI invokes only the four governed canonical actions', a
   })
   await client.reviewResult({
     projectId: 'prj_ProjectCreated01',
-    taskId: 'tsk_MeetingTask001',
+    taskId: MEETING_PLAN_TASK_ID,
     executionId: 'exe_MeetingExec001',
     resultSubmissionId: 'rsu_MeetingResult01',
     expectedProjectRevision: 2,
@@ -927,9 +1024,10 @@ test('renderer client carries the reviewed full workflow through its canonical c
     recoveryActionId: 'rca_TaskRecovery001',
     reason: 'The exact output cannot be verified.'
   })
-  await client.retryRecoverySuccessor({
+  await client.reassignTaskOffer({
     projectId: plan.projectId,
-    recoveryActionId: 'rca_TaskRecovery001',
+    taskId: 'tsk_RecoveryTask001',
+    previousTaskOfferId: 'ofr_RecoveryOffer001',
     workerUserId: 'usr_Worker000001',
     nextOutputFileName: 'meeting-summary.recovery-2.md',
     offerExpiresAt: '2026-08-27T01:08:00.000Z'
@@ -998,11 +1096,12 @@ test('renderer client carries the reviewed full workflow through its canonical c
       }
     },
     {
-      actionId: 'project-coordinator.content-recovery.retry-successor',
+      actionId: 'project-coordinator.task-offer.reassign',
       effect: 'external-write',
       input: {
         projectId: plan.projectId,
-        recoveryActionId: 'rca_TaskRecovery001',
+        taskId: 'tsk_RecoveryTask001',
+        previousTaskOfferId: 'ofr_RecoveryOffer001',
         workerUserId: 'usr_Worker000001',
         nextOutputFileName: 'meeting-summary.recovery-2.md',
         offerExpiresAt: '2026-08-27T01:08:00.000Z'
@@ -1026,7 +1125,6 @@ test('content-required provisioning, membership fences, and root recovery are de
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
-    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(pendingMarkup, /data-default-visible-card="project-workflow"/u)
   assert.match(pendingMarkup, /projectCoordinatorPrepareWorkflow/u)
@@ -1050,7 +1148,6 @@ test('content-required provisioning, membership fences, and root recovery are de
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
-    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(reviewedMarkup, /data-default-visible-card="project-workflow-confirmation"/u)
   assert.match(reviewedMarkup, /content-space\.authorize-provider-administration/u)
@@ -1070,7 +1167,6 @@ test('content-required provisioning, membership fences, and root recovery are de
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
-    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(contentFreeMarkup, /projectCoordinatorContentNotRequired/u)
   assert.doesNotMatch(contentFreeMarkup, />not_applicable</u)
@@ -1110,7 +1206,6 @@ test('content-required provisioning, membership fences, and root recovery are de
     onRemoveMember: () => undefined,
     onObserveAndLinkRecovery: () => undefined,
     onAbandonRecovery: () => undefined,
-    onRetryRecoverySuccessor: () => undefined
   }))
   assert.match(recoveryMarkup, /data-default-visible-card="content-recovery"/u)
   assert.match(recoveryMarkup, /owner_access_lost/u)
@@ -1149,7 +1244,6 @@ test('content-required provisioning, membership fences, and root recovery are de
       onRemoveMember: () => undefined,
       onObserveAndLinkRecovery: () => undefined,
       onAbandonRecovery: () => undefined,
-      onRetryRecoverySuccessor: () => undefined
     }
   ))
   assert.match(taskRecoveryMarkup, /data-task-recovery-action="rca_TaskRecovery001"/u)
@@ -1225,12 +1319,13 @@ test('content-required provisioning, membership fences, and root recovery are de
       onRemoveMember: () => undefined,
       onObserveAndLinkRecovery: () => undefined,
       onAbandonRecovery: () => undefined,
-      onRetryRecoverySuccessor: () => undefined
     }
   ))
   assert.match(successorMarkup, /data-default-visible-card="content-recovery-successor"/u)
-  assert.match(successorMarkup, /name="next-output-file-name"/u)
-  assert.match(successorMarkup, /projectCoordinatorApproveRecoveryRetry/u)
+  assert.match(successorMarkup, /meeting-summary\.recovery-1\.md/u)
+  assert.match(successorMarkup, /projectCoordinatorRecoverySuccessorSummary/u)
+  assert.doesNotMatch(successorMarkup, /name="next-output-file-name"/u)
+  assert.doesNotMatch(successorMarkup, /projectCoordinatorApproveRecoveryRetry/u)
 })
 
 test('an awaiting-confirmation Plan renders its Owner action as a default-visible card', () => {
@@ -1384,8 +1479,9 @@ test('file Plan editing can clear the logical declaration and confirmation requi
   const logicalFileTask = {
     ...draftProject.plan.plan.tasks[0]!,
     fileIntent: {
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       inputs: [],
+      dependencyInputs: [],
       output: {
         kind: 'content-space.output-new' as const,
         target: 'project-binding-root' as const,
@@ -1549,6 +1645,28 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   }))
   assert.match(completionMarkup, /data-default-visible-card="project-completion"/u)
   assert.match(completionMarkup, /projectCoordinatorCompleteProject/u)
+
+  const supersededHistoryMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: completionProjectWithSupersededPlanHistory(),
+    currentUserId: 'usr_Owner0000001',
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+  assert.match(supersededHistoryMarkup, /data-default-visible-card="project-completion"/u)
+
+  const incompletePlanMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: completionProjectWithUnmaterializedDependent(),
+    currentUserId: 'usr_Owner0000001',
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+  assert.doesNotMatch(incompletePlanMarkup, /data-default-visible-card="project-completion"/u)
 })
 
 test('decision HCI derives exact review and completion CAS facts from the visible Cloud snapshot', () => {
@@ -1607,7 +1725,7 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
   )
   assert.deepEqual(accepted, {
     projectId: 'prj_ProjectCreated01',
-    taskId: 'tsk_MeetingTask001',
+    taskId: MEETING_PLAN_TASK_ID,
     executionId: 'exe_MeetingExec001',
     resultSubmissionId: 'rsu_MeetingResult01',
     expectedProjectRevision: 8,
@@ -1652,10 +1770,27 @@ test('decision HCI derives exact review and completion CAS facts from the visibl
     acceptedResultSubmissionIds: ['rsu_MeetingResult01'],
     summary: 'Final bounded summary.'
   })
+  assert.deepEqual(projectCoordinatorCompletionInput(
+    completionProjectWithSupersededPlanHistory(),
+    'Current Plan summary.'
+  ), {
+    projectId: 'prj_ProjectCreated01',
+    expectedProjectRevision: 8,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedExecutionAuthorityEpoch: 1,
+    projectPlanId: 'pln_MeetingPlan001',
+    confirmedPlanRevision: 1,
+    acceptedResultSubmissionIds: ['rsu_MeetingResult01'],
+    summary: 'Current Plan summary.'
+  })
   assert.equal(projectCoordinatorCompletionInput({
     ...completionProject,
     records: []
   } as never, 'Final bounded summary.'), null)
+  assert.equal(projectCoordinatorCompletionInput(
+    completionProjectWithUnmaterializedDependent(),
+    'Final bounded summary.'
+  ), null)
 })
 
 function workspaceSection(
@@ -2204,7 +2339,7 @@ function decisionProjectFixture(
     createdAt: timestamp,
     updatedAt: timestamp,
     type: 'task' as const,
-    taskId: 'tsk_MeetingTask001',
+    taskId: MEETING_PLAN_TASK_ID,
     projectId: base.project.projectId,
     createdByCoordinatorAgentId: base.project.coordinatorAgentId,
     title: 'Compare training plans',
@@ -2322,4 +2457,91 @@ function decisionProjectFixture(
       sourceResultSubmissionId: submission.resultSubmissionId
     }] : []
   } as unknown as ProjectCoordinatorProject
+}
+
+function completionProjectWithUnmaterializedDependent(): ProjectCoordinatorProject {
+  const project = decisionProjectFixture('completion')
+  return {
+    ...project,
+    plan: {
+      ...project.plan!,
+      plan: {
+        ...project.plan!.plan,
+        tasks: [...project.plan!.plan.tasks, {
+          workerUserId: 'usr_ProjectMember01',
+          planItemId: 'item_meeting_follow_up',
+          title: 'Follow up accepted decisions',
+          objective: 'Complete the confirmed dependent Plan item.',
+          completionCriteria: ['The dependent result is accepted.'],
+          dependencyPlanItemIds: ['item_meeting_summary'],
+          requiredCapabilityTags: ['meeting.review'],
+          fileIntent: null
+        }]
+      }
+    }
+  }
+}
+
+function completionProjectWithSupersededPlanHistory(): ProjectCoordinatorProject {
+  const project = decisionProjectFixture('completion')
+  const currentTaskView = project.tasks[0]!
+  const currentReview = project.reviews[0]!
+  const currentTaskId = MEETING_PLAN_TASK_ID
+  const currentExecution = {
+    ...currentTaskView.executions[0]!,
+    taskId: currentTaskId
+  }
+  const historicalTaskId = 'tsk_HistoricalPlanTask01'
+  const historicalExecutionId = 'exe_HistoricalPlanExec01'
+  const historicalResultSubmissionId = 'rsu_HistoricalPlanResult01'
+  return {
+    ...project,
+    tasks: [{
+      task: {
+        ...currentTaskView.task,
+        taskId: historicalTaskId,
+        currentExecutionId: historicalExecutionId,
+        title: 'Immutable superseded Plan Task'
+      },
+      executions: [{
+        ...currentExecution,
+        taskId: historicalTaskId,
+        executionId: historicalExecutionId
+      }]
+    }, {
+      task: {
+        ...currentTaskView.task,
+        taskId: currentTaskId
+      },
+      executions: [currentExecution]
+    }],
+    reviews: [{
+      submission: {
+        ...currentReview.submission,
+        taskId: historicalTaskId,
+        executionId: historicalExecutionId,
+        resultSubmissionId: historicalResultSubmissionId
+      },
+      decision: currentReview.decision ? {
+        ...currentReview.decision,
+        taskId: historicalTaskId,
+        executionId: historicalExecutionId,
+        resultSubmissionId: historicalResultSubmissionId
+      } : null
+    }, {
+      submission: {
+        ...currentReview.submission,
+        taskId: currentTaskId
+      },
+      decision: currentReview.decision ? {
+        ...currentReview.decision,
+        taskId: currentTaskId
+      } : null
+    }],
+    records: [{
+      kind: 'observation',
+      projectId: project.project.projectId,
+      sourceResultSubmissionId: historicalResultSubmissionId
+    }, ...project.records]
+  } as ProjectCoordinatorProject
 }
