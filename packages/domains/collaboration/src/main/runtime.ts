@@ -194,6 +194,7 @@ export class CollaborationRuntime {
         }
         if (isWorkerTaskInboxPayload(message.payload)) {
           await tasks.handleInbox(message)
+          await this.refreshCollaborationFact(message)
           return
         }
         if (message.payload.type === 'agent.revoked') {
@@ -281,6 +282,7 @@ export class CollaborationRuntime {
     this.syncTranscriptSubscriptions()
     await connection.activate()
     this.localAgentIdentity = await connection.localAgentId()
+    await this.recoverTaskProjectFacts()
     // Task reconciliation consults canonical cloud state before executing. Run
     // it only after the connection has initialized; an offline activation keeps
     // the runs durable in reconciling state until an explicit recovery/restart.
@@ -883,6 +885,23 @@ export class CollaborationRuntime {
   private async refreshCollaborationFact(message: AgentInboxMessage): Promise<void> {
     const projectId = 'projectId' in message.payload ? message.payload.projectId : undefined
     if (!projectId) return
+    await this.refreshProjectFact(projectId)
+  }
+
+  private async recoverTaskProjectFacts(): Promise<void> {
+    if (this.requireConnection().state().state !== 'connected') return
+    const state = this.store.snapshot()
+    const knownProjectIds = new Set(state.projects.map(({ projectId }) => projectId))
+    const referencedProjectIds = new Set([
+      ...state.pendingTaskOffers.map(({ projectId }) => projectId),
+      ...state.taskRuns.map(({ offer }) => offer.projectId)
+    ])
+    await Promise.allSettled([...referencedProjectIds]
+      .filter((projectId) => !knownProjectIds.has(projectId))
+      .map((projectId) => this.refreshProjectFact(projectId)))
+  }
+
+  private async refreshProjectFact(projectId: string): Promise<void> {
     const response = await this.requireConnection().executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),

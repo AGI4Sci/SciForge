@@ -281,11 +281,17 @@ async function runShellHook(
     stdio: 'pipe'
   })
   const stdout: Buffer[] = []
+  let stdinError: NodeJS.ErrnoException | undefined
   child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
-  child.stdin.end(input)
-  const status = await new Promise<number | null>((resolve) => {
+  child.stdin.once('error', (error) => {
+    stdinError = error as NodeJS.ErrnoException
+  })
+  const statusPromise = new Promise<number | null>((resolve) => {
     child.once('close', resolve)
   })
+  child.stdin.end(input)
+  const status = await statusPromise
+  if (stdinError && stdinError.code !== 'EPIPE') throw stdinError
   return {
     status,
     stdout: Buffer.concat(stdout).toString('utf8').trim()

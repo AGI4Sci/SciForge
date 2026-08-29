@@ -626,6 +626,7 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   const projects = renderToStaticMarkup(
     <ProjectsSection
       projects={snapshot.projects}
+      tasks={snapshot.projects.flatMap((project) => project.tasks)}
       participant={snapshot.participant}
       busy={false}
       onTaskOfferDecision={NOOP}
@@ -656,6 +657,26 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(error, /Typed permission error/u)
 })
 
+test('renders a Worker Task offer even before its local Project fact is hydrated', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const task = snapshot.projects[0]?.tasks[0]
+  assert.ok(task)
+
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[task]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /data-collaboration-unmatched-tasks="true"/u)
+  assert.match(html, /data-task-id="task-1"/u)
+  assert.doesNotMatch(html, /collaborationNoProjects/u)
+})
+
 test('renders explicit claim, User rejection, and local-dismiss controls only for a manual Worker offer', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
@@ -672,6 +693,7 @@ test('renders explicit claim, User rejection, and local-dismiss controls only fo
   const html = renderToStaticMarkup(
     <ProjectsSection
       projects={snapshot.projects}
+      tasks={snapshot.projects.flatMap((project) => project.tasks)}
       participant={snapshot.participant}
       busy={false}
       onTaskOfferDecision={NOOP}

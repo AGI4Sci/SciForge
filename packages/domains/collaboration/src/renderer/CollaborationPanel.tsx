@@ -294,6 +294,7 @@ export function CollaborationPanel({
 }: CollaborationPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [snapshot, setSnapshot] = useState<CollaborationStatusSnapshot | null>(null)
+  const [tasks, setTasks] = useState<readonly CollaborationTaskView[]>([])
   const [loading, setLoading] = useState(true)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -311,10 +312,18 @@ export function CollaborationPanel({
   const challengeExpiresAtRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const refreshTasks = useCallback(async (): Promise<void> => {
+    const taskList = await client.listTasks()
+    setTasks(taskList.tasks)
+  }, [client])
+
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const next = await client.readStatus()
+      const [next] = await Promise.all([
+        client.readStatus(),
+        refreshTasks()
+      ])
       setSnapshot(next)
       setBaseUrl((current) => current || next.connection.baseUrl || '')
       setSelectedProviderKey((current) => current || next.providerOptions[0]?.providerKey || '')
@@ -324,11 +333,30 @@ export function CollaborationPanel({
     } finally {
       setLoading(false)
     }
-  }, [client, t])
+  }, [client, refreshTasks, t])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  useEffect(() => {
+    if (view === 'settings') return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async (): Promise<void> => {
+      try {
+        await refreshTasks()
+      } catch {
+        // Initial refresh reports capability errors; background polling is best-effort.
+      }
+      if (active) timer = setTimeout(() => void poll(), 3_000)
+    }
+    timer = setTimeout(() => void poll(), 3_000)
+    return () => {
+      active = false
+      if (timer) clearTimeout(timer)
+    }
+  }, [refreshTasks, view])
 
   useEffect(() => () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
@@ -885,6 +913,7 @@ export function CollaborationPanel({
               <>
                 <ProjectsSection
                   projects={snapshot.projects}
+                  tasks={tasks}
                   participant={participant}
                   busy={busyKey !== null}
                   onTaskOfferDecision={(taskOfferId, decision) => {
@@ -1888,21 +1917,38 @@ export function InlineConfirmationEditor({
 
 export function ProjectsSection({
   projects,
+  tasks,
   participant,
   busy,
   onTaskOfferDecision
 }: Readonly<{
   projects: readonly ProjectView[]
+  tasks: readonly CollaborationTaskView[]
   participant?: ParticipantView
   busy: boolean
   onTaskOfferDecision: (taskOfferId: string, decision: 'accept' | 'reject' | 'dismiss') => void
 }>): ReactElement {
   const { t } = useTranslation('common')
+  const projectIds = new Set(projects.map((project) => project.projectId))
+  const tasksWithoutProject = tasks.filter((task) => !projectIds.has(task.projectId))
   return (
     <section className={PANEL_SECTION} data-collaboration-section="projects">
       <SectionTitle icon={<Server className="h-4 w-4" />}>
         {t('collaborationProjects')}
       </SectionTitle>
+      {tasksWithoutProject.length ? (
+        <div className="mb-2 space-y-1.5" data-collaboration-unmatched-tasks="true">
+          {tasksWithoutProject.map((task) => (
+            <TaskRow
+              key={task.taskOfferId}
+              task={task}
+              participant={participant}
+              busy={busy}
+              onOfferDecision={onTaskOfferDecision}
+            />
+          ))}
+        </div>
+      ) : null}
       {projects.length ? (
         <div className="space-y-2">
           {projects.map((project) => (
@@ -1930,9 +1976,9 @@ export function ProjectsSection({
                 </div>
                 <div>Cloud revision {project.revision}</div>
               </dl>
-              {project.tasks.length ? (
+              {tasks.some((task) => task.projectId === project.projectId) ? (
                 <div className="space-y-1.5">
-                  {project.tasks.map((task) => (
+                  {tasks.filter((task) => task.projectId === project.projectId).map((task) => (
                     <TaskRow
                       key={task.taskOfferId}
                       task={task}
@@ -1946,7 +1992,10 @@ export function ProjectsSection({
             </article>
           ))}
         </div>
-      ) : <EmptyState>{t('collaborationNoProjects')}</EmptyState>}
+      ) : null}
+      {!projects.length && !tasksWithoutProject.length
+        ? <EmptyState>{t('collaborationNoProjects')}</EmptyState>
+        : null}
     </section>
   )
 }
