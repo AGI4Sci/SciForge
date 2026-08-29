@@ -68,6 +68,8 @@ export const projectCoordinatorMessages = Object.freeze({
       'The Agent returned an invalid Plan structure. No draft was saved; try generating it again.',
     projectCoordinatorCreateProject: 'Create Project',
     projectCoordinatorCreateProjectHint: 'Start a durable Agent collaboration',
+    projectCoordinatorMemberSelectionAfterCreate:
+      'Create the Project first, then select and assign Worker Users while generating or editing its Plan.',
     projectCoordinatorProjectName: 'Project name',
     projectCoordinatorProjectNamePlaceholder: 'e.g. Protein design evidence review',
     projectCoordinatorProjectGoal: 'Project goal',
@@ -246,6 +248,10 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorRecoverySuccessor: 'Recovery ready for reassignment',
     projectCoordinatorRecoverySuccessorSummary: 'The previous execution stays fenced. Use the Task reassignment control to issue the successor offer with a new output filename.',
     projectCoordinatorWorkflowReviewRequired: 'Prepare the one Project workflow from accepted invitations through Team readiness and Task dispatch.',
+    projectCoordinatorWorkflowWaitingForInvitations:
+      'Task dispatch is waiting for invited Worker Users to accept the confirmed Plan.',
+    projectCoordinatorInvitationRequired:
+      'Accept the confirmed Plan and invitation before this Project can dispatch Tasks.',
     projectCoordinatorPrepareWorkflow: 'Prepare Project workflow',
     projectCoordinatorWorkflowFullPlan: 'Complete Project workflow',
     projectCoordinatorWorkflowNoProviderOperations: 'No Provider operations are required; continuation will verify readiness, activate, and dispatch.',
@@ -330,6 +336,8 @@ export const projectCoordinatorMessages = Object.freeze({
       'Agent 返回的 Plan 结构不符合要求，系统未保存草稿，请重新生成。',
     projectCoordinatorCreateProject: '创建 Project',
     projectCoordinatorCreateProjectHint: '发起可持久恢复的 Agent 协作',
+    projectCoordinatorMemberSelectionAfterCreate:
+      '先创建 Project，再在生成或编辑 Plan 时选择并分配 Worker 用户。',
     projectCoordinatorProjectName: 'Project 名称',
     projectCoordinatorProjectNamePlaceholder: '例如：蛋白设计证据复核',
     projectCoordinatorProjectGoal: 'Project 目标',
@@ -508,6 +516,10 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorRecoverySuccessor: '恢复任务可重新派发',
     projectCoordinatorRecoverySuccessorSummary: '旧 execution 保持隔离。请使用任务重新派发控件，以新输出文件名创建后继 Offer。',
     projectCoordinatorWorkflowReviewRequired: '准备唯一 Project 流程：已接受邀请 → Team readiness → 激活 → Task 派发。',
+    projectCoordinatorWorkflowWaitingForInvitations:
+      'Task 派发正在等待受邀 Worker 用户接受已确认的 Plan。',
+    projectCoordinatorInvitationRequired:
+      '接受已确认的 Plan 与邀请后，这个 Project 才能派发 Task。',
     projectCoordinatorPrepareWorkflow: '准备 Project 流程',
     projectCoordinatorWorkflowFullPlan: '完整 Project 流程',
     projectCoordinatorWorkflowNoProviderOperations: '无需 Provider 操作；继续后将验证 readiness、激活并派发。',

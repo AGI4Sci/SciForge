@@ -1575,6 +1575,9 @@ export function ProjectCreateForm({
             <small>{t('projectCoordinatorCreatorRoleHint')}</small>
           </span>
         </div>
+        <p className="text-[11px] leading-relaxed text-ds-muted">
+          {t('projectCoordinatorMemberSelectionAfterCreate')}
+        </p>
         <button disabled={busy} type="submit" className="project-coordinator-primary-button">
           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Zap aria-hidden="true" />}
           {busy ? t('projectCoordinatorWorking') : t('projectCoordinatorCreateProject')}
@@ -2194,6 +2197,11 @@ export function ProjectCoordinatorPlanSection({
               <p className="text-[11px] text-ds-muted">
                 {t('projectCoordinatorWorkerMembers')}: {initialMemberUserIds.join(', ')}
               </p>
+              {missingInitialProviderFacts ? (
+                <p className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300" role="status">
+                  {t('projectCoordinatorCreateProviderFactsMissing')}
+                </p>
+              ) : null}
             </div>
           ) : null}
           {canConfirm ? (
@@ -3286,6 +3294,16 @@ export function ProjectCoordinatorProvisioningSection({
             </div>
           ) : null}
 
+          {canManage && confirmedPlan && invitationsPending ? (
+            <div
+              className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-300"
+              data-default-visible-card="project-workflow-waiting-invitations"
+              role="status"
+            >
+              {t('projectCoordinatorWorkflowWaitingForInvitations')}
+            </div>
+          ) : null}
+
           {plan ? (
             <div
               className="space-y-2 rounded border border-ds-border bg-ds-bg p-2"
@@ -3356,22 +3374,30 @@ export function ProjectCoordinatorProvisioningSection({
                   </div>
                   {membership.userId === currentUserId && membership.state === 'invited' &&
                     project.plan?.plan.state === 'confirmed' ? (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => onAcceptInvitation({
-                          projectId: project.project.projectId,
-                          projectMembershipId: membership.projectMembershipId,
-                          expectedProjectRevision: project.project.revision,
-                          expectedMembershipRevision: membership.revision,
-                          projectPlanId: project.plan!.plan.projectPlanId,
-                          expectedPlanRevision: project.plan!.plan.revision,
-                          planDigest: project.plan!.plan.planDigest
-                        })}
-                        className="rounded bg-ds-accent px-1.5 py-0.5 text-[10px] text-white disabled:opacity-50"
+                      <div
+                        className="space-y-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2"
+                        data-default-visible-card="project-invitation-action"
                       >
-                        {t('projectCoordinatorAcceptInvitation')}
-                      </button>
+                        <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                          {t('projectCoordinatorInvitationRequired')}
+                        </p>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onAcceptInvitation({
+                            projectId: project.project.projectId,
+                            projectMembershipId: membership.projectMembershipId,
+                            expectedProjectRevision: project.project.revision,
+                            expectedMembershipRevision: membership.revision,
+                            projectPlanId: project.plan!.plan.projectPlanId,
+                            expectedPlanRevision: project.plan!.plan.revision,
+                            planDigest: project.plan!.plan.planDigest
+                          })}
+                          className="rounded bg-ds-accent px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                        >
+                          {t('projectCoordinatorAcceptInvitation')}
+                        </button>
+                      </div>
                     ) : null}
                   {canManage && membership.userId !== project.project.ownerUserId &&
                     ['invited', 'pending_membership', 'active'].includes(membership.state) ? (
