@@ -41,6 +41,7 @@ import {
   projectCoordinatorFlowStages,
   projectCoordinatorMeetingPackageSummary,
   projectCoordinatorResultReviewInput,
+  projectCoordinatorSubmitDecision,
   projectCoordinatorTransferCandidates,
   projectCoordinatorWorkspaceNavigationItems,
   projectCoordinatorWorkerPresenceSummary
@@ -1673,6 +1674,10 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   assert.match(reviewMarkup, /data-default-visible-card="result-review"/u)
   assert.match(reviewMarkup, /projectCoordinatorAcceptResult/u)
   assert.match(reviewMarkup, /projectCoordinatorRequestRevision/u)
+  assert.match(reviewMarkup, /<textarea required="" name="instruction"/u)
+  assert.match(reviewMarkup, /<select required="" name="next-user"/u)
+  assert.match(reviewMarkup, /<button[^>]*formNoValidate=""[^>]*value="accept"/u)
+  assert.match(reviewMarkup, /<button[^>]*value="accept"[^>]*name="decision"/u)
 
   const artifactProject = decisionProjectFixture('review')
   artifactProject.reviews[0]!.submission.outputs.push({
@@ -1754,6 +1759,16 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
     onComplete: () => undefined
   }))
   assert.doesNotMatch(incompletePlanMarkup, /data-default-visible-card="project-completion"/u)
+})
+
+test('decision forms read the clicked native submitter instead of omitting its value', () => {
+  assert.equal(projectCoordinatorSubmitDecision({ name: 'decision', value: 'accept' }), 'accept')
+  assert.equal(projectCoordinatorSubmitDecision({
+    name: 'decision',
+    value: 'request_revision'
+  }), 'request_revision')
+  assert.equal(projectCoordinatorSubmitDecision({ name: 'other', value: 'accept' }), '')
+  assert.equal(projectCoordinatorSubmitDecision(null), '')
 })
 
 test('decision HCI derives exact review and completion CAS facts from the visible Cloud snapshot', () => {

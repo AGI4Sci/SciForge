@@ -2775,7 +2775,9 @@ export function ProjectCoordinatorDecisionSection({
               onSubmit={(event) => {
                 event.preventDefault()
                 const values = new FormData(event.currentTarget)
-                const decision = String(values.get('decision') ?? '')
+                const decision = projectCoordinatorSubmitDecision(
+                  (event.nativeEvent as SubmitEvent).submitter
+                )
                 onAnswerHumanNeeded({
                   projectId: request.projectId,
                   humanRequestId: request.humanRequestId,
@@ -2806,7 +2808,9 @@ export function ProjectCoordinatorDecisionSection({
               onSubmit={(event) => {
                 event.preventDefault()
                 const values = new FormData(event.currentTarget)
-                const decision = String(values.get('decision') ?? '')
+                const decision = projectCoordinatorSubmitDecision(
+                  (event.nativeEvent as SubmitEvent).submitter
+                )
                 const workerUserId = String(values.get('next-user') ?? '')
                 const input = projectCoordinatorResultReviewInput(
                   project,
@@ -2860,8 +2864,8 @@ export function ProjectCoordinatorDecisionSection({
                   ))}
                 </div>
               ) : null}
-              <textarea name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-              <select name="next-user" defaultValue="" aria-label={t('projectCoordinatorNextWorkerUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
+              <textarea required name="instruction" aria-label={t('projectCoordinatorRevisionInstruction')} placeholder={t('projectCoordinatorRevisionInstruction')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <select required name="next-user" defaultValue="" aria-label={t('projectCoordinatorNextWorkerUser')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs">
                 <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
                 {project.workerGroups.map((group) => (
                   <option key={group.userId} value={group.userId}>
@@ -2879,6 +2883,7 @@ export function ProjectCoordinatorDecisionSection({
                 task.taskId === review.submission.taskId
               ))?.task.fileIntent ? (
                 <input
+                  required
                   name="next-output-file-name"
                   aria-label={t('projectCoordinatorNextOutputFileName')}
                   placeholder={t('projectCoordinatorNextOutputFileName')}
@@ -2886,7 +2891,7 @@ export function ProjectCoordinatorDecisionSection({
                 />
               ) : null}
               <div className="flex gap-2">
-                <button name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
+                <button formNoValidate name="decision" value="accept" type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorAcceptResult')}</button>
                 <button name="decision" value="request_revision" type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1 disabled:opacity-50">{t('projectCoordinatorRequestRevision')}</button>
               </div>
             </form>
@@ -3014,6 +3019,14 @@ export function projectCoordinatorResultReviewInput(
         nextOfferExpiresAt: revision.nextOfferExpiresAt,
         nextFileIntent
       } : null
+}
+
+export function projectCoordinatorSubmitDecision(submitter: unknown): string {
+  if (!submitter || typeof submitter !== 'object') return ''
+  const candidate = submitter as Readonly<{ name?: unknown; value?: unknown }>
+  return candidate.name === 'decision' && typeof candidate.value === 'string'
+    ? candidate.value
+    : ''
 }
 
 export function projectCoordinatorCompletionInput(
