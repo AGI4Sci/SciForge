@@ -5,7 +5,10 @@ const eventNumericIdSchema = z.number().int().nonnegative().safe()
 const queueIdSchema = z.string().trim().min(1).max(1_024)
 const successEnvelope = {
   result: z.literal('success').optional(),
-  msg: z.string().max(4_096).optional()
+  msg: z.string().max(4_096).optional(),
+  ignored_parameters_unsupported: z.array(
+    z.string().trim().min(1).max(128)
+  ).max(100).optional()
 }
 export const zulipGroupSettingSchema = z.union([
   eventNumericIdSchema,
@@ -158,9 +161,21 @@ export const zulipUpdateMessageEventSchema = z.strictObject({
   is_me_message: z.boolean().optional()
 })
 
+export const zulipReactionEventSchema = z.strictObject({
+  id: z.number().int(),
+  type: z.literal('reaction'),
+  op: z.enum(['add', 'remove']),
+  message_id: eventNumericIdSchema,
+  user_id: eventNumericIdSchema,
+  emoji_name: z.string().trim().min(1).max(256),
+  emoji_code: z.string().trim().min(1).max(256),
+  reaction_type: z.enum(['unicode_emoji', 'realm_emoji', 'zulip_extra_emoji'])
+})
+
 export const zulipRawEventSchema = z.discriminatedUnion('type', [
   zulipMessageEventSchema,
   zulipUpdateMessageEventSchema,
+  zulipReactionEventSchema,
   zulipHeartbeatEventSchema
 ])
 
@@ -230,6 +245,7 @@ export const zulipSubscriptionsResponseSchema = z.strictObject({
     first_message_id: numericIdSchema.nullable().optional(),
     stream_weekly_traffic: z.number().int().nonnegative().safe().nullable().optional(),
     subscriber_count: z.number().int().nonnegative().safe().optional(),
+    subscribers: z.array(eventNumericIdSchema).max(100_000).optional(),
     can_add_subscribers_group: zulipGroupSettingSchema.optional(),
     can_administer_channel_group: zulipGroupSettingSchema.optional(),
     can_create_topic_group: zulipGroupSettingSchema.optional(),
@@ -292,3 +308,4 @@ export type ZulipMessage = z.infer<typeof zulipMessageSchema>
 export type ZulipRawEvent = z.infer<typeof zulipRawEventSchema>
 export type ZulipMessageEvent = z.infer<typeof zulipMessageEventSchema>
 export type ZulipUpdateMessageEvent = z.infer<typeof zulipUpdateMessageEventSchema>
+export type ZulipReactionEvent = z.infer<typeof zulipReactionEventSchema>

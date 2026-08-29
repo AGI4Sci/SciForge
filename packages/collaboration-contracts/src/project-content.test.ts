@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { providerInstanceRefSchema as domainProviderInstanceRefSchema } from '@sciforge/domain-sdk/provider-composition'
 
 import {
   canonicalProvisionedMemberSetBytes,
@@ -7,7 +8,8 @@ import {
   projectContentProvisioningAttestationSchema,
   projectContentProvisioningIntentSchema,
   providerDirectoryPrincipalFactSchema,
-  providerDirectoryPrincipalReferenceSchema
+  providerDirectoryPrincipalReferenceSchema,
+  providerInstanceRefSchema
 } from './project-content.js'
 import { restRequestSchema, restResponseSchema } from './protocol.js'
 import { projectInitialTeamIncludesAuthenticatedOwner } from './cloud-state-protocol.js'
@@ -88,6 +90,23 @@ const attestation = {
 }
 
 describe('Project content provisioning facts', () => {
+  it('keeps the published Provider Instance Ref validator in parity with Domain SDK', () => {
+    const examples = [
+      'provider-instance-alpha',
+      'A_1',
+      'provider.connection.alpha',
+      'cap_local-handle',
+      `portal_${'A'.repeat(32)}`,
+      'ab',
+      'provider instance alpha',
+      'A'.repeat(257)
+    ]
+    for (const example of examples) {
+      expect(providerInstanceRefSchema.safeParse(example).success)
+        .toBe(domainProviderInstanceRefSchema.safeParse(example).success)
+    }
+  })
+
   it('uses the canonical opaque Provider Instance Ref as its single non-authorizing identity', () => {
     expect(providerDirectoryPrincipalReferenceSchema.parse(ownerPrincipal).providerInstance)
       .toEqual(providerInstance)

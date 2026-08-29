@@ -37,7 +37,7 @@
     "test": "vitest run src --no-cache"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "5.0.0",
+    "@sciforge/collaboration-contracts": "5.1.0",
     "@sciforge/domain-sdk": "^0.2.3",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

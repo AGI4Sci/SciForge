@@ -79,10 +79,14 @@ async function activateManagedContainer(
   containerId: string
 ) {
   const endpoint = (await repository.getEndpoint(owner.endpointId))!
+  const agent = (await repository.listAgentsForUser(owner.userId))[0]
+  if (!agent) throw new Error('Expected a registered Agent before activating a managed container fixture')
+  const device = (await repository.getDevice(agent.deviceId))!
   await repository.insertManagedContainer({
     managedContainerId: `mco_${stableDigest(`${owner.userId}\u0000${containerId}`).slice(0, 12)}`,
     ownerUserId: owner.userId,
     humanEndpointId: owner.endpointId,
+    installationId: device.installationId,
     provider: 'zulip',
     realmId: 'realm-fixture',
     ownerProviderUserId: endpoint.providerUserId,
@@ -136,7 +140,7 @@ describe('remote capability approval security boundary', () => {
       allowedSenderUserIds: [owner.userId],
       idempotencyKey: 'idem_projection_remote_approval'
     })
-    await service.createRemoteCapabilityApproval(device, {
+    const created = await service.createRemoteCapabilityApproval(device, {
       projectionId: projection.projectionId,
       runtimeId: 'codex',
       threadId: 'thread-fixed',
@@ -154,38 +158,57 @@ describe('remote capability approval security boundary', () => {
       { kind: 'human_endpoint', id: owner.endpointId }, 0, 10, at.toISOString()
     )
     expect(cards).toHaveLength(1)
-    expect(cards[0]?.payload.text).toContain(reference)
+    expect(cards[0]?.payload.text).toBe([
+      '需审批（5 分钟）：写入工作区中的测试结果',
+      '👍 允许一次 · 👎 拒绝'
+    ].join('\n'))
+    expect(cards[0]?.payload.text).not.toContain('AP1-')
+    expect(cards[0]?.payload.text).not.toContain('回复：')
     expect(JSON.stringify(repository.state.auditEvents)).not.toContain(reference)
+    const createdId = String((created.approval as Record<string, unknown>).remoteApprovalId)
+    await service.confirmRemoteApprovalCard(createdId, 'provider-card-owner')
+    const actionSeeds = await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 10, at.toISOString()
+    )
+    expect(actionSeeds.filter((message) => message.messageType === 'provider.message.action.ensure.outbound'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ payload: expect.objectContaining({
+          providerMessageId: 'provider-card-owner', action: 'allow_once'
+        }) }),
+        expect.objectContaining({ payload: expect.objectContaining({
+          providerMessageId: 'provider-card-owner', action: 'deny_once'
+        }) })
+      ]))
 
-    await expect(service.decideRemoteCapabilityApproval(intruder.endpoint, {
-      approvalReference: reference,
-      decision: 'deny_once',
-      sourceLocator: locator,
+    await expect(service.decideRemoteCapabilityApprovalFromMessageAction(intruder.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-owner',
+      operation: 'add', action: 'deny_once',
       providerEventId: 'provider-event-intruder'
     })).rejects.toMatchObject({ code: 'permission_denied' })
-    await expect(service.decideRemoteCapabilityApproval(owner.endpoint, {
-      approvalReference: reference,
-      decision: 'allow_once',
-      sourceLocator: { ...locator, topicId: 'different-topic' },
+    await expect(service.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'wrong-provider-card',
+      operation: 'add', action: 'allow_once',
       providerEventId: 'provider-event-cross-topic'
+    })).rejects.toMatchObject({ code: 'not_found' })
+    await expect(service.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-owner',
+      operation: 'remove', action: 'allow_once',
+      providerEventId: 'provider-event-remove'
     })).rejects.toMatchObject({ code: 'permission_denied' })
 
     const race = await Promise.allSettled([
-      service.decideRemoteCapabilityApproval(owner.endpoint, {
-        approvalReference: reference,
-        decision: 'allow_once',
-        sourceLocator: locator,
+      service.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+        provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-owner',
+        operation: 'add', action: 'allow_once',
         providerEventId: 'provider-event-allow'
       }),
-      service.decideRemoteCapabilityApproval(owner.endpoint, {
-        approvalReference: reference,
-        decision: 'deny_once',
-        sourceLocator: locator,
+      service.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+        provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-owner',
+        operation: 'add', action: 'deny_once',
         providerEventId: 'provider-event-deny'
       })
     ])
-    expect(race.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
-    expect(race.filter((result) => result.status === 'rejected')).toHaveLength(1)
+    expect(race.filter((result) => result.status === 'fulfilled')).toHaveLength(2)
     const decisions = await repository.pullInbox(
       { kind: 'agent', id: registered.agent.agentId }, 0, 10, at.toISOString()
     )
@@ -198,13 +221,107 @@ describe('remote capability approval security boundary', () => {
       capabilityRequestId: 'capability-request-fixture'
     })
 
+    const secondSameTopicService = new CollaborationService({
+      repository,
+      now,
+      remoteApprovalReference: () => `AP1-${'H'.repeat(20)}`
+    })
+    const secondSameTopic = await secondSameTopicService.createRemoteCapabilityApproval(device, {
+      projectionId: projection.projectionId,
+      runtimeId: 'codex',
+      threadId: 'thread-fixed',
+      turnId: 'turn-same-topic-second',
+      capabilityRequestId: 'capability-request-same-topic-second',
+      desktopApprovalId: 'desktop-approval-same-topic-second',
+      safeSummary: '同一 Topic 的第二张审批卡片',
+      effect: 'workspace-write',
+      remoteEligible: true,
+      expiresAt: new Date(at.getTime() + 300_000).toISOString(),
+      idempotencyKey: 'idem_remote_approval_same_topic_second'
+    })
+    const secondSameTopicId = String(
+      (secondSameTopic.approval as Record<string, unknown>).remoteApprovalId
+    )
+    await secondSameTopicService.confirmRemoteApprovalCard(
+      secondSameTopicId,
+      'provider-card-same-topic-second'
+    )
+    await secondSameTopicService.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture',
+      providerMessageId: 'provider-card-same-topic-second',
+      operation: 'add', action: 'deny_once',
+      providerEventId: 'provider-event-same-topic-second'
+    })
+    const afterSameTopic = await repository.pullInbox(
+      { kind: 'agent', id: registered.agent.agentId }, 0, 10, at.toISOString()
+    )
+    expect(afterSameTopic).toHaveLength(2)
+    expect(afterSameTopic[1]?.payload).toMatchObject({
+      threadId: 'thread-fixed',
+      capabilityRequestId: 'capability-request-same-topic-second',
+      decision: 'deny_once'
+    })
+
+    const secondTopicLocator = {
+      ...locator,
+      topicId: 'topic-approval-second',
+      topicDisplayName: '审批二'
+    }
+    const secondTopicProjection = await service.createProjection(owner.user, {
+      agentId: registered.agent.agentId,
+      humanEndpointId: owner.endpointId,
+      locator: secondTopicLocator,
+      displayName: '第二个固定审批 Session',
+      allowedSenderUserIds: [owner.userId],
+      idempotencyKey: 'idem_projection_remote_approval_second_topic'
+    })
+    const secondTopicService = new CollaborationService({
+      repository,
+      now,
+      remoteApprovalReference: () => `AP1-${'J'.repeat(20)}`
+    })
+    const secondTopicApproval = await secondTopicService.createRemoteCapabilityApproval(device, {
+      projectionId: secondTopicProjection.projectionId,
+      runtimeId: 'codex',
+      threadId: 'thread-fixed-second-topic',
+      turnId: 'turn-second-topic',
+      capabilityRequestId: 'capability-request-second-topic',
+      desktopApprovalId: 'desktop-approval-second-topic',
+      safeSummary: '第二个 Topic 的独立审批卡片',
+      effect: 'workspace-write',
+      remoteEligible: true,
+      expiresAt: new Date(at.getTime() + 300_000).toISOString(),
+      idempotencyKey: 'idem_remote_approval_second_topic'
+    })
+    const secondTopicApprovalId = String(
+      (secondTopicApproval.approval as Record<string, unknown>).remoteApprovalId
+    )
+    await secondTopicService.confirmRemoteApprovalCard(
+      secondTopicApprovalId,
+      'provider-card-second-topic'
+    )
+    await secondTopicService.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-second-topic',
+      operation: 'add', action: 'allow_once', providerEventId: 'provider-event-second-topic'
+    })
+    const afterSecondTopic = await repository.pullInbox(
+      { kind: 'agent', id: registered.agent.agentId }, 0, 10, at.toISOString()
+    )
+    expect(afterSecondTopic).toHaveLength(3)
+    expect(afterSecondTopic[2]?.payload).toMatchObject({
+      projectionId: secondTopicProjection.projectionId,
+      threadId: 'thread-fixed-second-topic',
+      capabilityRequestId: 'capability-request-second-topic',
+      decision: 'allow_once'
+    })
+
     const closedReference = `AP1-${'B'.repeat(20)}`
     const closedService = new CollaborationService({
       repository,
       now,
       remoteApprovalReference: () => closedReference
     })
-    await closedService.createRemoteCapabilityApproval(device, {
+    const closed = await closedService.createRemoteCapabilityApproval(device, {
       projectionId: projection.projectionId,
       runtimeId: 'codex',
       threadId: 'thread-fixed',
@@ -217,11 +334,58 @@ describe('remote capability approval security boundary', () => {
       expiresAt: new Date(at.getTime() + 300_000).toISOString(),
       idempotencyKey: 'idem_remote_approval_closed'
     })
-    await expect(closedService.decideRemoteCapabilityApproval(owner.endpoint, {
-      approvalReference: closedReference,
-      decision: 'allow_once',
-      sourceLocator: locator,
+    const closedId = String((closed.approval as Record<string, unknown>).remoteApprovalId)
+    const desktopOnlyMessages = await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 50, at.toISOString()
+    )
+    const desktopOnlyNotice = desktopOnlyMessages.find((message) => (
+      message.messageType === 'provider.notification.outbound' &&
+      message.payload.remoteApprovalId === closedId
+    ))
+    expect(desktopOnlyNotice?.payload.text)
+      .toBe('需在 SciForge 电脑端审批：不可远程批准的测试操作')
+    expect(desktopOnlyNotice?.payload.text).not.toContain('👍')
+    expect(desktopOnlyNotice?.payload.text).not.toContain('👎')
+    expect(desktopOnlyNotice?.payload.text).not.toContain('AP1-')
+    await closedService.confirmRemoteApprovalCard(closedId, 'provider-card-closed')
+    const afterDesktopOnlyConfirmation = await repository.pullInbox(
+      { kind: 'human_endpoint', id: owner.endpointId }, 0, 50, at.toISOString()
+    )
+    expect(afterDesktopOnlyConfirmation.filter((message) => (
+      message.messageType === 'provider.message.action.ensure.outbound' &&
+      message.payload.remoteApprovalId === closedId
+    ))).toHaveLength(0)
+    await expect(closedService.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-closed',
+      operation: 'add', action: 'allow_once',
       providerEventId: 'provider-event-closed'
+    })).rejects.toMatchObject({ code: 'permission_denied' })
+
+    const legacyService = new CollaborationService({
+      repository,
+      now,
+      remoteApprovalReference: () => `AP1-${'G'.repeat(20)}`
+    })
+    const legacy = await legacyService.createRemoteCapabilityApproval(device, {
+      projectionId: projection.projectionId,
+      runtimeId: 'codex',
+      threadId: 'thread-fixed',
+      turnId: 'turn-legacy-command',
+      capabilityRequestId: 'capability-request-legacy-command',
+      desktopApprovalId: 'desktop-approval-legacy-command',
+      safeSummary: '旧交互版本测试',
+      effect: 'workspace-write',
+      remoteEligible: true,
+      expiresAt: new Date(at.getTime() + 300_000).toISOString(),
+      idempotencyKey: 'idem_remote_approval_legacy_command'
+    })
+    const legacyId = String((legacy.approval as Record<string, unknown>).remoteApprovalId)
+    const legacyStored = repository.state.remoteApprovals.get(legacyId)!
+    repository.state.remoteApprovals.set(legacyId, { ...legacyStored, interactionMode: 'command_v1' })
+    await legacyService.confirmRemoteApprovalCard(legacyId, 'provider-card-legacy-command')
+    await expect(legacyService.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-card-legacy-command',
+      operation: 'add', action: 'allow_once', providerEventId: 'provider-event-legacy-command'
     })).rejects.toMatchObject({ code: 'permission_denied' })
 
     const replyExpiredReference = `AP1-${'C'.repeat(20)}`
@@ -250,10 +414,9 @@ describe('remote capability approval security boundary', () => {
       now: () => new Date(at.getTime() + 61_000),
       remoteApprovalReference: () => `AP1-${'D'.repeat(20)}`
     })
-    const expiredDecision = await afterReplyExpiry.decideRemoteCapabilityApproval(owner.endpoint, {
-      approvalReference: replyExpiredReference,
-      decision: 'deny_once',
-      sourceLocator: locator,
+    const expiredDecision = await afterReplyExpiry.decideRemoteCapabilityApprovalFromMessageAction(owner.endpoint, {
+      provider: 'zulip', realmId: 'realm-fixture', providerMessageId: 'provider-message-reply-expired',
+      operation: 'add', action: 'deny_once',
       providerEventId: 'provider-event-reply-expired'
     })
     expect(expiredDecision.entity).toMatchObject({ status: 'expired' })

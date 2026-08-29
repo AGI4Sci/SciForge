@@ -54,6 +54,7 @@ import {
   zulipUserResponseSchema,
   type ZulipMessage,
   type ZulipMessageEvent,
+  type ZulipReactionEvent,
   type ZulipRawEvent,
   type ZulipUpdateMessageEvent
 } from './schemas.js'
@@ -114,7 +115,13 @@ export type ZulipPollResult = {
   events: ProviderEvent[]
 }
 
-export type ZulipStream = { id: string; name: string }
+export type ZulipStream = {
+  id: string
+  name: string
+  private: boolean
+  webPublic: boolean
+  subscriberIds?: string[]
+}
 export type ZulipTopic = { name: string; maxMessageId?: string }
 
 type ZulipLocatorCoordinates = {
@@ -149,7 +156,9 @@ export const ZULIP_HUMAN_ENDPOINT_PROVIDER_CONTRACT: HumanEndpointProviderContra
     identityChallenge: true,
     directMessages: true,
     managedContainers: false,
-    messageUpdates: true
+    privateContainerDiscovery: true,
+    messageUpdates: true,
+    messageActions: true
   },
   onboarding: {
     realmLabel: 'Zulip server URL',
@@ -206,6 +215,18 @@ function stableLocatorEventId(realmId: string, event: ZulipUpdateMessageEvent): 
     propagateMode: event.propagate_mode ?? null
   }), 'utf8').digest('hex').slice(0, 32)
   return `zulip:${realmHash}:locator:${operationHash}`
+}
+
+function stableReactionEventId(realmId: string, event: ZulipReactionEvent): string {
+  const realmHash = createHash('sha256').update(realmId, 'utf8').digest('hex').slice(0, 24)
+  const actionHash = createHash('sha256').update([
+    stableId(event.message_id),
+    stableId(event.user_id),
+    event.op,
+    event.reaction_type,
+    event.emoji_code.toLocaleLowerCase('en-US')
+  ].join('\u0000'), 'utf8').digest('hex').slice(0, 32)
+  return `zulip:${realmHash}:reaction:${actionHash}`
 }
 
 function stableDiscoveredTopicId(realmId: string, streamId: string, topicName: string): string {
@@ -285,7 +306,6 @@ function assertResolvedLocator(
 const BIND_COMMAND = /^\/bind (\S+)$/u
 const BIND_COMMAND_PREFIX = /^\/bind(?:\s|$)/u
 const HUMAN_ANSWER_CANDIDATE_COMMAND = /^sciforge-answer (hrq_[A-Za-z0-9]{12,64}) ([1-9][0-9]{0,15}) ([\s\S]+)$/u
-const REMOTE_APPROVAL_COMMAND = /^([12])\s+(AP1-[A-Z2-9]{20})$/iu
 
 function bindPairingResponse(text: string): { challengeId: string; challengeResponse: string } | null {
   const match = BIND_COMMAND.exec(text)
@@ -310,18 +330,6 @@ function humanAnswerCandidate(text: string): {
     return null
   }
   return { humanRequestId: match[1]!, requestRevision, answer }
-}
-
-function remoteApprovalResponse(text: string): {
-  approvalReference: string
-  decision: 'allow_once' | 'deny_once'
-} | null {
-  const match = REMOTE_APPROVAL_COMMAND.exec(text.trim())
-  if (!match) return null
-  return {
-    approvalReference: match[2]!.toUpperCase(),
-    decision: match[1] === '1' ? 'allow_once' : 'deny_once'
-  }
 }
 
 function boundedText(raw: string): string {
@@ -798,13 +806,22 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
 
   async listStreams(signal?: AbortSignal): Promise<ZulipStream[]> {
     const response = await this.client.request('api/v1/users/me/subscriptions', {
+      query: new URLSearchParams({ include_subscribers: 'true' }),
       schema: zulipSubscriptionsResponseSchema,
       retry: 'safe',
       ...(signal ? { signal } : {})
     })
     return response.subscriptions
       .filter((stream) => stream.is_archived !== true)
-      .map((stream) => ({ id: stableId(stream.stream_id), name: stream.name.trim() }))
+      .map((stream) => ({
+        id: stableId(stream.stream_id),
+        name: stream.name.trim(),
+        private: stream.invite_only === true,
+        webPublic: stream.is_web_public === true,
+        ...(stream.subscribers
+          ? { subscriberIds: stream.subscribers.map(stableId) }
+          : {})
+      }))
       .sort((left, right) => left.name.localeCompare(right.name))
   }
 
@@ -828,9 +845,20 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     if (request.realmId !== this.realmId) {
       throw new ZulipProviderError('invalid_locator', 'Requested realm does not match this Zulip provider.')
     }
-    if (!request.container || request.container.provider !== 'zulip' || request.container.realmId !== this.realmId) {
+    const exactContainer = request.container
+    if (exactContainer && (exactContainer.provider !== 'zulip' || exactContainer.realmId !== this.realmId)) {
       throw new ZulipProviderError('invalid_locator', 'Requested managed Channel does not match this Zulip provider.')
     }
+    const ownerIdentity = request.ownerIdentity
+    if (!exactContainer && (
+      !ownerIdentity ||
+      ownerIdentity.provider !== 'zulip' ||
+      ownerIdentity.realmId !== this.realmId ||
+      !/^\d+$/u.test(ownerIdentity.providerUserId)
+    )) {
+      throw new ZulipProviderError('invalid_locator', 'Private Channel discovery requires the verified Zulip user identity.')
+    }
+    const bot = exactContainer ? undefined : this.botIdentity ?? await this.authenticate()
     let offset = 0
     if (request.cursor) {
       const decoded = Buffer.from(request.cursor, 'base64url').toString('utf8')
@@ -840,34 +868,50 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       }
     }
     const query = request.query?.normalize('NFC').trim().toLocaleLowerCase('und') ?? ''
+    const streams = exactContainer
+      ? [{
+          id: exactContainer.containerId,
+          name: request.containerDisplayName ?? exactContainer.containerId,
+          private: true,
+          webPublic: false
+        }]
+      : (await this.listStreams()).filter((stream) => (
+          stream.private &&
+          !stream.webPublic &&
+          stream.subscriberIds?.includes(ownerIdentity!.providerUserId) === true &&
+          stream.subscriberIds.includes(bot!.providerUserId)
+        ))
     const discovered: ProviderLocator[] = []
-    const containerId = request.container.containerId
-    for (const topic of await this.listTopics(containerId)) {
-      if (query && !`${request.containerDisplayName ?? ''}\n${topic.name}`.normalize('NFC').toLocaleLowerCase('und').includes(query)) {
-        continue
+    for (const stream of streams) {
+      for (const topic of await this.listTopics(stream.id)) {
+        if (query && !`${stream.name}\n${topic.name}`.normalize('NFC').toLocaleLowerCase('und').includes(query)) continue
+        const coordinates = {
+          provider: 'zulip' as const,
+          realmId: this.realmId,
+          containerId: stream.id,
+          topicDisplayName: topic.name
+        }
+        const existing = await this.resolveStableLocator(coordinates)
+          .catch((error) => {
+            if (isZulipProviderError(error) && error.code === 'locator_missing') return undefined
+            throw error
+          })
+        discovered.push(existing
+          ? {
+              ...existing,
+              containerDisplayName: stream.name.slice(0, 200),
+              topicDisplayName: topic.name.slice(0, 200)
+            }
+          : {
+              type: 'provider_locator',
+              provider: 'zulip',
+              realmId: this.realmId,
+              containerId: stream.id,
+              topicId: stableDiscoveredTopicId(this.realmId, stream.id, topic.name),
+              containerDisplayName: stream.name.slice(0, 200),
+              topicDisplayName: topic.name.slice(0, 200)
+            })
       }
-      const coordinates = {
-        provider: 'zulip' as const,
-        realmId: this.realmId,
-        containerId,
-        topicDisplayName: topic.name
-      }
-      const existing = await this.resolveStableLocator(coordinates)
-        .catch((error) => {
-          if (isZulipProviderError(error) && error.code === 'locator_missing') return undefined
-          throw error
-        })
-      discovered.push(existing ?? {
-        type: 'provider_locator',
-        provider: 'zulip',
-        realmId: this.realmId,
-        containerId,
-        topicId: stableDiscoveredTopicId(this.realmId, containerId, topic.name),
-        ...(request.containerDisplayName
-          ? { containerDisplayName: request.containerDisplayName.slice(0, 200) }
-          : {}),
-        topicDisplayName: topic.name.slice(0, 200)
-      })
     }
     const locators = discovered.slice(offset, offset + request.limit)
     const nextOffset = offset + locators.length
@@ -885,7 +929,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
     const response = await this.client.request('api/v1/register', {
       method: 'POST',
       body: new URLSearchParams({
-        event_types: JSON.stringify(['message', 'update_message']),
+        event_types: JSON.stringify(['message', 'update_message', 'reaction']),
         fetch_event_types: JSON.stringify([]),
         apply_markdown: 'false',
         client_gravatar: 'false',
@@ -895,6 +939,7 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       retry: 'never',
       ...(signal ? { signal } : {})
     })
+    this.emitHealthy('zulip.events.queue_connected', 'Zulip event queue connected.')
     const cursor: ZulipEventCursor = {
       queueId: response.queue_id,
       lastEventId: response.last_event_id,
@@ -1071,6 +1116,16 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       })
     }
     try {
+      if (request.type === 'provider.ensure.message_action') {
+        await this.ensureMessageAction(request.providerMessageId, request.action)
+        return providerSendResultSchema.parse({
+          protocolVersion: CURRENT_PROTOCOL_VERSION,
+          type: 'provider.send.succeeded',
+          clientMessageId: request.clientMessageId,
+          providerMessageId: request.providerMessageId,
+          sentAt: this.now().toISOString()
+        })
+      }
       const content = formatZulipOutboundContent(
         request.text,
         'presentation' in request ? request.presentation : undefined
@@ -1103,6 +1158,36 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
         providerErrorCode: providerError?.code ?? 'provider_unavailable',
         safeMessage: providerError?.message ?? 'Zulip provider operation failed.'
       })
+    }
+  }
+
+  private async ensureMessageAction(
+    providerMessageId: string,
+    action: 'allow_once' | 'deny_once'
+  ): Promise<void> {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(providerMessageId)) {
+      throw new ZulipProviderError('invalid_payload', 'The Zulip message reference is invalid.')
+    }
+    const emoji = action === 'allow_once'
+      ? { name: '+1', code: '1f44d' }
+      : { name: '-1', code: '1f44e' }
+    try {
+      await this.client.request(
+        `api/v1/messages/${encodeURIComponent(providerMessageId)}/reactions`,
+        {
+          method: 'POST',
+          body: new URLSearchParams({
+            emoji_name: emoji.name,
+            emoji_code: emoji.code,
+            reaction_type: 'unicode_emoji'
+          }),
+          schema: zulipUpdateMessageResponseSchema,
+          retry: 'never'
+        }
+      )
+    } catch (error) {
+      if (isZulipProviderError(error) && error.code === 'reaction_already_exists') return
+      throw error
     }
   }
 
@@ -1304,10 +1389,46 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
         ? await this.toCanonicalMessageEvent(event, eventCursor, locatorOverlay)
         : event.type === 'update_message'
           ? await this.toCanonicalLocatorChangedEvent(event, eventCursor, locatorOverlay)
+          : event.type === 'reaction'
+            ? this.toCanonicalMessageActionEvent(event, eventCursor)
           : null
       if (canonical) events.push(canonical)
     }
     return { cursor: { ...cursor, lastEventId }, events }
+  }
+
+  private toCanonicalMessageActionEvent(
+    event: ZulipReactionEvent,
+    eventCursor: string
+  ): ProviderEvent | null {
+    if (event.op !== 'add' || event.reaction_type !== 'unicode_emoji') return null
+    const senderId = stableId(event.user_id)
+    const bot = this.botIdentity
+    if (!senderId || (bot !== null && senderId === bot.providerUserId)) return null
+    const action = event.emoji_code.toLocaleLowerCase('en-US') === '1f44d'
+      ? 'allow_once'
+      : event.emoji_code.toLocaleLowerCase('en-US') === '1f44e'
+        ? 'deny_once'
+        : null
+    if (!action) return null
+    this.rateLimiter.consume(`${this.realmId}\u0000${senderId}`)
+    return providerEventSchema.parse({
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      provider: 'zulip',
+      type: 'provider.message.action',
+      eventId: stableReactionEventId(this.realmId, event),
+      eventCursor,
+      occurredAt: this.now().toISOString(),
+      identity: {
+        type: 'provider_identity',
+        provider: 'zulip',
+        realmId: this.realmId,
+        providerUserId: senderId
+      },
+      providerMessageId: stableId(event.message_id),
+      operation: event.op,
+      action
+    })
   }
 
   private async toCanonicalMessageEvent(
@@ -1382,33 +1503,6 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
         locator,
         providerMessageId: remoteMessageId,
         ...answerCandidate
-      })
-    }
-    const approval = remoteApprovalResponse(text)
-    if (approval) {
-      const locator = await this.resolveLocatorAt({
-        provider: 'zulip',
-        realmId: this.realmId,
-        containerId: streamId,
-        topicDisplayName: topic
-      }, locatorOverlay)
-      return providerEventSchema.parse({
-        protocolVersion: CURRENT_PROTOCOL_VERSION,
-        provider: 'zulip',
-        type: 'provider.remote_approval.responded',
-        eventId,
-        eventCursor,
-        occurredAt: canonicalOccurredAt(message, receivedAt),
-        identity: {
-          type: 'provider_identity',
-          provider: 'zulip',
-          realmId: this.realmId,
-          providerUserId: senderId,
-          displayName: message.sender_full_name.trim().slice(0, 200)
-        },
-        locator,
-        providerMessageId: remoteMessageId,
-        ...approval
       })
     }
     const locator = await this.resolveLocatorAt({
@@ -1600,6 +1694,11 @@ export class ZulipHumanEndpointProvider implements HumanEndpointProvider {
       message,
       ...(detail === undefined ? {} : { detail: redactZulipDiagnostic(detail) })
     })
+  }
+
+  private emitHealthy(code: string, message: string): void {
+    if (!this.logger) return
+    this.logger({ level: 'info', code, message })
   }
 }
 

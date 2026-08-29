@@ -16,6 +16,10 @@ import {
   COLLABORATION_SCHEMA_FINGERPRINT,
   COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
   COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS,
+  COLLABORATION_V15_CATALOG_FINGERPRINTS,
+  COLLABORATION_V16_CATALOG_FINGERPRINTS,
+  COLLABORATION_V17_CATALOG_FINGERPRINTS,
+  COLLABORATION_V19_CATALOG_FINGERPRINTS,
   type CollaborationSchemaRoute,
   collaborationCatalogFingerprint,
   collaborationSchemaFingerprint,
@@ -43,9 +47,7 @@ describe.skipIf(connectionString === undefined).sequential(
           await installRoute(pool, route)
           if (route !== 'fresh-v4') {
             expect(await collaborationCatalogFingerprint(pool), route)
-              .toBe(route === 'current-v19'
-                ? COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
-                : COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route])
+              .toBe(expectedSourceCatalog(route))
           }
 
           await runCollaborationMigrations(pool)
@@ -525,15 +527,16 @@ describe.skipIf(connectionString === undefined).sequential(
       const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
       try {
         for (const sourceRoute of ['public-v5', 'staging-v9'] as const) {
-          for (const [version, forwardCount] of [[11, 1], [12, 2], [13, 3]] as const) {
+          for (const [version, forwardCount] of [
+            [11, 1], [12, 2], [13, 3], [14, 4], [15, 5], [16, 6], [17, 7]
+          ] as const) {
             await installRoute(pool, sourceRoute)
             for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
               await pool.query(await migrationSource(name))
             }
-            const checkpoint = `${sourceRoute}-v${version}` as
-              keyof typeof COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS
+            const checkpoint = `${sourceRoute}-v${version}`
             expect(await collaborationCatalogFingerprint(pool), checkpoint)
-              .toBe(COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS[checkpoint])
+              .toBe(expectedCheckpointCatalog(sourceRoute, version))
 
             await runCollaborationMigrations(pool)
             expect(await collaborationCatalogFingerprint(pool), checkpoint)
@@ -856,7 +859,8 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'current-v16',
   'current-v17',
   'current-v18',
-  'current-v19'
+  'current-v19',
+  'current-v20'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -875,7 +879,8 @@ const FORWARD_MIGRATIONS = [
   '0016_user_targeted_task_offers.sql',
   '0017_claim_created_task_executions.sql',
   '0018_project_membership_invitations.sql',
-  '0019_collaboration_pipeline_fixes.sql'
+  '0019_collaboration_pipeline_fixes.sql',
+  '0020_zulip_phone_link.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -925,7 +930,8 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'current-v16': 6,
     'current-v17': 7,
     'current-v18': 8,
-    'current-v19': 9
+    'current-v19': 9,
+    'current-v20': 10
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))
@@ -1629,6 +1635,30 @@ function expectedCurrentCatalog(route: CollaborationSchemaRoute): string {
   if (route === 'public-v5') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['public-v5']
   if (route === 'staging-v9') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['staging-v9']
   return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
+}
+
+function expectedSourceCatalog(route: Exclude<CollaborationSchemaRoute, 'fresh-v4'>): string {
+  if (route === 'current-v19') return COLLABORATION_V19_CATALOG_FINGERPRINTS['base-v4']
+  if (route === 'current-v20') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
+  return COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]
+}
+
+function expectedCheckpointCatalog(
+  route: 'public-v5' | 'staging-v9',
+  version: 11 | 12 | 13 | 14 | 15 | 16 | 17
+): string {
+  if (version <= 13) {
+    const checkpoint = `${route}-v${version}` as keyof typeof COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS
+    return COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS[checkpoint]
+  }
+  const lineage = route
+  if (version === 14) return {
+    'public-v5': '7413f6ac9d926784b10a84a83cbb80cfbff25be6e7f04ae1efdda2bf6763cf0d',
+    'staging-v9': '398324e912831ec272e33be7af45b97cee186e95f43ed877c40a6ea47988d875'
+  }[lineage]
+  if (version === 15) return COLLABORATION_V15_CATALOG_FINGERPRINTS[lineage]
+  if (version === 16) return COLLABORATION_V16_CATALOG_FINGERPRINTS[lineage]
+  return COLLABORATION_V17_CATALOG_FINGERPRINTS[lineage]
 }
 
 async function migrationSource(name: string): Promise<string> {

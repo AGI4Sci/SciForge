@@ -377,7 +377,10 @@ runuser --user sciforge_collab -- \
   --command='SELECT max(version) FROM sciforge_collaboration.schema_migrations;'
 ```
 
-当前版本预期输出 `19`。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
+当前版本预期输出 `20`。schema v19 保留当前 Collaboration closed-loop pipeline 修复；schema v20
+增加 reaction 审批交互模式、Desktop installation 级托管 Channel 归属，以及手机原生私人 Channel
+的短期发现证明和独占 claim。同一 Zulip 用户在每台电脑上也不能复用已被其他 installation 占用的
+Channel。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
 强行启动。服务使用 768 MiB 内存上限、空
 capability set、只读系统目录、受限地址族；provider 出站只通过 HTTPS，数据库只通过本机 socket。
 
@@ -445,10 +448,10 @@ free -h
 
 ## 11. Zulip 组织、Bot 与手机
 
-如需启用“每用户私人 Channel + 多 Topic + 固定 Session”，必须使用独立 provisioning 身份，不能给
-Generic Bot 添加成员或 Channel 管理权限。配置、schema v3、staging 验收和生产批准闸门见
-[每用户私人 Zulip Channel 运维说明](./zulip-private-channel-provisioning.zh-CN.md)。该功能与 `/bind`
-身份绑定分离：`/bind` 只确认 Zulip 用户归属，不创建项目 Topic，也不改变普通私聊不能控制 Agent 的边界。
+当前客户端要求用户在官方 Zulip 手机端原生创建私人 Channel，并把已验证用户与 Generic Bot 都加入成员。
+Provider 只从 Bot 的订阅中发现 `invite_only=true`、非 Web public 且成员列表同时包含二者的 Channel；Server
+在真正创建 Projection 时才原子写入 installation claim。SciForge 不再向 Desktop 暴露 Channel 创建、修复或
+归档能力。该功能与 `/bind` 身份绑定分离：`/bind` 只确认 Zulip 用户归属，不创建 Channel 或 Topic。
 
 每名真人使用独立 Zulip 账号，不能共用管理员或 Bot 账号。专用 Generic bot 订阅允许协作的 channel；
 Bot 的 API key 只注入云端 provider secret，不再下发到每台桌面。

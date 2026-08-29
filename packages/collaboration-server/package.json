@@ -59,7 +59,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "5.0.0",
+    "@sciforge/collaboration-contracts": "5.1.0",
     "@sciforge/collaboration-provider-zulip": "0.2.5",
     "pg": "^8.16.3",
     "ws": "8.21.1",
