@@ -10,6 +10,7 @@ import type {
 import type {
   ProjectCoordinatorRendererClient
 } from './project-coordinator-capability-client.js'
+import { projectCoordinatorSessionBindingForOrdinarySession } from './session-binding.js'
 
 export const PROJECT_COORDINATOR_COMPOSER_CONTEXT_MAX_CHARS = 48_000
 
@@ -41,9 +42,11 @@ export function createProjectCoordinatorComposerContextProvider(
 
         const projection = await client.readSessionProjection()
         if (request.signal.aborted) return { items: [] }
-        const binding = projection.bindings.find((candidate) => (
-          candidate.runtimeId === runtimeId && candidate.threadId === threadId
-        ))
+        const binding = projectCoordinatorSessionBindingForOrdinarySession(
+          projection,
+          runtimeId,
+          threadId
+        )
         if (!binding) return { items: [] }
 
         const workspace = await client.readWorkspace({ projectId: binding.projectId })

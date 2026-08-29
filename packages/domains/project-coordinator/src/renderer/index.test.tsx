@@ -12,7 +12,10 @@ import {
   WORKBENCH_WORKSPACE_SECTION_LOCATION
 } from '@sciforge/domain-sdk/renderer'
 import { canonicalTaskIdForPlanItem } from '@sciforge/collaboration-contracts'
-import type { ProjectCoordinatorProject } from '../contract.js'
+import type {
+  ProjectCoordinatorProject,
+  ProjectCoordinatorSessionBinding
+} from '../contract.js'
 
 import {
   PROJECT_COORDINATOR_COMPOSER_CONTEXT_CONTRIBUTION,
@@ -32,13 +35,17 @@ import {
   ProjectCoordinatorTransferSection,
   TasksSection,
   WorkersSection,
+  formatProjectCoordinatorDateTime,
   formatRelativeTime,
   projectCoordinatorAgentOperationalState,
   projectCoordinatorActivationTarget,
   projectCoordinatorAttentionSummary,
   projectCoordinatorCompletionInput,
   projectCoordinatorCreatedSelection,
+  projectCoordinatorCurrentSessionBinding,
+  projectCoordinatorEffectiveSessionAccess,
   projectCoordinatorFlowStages,
+  projectCoordinatorIsoFromLocalDateTime,
   projectCoordinatorMeetingPackageSummary,
   projectCoordinatorResultReviewInput,
   projectCoordinatorSubmitDecision,
@@ -497,13 +504,30 @@ test('operational Agent state never collapses online presence into Project eligi
 
 test('workflow signal and attention derive only from canonical Project facts', () => {
   const project = awaitingConfirmationProjectFixture() as ProjectCoordinatorProject
-  assert.deepEqual(projectCoordinatorAttentionSummary(project), {
+  const coordinatorBinding = decisionSessionBinding(project, 'coordinator')
+  assert.deepEqual(projectCoordinatorAttentionSummary(
+    project,
+    project.project.ownerUserId,
+    coordinatorBinding
+  ), {
     planConfirmation: 1,
     humanAnswers: 0,
     resultReviews: 0,
     recoveryActions: 0,
     revisionTasks: 0,
     total: 1
+  })
+  assert.deepEqual(projectCoordinatorAttentionSummary(
+    project,
+    'usr_ProjectMember01',
+    decisionSessionBinding(project, 'worker')
+  ), {
+    planConfirmation: 0,
+    humanAnswers: 0,
+    resultReviews: 0,
+    recoveryActions: 0,
+    revisionTasks: 0,
+    total: 0
   })
   assert.deepEqual(projectCoordinatorFlowStages(project).map(({ id, state }) => ({ id, state })), [
     { id: 'plan', state: 'attention' },
@@ -518,6 +542,49 @@ test('workflow signal and attention derive only from canonical Project facts', (
     Date.parse('2026-08-25T01:08:00.000Z'),
     'en'
   ), '—')
+})
+
+test('review affordances use the exact ordinary Session binding', () => {
+  const project = decisionProjectFixture('review')
+  const coordinatorBinding = decisionSessionBinding(project, 'coordinator')
+  const workerBinding = decisionSessionBinding(project, 'worker')
+  const projection = {
+    schemaVersion: 1 as const,
+    observedAt: project.project.updatedAt,
+    bindings: [coordinatorBinding, workerBinding],
+    pendingActivations: []
+  }
+
+  assert.equal(projectCoordinatorCurrentSessionBinding(projection, {
+    id: coordinatorBinding.threadId,
+    runtimeId: coordinatorBinding.runtimeId
+  }), coordinatorBinding)
+  assert.equal(projectCoordinatorCurrentSessionBinding(projection, {
+    id: coordinatorBinding.threadId
+  }), null)
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    coordinatorBinding
+  ), 'coordinator')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    'usr_ProjectMember01',
+    coordinatorBinding
+  ), 'read_only')
+})
+
+test('local deadline input converts to canonical ISO without losing local wall time', () => {
+  const localValue = '2026-08-31T10:00'
+  const iso = projectCoordinatorIsoFromLocalDateTime(localValue)
+  const parsed = new Date(iso)
+  assert.equal(parsed.getFullYear(), 2026)
+  assert.equal(parsed.getMonth(), 7)
+  assert.equal(parsed.getDate(), 31)
+  assert.equal(parsed.getHours(), 10)
+  assert.equal(parsed.getMinutes(), 0)
+  assert.equal(projectCoordinatorIsoFromLocalDateTime('not-a-date'), '')
+  assert.notEqual(formatProjectCoordinatorDateTime(iso, 'en'), '—')
 })
 
 test('Task assignment renders unpublished, pending User offer, and claimed Agent as distinct Cloud states', () => {
@@ -1650,9 +1717,11 @@ test('file Plan editing can clear the logical declaration and confirmation requi
 })
 
 test('pending HumanNeeded, result review, and eligible completion are default-visible decision cards', () => {
+  const pendingProject = decisionProjectFixture('pending-human')
   const pendingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
-    project: decisionProjectFixture('pending-human'),
+    project: pendingProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(pendingProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1660,11 +1729,29 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
     onComplete: () => undefined
   }))
   assert.match(pendingMarkup, /data-default-visible-card="human-needed"/u)
+  assert.match(pendingMarkup, /data-human-answer-state="actionable"/u)
   assert.match(pendingMarkup, /projectCoordinatorSubmitHumanAnswer/u)
+  assert.match(pendingMarkup, /projectCoordinatorAnswerDeadline/u)
 
+  const waitingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: pendingProject,
+    currentUserId: 'usr_ProjectMember01',
+    sessionBinding: decisionSessionBinding(pendingProject, 'worker'),
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+  assert.match(waitingMarkup, /data-human-answer-state="waiting-other"/u)
+  assert.match(waitingMarkup, /projectCoordinatorWaitingForUserAnswer/u)
+  assert.doesNotMatch(waitingMarkup, /name="answer"/u)
+
+  const reviewProject = decisionProjectFixture('review')
   const reviewMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
-    project: decisionProjectFixture('review'),
+    project: reviewProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(reviewProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1674,10 +1761,27 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   assert.match(reviewMarkup, /data-default-visible-card="result-review"/u)
   assert.match(reviewMarkup, /projectCoordinatorAcceptResult/u)
   assert.match(reviewMarkup, /projectCoordinatorRequestRevision/u)
+  assert.match(reviewMarkup, /projectCoordinatorWaitingForYourReview/u)
   assert.match(reviewMarkup, /<textarea required="" name="instruction"/u)
   assert.match(reviewMarkup, /<select required="" name="next-user"/u)
   assert.match(reviewMarkup, /<button[^>]*formNoValidate=""[^>]*value="accept"/u)
   assert.match(reviewMarkup, /<button[^>]*value="accept"[^>]*name="decision"/u)
+  assert.match(reviewMarkup, /type="datetime-local"[^>]*name="offer-expires-at"/u)
+
+  const workerReviewMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: reviewProject,
+    currentUserId: 'usr_ProjectMember01',
+    sessionBinding: decisionSessionBinding(reviewProject, 'worker'),
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+  assert.match(workerReviewMarkup, /data-result-review-access="read-only"/u)
+  assert.match(workerReviewMarkup, /projectCoordinatorWaitingForCoordinatorReview/u)
+  assert.doesNotMatch(workerReviewMarkup, /projectCoordinatorAcceptResult/u)
+  assert.doesNotMatch(workerReviewMarkup, /projectCoordinatorRequestRevision/u)
 
   const artifactProject = decisionProjectFixture('review')
   artifactProject.reviews[0]!.submission.outputs.push({
@@ -1699,6 +1803,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const artifactMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: artifactProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(artifactProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1709,12 +1814,14 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   assert.match(artifactMarkup, /data-artifact-review-output="0"/u)
   assert.match(artifactMarkup, /projectCoordinatorOpenArtifactInContentSpace/u)
 
+  const askProject = {
+    ...decisionProjectFixture('completion'),
+    records: []
+  } as ProjectCoordinatorProject
   const askMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
-    project: {
-      ...decisionProjectFixture('completion'),
-      records: []
-    } as never,
+    project: askProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(askProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1725,10 +1832,25 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   assert.match(askMarkup, /name="target-user"/u)
   assert.match(askMarkup, /value="usr_ProjectMember01"/u)
   assert.match(askMarkup, /projectCoordinatorAskMember/u)
+  assert.match(askMarkup, /type="datetime-local"[^>]*name="expires-at"/u)
 
+  const workerAskMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: askProject,
+    currentUserId: 'usr_ProjectMember01',
+    sessionBinding: decisionSessionBinding(askProject, 'worker'),
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+  assert.doesNotMatch(workerAskMarkup, /data-default-visible-card="human-needed-create"/u)
+
+  const completionProject = decisionProjectFixture('completion')
   const completionMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
-    project: decisionProjectFixture('completion'),
+    project: completionProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(completionProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1737,10 +1859,15 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   }))
   assert.match(completionMarkup, /data-default-visible-card="project-completion"/u)
   assert.match(completionMarkup, /projectCoordinatorCompleteProject/u)
+  assert.match(completionMarkup, /data-review-history-decision="accept"/u)
+  assert.match(completionMarkup, /projectCoordinatorStatusAccepted/u)
+  assert.match(completionMarkup, /rec_Observation0001/u)
 
+  const supersededHistoryProject = completionProjectWithSupersededPlanHistory()
   const supersededHistoryMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
-    project: completionProjectWithSupersededPlanHistory(),
+    project: supersededHistoryProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(supersededHistoryProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1749,9 +1876,11 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   }))
   assert.match(supersededHistoryMarkup, /data-default-visible-card="project-completion"/u)
 
+  const incompletePlanProject = completionProjectWithUnmaterializedDependent()
   const incompletePlanMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
-    project: completionProjectWithUnmaterializedDependent(),
+    project: incompletePlanProject,
     currentUserId: 'usr_Owner0000001',
+    sessionBinding: decisionSessionBinding(incompletePlanProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
     onAnswerHumanNeeded: () => undefined,
@@ -1759,6 +1888,59 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
     onComplete: () => undefined
   }))
   assert.doesNotMatch(incompletePlanMarkup, /data-default-visible-card="project-completion"/u)
+})
+
+test('revision review history identifies the next Worker and offer deadline', () => {
+  const project = decisionProjectFixture('completion')
+  const timestamp = project.project.updatedAt
+  const acceptedDecision = project.reviews[0]!.decision!
+  const revisionProject = {
+    ...project,
+    reviews: [{
+      ...project.reviews[0]!,
+      decision: {
+        ...acceptedDecision,
+        decision: 'request_revision' as const,
+        instruction: 'Compare the operational risks explicitly.',
+        acceptedProjectRecordId: null,
+        nextTaskOfferId: 'ofr_RevisionOffer001'
+      }
+    }],
+    offers: [{
+      schemaVersion: 1 as const,
+      type: 'task_offer' as const,
+      taskOfferId: 'ofr_RevisionOffer001',
+      projectId: project.project.projectId,
+      taskId: project.tasks[0]!.task.taskId,
+      executionId: null,
+      workerUserId: 'usr_ProjectMember01',
+      offeredByCoordinatorAgentId: project.project.coordinatorAgentId,
+      state: 'pending' as const,
+      reassignmentTaskRevision: project.tasks[0]!.task.revision,
+      offeredAt: timestamp,
+      expiresAt: '2026-08-31T02:00:00.000Z',
+      respondedAt: null,
+      revision: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }]
+  } as unknown as ProjectCoordinatorProject
+
+  const markup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
+    project: revisionProject,
+    currentUserId: project.project.ownerUserId,
+    sessionBinding: decisionSessionBinding(revisionProject, 'coordinator'),
+    busy: false,
+    onCreateHumanNeeded: () => undefined,
+    onAnswerHumanNeeded: () => undefined,
+    onReviewResult: () => undefined,
+    onComplete: () => undefined
+  }))
+
+  assert.match(markup, /data-review-history-decision="request_revision"/u)
+  assert.match(markup, /Compare the operational risks explicitly\./u)
+  assert.match(markup, /Project Member/u)
+  assert.match(markup, /projectCoordinatorOfferAcceptanceDeadline/u)
 })
 
 test('decision forms read the clicked native submitter instead of omitting its value', () => {
@@ -2559,6 +2741,48 @@ function decisionProjectFixture(
       sourceResultSubmissionId: submission.resultSubmissionId
     }] : []
   } as unknown as ProjectCoordinatorProject
+}
+
+function decisionSessionBinding(
+  project: ProjectCoordinatorProject,
+  role: 'coordinator' | 'worker'
+): ProjectCoordinatorSessionBinding {
+  if (role === 'coordinator') {
+    return {
+      schemaVersion: 1,
+      role,
+      projectId: project.project.projectId,
+      principalUserId: project.project.ownerUserId,
+      coordinatorAgentId: project.project.coordinatorAgentId,
+      coordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+      runtimeId: 'codex-runtime',
+      threadId: 'thread-coordinator',
+      boundAt: project.project.updatedAt,
+      access: 'coordinator',
+      fenceReason: null
+    }
+  }
+  const task = project.tasks[0]?.task
+  const execution = project.tasks[0]?.executions[0]
+  return {
+    schemaVersion: 1,
+    role,
+    projectId: project.project.projectId,
+    taskId: task?.taskId ?? MEETING_PLAN_TASK_ID,
+    executionId: execution?.executionId ?? 'exe_MeetingExec001',
+    principalUserId: 'usr_ProjectMember01',
+    assigneeAgentId: execution?.assigneeAgentId ?? 'agt_Worker0000001',
+    assigneeDeviceId: execution?.assigneeDeviceId ?? 'dev_Worker0000001',
+    runtimeId: 'codex-runtime',
+    threadId: 'thread-worker',
+    taskRevision: task?.revision ?? 1,
+    executionRevision: execution?.revision ?? 1,
+    projectExecutionAuthorityEpoch: 1,
+    userTaskAuthorityEpoch: 1,
+    access: 'worker',
+    fenceReason: null,
+    updatedAt: project.project.updatedAt
+  }
 }
 
 function completionProjectWithUnmaterializedDependent(): ProjectCoordinatorProject {
