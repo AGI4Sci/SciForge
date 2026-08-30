@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-opencontent-connector",
-  "version": "5.0.1",
+  "version": "5.0.2",
   "license": "MIT",
   "type": "module",
   "private": false,
