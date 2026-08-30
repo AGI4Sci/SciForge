@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/workspace-host",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -41,10 +41,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/codex-runtime": "0.1.13",
-    "@sciforge/domain-sdk": "0.2.12",
+    "@sciforge/codex-runtime": "0.1.14",
+    "@sciforge/domain-sdk": "0.2.13",
     "@sciforge/domain-life-science-preview": "1.0.1",
-    "@sciforge/workspace-egress": "0.1.13",
+    "@sciforge/workspace-egress": "0.1.14",
     "zod": "^4.4.3"
   },
   "devDependencies": {
