@@ -120,12 +120,23 @@ export function ContentSpacePanel({
   }>>()
   const requestEpoch = useRef(0)
   const mutationEpoch = useRef(0)
+  const enrollmentViewsRef = useRef(enrollmentViews)
+  const initialResourceRef = useRef(initialResource)
   const selectedProviderRef = useRef('')
   const activeDiscovery = useRef<AbortController | undefined>(undefined)
   const activeRead = useRef<AbortController | undefined>(undefined)
   const activeMutation = useRef<AbortController | undefined>(undefined)
   const containerPagination = useRef(newPaginationLedger())
   const entryPagination = useRef(newPaginationLedger())
+  enrollmentViewsRef.current = enrollmentViews
+  initialResourceRef.current = initialResource
+  const initialResourceIdentity = isContentSpaceInitialResource(initialResource)
+    ? JSON.stringify([
+        initialResource.kind,
+        initialResource.resourceRef,
+        initialResource.resource?.semanticRevision ?? null
+      ])
+    : ''
 
   const beginRead = useCallback(() => {
     activeRead.current?.abort()
@@ -408,7 +419,7 @@ export function ContentSpacePanel({
       setStatus('The selected Provider is no longer installed.')
       return
     }
-    const matchingViews = enrollmentViews.filter((view) =>
+    const matchingViews = enrollmentViewsRef.current.filter((view) =>
       view.providerKind === provider.providerKind
     )
     if (matchingViews.length > 1) {
@@ -432,7 +443,6 @@ export function ContentSpacePanel({
   }, [
     checkProviderAccess,
     clearProviderContent,
-    enrollmentViews,
     loadProvider,
     openInitialResource,
     providers,
@@ -472,18 +482,20 @@ export function ContentSpacePanel({
   }, [])
 
   useEffect(() => {
-    if (!providerDiscoveryReady || !isContentSpaceInitialResource(initialResource)) return
+    const currentInitialResource = initialResourceRef.current
+    if (!providerDiscoveryReady ||
+      !isContentSpaceInitialResource(currentInitialResource)) return
     if (providers.length === 0) {
-      activateProvider('', initialResource)
+      activateProvider('', currentInitialResource)
       setStatus('No Content Space Provider is installed.')
       return
     }
     if (providers.length === 1) {
-      activateProvider(providers[0]!.providerInstanceRef, initialResource)
+      activateProvider(providers[0]!.providerInstanceRef, currentInitialResource)
       return
     }
-    activateProvider('', initialResource)
-  }, [activateProvider, initialResource, providerDiscoveryReady, providers])
+    activateProvider('', currentInitialResource)
+  }, [activateProvider, initialResourceIdentity, providerDiscoveryReady, providers])
 
   const selectProvider = (next: string) => {
     activateProvider(
