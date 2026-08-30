@@ -357,7 +357,7 @@ class IdentityAgentCloudRuntime {
           }
         }
       })
-      const url = new URL('v1/events', identity.baseUrl)
+      const url = new URL('v1/events', ensureTrailingSlash(identity.baseUrl))
       url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:'
       socket = this.#webSocketFactory(url.toString(), {
         authorization: `Bearer ${authority.authority}`
@@ -432,11 +432,13 @@ class IdentityAgentCloudRuntime {
     request: RestRequest,
     options?: Readonly<{ signal?: AbortSignal }>
   ): Promise<RestResponse> {
-    return this.#executeWithAgentAuthority(
+    const response = await this.#executeWithAgentAuthority(
       agentIdSchema.parse(agentId),
       request,
       options?.signal
     )
+    if (response.type === 'rest.error') throw cloudFailure(response)
+    return response
   }
 
   async #executeWithAgentAuthority(
@@ -796,7 +798,12 @@ class IdentityAgentCloudRuntime {
     if (body.requestId !== request.requestId) {
       throw new AgentCloudRuntimeError('cloud_response_invalid', 'Cloud response requestId does not match.')
     }
-    if (!response.ok || body.type === 'rest.error') throw cloudFailure(body)
+    if (!response.ok && body.type !== 'rest.error') {
+      throw new AgentCloudRuntimeError(
+        'cloud_response_invalid',
+        'Cloud returned a non-error Agent body with a failing HTTP status.'
+      )
+    }
     return body
   }
 

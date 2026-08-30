@@ -99,7 +99,10 @@ export function createClaudeCodeAgentRuntimeAdapter(
       const result = await service.startThread({
         threadId: input.threadId,
         workspace: input.workspace,
-        title: input.title
+        title: input.title,
+        relation: input.relation,
+        threadSource: input.threadSource,
+        sidebarVisibility: input.sidebarVisibility
       })
       if (!result.ok) throw claudeFailure(result)
       return projectAgentRuntimeThreadSummary(result.thread)

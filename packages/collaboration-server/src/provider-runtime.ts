@@ -87,6 +87,7 @@ type ProviderRuntimeService = Pick<CollaborationService,
   | 'ackInboxMessage'
   | 'recordRejectedBoundary'
   | 'decideRemoteCapabilityApproval'
+  | 'decideRemoteCapabilityApprovalFromMessageAction'
   | 'confirmRemoteApprovalCard'
   | 'enqueueRemoteApprovalFallback'
   | 'expireRemoteCapabilityApprovals'
@@ -94,12 +95,15 @@ type ProviderRuntimeService = Pick<CollaborationService,
 
 type ProviderRuntimeRepository = Pick<CollaborationRepository,
   | 'getEndpoint'
+  | 'getAgent'
+  | 'getDevice'
   | 'getInboxCursor'
   | 'getManagedContainer'
   | 'getManagedContainerForOwner'
   | 'claimManagedContainerJobs'
   | 'completeManagedContainerJob'
   | 'failManagedContainerJob'
+  | 'transaction'
 >
 export type ProviderRuntimeAuthentication = Readonly<{
   resolveProviderIdentity(provider: string, realmId: string, providerUserId: string): Promise<HumanEndpointActor>
@@ -151,23 +155,36 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
   async listLocators(input: {
     actor: AuthContext
     humanEndpointId: string
+    agentId: string
     query?: string
     cursor?: string
     limit: number
   }): Promise<{ locators: ProviderLocator[]; nextCursor?: string }> {
     if (input.actor.kind === 'system') throw new CollaborationServiceError('permission_denied', 'System context cannot discover human endpoint locators.')
+    const ownerUserId = input.actor.userId
     const endpoint = await this.repository.getEndpoint(input.humanEndpointId)
     if (!endpoint || endpoint.status !== 'active' || endpoint.userId !== input.actor.userId) {
       throw new CollaborationServiceError('permission_denied', 'Locator discovery requires an active endpoint owned by the authenticated user.')
     }
+    const agent = await this.repository.getAgent(input.agentId)
+    if (!agent || agent.status !== 'active' || agent.ownerUserId !== input.actor.userId) {
+      throw new CollaborationServiceError('permission_denied', 'Locator discovery requires an active Agent owned by the authenticated user.')
+    }
+    const device = await this.repository.getDevice(agent.deviceId)
+    if (!device || device.status !== 'active' || device.userId !== input.actor.userId) {
+      throw new CollaborationServiceError('credential_revoked', 'Locator discovery requires the Agent\'s active local Device.')
+    }
+    const installationId = device.installationId
     const provider = this.providers.get(endpoint.provider)
     if (!provider) throw new CollaborationServiceError('resource_offline', 'The endpoint provider is not installed or configured.')
     const container = await this.repository.getManagedContainerForOwner(
       input.actor.userId,
       endpoint.provider,
-      endpoint.realmId
+      endpoint.realmId,
+      installationId
     )
-    const requiresManagedContainer = provider.contract.capabilities.managedContainers === true
+    const discoversPrivateContainers = provider.contract.capabilities.privateContainerDiscovery === true
+    const requiresManagedContainer = provider.contract.capabilities.managedContainers === true && !discoversPrivateContainers
     if (requiresManagedContainer && (
       !container ||
       container.humanEndpointId !== endpoint.humanEndpointId ||
@@ -183,7 +200,14 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       protocolVersion: CURRENT_PROTOCOL_VERSION,
       type: 'provider.locator.list',
       realmId: endpoint.realmId,
-      ...(container?.externalContainerId
+      ownerIdentity: {
+        type: 'provider_identity',
+        provider: endpoint.provider,
+        realmId: endpoint.realmId,
+        providerUserId: endpoint.providerUserId,
+        ...(endpoint.displayName ? { displayName: endpoint.displayName } : {})
+      },
+      ...(!discoversPrivateContainers && container?.externalContainerId
         ? { container: managedContainerRef(container), containerDisplayName: container.displayName }
         : {}),
       ...(input.query === undefined ? {} : { query: input.query }),
@@ -193,12 +217,34 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
     if (result.locators.some((locator) => (
       locator.provider !== endpoint.provider ||
       locator.realmId !== endpoint.realmId ||
-      (requiresManagedContainer && locator.containerId !== container?.externalContainerId)
+      (requiresManagedContainer && locator.containerId !== container?.externalContainerId) ||
+      (discoversPrivateContainers && !locator.containerDisplayName?.trim())
     ))) {
       throw new CollaborationServiceError(
         'permission_denied',
         'Provider locator discovery returned a target outside the authenticated user\'s managed Channel.'
       )
+    }
+    if (discoversPrivateContainers) {
+      const observedAt = this.now().toISOString()
+      const expiresAt = new Date(Date.parse(observedAt) + 10 * 60_000).toISOString()
+      const containers = new Map<string, string>()
+      for (const locator of result.locators) containers.set(locator.containerId, locator.containerDisplayName!)
+      await this.repository.transaction(async (tx) => {
+        for (const [externalContainerId, displayName] of containers) {
+          await tx.upsertPrivateContainerDiscovery({
+            ownerUserId,
+            humanEndpointId: endpoint.humanEndpointId,
+            installationId,
+            provider: endpoint.provider,
+            realmId: endpoint.realmId,
+            externalContainerId,
+            displayName,
+            observedAt,
+            expiresAt
+          })
+        }
+      })
     }
     return {
       locators: result.locators,
@@ -297,13 +343,15 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         })
       } else if (event.type === 'provider.remote_approval.responded') {
         await this.handleRemoteApprovalResponded(event, claimEventId)
+      } else if (event.type === 'provider.message.action') {
+        await this.handleMessageAction(event, claimEventId)
       } else if (event.type === 'provider.human_answer.candidate') {
         await this.handleHumanAnswerCandidate(event, claimEventId)
       } else if (event.type === 'provider.locator.changed') {
         await this.service.applyProviderLocatorChange({ previousLocator: event.previousLocator,
           currentLocator: event.currentLocator, providerEventId: claimEventId })
       }
-      // Edits, deletes and reactions are intentionally append-only no-ops in v1.
+      // Edits, deletes and non-action reactions are intentionally append-only no-ops in v1.
       await this.store.completeEvent({
         provider: event.provider,
         realmId,
@@ -326,7 +374,9 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
           actorKey: `provider:${event.provider}:${stableDigest(event.eventId)}` },
         `provider.${event.type}`, error).catch(() => undefined)
       }
-      await this.recordRuntimeFailure(event.provider, error)
+      if (!isExpectedProviderBoundaryRejection(error)) {
+        await this.recordRuntimeFailure(event.provider, error)
+      }
     }
   }
 
@@ -415,6 +465,25 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
       approvalReference: event.approvalReference,
       decision: event.decision,
       sourceLocator: event.locator,
+      providerEventId: claimEventId
+    })
+  }
+
+  private async handleMessageAction(
+    event: Extract<ProviderEvent, { type: 'provider.message.action' }>,
+    claimEventId: string
+  ): Promise<void> {
+    const actor = await this.authentication.resolveProviderIdentity(
+      event.identity.provider,
+      event.identity.realmId,
+      event.identity.providerUserId
+    )
+    await this.service.decideRemoteCapabilityApprovalFromMessageAction(actor, {
+      provider: event.provider,
+      realmId: event.identity.realmId,
+      providerMessageId: event.providerMessageId,
+      operation: event.operation,
+      action: event.action,
       providerEventId: claimEventId
     })
   }
@@ -667,7 +736,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
               : provider.send(request)
           ))
       const persisted = await this.store.readDelivery(endpoint.provider, request.clientMessageId)
-      if (!persisted || (prior && persisted.attemptCount === prior.attemptCount && result.type === 'provider.send.failed')) {
+      if (!persisted || (prior && persisted.attemptCount === prior.attemptCount)) {
         await this.store.recordDelivery(endpoint.provider, request.clientMessageId, result)
       }
       if (result.type === 'provider.send.succeeded' || !result.retryable) {
@@ -716,7 +785,7 @@ export class DefaultCollaborationProviderRuntime implements CollaborationProvide
         ? prior.result
         : providerSendResultSchema.parse(await provider.send(request))
       const persisted = await this.store.readDelivery(request.recipient.provider, request.clientMessageId)
-      if (!persisted || (prior && persisted.attemptCount === prior.attemptCount && result.type === 'provider.send.failed')) {
+      if (!persisted || (prior && persisted.attemptCount === prior.attemptCount)) {
         await this.store.recordDelivery(request.recipient.provider, request.clientMessageId, result)
       }
       if (result.type === 'provider.send.succeeded' || !result.retryable) {
@@ -931,6 +1000,23 @@ async function verifyChallenge(
 function outboundRequest(message: StoredInboxMessage): ProviderSendRequest | ProviderUpdateMessageRequest | undefined {
   const payload = message.payload
   if (
+    message.messageType === 'provider.message.action.ensure.outbound'
+    && payload.type === 'provider.message.action.ensure.outbound'
+    && typeof payload.providerMessageId === 'string'
+    && (payload.action === 'allow_once' || payload.action === 'deny_once')
+  ) {
+    const locator = providerLocatorSchema.safeParse(payload.locator)
+    if (!locator.success) return undefined
+    return {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      type: 'provider.ensure.message_action',
+      locator: locator.data,
+      providerMessageId: payload.providerMessageId,
+      clientMessageId: message.messageId,
+      action: payload.action
+    }
+  }
+  if (
     message.messageType === 'provider.message.update.outbound'
     && payload.type === 'provider.message.update.outbound'
     && typeof payload.providerMessageId === 'string'
@@ -983,6 +1069,7 @@ function eventRealmId(event: ProviderEvent): string | undefined {
     case 'provider.message.edited':
     case 'provider.message.deleted':
     case 'provider.message.reaction':
+    case 'provider.message.action':
     case 'provider.challenge.responded':
     case 'provider.challenge.invalid': return event.identity.realmId
     case 'provider.remote_approval.responded': return event.identity.realmId
@@ -998,6 +1085,7 @@ function eventDedupeKey(event: ProviderEvent): string {
     case 'provider.message.edited':
     case 'provider.message.deleted':
     case 'provider.message.reaction': return event.providerMessageId
+    case 'provider.message.action': return event.eventId
     case 'provider.remote_approval.responded': return event.providerMessageId
     case 'provider.human_answer.candidate': return event.providerMessageId
     case 'provider.locator.changed':
@@ -1010,6 +1098,10 @@ function eventDedupeKey(event: ProviderEvent): string {
 function isRetryableProviderRuntimeError(error: unknown): boolean {
   if (!(error instanceof CollaborationServiceError)) return true
   return error.retryable || error.code === 'resource_offline' || error.code === 'internal_error'
+}
+
+function isExpectedProviderBoundaryRejection(error: unknown): boolean {
+  return error instanceof CollaborationServiceError && error.code === 'authentication_required'
 }
 
 function endpointActor(endpoint: StoredEndpoint): HumanEndpointActor {

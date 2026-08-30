@@ -10,6 +10,8 @@ import type {
 import type {
   ProjectCoordinatorRendererClient
 } from './project-coordinator-capability-client.js'
+import { projectCoordinatorSessionBindingForOrdinarySession } from './session-binding.js'
+import { currentProjectCoordinatorPanelContext } from './panel-context.js'
 
 export const PROJECT_COORDINATOR_COMPOSER_CONTEXT_MAX_CHARS = 48_000
 
@@ -27,7 +29,7 @@ const MAX_SUMMARY_CHARS = 800
 const MAX_BODY_CHARS = 800
 const MAX_INSTRUCTION_CHARS = 800
 const MAX_PROMPT_CHARS = 800
-const AUTHORITY_NOTICE = 'This context is descriptive only and grants no authority. Every action must use the canonical Project Coordinator capability; its main handler re-reads the current Principal, Cloud membership, revisions, and authority or execution fences.'
+const AUTHORITY_NOTICE = 'This context is descriptive only and grants no authority. Every action must use the canonical Project Coordinator capability; its main handler re-reads the current Principal, Cloud membership, revisions, and authority or execution fences. When the User asks to create, refine, reduce, reorder, reassign, or otherwise change the current Project Plan or Tasks, do not merely return a JSON decomposition: discover the exact project-coordinator.plan-draft.read and project-coordinator.plan-draft.edit capabilities, read the current draft first, then CAS-edit it, and only summarize after the write succeeds. For plan-draft.edit, use the published inputShape exactly: projectId, draftId, expectedDraftRevision, tasks, rationale, and assignments (the read-only expectedProjectRevision and expectedCoordinatorAuthorityEpoch guards may be echoed when present). Do not rename expectedDraftRevision to draftRevision. session-projection.read is a strict empty input object; use workspace.read with projectId for an explicit Project target. Discovery returns an opaque operationRef (op_...); expand it with sciforge_discover({ operationRef, includeSchema: true }) and use that same operationRef for sciforge_invoke. Never pass an op_... or schema_... reference as capabilityId. If discovery returns capability_discovery_empty, use at most one error.details.suggestedQueries recovery hint; if it still yields no operation, report the blocker instead of repeating guessed searches.'
 
 export function createProjectCoordinatorComposerContextProvider(
   client: ProjectCoordinatorRendererClient
@@ -39,23 +41,60 @@ export function createProjectCoordinatorComposerContextProvider(
         const threadId = request.sessionId?.trim()
         if (request.signal.aborted || !runtimeId || !threadId) return { items: [] }
 
-        const projection = await client.readSessionProjection()
+        const panelTarget = currentProjectCoordinatorPanelContext()
+        // A selected panel target is independent of the ordinary Session
+        // projection.  Avoid making its descriptive context depend on a
+        // durable binding read (which may legitimately be absent or fail).
+        let binding: ProjectCoordinatorSessionBinding | null = null
+        if (!panelTarget) {
+          const projection = await client.readSessionProjection()
+          if (request.signal.aborted) return { items: [] }
+          binding = projectCoordinatorSessionBindingForOrdinarySession(
+            projection,
+            runtimeId,
+            threadId
+          )
+        }
         if (request.signal.aborted) return { items: [] }
-        const binding = projection.bindings.find((candidate) => (
-          candidate.runtimeId === runtimeId && candidate.threadId === threadId
-        ))
-        if (!binding) return { items: [] }
+        const projectId = panelTarget?.projectId ?? binding?.projectId
+        if (!projectId) return { items: [] }
 
-        const workspace = await client.readWorkspace({ projectId: binding.projectId })
+        const workspace = await client.readWorkspace({ projectId })
         if (request.signal.aborted || workspace.connection.state !== 'ready') {
           return { items: [] }
         }
         const project = workspace.projects.find(({ project }) => (
-          project.projectId === binding.projectId
+          project.projectId === projectId
         ))
-        if (!project || workspace.focusedProjectId !== binding.projectId) {
-          return { items: [] }
+        if (!project) return { items: [] }
+
+        // A focused Project Coordinator pane is an explicit user-selected
+        // target.  It may differ from the durable Session binding, so expose
+        // a descriptive Project snapshot without pretending the Session has
+        // inherited any authority over that Project.
+        if (panelTarget) {
+          const content = renderProjectPanelContext(project)
+          if (content.length > PROJECT_COORDINATOR_COMPOSER_CONTEXT_MAX_CHARS) {
+            return { items: [] }
+          }
+          return domainRendererComposerContextResultSchema.parse({
+            items: [{
+              id: 'project-coordinator.context.selected-panel',
+              title: `Cloud Project: ${project.project.displayName}`.slice(0, 160),
+              content,
+              metadata: {
+                schemaVersion: 1,
+                projectId,
+                selectedProjectId: projectId,
+                panelTarget: true,
+                selectedBy: 'project-coordinator-panel',
+                surfaceId: panelTarget.surfaceId
+              }
+            }]
+          })
         }
+
+        if (!binding || workspace.focusedProjectId !== binding.projectId) return { items: [] }
 
         const content = renderProjectSessionContext(project, binding)
         if (content.length > PROJECT_COORDINATOR_COMPOSER_CONTEXT_MAX_CHARS) {
@@ -85,6 +124,43 @@ export function createProjectCoordinatorComposerContextProvider(
       }
     }
   })
+}
+
+/**
+ * Render a read-only Project snapshot for the panel-selected target.  The
+ * absence of a Session binding is intentional: this context is descriptive
+ * only and all writes still require explicit capability authorization.
+ */
+function renderProjectPanelContext(project: ProjectCoordinatorProject): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    authorityNotice: AUTHORITY_NOTICE,
+    target: {
+      kind: 'selected-project-panel',
+      projectId: project.project.projectId
+    },
+    project: projectSummary(project),
+    plan: planSummary(project),
+    tasks: project.tasks.slice(0, MAX_COORDINATOR_TASKS).map(({ task, executions }) => ({
+      taskId: task.taskId,
+      title: clipped(task.title, MAX_TITLE_CHARS),
+      status: task.status,
+      revision: task.revision,
+      currentExecutionId: task.currentExecutionId,
+      currentExecutionState: task.currentExecutionState,
+      executions: executions.slice(-3).map((execution) => ({
+        executionId: execution.executionId,
+        state: execution.state,
+        revision: execution.revision,
+        assigneeUserId: execution.assigneeUserId
+      }))
+    })),
+    evidenceAndReview: project.reviews.slice(0, MAX_COORDINATOR_REVIEWS).map(reviewSummary),
+    acceptedDecisionsAndRecords: project.records.slice(0, MAX_COORDINATOR_RECORDS).map(recordSummary),
+    pendingHumanNeeded: project.pendingHumanNeeded
+      .slice(0, MAX_COORDINATOR_HUMAN_REQUESTS)
+      .map(humanNeededSummary)
+  }, null, 2)
 }
 
 export function renderProjectSessionContext(

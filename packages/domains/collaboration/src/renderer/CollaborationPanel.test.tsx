@@ -21,6 +21,7 @@ import {
   PairingCopyFeedback,
   PairingStatus,
   ParticipantSection,
+  PhoneLinkSetup,
   ProjectionLocatorSelector,
   ProjectionCard,
   ProjectionGroup,
@@ -37,6 +38,22 @@ import {
 } from './CollaborationPanel.js'
 
 const NOOP = () => undefined
+
+test('keeps first-time Phone Link setup open and completed setup collapsible', () => {
+  const incomplete = renderToStaticMarkup(
+    <PhoneLinkSetup setupComplete={false}><span>setup-fields</span></PhoneLinkSetup>
+  )
+  assert.match(incomplete, /data-phone-link-setup="incomplete"/u)
+  assert.match(incomplete, /aria-expanded="true"/u)
+  assert.match(incomplete, /setup-fields/u)
+
+  const complete = renderToStaticMarkup(
+    <PhoneLinkSetup setupComplete><span>setup-fields</span></PhoneLinkSetup>
+  )
+  assert.match(complete, /data-phone-link-setup="complete"/u)
+  assert.match(complete, /aria-expanded="false"/u)
+  assert.doesNotMatch(complete, /setup-fields|disabled/u)
+})
 
 test('pairing poll schedule honors server retry and stops locally at expiry after rate-limit errors', () => {
   const now = Date.parse('2026-08-15T04:00:00.000Z')
@@ -257,13 +274,12 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
   assert.match(html, /data-projection-status="error"/u)
   assert.match(html, /collaborationDesktopSession.*细胞分析/u)
   assert.match(html, /collaborationPersonalControlOnly/u)
-  assert.match(html, /codex\/thread-stable/u)
+  assert.doesNotMatch(html, /codex\/thread-stable/u)
   assert.match(html, /<details/u)
   assert.doesNotMatch(html, /Researcher A|Laptop A|user-b|collaborationSharedExecutionNotice/u)
   assert.doesNotMatch(html, /collaborationRename|collaborationSaveAllowlist|collaborationAdvancedPermissions/u)
   for (const action of [
     'collaborationPause',
-    'collaborationClose',
     'collaborationRetry'
   ]) {
     assert.match(html, new RegExp(action, 'u'))
@@ -279,7 +295,8 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
       onRetry={NOOP}
     />
   )
-  assert.match(paused, /collaborationRelink/u)
+  assert.match(paused, /collaborationResume/u)
+  assert.doesNotMatch(paused, /collaborationRelink|collaborationClose/u)
 
   const closed = renderToStaticMarkup(
     <ProjectionCard
@@ -290,7 +307,7 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
       onRetry={NOOP}
     />
   )
-  assert.match(closed, /collaborationRestoreToCurrent/u)
+  assert.doesNotMatch(closed, /collaborationRestoreToCurrent|collaborationRelink|collaborationClose/u)
 
   const occupied = renderToStaticMarkup(
     <ProjectionCard
@@ -483,6 +500,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
       managedContainerId: 'mco_123456789012',
       ownerUserId: 'usr_123456789012',
       humanEndpointId: 'hep_123456789012',
+      installationId: 'ins_123456789012',
       provider: 'provider.fixture',
       realmId: 'realm-a',
       stableKey: 'managed-owner-realm-a',
@@ -550,7 +568,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
   assert.match(failedHtml, />\?</u)
 })
 
-test('keeps locator discovery inside the authenticated user managed container', () => {
+test('uses only locators already attested for the authenticated endpoint', () => {
   const owned = {
     type: 'provider_locator' as const,
     provider: 'provider.fixture',
@@ -575,6 +593,7 @@ test('keeps locator discovery inside the authenticated user managed container', 
       managedContainerId: 'mco_123456789012',
       ownerUserId: 'usr_123456789012',
       humanEndpointId: 'hep_123456789012',
+      installationId: 'ins_123456789012',
       provider: 'provider.fixture',
       realmId: 'realm-a',
       stableKey: 'managed-owner-realm-a',
@@ -607,10 +626,10 @@ test('keeps locator discovery inside the authenticated user managed container', 
     managed,
     'hep_123456789012'
   )
-  assert.deepEqual(filtered, [owned])
+  assert.deepEqual(filtered, [owned, crossUser])
   assert.deepEqual(
     filterProjectionLocatorsForManagedContainer([owned, crossUser], [], 'hep_123456789012'),
-    []
+    [owned, crossUser]
   )
   const html = renderToStaticMarkup(
     <ProjectionLocatorSelector locators={filtered} projections={[]}
@@ -618,7 +637,7 @@ test('keeps locator discovery inside the authenticated user managed container', 
       onSelect={NOOP} />
   )
   assert.match(html, /本人 Topic/u)
-  assert.doesNotMatch(html, /其他用户 Topic/u)
+  assert.match(html, /其他用户 Topic/u)
 })
 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {
@@ -626,6 +645,7 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   const projects = renderToStaticMarkup(
     <ProjectsSection
       projects={snapshot.projects}
+      tasks={snapshot.projects.flatMap((project) => project.tasks)}
       participant={snapshot.participant}
       busy={false}
       onTaskOfferDecision={NOOP}
@@ -656,7 +676,27 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(error, /Typed permission error/u)
 })
 
-test('renders explicit claim and local-dismiss controls only for a manual Worker offer', () => {
+test('renders a Worker Task offer even before its local Project fact is hydrated', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const task = snapshot.projects[0]?.tasks[0]
+  assert.ok(task)
+
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[task]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /data-collaboration-unmatched-tasks="true"/u)
+  assert.match(html, /data-task-id="task-1"/u)
+  assert.doesNotMatch(html, /collaborationNoProjects/u)
+})
+
+test('renders explicit claim, User rejection, and local-dismiss controls only for a manual Worker offer', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
@@ -672,6 +712,7 @@ test('renders explicit claim and local-dismiss controls only for a manual Worker
   const html = renderToStaticMarkup(
     <ProjectsSection
       projects={snapshot.projects}
+      tasks={snapshot.projects.flatMap((project) => project.tasks)}
       participant={snapshot.participant}
       busy={false}
       onTaskOfferDecision={NOOP}
@@ -679,6 +720,7 @@ test('renders explicit claim and local-dismiss controls only for a manual Worker
   )
   assert.match(html, /data-task-offer-decision="true"/u)
   assert.match(html, /collaborationTaskAccept/u)
+  assert.match(html, /collaborationTaskReject/u)
   assert.match(html, /collaborationTaskDismiss/u)
 })
 

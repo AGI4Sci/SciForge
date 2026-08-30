@@ -27,8 +27,10 @@ const openContentExternalAccountSchema = z.object({
   name: z.string().trim().min(1).max(256)
 }).strict().readonly()
 
+const openContentSessionTokenSchema = z.string().trim().min(16).max(4096)
+
 const openContentAuthenticatedSessionSchema = z.object({
-  token: z.string().trim().min(16).max(4096)
+  token: openContentSessionTokenSchema
 }).strict().readonly()
 
 type OpenContentExternalAccount = z.infer<typeof openContentExternalAccountSchema>
@@ -48,7 +50,7 @@ const publicKeyResponseSchema = z.object({
 const loginResponseSchema = z.object({
   result: z.number().int(),
   msg: z.string().max(1024),
-  data: z.string().trim().min(16).max(4096),
+  data: z.unknown(),
   clientId: z.string().max(4096).nullable()
 }).strict()
 
@@ -454,7 +456,11 @@ export function createOpenContentClient(options: Readonly<{
           'provider_contract_violation'
         )
         requireBusinessSuccess(loginEnvelope.result, 'unauthorized')
-        const token = loginEnvelope.data
+        const token = parseProviderResponse(
+          openContentSessionTokenSchema,
+          loginEnvelope.data,
+          'provider_contract_violation'
+        )
 
         const validityResponse = await requestJson({
           baseUrl,

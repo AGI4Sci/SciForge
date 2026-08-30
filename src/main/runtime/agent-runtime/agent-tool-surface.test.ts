@@ -7,6 +7,7 @@ import {
   filterAgentRuntimeToolSurface,
   nativeAgentToolExecutionMetadata,
   nativeVisualResourceIdentity,
+  modelVisibleAgentRuntimeToolFailure,
   normalizeNativeVisualToolError,
   scopeAgentRuntimeToolSurface
 } from './agent-tool-surface'
@@ -345,6 +346,64 @@ describe('normalizeNativeVisualToolError', () => {
       providerStage: 'vision_translation',
       resourceIdentity: `visual:${refs.snapshot}`
     })
+  })
+})
+
+describe('modelVisibleAgentRuntimeToolFailure', () => {
+  it('publishes bounded structured discovery recovery hints separately from the error message', () => {
+    const text = modelVisibleAgentRuntimeToolFailure('sciforge_discover', {
+      code: 'capability_discovery_empty',
+      message: 'No capability matched the discovery request.',
+      failureClass: 'capability_not_found',
+      retryable: true,
+      recovery: {
+        action: 'use_suggested_query',
+        instruction: 'Use one suggested query only.'
+      },
+      details: {
+        suggestedQueries: [{ text: 'project plan', limit: 8 }],
+        huge: 'x'.repeat(10_000)
+      }
+    })
+    const payload = JSON.parse(text) as {
+      error: {
+        message: string
+        details: { suggestedQueries: Array<{ text: string }>; huge: string }
+        recovery: { action: string }
+      }
+    }
+    expect(payload.error.message).toBe('No capability matched the discovery request.')
+    expect(payload.error.recovery.action).toBe('use_suggested_query')
+    expect(payload.error.details.suggestedQueries).toEqual([{ text: 'project plan', limit: 8 }])
+    expect(payload.error.details.huge).toHaveLength(600)
+    expect(text.length).toBeLessThan(2_000)
+  })
+
+  it('publishes bounded capability input validation issues so the model can repair writes', () => {
+    const text = modelVisibleAgentRuntimeToolFailure('sciforge_invoke', {
+      code: 'invalid_input',
+      message: 'Input for project-coordinator.plan-draft.edit failed validation.',
+      details: {
+        issues: [
+          { path: ['expectedDraftRevision'], message: 'Required' },
+          { path: ['assignments'], message: 'Array must contain at least 1 element(s)' }
+        ]
+      }
+    })
+    const payload = JSON.parse(text) as {
+      error: {
+        code: string
+        details: { issues: Array<{ path: string[]; message: string }> }
+        recovery: { action: string; instruction: string }
+      }
+    }
+    expect(payload.error.code).toBe('invalid_input')
+    expect(payload.error.recovery.action).toBe('correct_arguments')
+    expect(payload.error.recovery.instruction).toContain('inputShape')
+    expect(payload.error.details.issues).toEqual([
+      { path: ['expectedDraftRevision'], message: 'Required' },
+      { path: ['assignments'], message: 'Array must contain at least 1 element(s)' }
+    ])
   })
 })
 

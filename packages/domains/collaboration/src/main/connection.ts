@@ -185,16 +185,22 @@ export class CollaborationConnection {
   }
 
   async configure(baseUrl: string): Promise<void> {
-    await this.disconnect()
     const status = this.requireIdentityReady()
     if (normalizeCollaborationBaseUrl(baseUrl) !== normalizeCollaborationBaseUrl(status.baseUrl)) {
       throw new Error('Collaboration Cloud must use the active Identity Cloud endpoint.')
     }
+    await this.disconnect()
     await this.options.settings.configure(status.baseUrl)
     this.connectionState = { state: 'disconnected' }
-    await this.refreshProviderCatalog()
-    const agent = await this.ensureLocalAgent()
-    await this.refreshParticipant(agent.ownerUserId)
+    try {
+      await this.refreshProviderCatalog()
+      const agent = await this.ensureLocalAgent()
+      await this.refreshParticipant(agent.ownerUserId)
+      await this.connect()
+    } catch (error) {
+      this.recordError(error, true)
+      throw error
+    }
   }
 
   async applyConnectionAction(input: CollaborationConnectionConnectInput): Promise<void> {
@@ -308,6 +314,7 @@ export class CollaborationConnection {
 
   async ensureLocalAgent(): Promise<AgentNode> {
     const identity = this.requireIdentityReady()
+    await this.options.store.prepareForAuthenticatedUser(identity.userId)
     const state = this.options.store.snapshot()
     if (state.user && state.user.userId !== identity.userId) {
       throw new Error('Cached collaboration state belongs to another OIDC User.')
@@ -419,13 +426,16 @@ export class CollaborationConnection {
           key: 'providerUserId',
           label: provider.onboarding.accountLabel,
           required: true,
-          placeholder: 'Exact provider account identity'
+          placeholder: provider.provider === 'zulip'
+            ? 'Numeric user ID of the Zulip account to pair'
+            : 'Exact provider account identity'
         }
       ]
     }))
   }
 
   async refreshEndpointLocators(humanEndpointId: string): Promise<number> {
+    const agentId = await this.requireLocalAgentId()
     const locators: Array<{ humanEndpointId: string; locator: ProviderLocator }> = []
     let cursor: string | undefined
     let pageCount = 0
@@ -435,6 +445,7 @@ export class CollaborationConnection {
         requestId: collaborationRequestId(),
         type: 'endpoint.locator.list',
         humanEndpointId,
+        agentId,
         ...(cursor ? { cursor } : {}),
         limit: 500
       }))
@@ -457,10 +468,12 @@ export class CollaborationConnection {
   }
 
   async refreshManagedContainers(): Promise<readonly ManagedProviderContainer[]> {
+    const agentId = await this.requireLocalAgentId()
     const response = await this.executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
-      type: 'managed_container.list'
+      type: 'managed_container.list',
+      agentId
     }))
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.collection' || response.items.some((item) => item.type !== 'managed_provider_container')) {

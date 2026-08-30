@@ -37,6 +37,8 @@ import {
 import {
   COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
   COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
+  type CoordinatorCloudCommand,
+  type CoordinatorCloudCommandReplayValidator,
   type CoordinatorCloudCommandService
 } from './coordinator-cloud-command.js'
 import {
@@ -156,7 +158,7 @@ test('global collaboration mutations satisfy the production broker contract with
     },
     [COLLABORATION_CAPABILITY_IDS.taskOfferDecide]: {
       taskOfferId: TEST_IDS.taskOfferId,
-      decision: 'dismiss'
+      decision: 'reject'
     },
     [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
     [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
@@ -173,6 +175,15 @@ test('global collaboration mutations satisfy the production broker contract with
   assert.equal(definitions.some(({ id }) => (
     id === 'collaboration.participant.primary-agent.select'
   )), false)
+  assert.equal(definitions.find(({ id }) => (
+    id === COLLABORATION_CAPABILITY_IDS.taskOfferDecide
+  ))?.version, '1.1.0')
+  for (const id of [
+    COLLABORATION_CAPABILITY_IDS.statusRead,
+    COLLABORATION_CAPABILITY_IDS.taskList
+  ]) {
+    assert.equal(definitions.find((definition) => definition.id === id)?.version, '1.1.0')
+  }
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)
@@ -198,7 +209,8 @@ test('the Collaboration entry publishes one Coordinator command service backed b
       state: 'ready',
       baseUrl: 'https://collaboration.example.test',
       userId: TEST_IDS.userId,
-      deviceId: TEST_IDS.deviceId
+      deviceId: TEST_IDS.deviceId,
+      deviceRevision: 1
     }),
     execute: async (request) => ({
       contractVersion: 1,
@@ -240,6 +252,14 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     executeCoordinatorCloudCommand: async (command: unknown) => {
       coordinatorCommand = command
       return fenceResponse
+    },
+    resumeCoordinatorCloudCommand: async (
+      _idempotencyKey: string,
+      validateCommand: CoordinatorCloudCommandReplayValidator
+    ) => {
+      if (!coordinatorCommand) return null
+      validateCommand(coordinatorCommand as CoordinatorCloudCommand)
+      return { command: coordinatorCommand, response: fenceResponse }
     },
     listWorkerSessionBindings: () => []
   } as unknown as CollaborationRuntime
@@ -289,6 +309,10 @@ test('the Collaboration entry publishes one Coordinator command service backed b
     reason: 'Coordinator changed the synthetic assignment.'
   }
   await assert.rejects(coordinatorService.execute(command), /runtime is not active/u)
+  await assert.rejects(
+    coordinatorService.resume(command.idempotencyKey, () => undefined),
+    /runtime is not active/u
+  )
   const disposeCoordinatorInbox = coordinatorService.subscribe(async () => undefined)
   assert.throws(
     () => coordinatorService.subscribe(async () => undefined),
@@ -342,6 +366,12 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   assert.equal(typeof runtimeOptions?.coordinatorInboxHandler?.(), 'function')
   assert.deepEqual(await coordinatorService.execute(command), fenceResponse)
   assert.deepEqual(coordinatorCommand, command)
+  assert.deepEqual(await coordinatorService.resume(command.idempotencyKey, (replayed) => {
+    assert.deepEqual(replayed, command)
+  }), {
+    command,
+    response: fenceResponse
+  })
   assert.deepEqual(workerService.listBindings(), [])
   assert.equal(typeof deactivate, 'function')
   await deactivate?.()

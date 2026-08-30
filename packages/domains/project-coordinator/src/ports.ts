@@ -55,7 +55,9 @@ import type {
 
 import {
   projectCoordinatorProjectCreateInputSchema,
-  projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorProjectCreateReceiptSchema,
+  projectCoordinatorProjectDeleteInputSchema,
+  projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorCompleteInputSchema,
@@ -73,7 +75,9 @@ import {
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorProject,
   type ProjectCoordinatorProjectCreateInput,
-  type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorProjectCreateReceipt,
+  type ProjectCoordinatorProjectDeleteInput,
+  type ProjectCoordinatorProjectDeleteResult,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorCompleteInput,
@@ -113,11 +117,7 @@ export type ProjectCoordinatorWorkspacePort = Readonly<{
 }>
 
 export type ProjectCoordinatorCloudWorkspacePort = ProjectCoordinatorWorkspacePort & Readonly<{
-  createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
-  completeProjectCreate(
-    input: ProjectCoordinatorProjectCreateInput,
-    result: ProjectCoordinatorProjectCreateResult
-  ): Promise<void>
+  createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateReceipt>
 }>
 
 export type ProjectCoordinatorPlanPort = Readonly<{
@@ -141,6 +141,11 @@ export type ProjectCoordinatorPlanPort = Readonly<{
 }>
 
 export type ProjectCoordinatorActionPort = Readonly<{
+  deleteProject(
+    input: ProjectCoordinatorProjectDeleteInput,
+    idempotencyKey: string,
+    authorizeFirstAttempt: () => Promise<void>
+  ): Promise<ProjectCoordinatorProjectDeleteResult>
   transferCoordinator(
     input: ProjectCoordinatorTransferInput,
     idempotencyKey: string
@@ -200,8 +205,7 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
   readCoordinatorTransferFeedback?: (
     projectId: string
   ) => Promise<ProjectCoordinatorTransferFeedback | null>
-  createIntentState?: Pick<ProjectCoordinatorStateStore,
-    'resolveProjectCreateIntent' | 'recordProjectCreateSucceeded'>
+  createIntentState?: Pick<ProjectCoordinatorStateStore, 'resolveProjectCreateIntent'>
   requestId?: () => `req_${string}`
   now?: () => Date
 }>): ProjectCoordinatorCloudWorkspacePort {
@@ -309,25 +313,11 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       if (response.project.ownerUserId !== identity.userId) {
         throw new Error('Project create did not preserve the current Agent owner authority.')
       }
-      return projectCoordinatorProjectCreateResultSchema.parse({
+      return projectCoordinatorProjectCreateReceiptSchema.parse({
         createIntentId,
         createdProjectId: response.project.projectId,
         workspace: await readWorkspace({ projectId: response.project.projectId })
       })
-    },
-    completeProjectCreate: async (rawInput, rawResult) => {
-      if (!options.createIntentState) return
-      const input = projectCoordinatorProjectCreateInputSchema.parse(rawInput)
-      const result = projectCoordinatorProjectCreateResultSchema.parse(rawResult)
-      const identity = options.transport.status()
-      if (identity.state !== 'ready') {
-        throw new Error('Project create completion requires the authenticated Owner.')
-      }
-      await options.createIntentState.recordProjectCreateSucceeded(
-        identity.userId,
-        { ...input, createIntentId: result.createIntentId },
-        result.createdProjectId
-      )
     }
   })
 }
@@ -343,6 +333,11 @@ const generatedPlanFileIntentSelectionSchema = z.object({
     destinationName: taskFileDestinationNameSchema,
     expectedSemanticRevision: z.string().trim().min(1).max(256).nullable(),
     expectedMediaType: z.string().trim().min(1).max(256).nullable()
+  }).strict()).max(100),
+  dependencyInputs: z.array(z.object({
+    planItemId: projectPlanTaskDeclarationSchema.shape.planItemId,
+    outputIndex: z.number().int().min(0).max(99),
+    destinationName: taskFileDestinationNameSchema
   }).strict()).max(100),
   output: z.object({
     fileName: taskFileDestinationNameSchema,
@@ -386,7 +381,7 @@ function generatedTaskFileIntent(options: Readonly<{
   }>[]
 }>) {
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     inputs: options.selection.inputs.map((input) => {
       const source = options.fileSourceInputs.find(
         ({ sourceInputIndex }) => sourceInputIndex === input.sourceInputIndex
@@ -402,6 +397,7 @@ function generatedTaskFileIntent(options: Readonly<{
         expectedMediaType: input.expectedMediaType
       }
     }),
+    dependencyInputs: options.selection.dependencyInputs,
     output: {
       kind: 'content-space.output-new' as const,
       target: 'project-binding-root' as const,
@@ -493,6 +489,13 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   const now = options.now ?? (() => new Date())
   const draftId = options.draftId ?? (() => `draft_${randomUUID().replaceAll('-', '')}`)
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
+  // Generation requests may outlive one another when a caller retries from a
+  // different surface. Keep the ordering in the port so an older completion
+  // cannot replace a newer valid draft. Invalid attempts do not advance this
+  // committed watermark and therefore never erase an existing valid draft.
+  const generationSequenceByProject = new Map<string, number>()
+  const committedGenerationSequenceByProject = new Map<string, number>()
+  const generationCommitQueueByProject = new Map<string, Promise<void>>()
   const readProject = async (projectId: string) => {
     const workspace = await options.workspace.readWorkspace({ projectId })
     if (workspace.connection.state !== 'ready') {
@@ -506,6 +509,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   return Object.freeze({
     generateDraft: async (rawInput) => {
       const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(rawInput)
+      const generationSequence = (generationSequenceByProject.get(input.projectId) ?? 0) + 1
+      generationSequenceByProject.set(input.projectId, generationSequence)
       const { project, observedAt } = await readProject(input.projectId)
       const candidates = project.workerGroups
         .map((group) => {
@@ -557,12 +562,15 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
             `Exact file input choices: ${JSON.stringify(fileSourceInputs)}`,
             `Worker User candidates: ${JSON.stringify(candidates)}`,
             'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks in eligibleTaskScopes, a fileIntent requires file_tasks in eligibleTaskScopes, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
-            'The final response is constrained by the supplied JSON Schema. Return exactly one object with tasks and rationale.',
+            'Capability tags are executable requirements, not topical labels. Copy them character-for-character from the selected runtimeProfiles capabilityTags list; never invent tags such as protein-engineering, product-scoping, agent-architecture, or evaluation. If a task needs no additional capability beyond the listed runtime profile, use an empty requiredCapabilityTags array.',
+            'The final response is constrained by the supplied JSON Schema. Return exactly one object with tasks and rationale, with no Markdown or code fences.',
             'Every task must contain only planItemId, title, objective, completionCriteria, dependencyPlanItemIds, requiredCapabilityTags, and fileIntent.',
+            'completionCriteria must always be a non-empty JSON array of one or more strings, never a single string.',
             'Use a unique stable item_* planItemId. Dependencies must reference another item in this same response. Capability tags must describe actual requirements and use the lowercase tag format.',
             'Do not emit id, description, assignee, dependencies, status, or any other convenience fields. Worker User assignment is a later Human decision.',
-            'A fileIntent is a logical Plan declaration only. Never include a bindingRevision; Cloud binds the created Task to the current active Project Content root when its Offer is committed.',
-            'A non-null fileIntent selects existing inputs only by sourceInputIndex from Exact file input choices. Never copy or invent a locator identity. Use an empty inputs array for an output-only task.'
+            'A fileIntent is a logical Plan declaration selection containing only inputs, dependencyInputs, and output; the host materializes schemaVersion 2. Never include a schemaVersion or bindingRevision; Cloud binds the created Task to the current active Project Content root when its Offer is committed.',
+            'A non-null fileIntent selects existing inputs only by sourceInputIndex from Exact file input choices. Never copy or invent a locator identity.',
+            'dependencyInputs must be an array, using [] when none are needed. Each entry selects an outputIndex from a direct dependencyPlanItemId whose fileIntent is non-null. Do not select transitive dependencies. Keep all static and dependency destinationName values unique and use at most 100 total inputs.'
           ].join('\n'),
           outputSchema: generatedPlanOutputJsonSchema(),
           ...(input.modelId ? { model: input.modelId } : {}),
@@ -639,32 +647,62 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           { cause }
         )
       }
-      const timestamp = now().toISOString()
-      const next = projectCoordinatorPlanDraftSchema.parse({
-        draftId: draftId(),
-        draftRevision: 1,
-        projectId: project.project.projectId,
-        expectedProjectRevision: project.project.revision,
-        expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
-        supersedesProjectPlanId: project.plan?.plan.projectPlanId ?? null,
-        sourceInputLocators: input.sourceInputLocators,
-        tasks: content.tasks,
-        rationale: content.rationale,
-        runtimeProvenance: {
-          runtimeId: generated.runtimeId,
-          modelId: input.modelId,
-          generatedByCoordinatorAgentId: project.project.coordinatorAgentId,
-          generatedAt: timestamp
-        },
-        assignments: content.tasks.map(({ planItemId }) => ({
-          planItemId,
-          workerUserId: null,
-          recommendationReason: null
-        })),
-        createdAt: timestamp,
-        updatedAt: timestamp
-      })
-      return state.writeDraft(next, null)
+      // Serialize only the durable commit. This closes the race where two
+      // successful generations both read the same draft revision before the
+      // CAS write; the queue guarantees that the newest successful sequence
+      // either supersedes the older result or observes it as stale.
+      const previousCommit = generationCommitQueueByProject.get(input.projectId) ?? Promise.resolve()
+      const commit = previousCommit
+        .catch(() => undefined)
+        .then(async () => {
+          const committedGenerationSequence = committedGenerationSequenceByProject.get(input.projectId) ?? 0
+          if (committedGenerationSequence > generationSequence) {
+            const current = await state.readDraft(input.projectId)
+            if (current) return current
+            throw new ProjectCoordinatorPlanGenerationError(
+              'runtime_execution_failed',
+              'A newer Plan generation already completed; the older result was discarded.'
+            )
+          }
+          const currentDraft = await state.readDraft(input.projectId)
+          const timestamp = now().toISOString()
+          const next = projectCoordinatorPlanDraftSchema.parse({
+            draftId: draftId(),
+            draftRevision: (currentDraft?.draftRevision ?? 0) + 1,
+            projectId: project.project.projectId,
+            expectedProjectRevision: project.project.revision,
+            expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+            supersedesProjectPlanId: project.plan?.plan.projectPlanId ?? null,
+            sourceInputLocators: input.sourceInputLocators,
+            tasks: content.tasks,
+            rationale: content.rationale,
+            runtimeProvenance: {
+              runtimeId: generated.runtimeId,
+              modelId: input.modelId,
+              generatedByCoordinatorAgentId: project.project.coordinatorAgentId,
+              generatedAt: timestamp
+            },
+            assignments: content.tasks.map(({ planItemId }) => ({
+              planItemId,
+              workerUserId: null,
+              recommendationReason: null
+            })),
+            createdAt: timestamp,
+            updatedAt: timestamp
+          })
+          const written = await state.writeDraft(next, currentDraft?.draftRevision ?? null)
+          committedGenerationSequenceByProject.set(input.projectId, generationSequence)
+          return written
+        })
+      const queueTail = commit.then(() => undefined, () => undefined)
+      generationCommitQueueByProject.set(input.projectId, queueTail)
+      try {
+        return await commit
+      } finally {
+        if (generationCommitQueueByProject.get(input.projectId) === queueTail) {
+          generationCommitQueueByProject.delete(input.projectId)
+        }
+      }
     },
     readDraft: async (rawInput) => {
       const input = projectCoordinatorPlanDraftReadInputSchema.parse(rawInput)
@@ -678,6 +716,18 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Plan draft revision conflict.')
       }
       const { project, observedAt } = await readProject(input.projectId)
+      if (
+        input.expectedProjectRevision !== undefined &&
+        input.expectedProjectRevision !== project.project.revision
+      ) {
+        throw new Error('Plan draft Project revision conflict.')
+      }
+      if (
+        input.expectedCoordinatorAuthorityEpoch !== undefined &&
+        input.expectedCoordinatorAuthorityEpoch !== project.project.coordinatorAuthorityEpoch
+      ) {
+        throw new Error('Plan draft Coordinator authority epoch conflict.')
+      }
       assertAssignmentsHavePlanningRuntime(
         project,
         input.tasks,
@@ -899,6 +949,107 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     })
   }
   return Object.freeze({
+    deleteProject: async (rawInput, idempotencyKey, authorizeFirstAttempt) => {
+      const input = projectCoordinatorProjectDeleteInputSchema.parse(rawInput)
+      const identity = options.transport.status()
+      if (identity.state !== 'ready') {
+        throw new Error('Project deletion requires the current authenticated User and Device.')
+      }
+      let intent = await options.state.readProjectDeleteIntent(
+        identity.userId,
+        input.projectId,
+        idempotencyKey
+      )
+      const isDurableReplay = intent !== null
+      if (!intent) {
+        const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
+        const projectView = requireReadyProject(workspace, input.projectId)
+        if (
+          workspace.connection.state !== 'ready' ||
+          workspace.connection.userId !== identity.userId ||
+          projectView.project.ownerUserId !== identity.userId
+        ) {
+          throw new Error('Only the current Project Owner may delete this Project.')
+        }
+        await authorizeFirstAttempt()
+        intent = await options.state.beginProjectDelete({
+          projectId: input.projectId,
+          principalUserId: identity.userId,
+          idempotencyKey,
+          expectedRevision: projectView.project.revision,
+          expectedCoordinatorAuthorityEpoch: projectView.project.coordinatorAuthorityEpoch,
+          expectedExecutionAuthorityEpoch: projectView.project.executionAuthorityEpoch
+        })
+      }
+      if (intent.state === 'succeeded') {
+        return projectCoordinatorProjectDeleteResultSchema.parse({
+          projectId: input.projectId,
+          deleted: true
+        })
+      }
+      const completeDelete = async (): Promise<ProjectCoordinatorProjectDeleteResult> => {
+        await options.state.completeProjectDelete(
+          identity.userId,
+          input.projectId,
+          intent.idempotencyKey
+        )
+        return projectCoordinatorProjectDeleteResultSchema.parse({
+          projectId: input.projectId,
+          deleted: true
+        })
+      }
+
+      const command = {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'project.delete' as const,
+        idempotencyKey: intent.idempotencyKey,
+        projectId: intent.projectId,
+        expectedRevision: intent.expectedRevision,
+        expectedCoordinatorAuthorityEpoch: intent.expectedCoordinatorAuthorityEpoch,
+        expectedExecutionAuthorityEpoch: intent.expectedExecutionAuthorityEpoch
+      }
+      const response = await options.transport.execute({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: command
+      })
+      if (
+        isDurableReplay &&
+        response.status === 404 &&
+        response.body.type === 'rest.error' &&
+        response.body.requestId === command.requestId &&
+        response.body.error.code === 'not_found' &&
+        response.body.error.httpStatus === 404
+      ) {
+        return completeDelete()
+      }
+      if (response.status >= 400 || response.body.type === 'rest.error') {
+        if (response.status < 500) {
+          await options.state.abandonProjectDelete(
+            identity.userId,
+            input.projectId,
+            intent.idempotencyKey
+          )
+        }
+        const detail = response.body.type === 'rest.error'
+          ? `${response.body.error.code}: ${response.body.error.message}`
+          : `HTTP ${response.status}`
+        throw new Error(`SciForge Cloud request failed: ${detail}`)
+      }
+      if (
+        response.body.type !== 'rest.receipt' ||
+        response.body.requestId !== command.requestId ||
+        response.body.receipt.type !== 'operation.receipt' ||
+        response.body.receipt.idempotencyKey !== intent.idempotencyKey ||
+        response.body.receipt.status !== 'succeeded' ||
+        response.body.receipt.actor.actorType !== 'user' ||
+        response.body.receipt.actor.userId !== identity.userId
+      ) {
+        throw new Error(`Project delete returned ${response.body.type}.`)
+      }
+      return completeDelete()
+    },
     transferCoordinator: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorTransferInputSchema.parse(rawInput)
       const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
@@ -1106,6 +1257,10 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     handleInbox: async (rawMessage) => {
       const message = agentInboxMessageSchema.parse(rawMessage)
+      if (message.payload.type === 'project.deleted') {
+        await options.state.clearProjectLocalState(message.payload.projectId)
+        return
+      }
       if (message.payload.type === 'project.started') {
         const started = message.payload
         const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })
@@ -1129,6 +1284,81 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
           plan.revision < confirmed.revision
         ) return
         await options.continuation.reconcileProject(confirmed.projectId)
+        return
+      }
+      if (message.payload.type === 'task.offer.closed') {
+        const closed = message.payload
+        if (closed.audience !== 'coordinator') {
+          throw new Error('Project Coordinator received a Worker-only Task offer closure.')
+        }
+        const workspace = await options.workspace.readWorkspace({ projectId: closed.projectId })
+        const project = requireReadyProject(workspace, closed.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const task = project.tasks.find(({ task }) => task.taskId === closed.taskId)?.task
+        const offer = project.offers.find(({ taskOfferId }) => (
+          taskOfferId === closed.taskOfferId
+        ))
+        if (!task || !offer || offer.projectId !== closed.projectId ||
+            offer.taskId !== closed.taskId || offer.state !== closed.outcome ||
+            offer.executionId !== null || offer.revision !== closed.offerRevision ||
+            task.revision < closed.taskRevision ||
+            (task.revision === closed.taskRevision && (
+              task.status !== 'revision_requested' ||
+              task.currentExecutionId !== null ||
+              task.currentExecutionState !== null
+            ))) {
+          throw new Error('Task offer closure does not match fresh Cloud Task facts.')
+        }
+        return
+      }
+      if (message.payload.type === 'task.execution.failed') {
+        const failed = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: failed.projectId })
+        const project = requireReadyProject(workspace, failed.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const taskView = project.tasks.find(({ task }) => task.taskId === failed.taskId)
+        const execution = taskView?.executions.find(({ executionId }) => (
+          executionId === failed.executionId
+        ))
+        if (!taskView || !execution || execution.projectId !== failed.projectId ||
+            execution.taskId !== failed.taskId || execution.state !== 'failed' ||
+            execution.fence.status !== 'fenced' ||
+            execution.fence.reason !== 'execution_failed' ||
+            execution.revision !== failed.executionRevision ||
+            taskView.task.revision < failed.taskRevision ||
+            failed.retryable !== (failed.taskStatus === 'revision_requested') ||
+            (taskView.task.revision === failed.taskRevision && (
+              taskView.task.status !== failed.taskStatus ||
+              taskView.task.currentExecutionId !== failed.executionId ||
+              taskView.task.currentExecutionState !== 'failed' ||
+              (failed.retryable !== (taskView.task.completedAt === null))
+            ))) {
+          throw new Error('Task execution failure does not match fresh fenced Cloud facts.')
+        }
+        return
+      }
+      if (message.payload.type === 'task.execution.started') {
+        const started = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })
+        const project = requireReadyProject(workspace, started.projectId)
+        if (message.recipientAgentId !== project.project.coordinatorAgentId) return
+        const taskView = project.tasks.find(({ task }) => task.taskId === started.taskId)
+        const execution = taskView?.executions.find(({ executionId }) => (
+          executionId === started.executionId
+        ))
+        if (!taskView || !execution || execution.projectId !== started.projectId ||
+            execution.taskId !== started.taskId || execution.startedAt === null ||
+            execution.revision < started.executionRevision ||
+            taskView.task.revision < started.taskRevision ||
+            (execution.revision === started.executionRevision && execution.state !== 'running') ||
+            (taskView.task.revision === started.taskRevision && (
+              taskView.task.status !== 'in_progress' ||
+              taskView.task.currentExecutionId !== started.executionId ||
+              taskView.task.currentExecutionState !== 'running'
+            ))) {
+          throw new Error('Task execution start does not match fresh Cloud Task facts.')
+        }
+        await options.continuation.reconcileProject(started.projectId)
         return
       }
       if (message.payload.type === 'task.result.submitted') {

@@ -13,6 +13,7 @@ import {
   confirmableHumanActionSchema,
   projectInitialTeamIncludesAuthenticatedOwner,
   providerDirectRecipientSchema,
+  taskFileDestinationNamesAreUnique,
   type AgentCredentialBootstrapPublicKey,
   type AgentCredentialEnvelope,
   type ProviderDirectRecipient,
@@ -21,6 +22,7 @@ import {
   type ProjectInitialTeam,
   type ProjectWorkerAvailabilityView,
   type RestRequest,
+  type TaskFileDependencyInput,
   type TaskExecutionPreflight,
   type TaskFileDeclaration,
   type TaskFileIntent,
@@ -214,6 +216,7 @@ export class CollaborationService {
         referenceDigest: digestSecret(approvalReference),
         safeSummary: input.safeSummary,
         effect: input.effect,
+        interactionMode: 'reaction_v1',
         remoteEligible: input.remoteEligible,
         status: input.remoteEligible ? 'pending' : 'desktop_only',
         revision: 1,
@@ -223,8 +226,8 @@ export class CollaborationService {
       }
       await tx.insertRemoteApproval(approval)
       const cardText = input.remoteEligible
-        ? remoteApprovalCard(approval, approvalReference, projection.displayName)
-        : remoteApprovalTerminalText('desktop_only')
+        ? remoteApprovalCard(approval)
+        : remoteApprovalDesktopRequiredNotice(approval)
       const message = await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
         'provider.notification.outbound', {
           protocolVersion: '1.0',
@@ -262,6 +265,9 @@ export class CollaborationService {
         await tx.getRemoteApprovalByReferenceDigest(digestSecret(input.approvalReference)),
         'Remote approval'
       )
+      if (approval.interactionMode !== 'command_v1') {
+        fail('permission_denied', 'This approval card does not accept command replies.')
+      }
       authorize({
         actor,
         operation: 'capability_approval',
@@ -336,6 +342,116 @@ export class CollaborationService {
     })
   }
 
+  async decideRemoteCapabilityApprovalFromMessageAction(actor: HumanEndpointActor, input: {
+    provider: string
+    realmId: string
+    providerMessageId: string
+    operation: 'add' | 'remove'
+    action: 'allow_once' | 'deny_once'
+    providerEventId: string
+  }): Promise<Record<string, unknown>> {
+    assertText(input.provider, 'provider', 1, 64)
+    assertText(input.realmId, 'realmId', 1, 512)
+    assertText(input.providerMessageId, 'providerMessageId', 1, 512)
+    assertText(input.providerEventId, 'providerEventId', 1, 512)
+    const idempotencyKey = `idem_remote_approval_${stableDigest(input.providerEventId)}`
+    return this.commit(actor, 'capability.approval.decide', idempotencyKey, {
+      action: input.action,
+      operation: input.operation,
+      providerEventId: input.providerEventId,
+      provider: input.provider,
+      realmId: input.realmId,
+      providerMessageId: input.providerMessageId
+    }, async (tx, at) => {
+      const approval = required(
+        await tx.getRemoteApprovalByProviderMessage(input.provider, input.realmId, input.providerMessageId),
+        'Remote approval'
+      )
+      if (approval.interactionMode !== 'reaction_v1' || input.operation !== 'add') {
+        fail('permission_denied', 'This approval card does not accept the requested message action.')
+      }
+      authorize({
+        actor,
+        operation: 'capability_approval',
+        targetUserId: approval.ownerUserId,
+        requiredAssurance: 'verified',
+        remoteApprovalAllowed: input.action === 'deny_once' || approval.remoteEligible
+      })
+      const agent = required(await tx.getAgent(approval.agentId), 'Agent')
+      if (agent.status !== 'active' || agent.ownerUserId !== approval.ownerUserId) {
+        fail('credential_revoked', 'The approval Agent is no longer active for its owner.')
+      }
+      const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+      if (projection.status !== 'active' || projection.agentId !== approval.agentId) {
+        fail('revision_conflict', 'The approval Projection is no longer active for its Agent.')
+      }
+      if (projection.locatorRevision !== approval.locatorRevision || !sameLocator(projection.locator, approval.locator)) {
+        fail('revision_conflict', 'The approval locator revision is no longer current.')
+      }
+      if (actor.humanEndpointId !== projection.humanEndpointId) {
+        fail('permission_denied', 'The approval belongs to another human endpoint.')
+      }
+      if (approval.expiresAt <= at) {
+        const expired = { ...approval, status: 'expired' as const, revision: approval.revision + 1, updatedAt: at }
+        await tx.updateRemoteApproval(expired, approval.revision)
+        const notifications = approval.providerCardMessageId
+          ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+              'provider.message.update.outbound', {
+                protocolVersion: '1.0', type: 'provider.message.update.outbound',
+                remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+                providerMessageId: approval.providerCardMessageId,
+                text: remoteApprovalTerminalText('expired'), fallbackText: remoteApprovalTerminalText('expired')
+              }, at)]
+          : []
+        return {
+          response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(expired) },
+          resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId,
+          notifications: notifications.map((message) => ({ recipient: message.recipient, sequence: message.sequence }))
+        }
+      }
+      if (approval.status !== 'pending') {
+        return {
+          response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(approval) },
+          resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId
+        }
+      }
+      const decisionId = `decision-${stableDigest(input.providerEventId)}`
+      const updated: StoredRemoteCapabilityApproval = {
+        ...approval,
+        status: input.action === 'allow_once' ? 'approved' : 'denied',
+        decisionEventId: input.providerEventId,
+        decisionId,
+        revision: approval.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateRemoteApproval(updated, approval.revision)
+      const message = await this.appendInbox(tx, { kind: 'agent', id: approval.agentId },
+        'capability.approval.decision', {
+          protocolVersion: '1.0', type: 'capability.approval.decision',
+          remoteApprovalId: approval.remoteApprovalId, desktopApprovalId: approval.desktopApprovalId,
+          projectionId: approval.projectionId, runtimeId: approval.runtimeId,
+          threadId: approval.threadId, turnId: approval.turnId,
+          capabilityRequestId: approval.capabilityRequestId, decisionId, decision: input.action
+        }, at)
+      const cardUpdate = approval.providerCardMessageId
+        ? await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+            'provider.message.update.outbound', {
+              protocolVersion: '1.0', type: 'provider.message.update.outbound',
+              remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+              providerMessageId: approval.providerCardMessageId,
+              text: remoteApprovalTerminalText(updated.status),
+              fallbackText: remoteApprovalTerminalText(updated.status)
+            }, at)
+        : null
+      return {
+        response: { protocolVersion: '1.0', type: 'rest.entity', entity: toRemoteApprovalEntity(updated) },
+        resourceKind: 'remote_capability_approval', resourceId: approval.remoteApprovalId,
+        notifications: [message, ...(cardUpdate ? [cardUpdate] : [])]
+          .map((notification) => ({ recipient: notification.recipient, sequence: notification.sequence }))
+      }
+    })
+  }
+
   async reportRemoteCapabilityApprovalResult(actor: AgentActor, input: {
     remoteApprovalId: string
     decisionId: string
@@ -367,6 +483,7 @@ export class CollaborationService {
       }
       await tx.updateRemoteApproval(updated, approval.revision)
       const notifications = approval.providerCardMessageId
+        && !(approval.interactionMode === 'reaction_v1' && input.outcome === 'applied')
         ? [await this.appendInbox(tx, { kind: 'human_endpoint', id: (
           required(await tx.getProjection(approval.projectionId), 'Projection')
         ).humanEndpointId }, 'provider.message.update.outbound', {
@@ -423,12 +540,12 @@ export class CollaborationService {
   }
 
   async confirmRemoteApprovalCard(remoteApprovalId: string, providerMessageId: string): Promise<void> {
-    const notification = await this.repository.transaction(async (tx) => {
+    const notifications = await this.repository.transaction(async (tx) => {
       const approval = required(await tx.getRemoteApproval(remoteApprovalId), 'Remote approval')
       if (approval.providerCardMessageId && approval.providerCardMessageId !== providerMessageId) {
         fail('identity_conflict', 'The approval card message reference cannot be replaced.')
       }
-      if (approval.providerCardMessageId) return null
+      if (approval.providerCardMessageId) return []
       const updated = {
         ...approval,
         providerCardMessageId: providerMessageId,
@@ -436,17 +553,32 @@ export class CollaborationService {
         updatedAt: this.timestamp()
       }
       await tx.updateRemoteApproval(updated, approval.revision)
-      if (approval.status === 'pending' || approval.status === 'desktop_only') return null
+      if (approval.status === 'pending' && approval.interactionMode === 'reaction_v1') {
+        const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
+        const messages = []
+        for (const action of ['allow_once', 'deny_once'] as const) {
+          messages.push(await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+            'provider.message.action.ensure.outbound', {
+              protocolVersion: '1.0', type: 'provider.message.action.ensure.outbound',
+              remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
+              providerMessageId, action
+            }, updated.updatedAt))
+        }
+        return messages
+      }
+      if (approval.status === 'pending' || approval.status === 'desktop_only') return []
       const projection = required(await tx.getProjection(approval.projectionId), 'Projection')
-      return this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
+      return [await this.appendInbox(tx, { kind: 'human_endpoint', id: projection.humanEndpointId },
         'provider.message.update.outbound', {
           protocolVersion: '1.0', type: 'provider.message.update.outbound',
           remoteApprovalId: approval.remoteApprovalId, locator: approval.locator,
           providerMessageId, text: remoteApprovalTerminalText(approval.status),
           fallbackText: remoteApprovalTerminalText(approval.status)
-        }, updated.updatedAt)
+        }, updated.updatedAt)]
     })
-    if (notification) await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+    for (const notification of notifications) {
+      await this.notifier?.notifyInboxAvailable(notification.recipient, notification.sequence)
+    }
   }
 
   async enqueueRemoteApprovalFallback(input: {
@@ -853,8 +985,10 @@ export class CollaborationService {
       }
       if (input.status !== 'active') {
         notifications.push(...await this.pauseEndpointProjections(tx, endpoint, at, 'human_endpoint_inactive'))
-        const container = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
-        if (container?.humanEndpointId === endpoint.humanEndpointId && container.status !== 'archived') {
+        const containers = (await tx.listManagedContainersForOwner(actor.userId)).filter((candidate) => (
+          candidate.humanEndpointId === endpoint.humanEndpointId && candidate.status !== 'archived'
+        ))
+        for (const container of containers) {
           await tx.updateManagedContainer({
             ...container,
             status: 'suspended',
@@ -885,11 +1019,14 @@ export class CollaborationService {
       const updated: StoredEndpoint = { ...endpoint, userId: target.userId, revision: endpoint.revision + 1, updatedAt: at }
       await tx.updateEndpoint(updated, endpoint.revision)
       const notifications = await this.pauseEndpointProjections(tx, endpoint, at, 'human_endpoint_transferred')
-      const container = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
-      if (container?.humanEndpointId === endpoint.humanEndpointId) {
+      const containers = (await tx.listManagedContainersForOwner(actor.userId)).filter((candidate) => (
+        candidate.humanEndpointId === endpoint.humanEndpointId
+      ))
+      for (const container of containers) {
         await tx.updateManagedContainer({
           ...container,
-          ownerUserId: target.userId,
+          status: 'suspended',
+          safeErrorCode: 'human_endpoint_transferred',
           revision: container.revision + 1,
           updatedAt: at
         }, container.revision)
@@ -1169,7 +1306,8 @@ export class CollaborationService {
       if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
         fail('validation_failed', 'Projection locator must use the bound endpoint provider and realm.')
       }
-      await requireOwnedManagedLocator(tx, actor.userId, endpoint, input.locator)
+      const installationId = await requireOwnedAgentInstallation(tx, actor.userId, agent.agentId)
+      await requireOwnedPrivateLocator(tx, actor.userId, endpoint, installationId, input.locator, at)
       for (const userId of allowed) required(await tx.getUser(userId), 'Allowed sender')
       if (await tx.getProjectionByLocator(input.locator.provider, input.locator.realmId, input.locator.containerId, input.locator.topicId)) {
         fail('identity_conflict', 'This provider locator already resolves to a personal Session projection.')
@@ -1190,7 +1328,7 @@ export class CollaborationService {
     projectionId: string
     expectedRevision: number
     displayName?: string
-    status?: 'active' | 'paused' | 'closed'
+    status?: 'active' | 'paused'
     locator?: ProviderLocatorValue
     locatorRevision?: number
     allowedSenderUserIds?: string[]
@@ -1200,17 +1338,7 @@ export class CollaborationService {
       const projection = required(await tx.getProjection(input.projectionId), 'Projection')
       if (projection.ownerUserId !== actor.userId) fail('permission_denied', 'Only the projection owner may update it.')
       expectRevision(projection.revision, input.expectedRevision)
-      if (
-        projection.status === 'closed' &&
-        (
-          input.status !== 'paused' ||
-          input.displayName !== undefined ||
-          input.locator !== undefined ||
-          input.allowedSenderUserIds !== undefined
-        )
-      ) {
-        fail('invalid_state_transition', 'A closed projection can only be restored to paused before reactivation.')
-      }
+      if (projection.status === 'closed') fail('invalid_state_transition', 'A closed projection cannot be rebound.')
       if (input.displayName) assertText(input.displayName, 'displayName', 1, 200)
       let locator = projection.locator
       let locatorRevision = projection.locatorRevision
@@ -1221,7 +1349,9 @@ export class CollaborationService {
         if (endpoint.provider !== input.locator.provider || endpoint.realmId !== input.locator.realmId) {
           fail('validation_failed', 'Updated locator must remain in the verified endpoint provider realm.')
         }
-        await requireOwnedManagedLocator(tx, actor.userId, endpoint, input.locator)
+        const agent = required(await tx.getAgent(projection.agentId), 'Projection Agent')
+        const installationId = await requireOwnedAgentInstallation(tx, actor.userId, agent.agentId)
+        await requireOwnedPrivateLocator(tx, actor.userId, endpoint, installationId, input.locator, at)
         const otherProjection = await tx.getProjectionByLocator(input.locator.provider, input.locator.realmId,
           input.locator.containerId, input.locator.topicId)
         if (otherProjection && otherProjection.projectionId !== projection.projectionId) {
@@ -1373,7 +1503,8 @@ export class CollaborationService {
         }
         if (projection.status === 'closed') fail('invalid_state_transition', 'A closed projection cannot move.')
         const endpoint = required(await tx.getEndpoint(projection.humanEndpointId), 'Projection endpoint')
-        await requireOwnedManagedLocator(tx, projection.ownerUserId, endpoint, input.currentLocator)
+        const installationId = await requireOwnedAgentInstallation(tx, projection.ownerUserId, projection.agentId)
+        await requireOwnedPrivateLocator(tx, projection.ownerUserId, endpoint, installationId, input.currentLocator, at)
         const updated: StoredProjection = { ...projection, locator: input.currentLocator,
           locatorRevision: projection.locatorRevision + 1, revision: projection.revision + 1,
           lastErrorCode: undefined, updatedAt: at }
@@ -2261,6 +2392,68 @@ export class CollaborationService {
     }).then(responseEntity<StoredProject>)
   }
 
+  async deleteProject(
+    actor: UserActor,
+    input: RestCommand<'project.delete'>
+  ): Promise<void> {
+    await this.commit(actor, 'project.delete', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      requireProjectOwner(project, actor)
+      expectRevision(project.revision, input.expectedRevision)
+      expectRevision(project.coordinatorAuthorityEpoch, input.expectedCoordinatorAuthorityEpoch)
+      expectRevision(project.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)
+
+      const unresolvedExternalOperation = (await tx.listExternalOperationJournal(project.projectId))
+        .find(({ state }) => state === 'dispatched' || state === 'outcome_unknown')
+      if (unresolvedExternalOperation) {
+        fail(
+          'invalid_state_transition',
+          'A Project with a dispatched or unresolved external operation cannot be deleted.'
+        )
+      }
+
+      const memberships = await tx.listProjectMembers(project.projectId)
+      const memberAgents = (await Promise.all(
+        memberships.map(({ userId }) => tx.listAgentsForUser(userId))
+      )).flat()
+      const recipientAgentIds = new Set(
+        memberAgents.filter(({ status }) => status === 'active').map(({ agentId }) => agentId)
+      )
+      recipientAgentIds.add(project.coordinatorAgentId)
+
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      const payload = agentInboxPayloadSchema.parse({
+        protocolVersion: '1.0',
+        type: 'project.deleted',
+        projectId: project.projectId,
+        deletedAt: at
+      })
+      for (const agentId of recipientAgentIds) {
+        const message = await this.appendInbox(
+          tx,
+          { kind: 'agent', id: agentId },
+          'project.deleted',
+          payload,
+          at
+        )
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+
+      await tx.deleteProject(project.projectId, project.revision)
+      return {
+        response: {
+          protocolVersion: '1.0',
+          type: 'project.deleted',
+          projectId: project.projectId,
+          deletedAt: at
+        },
+        resourceKind: 'project',
+        resourceId: project.projectId,
+        notifications
+      }
+    })
+  }
+
   async publishWorkerAvailability(
     actor: AgentActor,
     input: CloudCommand<'worker.availability.publish'>
@@ -2979,7 +3172,7 @@ export class CollaborationService {
         revision: 1, createdAt: at, updatedAt: at
       }
       await tx.insertProjectContentProvisioningAttestation(attestation)
-      const attestationDigest = stableDigest(attested)
+      const attestationDigest = stableDigest(toProjectContentProvisioningAttestation(attestation))
       const bindingRevision = (currentBinding?.revision ?? 0) + 1
       const binding: StoredProjectContentSpaceBinding = {
         projectContentBindingId: currentBinding?.projectContentBindingId ?? newId('pcb'),
@@ -4081,7 +4274,7 @@ export class CollaborationService {
       if (acceptedSubmissionIds.length !== input.acceptedResultSubmissionIds.length) {
         fail('validation_failed', 'Accepted Task result submission identities must be unique.')
       }
-      const completedTaskIds = new Set<string>()
+      const completedTasks = new Map<string, StoredTask>()
       for (const resultSubmissionId of acceptedSubmissionIds) {
         const submission = required(await tx.getTaskResultSubmission(resultSubmissionId), 'Task result submission')
         if (submission.projectId !== project.projectId) {
@@ -4090,20 +4283,38 @@ export class CollaborationService {
         const task = required(await tx.getTaskForUpdate(submission.taskId), 'Accepted result Task')
         const reviews = await tx.listTaskResultReviews(submission.resultSubmissionId)
         if (
-          task.status !== 'completed' || task.currentExecutionId !== submission.executionId ||
+          task.projectId !== project.projectId || task.status !== 'completed' ||
+          task.currentExecutionId !== submission.executionId ||
           !reviews.some((review) => review.decision === 'accept' &&
             review.resultSubmissionId === submission.resultSubmissionId && review.acceptedProjectRecordId !== null)
         ) {
           fail('revision_conflict', 'Every cited Task result must be the current Coordinator-accepted completed result.')
         }
-        if (completedTaskIds.has(task.taskId)) {
+        if (completedTasks.has(task.taskId)) {
           fail('validation_failed', 'The final summary may cite only one accepted result for each Task.')
         }
-        completedTaskIds.add(task.taskId)
+        completedTasks.set(task.taskId, task)
       }
-      const projectTaskCount = await tx.countProjectTasks(project.projectId)
-      if (projectTaskCount !== completedTaskIds.size) {
-        fail('invalid_state_transition', 'Every Project Task requires one accepted result before final summary.')
+      const canonicalPlanTaskIds = plan.tasks.map(({ planItemId }) => (
+        canonicalTaskIdForPlanItem(plan.projectPlanId, planItemId)
+      ))
+      for (const taskId of canonicalPlanTaskIds) {
+        const task = completedTasks.get(taskId)
+        if (!task || task.projectId !== project.projectId) {
+          fail(
+            'invalid_state_transition',
+            'Every confirmed Project Plan item requires its canonical Task and accepted result before final summary.'
+          )
+        }
+      }
+      if (
+        new Set(canonicalPlanTaskIds).size !== plan.tasks.length ||
+        completedTasks.size !== plan.tasks.length
+      ) {
+        fail(
+          'invalid_state_transition',
+          'Every current confirmed Project Plan item requires exactly one accepted result before final summary.'
+        )
       }
       if ((await tx.listCurrentTaskExecutionsForProjectForUpdate(project.projectId)).length > 0) {
         fail('invalid_state_transition', 'The Project still has a current non-terminal Task execution.')
@@ -4315,7 +4526,7 @@ export class CollaborationService {
       expectRevision(project.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)
       if (project.status !== 'active') fail('invalid_state_transition', 'Task offers require an active Project.')
       if (Date.parse(input.offerExpiresAt) <= Date.parse(at)) {
-        fail('validation_failed', 'A Task offer expiry must be in the future.')
+        fail('request_expired', 'A Task offer expiry must be in the future.')
       }
       const plan = required(await tx.getProjectPlan(input.projectPlanId), 'Project plan')
       expectRevision(plan.revision, input.expectedPlanRevision)
@@ -4347,6 +4558,8 @@ export class CollaborationService {
       const fileIntent = await bindPlanFileDeclarationToCurrentProjectRoot(
         tx,
         project,
+        plan,
+        dependencyTaskIds,
         item.fileIntent
       )
       const eligibility = await requireEligibleWorkerUser({
@@ -4365,6 +4578,7 @@ export class CollaborationService {
         workerUserId: item.workerUserId,
         offeredByCoordinatorAgentId: actor.agentId,
         state: 'pending',
+        reassignmentTaskRevision: null,
         offeredAt: at,
         expiresAt: input.offerExpiresAt,
         respondedAt: null,
@@ -4529,6 +4743,64 @@ export class CollaborationService {
     }).then(taskOfferBundleResponse)
   }
 
+  async rejectTaskOffer(
+    actor: AgentActor,
+    input: CloudCommand<'task.offer.reject'>
+  ): Promise<Readonly<{ task: StoredTask; offer: StoredTaskOffer }>> {
+    return this.commit(actor, 'task.offer.reject', input.idempotencyKey, input, async (tx, at) => {
+      const { project, task, offer } = await requireTaskOfferClaim(tx, input)
+      if (offer.workerUserId !== actor.userId) {
+        fail('permission_denied', 'Only an Agent Device owned by the selected Worker User may reject this offer.')
+      }
+      if (
+        offer.state !== 'pending' ||
+        offer.expiresAt <= at ||
+        offer.executionId !== null ||
+        task.status !== 'offered' ||
+        task.currentExecutionId !== null
+      ) {
+        fail('invalid_state_transition', 'Only the current pending Task offer may be rejected.')
+      }
+      const updatedOffer: StoredTaskOffer = {
+        ...offer,
+        state: 'rejected',
+        reassignmentTaskRevision: task.revision + 1,
+        respondedAt: at,
+        revision: offer.revision + 1,
+        updatedAt: at
+      }
+      const updatedTask: StoredTask = {
+        ...task,
+        status: 'revision_requested',
+        revision: task.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateTaskOffer(updatedOffer, offer.revision)
+      await tx.updateTask(updatedTask, task.revision)
+      const notifications = await this.appendTaskOfferClosedNotifications(
+        tx,
+        project.projectId,
+        project.coordinatorAgentId,
+        updatedTask,
+        updatedOffer,
+        'rejected',
+        ['coordinator', 'worker'],
+        at
+      )
+      return {
+        response: {
+          protocolVersion: '1.0',
+          type: 'task.offer.rejected',
+          task: updatedTask,
+          offer: updatedOffer
+        },
+        resourceKind: 'task_offer',
+        resourceId: offer.taskOfferId,
+        notifications
+      }
+    }).then(taskOfferResponse)
+  }
+
   /**
    * The sole Task-offer timeout path. The Cloud compares its own current time
    * with the durable Offer expiresAt fact and records the transition through
@@ -4550,15 +4822,21 @@ export class CollaborationService {
         expectedOfferRevision: candidate.revision,
         expiresAt: candidate.expiresAt
       }, async (tx, committedAt) => {
+        const project = required(await tx.getProjectForUpdate(candidate.projectId), 'Project')
+        const task = required(await tx.getTaskForUpdate(candidate.taskId), 'Task')
         const offer = required(await tx.getTaskOfferForUpdate(candidate.taskOfferId), 'Task offer')
-        if (offer.revision !== candidate.revision || offer.state !== 'pending' || offer.expiresAt > committedAt) {
+        if (
+          offer.taskId !== task.taskId ||
+          offer.revision !== candidate.revision ||
+          offer.state !== 'pending' ||
+          offer.expiresAt > committedAt
+        ) {
           return { response: { transitioned: false } }
         }
-        const task = required(await tx.getTaskForUpdate(offer.taskId), 'Task')
-        const project = required(await tx.getProjectForUpdate(offer.projectId), 'Project')
         if (
           offer.executionId !== null ||
           task.currentExecutionId !== null ||
+          offer.projectId !== project.projectId ||
           task.projectId !== project.projectId ||
           task.status !== 'offered'
         ) {
@@ -4567,6 +4845,7 @@ export class CollaborationService {
         const updatedOffer: StoredTaskOffer = {
           ...offer,
           state: 'timed_out',
+          reassignmentTaskRevision: task.revision + 1,
           respondedAt: committedAt,
           revision: offer.revision + 1,
           updatedAt: committedAt
@@ -4579,25 +4858,16 @@ export class CollaborationService {
         }
         await tx.updateTaskOffer(updatedOffer, offer.revision)
         await tx.updateTask(updatedTask, task.revision)
-        const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-        const recipientAgentIds = new Set([
+        const notifications = await this.appendTaskOfferClosedNotifications(
+          tx,
+          project.projectId,
           project.coordinatorAgentId,
-          ...(await tx.listAgentsForUser(offer.workerUserId))
-            .filter(({ status }) => status === 'active')
-            .map(({ agentId }) => agentId)
-        ])
-        for (const agentId of [...recipientAgentIds].sort()) {
-          const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.closed', {
-            protocolVersion: '1.0',
-            type: 'task.offer.closed',
-            projectId: project.projectId,
-            taskId: task.taskId,
-            taskOfferId: offer.taskOfferId,
-            outcome: 'timed_out',
-            offerRevision: updatedOffer.revision
-          }, committedAt)
-          notifications.push({ recipient: message.recipient, sequence: message.sequence })
-        }
+          updatedTask,
+          updatedOffer,
+          'timed_out',
+          ['coordinator', 'worker'],
+          committedAt
+        )
         return {
           response: { transitioned: true },
           resourceKind: 'task_offer',
@@ -4621,24 +4891,23 @@ export class CollaborationService {
           task.currentExecutionId !== null) {
         fail('invalid_state_transition', 'Only the current pending Task offer may be withdrawn.')
       }
-      const updatedOffer: StoredTaskOffer = { ...offer, state: 'withdrawn', respondedAt: at,
+      const updatedOffer: StoredTaskOffer = { ...offer, state: 'withdrawn',
+        reassignmentTaskRevision: task.revision + 1, respondedAt: at,
         revision: offer.revision + 1, updatedAt: at }
       const updatedTask: StoredTask = { ...task, status: 'revision_requested',
         revision: task.revision + 1, updatedAt: at }
       await tx.updateTaskOffer(updatedOffer, offer.revision)
       await tx.updateTask(updatedTask, task.revision)
-      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-      const recipientAgentIds = new Set((await tx.listAgentsForUser(offer.workerUserId))
-        .filter(({ status }) => status === 'active')
-        .map(({ agentId }) => agentId))
-      for (const agentId of [...recipientAgentIds].sort()) {
-        const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offer.closed', {
-          protocolVersion: '1.0', type: 'task.offer.closed', projectId: project.projectId,
-          taskId: task.taskId, taskOfferId: offer.taskOfferId, outcome: 'withdrawn',
-          offerRevision: updatedOffer.revision
-        }, at)
-        notifications.push({ recipient: message.recipient, sequence: message.sequence })
-      }
+      const notifications = await this.appendTaskOfferClosedNotifications(
+        tx,
+        project.projectId,
+        project.coordinatorAgentId,
+        updatedTask,
+        updatedOffer,
+        'withdrawn',
+        ['worker'],
+        at
+      )
       return { response: { protocolVersion: '1.0', type: 'task.offer.withdrawn',
         task: updatedTask, offer: updatedOffer }, resourceKind: 'task_offer',
         resourceId: offer.taskOfferId, notifications }
@@ -4650,9 +4919,13 @@ export class CollaborationService {
     input: CloudCommand<'task.offer.reassign'>
   ): Promise<Readonly<{ task: StoredTask; offer: StoredTaskOffer }>> {
     return this.commit(actor, 'task.offer.reassign', input.idempotencyKey, input, async (tx, at) => {
+      const observedTask = required(await tx.getTask(input.taskId), 'Task')
+      const project = required(await tx.getProjectForUpdate(observedTask.projectId), 'Project')
       const task = required(await tx.getTaskForUpdate(input.taskId), 'Task')
       expectRevision(task.revision, input.expectedTaskRevision)
-      const project = required(await tx.getProjectForUpdate(task.projectId), 'Project')
+      if (task.projectId !== project.projectId) {
+        fail('revision_conflict', 'The Task no longer belongs to the observed Project.')
+      }
       requireCoordinatorCommand(
         project,
         actor,
@@ -4672,8 +4945,15 @@ export class CollaborationService {
         fail('invalid_state_transition', 'Reassignment requires a terminal previous Task offer.')
       }
       if (previousOffer.executionId === null) {
-        if (task.currentExecutionId !== null || !['withdrawn', 'timed_out'].includes(previousOffer.state)) {
-          fail('revision_conflict', 'An unclaimed previous offer must leave no current execution.')
+        if (
+          task.currentExecutionId !== null ||
+          !['rejected', 'withdrawn', 'timed_out'].includes(previousOffer.state) ||
+          previousOffer.reassignmentTaskRevision !== task.revision
+        ) {
+          fail(
+            'revision_conflict',
+            'An unclaimed previous offer must be the terminal offer that requested this Task revision.'
+          )
         }
       } else {
         const previous = required(
@@ -4682,7 +4962,10 @@ export class CollaborationService {
         )
         if (
           task.currentExecutionId !== previous.executionId ||
+          task.currentExecutionState !== previous.state ||
           previous.taskId !== task.taskId ||
+          previous.projectId !== task.projectId ||
+          previous.projectId !== project.projectId ||
           previous.fence.status !== 'fenced' ||
           !(['failed', 'cancelled', 'revoked'] as const).includes(
             previous.state as 'failed' | 'cancelled' | 'revoked'
@@ -4695,7 +4978,7 @@ export class CollaborationService {
         }
       }
       if (task.executionCount >= task.maxRetries + 1) fail('budget_exhausted', 'The Task retry budget is exhausted.')
-      if (Date.parse(input.offerExpiresAt) <= Date.parse(at)) fail('validation_failed', 'The next Task offer expiry must be in the future.')
+      if (Date.parse(input.offerExpiresAt) <= Date.parse(at)) fail('request_expired', 'The next Task offer expiry must be in the future.')
       const nextFileIntent = await requireNewlyNamedSuccessorFileIntent(
         tx,
         task,
@@ -4708,7 +4991,7 @@ export class CollaborationService {
       const offer: StoredTaskOffer = {
         taskOfferId: newId('ofr'), executionId: null, taskId: task.taskId, projectId: task.projectId,
         workerUserId: input.workerUserId, offeredByCoordinatorAgentId: actor.agentId,
-        state: 'pending', offeredAt: at,
+        state: 'pending', reassignmentTaskRevision: null, offeredAt: at,
         expiresAt: input.offerExpiresAt, respondedAt: null,
         revision: 1, createdAt: at, updatedAt: at
       }
@@ -4789,17 +5072,28 @@ export class CollaborationService {
       if (!['accepted', 'running', 'needs_human'].includes(execution.state)) {
         fail('invalid_state_transition', 'Only an accepted or running execution may report failure.')
       }
+      const retryable = task.executionCount < task.maxRetries + 1
+      const taskStatus = retryable ? 'revision_requested' as const : 'failed' as const
       const updatedExecution = fenceTaskExecution(execution, 'failed', 'execution_failed', input.failedAt)
-      const updatedTask: StoredTask = { ...task, currentExecutionState: 'failed', status: 'failed',
-        completedAt: input.failedAt, revision: task.revision + 1, updatedAt: at }
+      const updatedTask: StoredTask = { ...task, currentExecutionState: 'failed', status: taskStatus,
+        completedAt: retryable ? null : input.failedAt, revision: task.revision + 1, updatedAt: at }
       await tx.updateTaskExecution({ ...updatedExecution, updatedAt: at }, execution.revision)
       await tx.updateTask(updatedTask, task.revision)
       if (execution.fileIntent !== null) await tx.invalidateCloudResourceRefs(task.taskId, execution.executionId, at)
-      const message = await this.appendInbox(tx, { kind: 'agent', id: project.coordinatorAgentId }, 'task.execution.failed', {
+      const failurePayload = agentInboxPayloadSchema.parse({
         protocolVersion: '1.0', type: 'task.execution.failed', projectId: project.projectId,
         taskId: task.taskId, executionId: execution.executionId,
+        taskRevision: updatedTask.revision, executionRevision: updatedExecution.revision,
+        taskStatus, retryable,
         safeFailureCode: input.safeFailureCode, safeMessage: input.safeMessage
-      }, at)
+      })
+      const message = await this.appendInbox(
+        tx,
+        { kind: 'agent', id: project.coordinatorAgentId },
+        failurePayload.type,
+        failurePayload,
+        at
+      )
       return { response: { protocolVersion: '1.0', type: 'task.execution.failed',
         task: updatedTask, execution: { ...updatedExecution, updatedAt: at } }, resourceKind: 'task_execution',
         resourceId: execution.executionId, notifications: [{ recipient: message.recipient, sequence: message.sequence }] }
@@ -5120,7 +5414,7 @@ export class CollaborationService {
           workerUserId: input.nextWorkerUserId!,
           fileIntent: nextFileIntent, requiredCapabilityTags: task.requiredCapabilityTags, at })
         if (Date.parse(input.nextOfferExpiresAt!) <= Date.parse(at)) {
-          fail('validation_failed', 'The revision offer expiry must be in the future.')
+          fail('request_expired', 'The revision offer expiry must be in the future.')
         }
         updatedExecution = {
           ...execution,
@@ -5135,7 +5429,8 @@ export class CollaborationService {
         nextOffer = { taskOfferId: nextTaskOfferId, executionId: null, taskId: task.taskId,
           projectId: task.projectId, workerUserId: input.nextWorkerUserId!,
           offeredByCoordinatorAgentId: actor.agentId,
-          state: 'pending', offeredAt: at, expiresAt: input.nextOfferExpiresAt!, respondedAt: null,
+          state: 'pending', reassignmentTaskRevision: null,
+          offeredAt: at, expiresAt: input.nextOfferExpiresAt!, respondedAt: null,
           revision: 1, createdAt: at, updatedAt: at }
         updatedTask = { ...task, status: 'offered', currentExecutionId: null,
           currentExecutionState: null, fileIntent: nextFileIntent,
@@ -5430,20 +5725,22 @@ export class CollaborationService {
 
   async ensureManagedContainer(actor: UserActor, input: {
     humanEndpointId: string
+    agentId: string
     displayName?: string
     policy: StoredManagedContainer['policy']
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
-    const expectedName = `sciforge-${stableDigest(actor.userId).slice(0, 12)}`
-    if (input.displayName !== undefined && input.displayName !== expectedName) {
-      fail('validation_failed', 'Managed Channel name must use the server-derived stable user handle.')
-    }
     const response = await this.commit(actor, 'managed_container.ensure', input.idempotencyKey, input, async (tx, at) => {
       const endpoint = required(await tx.getEndpoint(input.humanEndpointId), 'Human endpoint')
       if (endpoint.userId !== actor.userId || endpoint.status !== 'active') {
         fail('permission_denied', 'Managed Channel requires an active endpoint owned by the authenticated user.')
       }
-      const existing = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId)
+      const installationId = await requireOwnedAgentInstallation(tx, actor.userId, input.agentId)
+      const expectedName = `sciforge-${stableDigest(actor.userId).slice(0, 8)}-${stableDigest(installationId).slice(0, 8)}`
+      if (input.displayName !== undefined && input.displayName !== expectedName) {
+        fail('validation_failed', 'Managed Channel name must use the server-derived user and installation handle.')
+      }
+      const existing = await tx.getManagedContainerForOwner(actor.userId, endpoint.provider, endpoint.realmId, installationId)
       if (existing) {
         if (existing.status === 'failed' && !existing.externalContainerId) {
           const retried: StoredManagedContainer = {
@@ -5476,10 +5773,11 @@ export class CollaborationService {
         managedContainerId,
         ownerUserId: actor.userId,
         humanEndpointId: endpoint.humanEndpointId,
+        installationId,
         provider: endpoint.provider,
         realmId: endpoint.realmId,
         ownerProviderUserId: endpoint.providerUserId,
-        stableKey: `managed-${stableDigest({ ownerUserId: actor.userId, provider: endpoint.provider, realmId: endpoint.realmId })}`,
+        stableKey: `managed-${stableDigest({ ownerUserId: actor.userId, provider: endpoint.provider, realmId: endpoint.realmId, installationId })}`,
         displayName: expectedName,
         policy: input.policy,
         status: 'requested',
@@ -5510,26 +5808,30 @@ export class CollaborationService {
     return required(await this.repository.getManagedContainer(committed.managedContainerId), 'Managed container')
   }
 
-  async getManagedContainer(actor: AuthContext, managedContainerId: string): Promise<StoredManagedContainer> {
+  async getManagedContainer(actor: AuthContext, managedContainerId: string, agentId: string): Promise<StoredManagedContainer> {
     const container = required(await this.repository.getManagedContainer(managedContainerId), 'Managed container')
     if (actor.kind === 'system' || actor.userId !== container.ownerUserId) {
       fail('permission_denied', 'Managed Channel belongs to another user.')
     }
+    const installationId = await requireOwnedAgentInstallation(this.repository, actor.userId, agentId)
+    if (container.installationId !== installationId) fail('permission_denied', 'Managed Channel belongs to another SciForge installation.')
     return container
   }
 
-  async listManagedContainers(actor: UserActor): Promise<StoredManagedContainer[]> {
-    return this.repository.listManagedContainersForOwner(actor.userId)
+  async listManagedContainers(actor: UserActor, agentId: string): Promise<StoredManagedContainer[]> {
+    const installationId = await requireOwnedAgentInstallation(this.repository, actor.userId, agentId)
+    return (await this.repository.listManagedContainersForOwner(actor.userId)).filter((container) => container.installationId === installationId)
   }
 
   async inspectManagedContainer(actor: UserActor, input: {
     managedContainerId: string
+    agentId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.inspect', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      await requireManagedContainerOwner(tx, actor.userId, current)
+      await requireManagedContainerOwner(tx, actor.userId, input.agentId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
       if (!['active', 'drifted', 'failed'].includes(current.status)) {
@@ -5551,12 +5853,13 @@ export class CollaborationService {
 
   async reconcileManagedContainer(actor: UserActor, input: {
     managedContainerId: string
+    agentId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.reconcile', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      await requireManagedContainerOwner(tx, actor.userId, current)
+      await requireManagedContainerOwner(tx, actor.userId, input.agentId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
       if (!['drifted', 'failed'].includes(current.status)) {
@@ -5583,12 +5886,13 @@ export class CollaborationService {
 
   async archiveManagedContainer(actor: UserActor, input: {
     managedContainerId: string
+    agentId: string
     expectedRevision: number
     idempotencyKey: string
   }): Promise<StoredManagedContainer> {
     const response = await this.commit(actor, 'managed_container.archive', input.idempotencyKey, input, async (tx, at) => {
       const current = required(await tx.getManagedContainer(input.managedContainerId), 'Managed container')
-      await requireManagedContainerOwner(tx, actor.userId, current)
+      await requireManagedContainerOwner(tx, actor.userId, input.agentId, current)
       if (current.revision !== input.expectedRevision) fail('revision_conflict', 'Managed Channel revision changed.')
       if (!current.externalContainerId) fail('validation_failed', 'Managed Channel has not completed initial provisioning.')
       if (!['active', 'drifted'].includes(current.status)) {
@@ -5683,6 +5987,49 @@ export class CollaborationService {
     return notifications
   }
 
+  private async appendTaskOfferClosedNotifications(
+    tx: CollaborationTransaction,
+    projectId: string,
+    coordinatorAgentId: string | null,
+    task: StoredTask,
+    offer: StoredTaskOffer,
+    outcome: 'rejected' | 'withdrawn' | 'timed_out',
+    audiences: readonly ('worker' | 'coordinator')[],
+    at: string
+  ): Promise<Array<{ recipient: InboxRecipient; sequence: number }>> {
+    const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+    for (const audience of audiences) {
+      const recipientAgentIds = audience === 'coordinator'
+        ? coordinatorAgentId === null ? [] : [coordinatorAgentId]
+        : (await tx.listAgentsForUser(offer.workerUserId))
+          .filter(({ status }) => status === 'active')
+          .map(({ agentId }) => agentId)
+          .sort()
+      for (const agentId of recipientAgentIds) {
+        const payload = agentInboxPayloadSchema.parse({
+          protocolVersion: '1.0',
+          type: 'task.offer.closed',
+          projectId,
+          taskId: task.taskId,
+          taskOfferId: offer.taskOfferId,
+          audience,
+          outcome,
+          taskRevision: task.revision,
+          offerRevision: offer.revision
+        })
+        const message = await this.appendInbox(
+          tx,
+          { kind: 'agent', id: agentId },
+          payload.type,
+          payload,
+          at
+        )
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+    }
+    return notifications
+  }
+
   /** Closes pre-claim User offers in the same transaction as their enclosing authority change. */
   private async closePendingTaskOffers(
     tx: CollaborationTransaction,
@@ -5706,32 +6053,32 @@ export class CollaborationService {
       const closed: StoredTaskOffer = {
         ...offer,
         state: 'withdrawn',
+        reassignmentTaskRevision: taskStatus === 'revision_requested'
+          ? task.revision + 1
+          : null,
         respondedAt: at,
         revision: offer.revision + 1,
         updatedAt: at
       }
-      await tx.updateTaskOffer(closed, offer.revision)
-      await tx.updateTask({
+      const updatedTask: StoredTask = {
         ...task,
         status: taskStatus,
         completedAt: taskStatus === 'cancelled' ? at : null,
         revision: task.revision + 1,
         updatedAt: at
-      }, task.revision)
-      for (const agent of (await tx.listAgentsForUser(offer.workerUserId))
-        .filter(({ status }) => status === 'active')) {
-        const message = await this.appendInbox(tx, { kind: 'agent', id: agent.agentId },
-          'task.offer.closed', {
-            protocolVersion: '1.0',
-            type: 'task.offer.closed',
-            projectId,
-            taskId: task.taskId,
-            taskOfferId: offer.taskOfferId,
-            outcome: 'withdrawn',
-            offerRevision: closed.revision
-          }, at)
-        notifications.push({ recipient: message.recipient, sequence: message.sequence })
       }
+      await tx.updateTaskOffer(closed, offer.revision)
+      await tx.updateTask(updatedTask, task.revision)
+      notifications.push(...await this.appendTaskOfferClosedNotifications(
+        tx,
+        projectId,
+        null,
+        updatedTask,
+        closed,
+        'withdrawn',
+        ['worker'],
+        at
+      ))
     }
     return notifications
   }
@@ -5812,26 +6159,45 @@ export class CollaborationService {
   private timestamp(): string { return this.now().toISOString() }
 }
 
-async function requireOwnedManagedLocator(
-  repository: CollaborationReadRepository,
+async function requireOwnedPrivateLocator(
+  repository: CollaborationTransaction,
   ownerUserId: string,
   endpoint: StoredEndpoint,
-  locator: ProviderLocatorValue
+  installationId: string,
+  locator: ProviderLocatorValue,
+  at: string
 ): Promise<void> {
+  await repository.lockIdempotency('provider-private-container', stableDigest({
+    provider: locator.provider, realmId: locator.realmId, containerId: locator.containerId
+  }))
   const container = await repository.getManagedContainerForOwner(
     ownerUserId,
     endpoint.provider,
-    endpoint.realmId
+    endpoint.realmId,
+    installationId
   )
-  if (
-    !container ||
-    container.humanEndpointId !== endpoint.humanEndpointId ||
-    container.status !== 'active' ||
-    !container.externalContainerId ||
-    locator.containerId !== container.externalContainerId
-  ) {
-    fail('permission_denied', 'Projection locator must belong to the authenticated user\'s active managed Channel.')
+  if (container && container.humanEndpointId === endpoint.humanEndpointId &&
+      container.status === 'active' && container.externalContainerId === locator.containerId) return
+  const existingClaim = await repository.getPrivateContainerClaim(locator.provider, locator.realmId, locator.containerId)
+  if (existingClaim) {
+    if (existingClaim.ownerUserId !== ownerUserId || existingClaim.humanEndpointId !== endpoint.humanEndpointId ||
+        existingClaim.installationId !== installationId) {
+      fail('identity_conflict', 'This private Channel is already bound to another SciForge installation.')
+    }
+    return
   }
+  const discovery = await repository.getPrivateContainerDiscovery(
+    ownerUserId, endpoint.humanEndpointId, installationId,
+    locator.provider, locator.realmId, locator.containerId
+  )
+  if (!discovery || Date.parse(discovery.expiresAt) <= Date.parse(at)) {
+    fail('permission_denied', 'Refresh private Channels before binding this Topic.')
+  }
+  await repository.insertPrivateContainerClaim({
+    claimId: newId('pcc'), ownerUserId, humanEndpointId: endpoint.humanEndpointId, installationId,
+    provider: locator.provider, realmId: locator.realmId, externalContainerId: locator.containerId,
+    displayName: discovery.displayName, claimedAt: at
+  })
 }
 
 type ProjectListCursor = Readonly<{
@@ -6095,6 +6461,7 @@ function coordinationPage<Item>(
 async function requireManagedContainerOwner(
   repository: CollaborationReadRepository,
   ownerUserId: string,
+  agentId: string,
   container: StoredManagedContainer
 ): Promise<StoredEndpoint> {
   if (container.ownerUserId !== ownerUserId) {
@@ -6110,7 +6477,27 @@ async function requireManagedContainerOwner(
   ) {
     fail('permission_denied', 'Managed Channel requires its active verified owner endpoint.')
   }
+  const installationId = await requireOwnedAgentInstallation(repository, ownerUserId, agentId)
+  if (installationId !== container.installationId) {
+    fail('permission_denied', 'Managed Channel belongs to another SciForge installation.')
+  }
   return endpoint
+}
+
+async function requireOwnedAgentInstallation(
+  repository: CollaborationReadRepository,
+  ownerUserId: string,
+  agentId: string
+): Promise<string> {
+  const agent = required(await repository.getAgent(agentId), 'Managed Channel Agent')
+  if (agent.ownerUserId !== ownerUserId || agent.status !== 'active') {
+    fail('permission_denied', 'Managed Channel requires an active Agent owned by the authenticated user.')
+  }
+  const device = required(await repository.getDevice(agent.deviceId), 'Managed Channel Agent Device')
+  if (device.userId !== ownerUserId || device.status !== 'active') {
+    fail('credential_revoked', 'Managed Channel Agent Device is no longer active.')
+  }
+  return device.installationId
 }
 
 function actorAuditIdentity(actor: AuthContext): Pick<StoredAuditEvent, 'actorUserId' | 'actorEndpointId' | 'actorAgentId'> {
@@ -6885,6 +7272,8 @@ async function requireEligibleWorkerUser(input: Readonly<{
 async function bindPlanFileDeclarationToCurrentProjectRoot(
   tx: CollaborationTransaction,
   project: StoredProject,
+  plan: StoredProjectPlan,
+  dependencyTaskIds: readonly string[],
   declaration: TaskFileDeclaration | null
 ): Promise<TaskFileIntent | null> {
   if (declaration === null) return null
@@ -6895,7 +7284,152 @@ async function bindPlanFileDeclarationToCurrentProjectRoot(
     await tx.getProjectContentSpaceBindingForUpdate(project.projectId),
     'Project Content binding'
   )
-  return bindTaskFileDeclaration(declaration, binding.revision)
+  if (
+    binding.status !== 'active' ||
+    binding.rootLocator === null ||
+    binding.rootLocatorDigest === null ||
+    stableDigest(binding.rootLocator) !== binding.rootLocatorDigest
+  ) {
+    fail('revision_conflict', 'A file Task requires the exact active Project Content root.')
+  }
+  const resolvedDependencyInputs: TaskFileIntent['inputs'] = []
+  for (const dependencyInput of declaration.dependencyInputs) {
+    resolvedDependencyInputs.push(await resolveAcceptedDependencyFileInput({
+      tx,
+      project,
+      plan,
+      binding,
+      rootLocator: binding.rootLocator,
+      rootLocatorDigest: binding.rootLocatorDigest,
+      dependencyTaskIds,
+      dependencyInput
+    }))
+  }
+  const allInputs = [...declaration.inputs, ...resolvedDependencyInputs]
+  if (allInputs.length > 100) {
+    fail('validation_failed', 'A Task file intent may contain at most 100 total inputs.')
+  }
+  const destinationNames = allInputs.map(({ destinationName }) => destinationName)
+  const locatorDigests = allInputs.map(({ locator }) => stableDigest(locator))
+  if (
+    !taskFileDestinationNamesAreUnique(destinationNames) ||
+    new Set(locatorDigests).size !== locatorDigests.length
+  ) {
+    fail('validation_failed', 'A Task file intent requires unique destinations and exact input locators.')
+  }
+  return bindTaskFileDeclaration(declaration, binding.revision, resolvedDependencyInputs)
+}
+
+async function resolveAcceptedDependencyFileInput(input: Readonly<{
+  tx: CollaborationTransaction
+  project: StoredProject
+  plan: StoredProjectPlan
+  binding: StoredProjectContentSpaceBinding
+  rootLocator: NonNullable<StoredProjectContentSpaceBinding['rootLocator']>
+  rootLocatorDigest: string
+  dependencyTaskIds: readonly string[]
+  dependencyInput: TaskFileDependencyInput
+}>): Promise<TaskFileIntent['inputs'][number]> {
+  const sourcePlanItem = input.plan.tasks.find(
+    ({ planItemId }) => planItemId === input.dependencyInput.planItemId
+  )
+  const sourceTaskId = sourcePlanItem === undefined
+    ? null
+    : canonicalTaskIdForPlanItem(input.plan.projectPlanId, sourcePlanItem.planItemId)
+  if (
+    sourcePlanItem?.fileIntent === null ||
+    sourceTaskId === null ||
+    !input.dependencyTaskIds.includes(sourceTaskId)
+  ) {
+    fail('validation_failed', 'A dependency input must select a direct file Task dependency.')
+  }
+  const sourceTask = required(await input.tx.getTask(sourceTaskId), 'Dependency Task')
+  if (
+    sourceTask.projectId !== input.project.projectId ||
+    sourceTask.status !== 'completed' ||
+    sourceTask.currentExecutionState !== 'completed' ||
+    sourceTask.currentExecutionId === null ||
+    sourceTask.fileIntent === null
+  ) {
+    fail('revision_conflict', 'A dependency input requires the exact current completed file Task.')
+  }
+  const execution = required(
+    await input.tx.getTaskExecution(sourceTask.currentExecutionId),
+    'Dependency Task execution'
+  )
+  if (
+    execution.projectId !== input.project.projectId ||
+    execution.taskId !== sourceTask.taskId ||
+    execution.state !== 'completed' ||
+    execution.fence.status !== 'fenced' ||
+    execution.fence.reason !== 'completed' ||
+    execution.currentResultSubmissionId === null ||
+    execution.fileIntent === null
+  ) {
+    fail('revision_conflict', 'A dependency input requires the exact current completed execution.')
+  }
+  const submission = required(
+    await input.tx.getTaskResultSubmission(execution.currentResultSubmissionId),
+    'Dependency Task result submission'
+  )
+  if (
+    submission.projectId !== input.project.projectId ||
+    submission.taskId !== sourceTask.taskId ||
+    submission.executionId !== execution.executionId
+  ) {
+    fail('revision_conflict', 'A dependency input requires the exact current result submission.')
+  }
+  const acceptedReview = (await input.tx.listTaskResultReviews(submission.resultSubmissionId))
+    .find((review) => (
+      review.projectId === input.project.projectId &&
+      review.taskId === sourceTask.taskId &&
+      review.executionId === execution.executionId &&
+      review.resultSubmissionId === submission.resultSubmissionId &&
+      review.reviewedResultRevision === submission.revision &&
+      review.decision === 'accept' &&
+      review.acceptedProjectRecordId !== null
+    ))
+  if (!acceptedReview?.acceptedProjectRecordId) {
+    fail('revision_conflict', 'A dependency input requires a Coordinator-accepted current result.')
+  }
+  const acceptedRecord = required(
+    await input.tx.getProjectRecord(acceptedReview.acceptedProjectRecordId),
+    'Accepted dependency Project record'
+  )
+  if (
+    acceptedRecord.projectId !== input.project.projectId ||
+    acceptedRecord.kind !== 'observation' ||
+    acceptedRecord.status !== 'accepted' ||
+    acceptedRecord.sourceTaskId !== sourceTask.taskId ||
+    acceptedRecord.sourceResultSubmissionId !== submission.resultSubmissionId ||
+    acceptedRecord.sourceRevision !== submission.revision ||
+    acceptedRecord.acceptedByUserId !== acceptedReview.decidedByUserId ||
+    acceptedRecord.acceptedByAgentId !== acceptedReview.decidedByCoordinatorAgentId
+  ) {
+    fail('revision_conflict', 'A dependency input requires its exact accepted Project record.')
+  }
+  const output = submission.outputs[input.dependencyInput.outputIndex]
+  if (
+    output === undefined ||
+    output.locator.kind !== 'content-space.file-reference' ||
+    output.executionId !== execution.executionId ||
+    output.assignmentTaskRevision !== execution.fence.assignmentTaskRevision ||
+    output.bindingRevision !== execution.fence.bindingRevision ||
+    output.bindingRevision !== sourceTask.fileIntent.bindingRevision ||
+    output.bindingRevision > input.binding.revision ||
+    output.rootLocatorDigest !== input.rootLocatorDigest ||
+    output.locator.authority !== input.rootLocator.authority ||
+    stableDigest(output.locator) !== output.locatorDigest
+  ) {
+    fail('revision_conflict', 'The selected dependency output does not match the accepted file and active root.')
+  }
+  return {
+    kind: 'content-space.input-file',
+    locator: output.locator,
+    destinationName: input.dependencyInput.destinationName,
+    expectedSemanticRevision: null,
+    expectedMediaType: null
+  }
 }
 
 async function requireEligibleAssignee(input: Readonly<{
@@ -7065,12 +7599,14 @@ async function requireTaskOfferClaim(
   task: StoredTask
   offer: StoredTaskOffer
 }>> {
+  const observedTask = required(await tx.getTask(input.taskId), 'Task')
+  const project = required(await tx.getProjectForUpdate(observedTask.projectId), 'Project')
   const task = required(await tx.getTaskForUpdate(input.taskId), 'Task')
   expectRevision(task.revision, input.expectedTaskRevision)
   const offer = required(await tx.getTaskOfferForUpdate(input.taskOfferId), 'Task offer')
   expectRevision(offer.revision, input.expectedOfferRevision)
-  const project = required(await tx.getProjectForUpdate(task.projectId), 'Project')
   if (
+    task.projectId !== project.projectId ||
     offer.taskId !== task.taskId ||
     offer.projectId !== project.projectId
   ) {
@@ -7268,23 +7804,15 @@ function sameLocator(left: ProviderLocatorValue, right: ProviderLocatorValue): b
     && left.topicId === right.topicId
 }
 
-function remoteApprovalCard(
-  approval: StoredRemoteCapabilityApproval,
-  approvalReference: string,
-  sessionDisplayName: string
-): string {
-  return [
-    'SciForge 请求一次权限',
-    '',
-    `操作：${approval.safeSummary}`,
-    `Session：${sessionDisplayName}`,
-    `风险：${approval.effect}`,
-    '有效期：5 分钟',
-    '',
-    '回复：',
-    `1 ${approvalReference}    仅本次允许`,
-    `2 ${approvalReference}    拒绝`
-  ].join('\n')
+function remoteApprovalCard(approval: StoredRemoteCapabilityApproval): string {
+  const riskNotice = approval.effect !== 'workspace-write'
+    ? '\n高风险，建议到电脑核实。'
+    : ''
+  return `需审批（5 分钟）：${approval.safeSummary}${riskNotice}\n👍 允许一次 · 👎 拒绝`
+}
+
+function remoteApprovalDesktopRequiredNotice(approval: StoredRemoteCapabilityApproval): string {
+  return `需在 SciForge 电脑端审批：${approval.safeSummary}`
 }
 
 function remoteApprovalTerminalText(status: StoredRemoteCapabilityApproval['status']): string {
@@ -7315,6 +7843,7 @@ function toRemoteApprovalEntity(approval: StoredRemoteCapabilityApproval): Recor
     safeSummary: approval.safeSummary,
     effect: approval.effect,
     remoteEligible: approval.remoteEligible,
+    interactionMode: approval.interactionMode,
     status: approval.status,
     expiresAt: approval.expiresAt,
     ...(approval.providerCardMessageId ? { providerCardMessageId: approval.providerCardMessageId } : {}),

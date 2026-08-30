@@ -32,6 +32,7 @@ import {
   type ProjectCoordinatorCapabilityFactory,
   type ProjectCoordinatorCapabilityOptions
 } from './main.js'
+import type { ProjectCreationOrchestrator } from './project-creation-orchestrator.js'
 import type { ProjectCoordinatorSessionProjectionPort } from './session-projection.js'
 import {
   createProjectContentProvisioningAttestationSigningPort,
@@ -50,8 +51,7 @@ test('workspace read remains a strict non-writing coordination capability', asyn
           providerPrincipalFacts: [],
           projects: []
         }),
-        createProject: async () => { throw new Error('unused') },
-        completeProjectCreate: async () => { throw new Error('unused') }
+        createProject: async () => { throw new Error('unused') }
       },
       plan: {
         readDraft: async () => null,
@@ -70,7 +70,8 @@ test('workspace read remains a strict non-writing coordination capability', asyn
       coordinatorCloudCommands: coordinatorCloudCommandService(),
       actions: coordinatorActionPort()
     },
-    sessions: sessionProjectionPort()
+    sessions: sessionProjectionPort(),
+    projectCreation: projectCreationStub()
   })
   const definitions = factory.createDefinitions()
   assert.deepEqual(factory.policy.directTransportPrefixes, [])
@@ -98,7 +99,8 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
       state: 'ready',
       baseUrl: 'https://cloud-run0.sciforge.cn/',
       userId: 'usr_Owner0000001',
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async () => {
       executeCalls += 1
@@ -113,6 +115,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   let coordinatorInboxSubscribed = false
   const coordinatorService: CoordinatorCloudCommandService = {
     execute: async () => { throw new Error('No Coordinator write is expected.') },
+    resume: async () => null,
     subscribe: () => {
       coordinatorInboxSubscribed = true
       return () => { coordinatorInboxSubscribed = false }
@@ -176,6 +179,8 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   assert.deepEqual(factory.createDefinitions().map(({ id }) => id), [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
@@ -184,9 +189,9 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
     PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
     PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
@@ -217,6 +222,7 @@ function coordinatorCloudCommandService(): CoordinatorCloudCommandService {
     execute: async () => {
       throw new Error('No write capability invoked this test service.')
     },
+    resume: async () => null,
     subscribe: () => () => undefined
   })
 }
@@ -260,7 +266,13 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
       availableWorkerUsers: [],
       providerPrincipalFacts: [],
       projects: [createdProjectView()]
-    }
+    },
+    coordinatorSession: {
+      projectId: 'prj_ProjectCreated01',
+      runtimeId: 'runtime-created-project',
+      threadId: 'thread-created-project'
+    },
+    activationRequestId: 'pca_UiActivation001'
   }
   // The tracer observes only capability policy and delegation. Cloud parsing,
   // pagination, digest and CAS behavior are covered through the public ports.
@@ -273,8 +285,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
         providerPrincipalFacts: [],
         projects: []
       }),
-      createProject: async () => created,
-      completeProjectCreate: async () => undefined
+      createProject: async () => created
     },
     plan: {
       readDraft: async () => null,
@@ -296,13 +307,16 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
     ports: ports as never,
-    sessions: sessionProjectionPort()
+    sessions: sessionProjectionPort(),
+    projectCreation: projectCreationStub(async () => created)
   })
   const definitions = factory.createDefinitions()
 
   assert.deepEqual(definitions.map(({ id }) => id), [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
@@ -311,9 +325,9 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
     PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
     PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
@@ -325,13 +339,48 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
   ])
   const create = definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate)!
+  assert.equal(create.version, '2.0.0')
   assert.equal(create.effect, 'external-write')
   assert.equal(create.approval, 'confirmation')
   assert.equal(create.concurrency.idempotency, 'required')
+  const projectDelete = definitions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete
+  )!
+  assert.equal(projectDelete.version, '1.0.0')
+  assert.equal(projectDelete.effect, 'destructive')
+  assert.equal(projectDelete.approval, 'confirmation')
+  assert.equal(projectDelete.concurrency.idempotency, 'required')
   const generate = definitions.find(
     ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate
   )!
+  assert.equal(generate.version, '3.0.0')
   assert.equal(generate.effect, 'workspace-write')
+  for (const id of [
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.resultReview,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete
+  ]) {
+    assert.equal(definitions.find((definition) => definition.id === id)?.version, '2.0.0')
+  }
+  const activation = definitions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge
+  )!
+  assert.deepEqual(activation.audiences, ['ui'])
   const transfer = definitions.find(
     ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer
   )!
@@ -353,13 +402,15 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   })
 })
 
-test('Agent project.create binds only after an exact successful canonical receipt', async () => {
+test('project.create delegates fresh Session creation to the canonical orchestrator', async () => {
   const result = createdProjectResult()
-  const successfulSessions = trackingSessionProjectionPort()
-  const successful = projectCreateCapability(async () => result, successfulSessions.port)
-  const context = agentInvocationContext('invocation-agent-create-1')
-
-  assert.deepEqual(await successful.handler({
+  const calls: Array<Readonly<{ input: unknown; context: unknown }>> = []
+  const successful = projectCreateCapability(async (input, context) => {
+    calls.push({ input, context })
+    return result
+  })
+  const invocation = agentInvocationContext('invocation-agent-create-1')
+  const input = {
     createIntentId: result.createIntentId,
     displayName: 'Meeting',
     goal: 'Run the meeting.',
@@ -369,97 +420,27 @@ test('Agent project.create binds only after an exact successful canonical receip
       maxTaskRetries: 1,
       maxCoordinationRounds: 2
     }
-  }, context), { output: result })
-  assert.deepEqual(successfulSessions.boundSessions, [context.ordinarySession])
-
-  const rejectedSessions = trackingSessionProjectionPort()
-  const rejected = projectCreateCapability(async () => {
-    throw new Error('canonical create rejected')
-  }, rejectedSessions.port)
-  await assert.rejects(() => rejected.handler({
-    createIntentId: 'pct_RejectedCreate0001',
-    displayName: 'Rejected',
-    goal: 'Remain unbound.',
-    budget: {
-      maxTasks: 4,
-      maxTasksPerRound: 4,
-      maxTaskRetries: 1,
-      maxCoordinationRounds: 2
-    }
-  }, agentInvocationContext('invocation-agent-create-2')), /canonical create rejected/u)
-  assert.deepEqual(rejectedSessions.boundSessions, [])
-
-  for (const failure of [
-    Object.assign(new Error('Project create was cancelled.'), { name: 'AbortError' }),
-    Object.assign(new Error('Project create timed out.'), { name: 'TimeoutError' })
-  ]) {
-    const interruptedSessions = trackingSessionProjectionPort()
-    const interrupted = projectCreateCapability(async () => {
-      throw failure
-    }, interruptedSessions.port)
-    await assert.rejects(() => interrupted.handler({
-      createIntentId: failure.name === 'AbortError'
-        ? 'pct_CancelledCreate001'
-        : 'pct_TimeoutCreate00001',
-      displayName: failure.name,
-      goal: 'Remain unbound after an interrupted create.',
-      budget: {
-        maxTasks: 4,
-        maxTasksPerRound: 4,
-        maxTaskRetries: 1,
-        maxCoordinationRounds: 2
-      }
-    }, agentInvocationContext(`invocation-agent-${failure.name.toLowerCase()}`)), failure)
-    assert.deepEqual(interruptedSessions.boundSessions, [])
   }
 
-  const invalidSessions = trackingSessionProjectionPort()
-  const invalid = projectCreateCapability(async () => ({
-    createdProjectId: result.createdProjectId,
-    workspace: {
-      connection: { state: 'identity_required' },
-      observedAt: '2026-08-25T01:05:00.000Z',
-      focusedProjectId: result.createdProjectId,
-      availableWorkerUsers: [],
-      providerPrincipalFacts: [],
-      projects: []
+  assert.deepEqual(await successful.handler(input, invocation), { output: result })
+  assert.deepEqual(calls, [{
+    input,
+    context: {
+      preferredRuntimeId: invocation.ordinarySession!.runtimeId,
+      assertPrincipalCurrent: invocation.assertPrincipalCurrent
     }
-  }) as never, invalidSessions.port)
-  await assert.rejects(() => invalid.handler({
-    createIntentId: 'pct_InvalidCreate00001',
-    displayName: 'Invalid receipt',
-    goal: 'Remain unbound after response drift.',
-    budget: {
-      maxTasks: 4,
-      maxTasksPerRound: 4,
-      maxTaskRetries: 1,
-      maxCoordinationRounds: 2
-    }
-  }, agentInvocationContext('invocation-agent-create-3')))
-  assert.deepEqual(invalidSessions.boundSessions, [])
+  }])
 
-  let alreadyBoundCloudCreates = 0
-  const alreadyBoundSessions = trackingSessionProjectionPort({ alreadyBound: true })
-  const alreadyBound = projectCreateCapability(async () => {
-    alreadyBoundCloudCreates += 1
-    return result
-  }, alreadyBoundSessions.port)
-  await assert.rejects(() => alreadyBound.handler({
-    createIntentId: 'pct_AlreadyBoundCreate1',
-    displayName: 'Second Project',
-    goal: 'Fail before a second Cloud create.',
-    budget: {
-      maxTasks: 4,
-      maxTasksPerRound: 4,
-      maxTaskRetries: 1,
-      maxCoordinationRounds: 2
-    }
-  }, agentInvocationContext('invocation-agent-create-bound')), /already bound/u)
-  assert.equal(alreadyBoundCloudCreates, 0)
-  assert.deepEqual(alreadyBoundSessions.boundSessions, [])
+  const rejected = projectCreateCapability(async () => {
+    throw new Error('canonical create rejected')
+  })
+  await assert.rejects(
+    rejected.handler(input, agentInvocationContext('invocation-agent-create-2')),
+    /canonical create rejected/u
+  )
 })
 
-test('Agent reads require exact ordinary Session scope and cannot enumerate sibling Sessions', async () => {
+test('Agent reads target an explicit Project independently of ordinary Session bindings', async () => {
   const seenProjectionSessions: unknown[] = []
   let workspaceReads = 0
   const sessions: ProjectCoordinatorSessionProjectionPort = {
@@ -469,19 +450,19 @@ test('Agent reads require exact ordinary Session scope and cannot enumerate sibl
       return {
         schemaVersion: 1,
         observedAt: '2026-08-28T00:00:00.000Z',
-        bindings: []
+        bindings: [],
+        pendingActivations: []
       }
     },
-    scopeWorkspaceRead: async () => {
-      throw new Error('The ordinary Session is not bound to a Cloud Project.')
-    }
+    scopeWorkspaceRead: async (input) => input
   }
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
     ports: projectCreatePorts(async () => createdProjectResult(), () => {
       workspaceReads += 1
     }) as never,
-    sessions
+    sessions,
+    projectCreation: projectCreationStub()
   })
   const definitions = factory.createDefinitions()
   assert.equal(definitions.some(({ id }) => id.endsWith('.session.bind')), false)
@@ -490,6 +471,7 @@ test('Agent reads require exact ordinary Session scope and cannot enumerate sibl
   )).map(({ id }) => id), [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
@@ -498,9 +480,9 @@ test('Agent reads require exact ordinary Session scope and cannot enumerate sibl
     PROJECT_COORDINATOR_CAPABILITY_IDS.planConfirm,
     PROJECT_COORDINATOR_CAPABILITY_IDS.workflowPrepare,
     PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryObserveLink,
     PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
@@ -523,11 +505,12 @@ test('Agent reads require exact ordinary Session scope and cannot enumerate sibl
   const workspaceRead = definitions.find(({ id }) => (
     id === PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead
   ))!
-  await assert.rejects(
-    workspaceRead.handler({}, firstSession),
-    /not bound to a Cloud Project/u
-  )
-  assert.equal(workspaceReads, 0)
+  const workspaceResult = await workspaceRead.handler({
+    projectId: 'prj_ProjectCreated01'
+  }, firstSession)
+  assert.equal((workspaceResult.output as { focusedProjectId?: string }).focusedProjectId,
+    'prj_ProjectCreated01')
+  assert.equal(workspaceReads, 1)
 })
 
 test('membership-inactive Agent scope rejects external writes before the canonical port', async () => {
@@ -550,7 +533,8 @@ test('membership-inactive Agent scope rejects external writes before the canonic
       authorize: async () => {
         throw new Error('The ordinary Session is fenced: membership_inactive.')
       }
-    }
+    },
+    projectCreation: projectCreationStub()
   })
   const addMember = factory.createDefinitions().find(({ id }) => (
     id === PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd
@@ -566,6 +550,116 @@ test('membership-inactive Agent scope rejects external writes before the canonic
   assert.equal(addMemberCalls, 0)
 })
 
+test('Project delete requires exact Coordinator Session authority and derives a stable invocation key', async () => {
+  const projectId = 'prj_ProjectCreated01'
+  const calls: Array<Readonly<{ input: unknown; idempotencyKey: string }>> = []
+  const authorizations: Array<Readonly<{
+    projectId: string
+    session: unknown
+    access: string
+  }>> = []
+  const deleted = Object.freeze({ projectId, deleted: true as const })
+  let deleteIntentStarted = false
+  const basePorts = projectCreatePorts(async () => createdProjectResult())
+  const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: (input) => input,
+    ports: {
+      ...basePorts,
+      actions: {
+        ...coordinatorActionPort(),
+        deleteProject: async (
+          input: unknown,
+          idempotencyKey: string,
+          authorizeFirstAttempt: () => Promise<void>
+        ) => {
+          if (!deleteIntentStarted) {
+            await authorizeFirstAttempt()
+            deleteIntentStarted = true
+          }
+          calls.push({ input, idempotencyKey })
+          return deleted
+        }
+      }
+    } as never,
+    sessions: {
+      ...sessionProjectionPort(),
+      authorize: async (authorizedProjectId, session, access) => {
+        authorizations.push({ projectId: authorizedProjectId, session, access })
+        return {
+          schemaVersion: 1,
+          role: 'coordinator',
+          projectId: authorizedProjectId,
+          principalUserId: 'usr_Owner0000001',
+          coordinatorAgentId: 'agt_Coordinator01',
+          coordinatorAuthorityEpoch: 1,
+          runtimeId: session.runtimeId,
+          threadId: session.threadId,
+          boundAt: '2026-08-28T01:00:00.000Z',
+          access: 'coordinator',
+          fenceReason: null
+        }
+      }
+    },
+    projectCreation: projectCreationStub()
+  })
+  const capability = factory.createDefinitions().find(({ id }) => (
+    id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete
+  ))!
+  const invocation = agentInvocationContext('invocation-project-delete-1')
+
+  assert.deepEqual(await capability.handler({ projectId }, invocation), { output: deleted })
+  assert.deepEqual(await capability.handler({ projectId }, invocation), { output: deleted })
+  assert.deepEqual(authorizations, [{
+    projectId,
+    session: invocation.ordinarySession,
+    access: 'coordinator'
+  }])
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls.map(({ input }) => input), [{ projectId }, { projectId }])
+  assert.equal(calls[0]!.idempotencyKey, calls[1]!.idempotencyKey)
+  assert.match(calls[0]!.idempotencyKey, /^idem_project-coordinator\.[a-f0-9]{48}$/u)
+
+  let fencedCalls = 0
+  const fenced = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: (input) => input,
+    ports: {
+      ...basePorts,
+      actions: {
+        ...coordinatorActionPort(),
+        deleteProject: async (
+          _input: unknown,
+          _idempotencyKey: string,
+          authorizeFirstAttempt: () => Promise<void>
+        ) => {
+          await authorizeFirstAttempt()
+          fencedCalls += 1
+          return deleted
+        }
+      }
+    } as never,
+    sessions: {
+      ...sessionProjectionPort(),
+      authorize: async () => {
+        throw new Error('The ordinary Session is fenced: membership_inactive.')
+      }
+    },
+    projectCreation: projectCreationStub()
+  }).createDefinitions().find(({ id }) => (
+    id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete
+  ))!
+  await assert.rejects(
+    fenced.handler({ projectId }, agentInvocationContext('invocation-project-delete-fenced')),
+    /membership_inactive/u
+  )
+  assert.equal(fencedCalls, 0)
+
+  await assert.rejects(
+    capability.handler({ projectId }, uiInvocationContext()),
+    /Host invocation ID is required/u
+  )
+  assert.equal(calls.length, 2)
+})
+
 test('Plan generation capability returns only a bounded package-owned failure reason', async () => {
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
@@ -578,8 +672,7 @@ test('Plan generation capability returns only a bounded package-owned failure re
           providerPrincipalFacts: [],
           projects: []
         }),
-        createProject: async () => { throw new Error('unused') },
-        completeProjectCreate: async () => { throw new Error('unused') }
+        createProject: async () => { throw new Error('unused') }
       },
       plan: {
         readDraft: async () => null,
@@ -603,7 +696,8 @@ test('Plan generation capability returns only a bounded package-owned failure re
       coordinatorCloudCommands: coordinatorCloudCommandService(),
       actions: coordinatorActionPort()
     },
-    sessions: sessionProjectionPort()
+    sessions: sessionProjectionPort(),
+    projectCreation: projectCreationStub()
   })
   const generate = factory.createDefinitions().find(
     ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate
@@ -626,6 +720,7 @@ test('Plan generation capability returns only a bounded package-owned failure re
 
 function coordinatorActionPort() {
   return Object.freeze({
+    deleteProject: async () => { throw new Error('unused') },
     transferCoordinator: async () => { throw new Error('unused') },
     createHumanNeeded: async () => { throw new Error('unused') },
     answerHumanNeeded: async () => { throw new Error('unused') },
@@ -654,19 +749,18 @@ function coordinatorProvisioningPort() {
 function coordinatorRecoveryPort() {
   return Object.freeze({
     observeAndLink: async () => { throw new Error('unused') },
-    abandon: async () => { throw new Error('unused') },
-    retrySuccessor: async () => { throw new Error('unused') }
+    abandon: async () => { throw new Error('unused') }
   })
 }
 
 function projectCreateCapability(
-  createProject: () => Promise<unknown>,
-  sessions: ProjectCoordinatorSessionProjectionPort
+  createProject: ProjectCreationOrchestrator['create']
 ): ProjectCoordinatorCapabilityOptions {
   return createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
-    ports: projectCreatePorts(createProject) as never,
-    sessions
+    ports: projectCreatePorts(async () => { throw new Error('unused') }) as never,
+    sessions: sessionProjectionPort(),
+    projectCreation: projectCreationStub(createProject)
   }).createDefinitions().find(({ id }) => (
     id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate
   ))!
@@ -682,8 +776,7 @@ function projectCreatePorts(
         onWorkspaceRead()
         return createdProjectResult().workspace
       },
-      createProject,
-      completeProjectCreate: async () => undefined
+      createProject
     },
     plan: {
       readDraft: async () => null,
@@ -719,40 +812,23 @@ function createdProjectResult() {
       availableWorkerUsers: [],
       providerPrincipalFacts: [],
       projects: [createdProjectView()]
-    }
+    },
+    coordinatorSession: {
+      projectId: 'prj_ProjectCreated01',
+      runtimeId: 'runtime-created-project',
+      threadId: 'thread-created-project'
+    },
+    activationRequestId: 'pca_MainActivation01'
   }
 }
 
-function trackingSessionProjectionPort(
-  input: Readonly<{ alreadyBound?: boolean }> = {}
-) {
-  const boundSessions: unknown[] = []
-  let bound = input.alreadyBound ?? false
-  const port: ProjectCoordinatorSessionProjectionPort = {
-    ...sessionProjectionPort(),
-    withUnboundSession: async (_session, operation) => {
-      if (bound) throw new Error('The ordinary Session is already bound to a Cloud Project.')
-      return operation()
-    },
-    bindCreatedProject: async (result, session) => {
-      boundSessions.push(session)
-      bound = true
-      return {
-        schemaVersion: 1,
-        role: 'coordinator',
-        projectId: result.createdProjectId,
-        principalUserId: 'usr_Owner0000001',
-        coordinatorAgentId: 'agt_Coordinator01',
-        coordinatorAuthorityEpoch: 1,
-        runtimeId: session.runtimeId,
-        threadId: session.threadId,
-        boundAt: '2026-08-25T01:05:00.000Z',
-        access: 'coordinator',
-        fenceReason: null
-      }
-    }
-  }
-  return { port, boundSessions }
+function projectCreationStub(
+  create: ProjectCreationOrchestrator['create'] = async () => createdProjectResult()
+): ProjectCreationOrchestrator {
+  return {
+    create,
+    acknowledgeActivation: async () => undefined
+  } as unknown as ProjectCreationOrchestrator
 }
 
 function createdProjectView() {
@@ -824,11 +900,10 @@ function sessionProjectionPort(): ProjectCoordinatorSessionProjectionPort {
     readProjection: async () => ({
       schemaVersion: 1,
       observedAt: '2026-08-28T00:00:00.000Z',
-      bindings: []
+      bindings: [],
+      pendingActivations: []
     }),
     scopeWorkspaceRead: async (input) => input,
-    withUnboundSession: async (_session, operation) => operation(),
-    bindCreatedProject: async () => { throw new Error('unused') },
     authorize: async () => { throw new Error('unused') },
     authorizeInvitationAcceptance: async () => undefined
   }

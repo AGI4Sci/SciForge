@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-sdk",
-  "version": "0.2.11",
+  "version": "0.2.13",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -12,6 +12,10 @@
     "./controlled-process": "./src/controlled-process.ts",
     "./external-navigation": "./src/external-navigation.ts",
     "./file-transfer": "./src/file-transfer.ts",
+    "./file-transfer-portability": {
+      "types": "./src/file-transfer-portability.d.ts",
+      "import": "./src/file-transfer-portability.js"
+    },
     "./host": "./src/host.ts",
     "./main": "./src/main.ts",
     "./package-storage": "./src/package-storage.ts",

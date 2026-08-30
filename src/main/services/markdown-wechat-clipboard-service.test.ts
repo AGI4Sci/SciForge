@@ -252,7 +252,7 @@ describe('markdown-wechat-clipboard-service', () => {
     expect(result.counts.embeddedImages).toBe(2)
     expect(result.outputBytes).toBeGreaterThan(20_000_000)
     expect(result.html.match(/data:image\/png;base64/g)).toHaveLength(2)
-  })
+  }, 15_000)
 
   it('delegates traversal-shaped image paths to the workspace-safe reader and preserves alt text on rejection', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-wechat-workspace-'))

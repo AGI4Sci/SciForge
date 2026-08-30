@@ -7,11 +7,13 @@ import {
   openContentBindInputSchema,
   openContentConnectionTargetInputSchema,
   openContentConnectionResultSchema,
-  openContentUnbindOutputSchema
+  openContentUnbindOutputSchema,
+  type OpenContentExternalBindingAttestation
 } from '../contract.js'
 import { OPENCONTENT_CONNECTOR_DOMAIN_MODULE_ID } from '../definition.js'
 import type { OpenContentConnectionService } from './connection-service.js'
 import { OpenContentPrivateAccountError } from './private-account-runtime.js'
+import type { OpenContentProviderPrincipalPublisher } from './provider-principal-publisher.js'
 
 type OpenContentCapabilityContext = Readonly<{
   caller: Readonly<{
@@ -57,7 +59,9 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
   defineCapability(options: OpenContentCapabilityOptions): CapabilityDefinition
   providerInstanceRef: string
   connections: OpenContentConnectionService
+  providerPrincipalPublisher: OpenContentProviderPrincipalPublisher
 }>): OpenContentCapabilityFactoryContribution<CapabilityDefinition> {
+  const providerPrincipalPublisher = options.providerPrincipalPublisher
   const define = (
     input: Omit<OpenContentCapabilityOptions, 'audiences' | 'scope'>
   ): CapabilityDefinition => options.defineCapability({
@@ -76,12 +80,12 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
     createDefinitions: () => [
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Inspect OpenContent Connection',
-        description: 'Reads the current Principal connection status for OpenContent.',
-        effect: 'read',
+        description: 'Reads and synchronizes the current Principal connection status for OpenContent.',
+        effect: 'external-write',
         approval: 'none',
-        concurrency: { revision: 'none', idempotency: 'none' },
+        concurrency: { revision: 'none', idempotency: 'required' },
         tags: ['opencontent', 'provider-connection'],
         inputSchema: openContentConnectionTargetInputSchema,
         outputSchema: openContentConnectionResultSchema,
@@ -93,18 +97,25 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
           )
           if (targetError) return { output: targetError }
           return {
-            output: await connectionCapabilityResult(() => options.connections.status({
+            output: await connectionCapabilityResult(() => synchronizeConnectionStatus(
+              options,
+              providerPrincipalPublisher,
               principal,
-              providerInstanceRef: input.providerInstanceRef,
-              signal: context.signal,
-              assertPrincipalCurrent: context.assertPrincipalCurrent
-            }))
+              input.providerInstanceRef,
+              context,
+              () => options.connections.status({
+                principal,
+                providerInstanceRef: input.providerInstanceRef,
+                signal: context.signal,
+                assertPrincipalCurrent: context.assertPrincipalCurrent
+              })
+            ))
           }
         }
       }),
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Bind Existing OpenContent Account',
         description: 'Validates and binds one existing OpenContent account to the current Principal.',
         effect: 'external-write',
@@ -126,13 +137,20 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
           }
           try {
             return {
-              output: await connectionCapabilityResult(() => options.connections.enroll({
+              output: await connectionCapabilityResult(() => synchronizeConnectionStatus(
+                options,
+                providerPrincipalPublisher,
                 principal,
-                providerInstanceRef: input.providerInstanceRef,
-                credentials,
-                signal: context.signal,
-                assertPrincipalCurrent: context.assertPrincipalCurrent
-              }))
+                input.providerInstanceRef,
+                context,
+                () => options.connections.enroll({
+                  principal,
+                  providerInstanceRef: input.providerInstanceRef,
+                  credentials,
+                  signal: context.signal,
+                  assertPrincipalCurrent: context.assertPrincipalCurrent
+                })
+              ))
             }
           } finally {
             credentials.account = ''
@@ -142,7 +160,7 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
       }),
       define({
         id: OPENCONTENT_CONNECTION_CAPABILITY_IDS.unbind,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Unbind OpenContent Account',
         description: 'Removes this Principal-bound, node-local OpenContent Session Token.',
         effect: 'external-write',
@@ -159,17 +177,94 @@ export function createOpenContentCapabilityFactory<CapabilityDefinition>(options
           )
           if (targetError) return { output: targetError }
           return {
-            output: await unbindCapabilityResult(() => options.connections.unbind({
-              principal,
-              providerInstanceRef: input.providerInstanceRef,
-              signal: context.signal,
-              assertPrincipalCurrent: context.assertPrincipalCurrent
-            }))
+            output: await unbindCapabilityResult(async () => {
+              const result = await options.connections.unbind({
+                principal,
+                providerInstanceRef: input.providerInstanceRef,
+                signal: context.signal,
+                assertPrincipalCurrent: context.assertPrincipalCurrent
+              })
+              context.assertPrincipalCurrent()
+              await providerPrincipalPublisher.synchronize({
+                principal,
+                providerInstanceRef: input.providerInstanceRef,
+                status: { state: 'disconnected' },
+                signal: context.signal,
+                assertPrincipalCurrent: context.assertPrincipalCurrent
+              })
+              return result
+            })
           }
         }
       })
     ]
   })
+}
+
+async function synchronizeConnectionStatus(
+  options: Readonly<{
+    connections: OpenContentConnectionService
+  }>,
+  providerPrincipalPublisher: OpenContentProviderPrincipalPublisher,
+  principal: PrincipalSnapshot,
+  providerInstanceRef: string,
+  context: OpenContentCapabilityContext,
+  readStatus: () => Promise<import('../contract.js').OpenContentConnectionStatus>
+): Promise<import('../contract.js').OpenContentConnectionStatus> {
+  const status = await readStatus()
+  if (principal.assurance !== 'cloud-authenticated') return status
+  let connected: Readonly<{
+    externalIdentityId: number
+    bindingAttestation: OpenContentExternalBindingAttestation
+    observedAt: string
+  }> | undefined
+  try {
+    connected = status.state === 'connected'
+      ? await options.connections.useCurrentSession(
+          {
+            principal,
+            providerInstanceRef,
+            signal: context.signal,
+            assertPrincipalCurrent: context.assertPrincipalCurrent
+          },
+          ({ externalIdentityId, bindingAttestation }) => Object.freeze({
+            externalIdentityId,
+            bindingAttestation,
+            observedAt: new Date().toISOString()
+          })
+        )
+      : undefined
+  } catch (error) {
+    if (isProviderAuthorizationFailure(error)) {
+      context.assertPrincipalCurrent()
+      await providerPrincipalPublisher.synchronize({
+        principal,
+        providerInstanceRef,
+        status: {
+          state: 'reauthentication_required',
+          providerInstanceRef
+        },
+        signal: context.signal,
+        assertPrincipalCurrent: context.assertPrincipalCurrent
+      })
+    }
+    throw error
+  }
+  context.assertPrincipalCurrent()
+  await providerPrincipalPublisher.synchronize({
+    principal,
+    providerInstanceRef,
+    status,
+    ...(connected ? { connected } : {}),
+    signal: context.signal,
+    assertPrincipalCurrent: context.assertPrincipalCurrent
+  })
+  return status
+}
+
+function isProviderAuthorizationFailure(error: unknown): boolean {
+  return error instanceof OpenContentConnectorError &&
+    (error.code === 'unauthorized' || error.code === 'reauthentication_required')
 }
 
 function requireConnectionPrincipal(context: OpenContentCapabilityContext): PrincipalSnapshot {

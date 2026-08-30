@@ -94,6 +94,79 @@ describe('A OIDC, Device, and Agent server semantics', () => {
     }), 'credential_revoked')
   })
 
+  it('replays the first Agent response after credential rotation under one stable principal', async () => {
+    const clock = new Clock()
+    const repository = new IdentityFakeRepository()
+    const identities = new IdentityService(repository, clock.now)
+    const collaboration = new CollaborationService({ repository, now: clock.now })
+    const user = await identities.resolveOidcUser(verifiedIdentity(clock))
+    const enrollment = await identities.createDeviceEnrollment(user, {
+      installationId: 'ins_agent_rotation_replay',
+      idempotencyKey: 'idem_agent_rotation_enrollment'
+    })
+    const fixture = createDeviceFixture({
+      ...enrollment,
+      userId: user.userId,
+      installationId: 'ins_agent_rotation_replay'
+    })
+    const created = await identities.createDevice(user, {
+      ...fixture.deviceRequest,
+      nonce: enrollment.nonce,
+      idempotencyKey: 'idem_agent_rotation_device'
+    })
+    const firstBootstrap = createAgentCredentialBootstrap()
+    const registered = await collaboration.ensureAgent(user, {
+      deviceId: created.device.deviceId,
+      capabilities: ['runtime-exec'],
+      credentialBootstrapPublicKey: firstBootstrap.publicKey,
+      idempotencyKey: 'idem_agent_rotation_ensure'
+    })
+    const authentication = new AuthenticationService(repository, clock.now)
+    const firstCredential = firstBootstrap.open(registered.sealedCredential!)
+    const firstActor = await authentication.resolveBearer(firstCredential)
+    if (firstActor.kind !== 'agent_device') throw new Error('Expected Agent actor')
+
+    const heartbeatRequest = {
+      expectedRevision: registered.agent.revision,
+      connectionStatus: 'online' as const,
+      idempotencyKey: 'idem_agent_rotation_heartbeat'
+    }
+    const firstResponse = await collaboration.heartbeatAgent(firstActor, heartbeatRequest)
+    const firstReceipt = await collaboration.reconcileReceipt(
+      firstActor,
+      heartbeatRequest.idempotencyKey
+    )
+    expect(firstReceipt).not.toBeNull()
+
+    const replacementBootstrap = createAgentCredentialBootstrap()
+    const rotated = await collaboration.rotateAgentCredential(user, {
+      agentId: registered.agent.agentId,
+      expectedRevision: firstResponse.revision,
+      credentialBootstrapPublicKey: replacementBootstrap.publicKey,
+      idempotencyKey: 'idem_agent_rotation_replace'
+    })
+    const replacementCredential = replacementBootstrap.open(rotated.sealedCredential!)
+    const replacementActor = await authentication.resolveBearer(replacementCredential)
+    if (replacementActor.kind !== 'agent_device') throw new Error('Expected replacement Agent actor')
+
+    expect(firstActor.actorKey).toBe(`agent:${registered.agent.agentId}`)
+    expect(replacementActor.actorKey).toBe(firstActor.actorKey)
+    await expectServiceCode(() => authentication.resolveBearer(firstCredential), 'credential_revoked')
+    await expect(collaboration.heartbeatAgent(replacementActor, heartbeatRequest))
+      .resolves.toEqual(firstResponse)
+    await expect(collaboration.heartbeatAgent(replacementActor, {
+      ...heartbeatRequest,
+      connectionStatus: 'offline'
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+
+    expect(await collaboration.reconcileReceipt(replacementActor, heartbeatRequest.idempotencyKey))
+      .toEqual(firstReceipt)
+    expect(await repository.getAgent(registered.agent.agentId)).toMatchObject({
+      revision: rotated.agent.revision,
+      credentialGeneration: rotated.agent.credentialGeneration
+    })
+  })
+
   it('keeps exact revoke replay read-only after recent authentication expires', async () => {
     const clock = new Clock()
     const repository = new IdentityFakeRepository()

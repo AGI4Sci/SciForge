@@ -334,11 +334,19 @@ export class CloudIdentityRuntime {
           : 'Register this Desktop Device before continuing.'
       }
     }
+    const deviceRevision = this.#device.activeDeviceRevision()
+    if (deviceRevision === undefined) {
+      return {
+        state: 'unavailable',
+        reason: 'SciForge Cloud did not retain the ACTIVE Desktop Device revision.'
+      }
+    }
     return {
       state: 'ready',
       baseUrl: this.#cloudBaseUrl,
       userId: identity.user.userId,
-      deviceId: device.device.deviceId
+      deviceId: device.device.deviceId,
+      deviceRevision
     }
   }
 

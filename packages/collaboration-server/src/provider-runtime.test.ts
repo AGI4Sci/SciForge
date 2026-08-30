@@ -40,6 +40,23 @@ function managedContainerPolicy() {
   }
 }
 
+async function seedLocatorAgent(repository: FakeCollaborationRepository, userId: string, at: string) {
+  const deviceId = `dev_${userId.slice(4)}`
+  const agentId = `agt_${userId.slice(4)}`
+  await repository.insertDevice({
+    deviceId, userId, installationId: `ins_${userId.slice(4)}`, displayName: 'Local test computer',
+    platform: { os: 'windows', arch: 'x64' },
+    publicKeyJwk: { kty: 'OKP', crv: 'Ed25519', x: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
+    capabilitySummary: [], status: 'active', revision: 1, createdAt: at, updatedAt: at
+  })
+  await repository.insertAgent({
+    agentId, deviceId, ownerUserId: userId, displayName: 'Local Agent', nodeType: 'desktop',
+    capabilities: [], status: 'active', connectionStatus: 'online', credentialGeneration: 1,
+    revision: 1, updatedAt: at
+  })
+  return { agentId, installationId: `ins_${userId.slice(4)}` }
+}
+
 describe('provider runtime', () => {
   it('scopes locator discovery to the authenticated owner managed Channel', async () => {
     const repository = new FakeCollaborationRepository()
@@ -49,9 +66,11 @@ describe('provider runtime', () => {
       providerUserId: '42', displayName: 'Owner endpoint', assurance: 'verified', status: 'active',
       revision: 1, verifiedAt: at, updatedAt: at
     })
+    const local = await seedLocatorAgent(repository, 'usr_123456789012', at)
     await repository.insertManagedContainer({
       managedContainerId: 'mco_123456789012', ownerUserId: 'usr_123456789012',
-      humanEndpointId: 'hep_123456789012', provider: 'fake', realmId: 'realm-1', ownerProviderUserId: '42',
+      humanEndpointId: 'hep_123456789012', installationId: local.installationId,
+      provider: 'fake', realmId: 'realm-1', ownerProviderUserId: '42',
       stableKey: 'managed-owner-realm', displayName: 'sciforge-owner', externalContainerId: 'owner-channel',
       policy: managedContainerPolicy(), status: 'active', revision: 2, createdAt: at, updatedAt: at
     })
@@ -72,7 +91,7 @@ describe('provider runtime', () => {
     await expect(runtime.listLocators({
       actor: { kind: 'user', actorKey: 'user:usr_123456789012', userId: 'usr_123456789012',
         credentialId: 'credential-owner', assurance: 'verified' },
-      humanEndpointId: 'hep_123456789012', limit: 50
+      humanEndpointId: 'hep_123456789012', agentId: local.agentId, limit: 50
     })).resolves.toEqual({ locators: [] })
 
     expect(provider.locatorListRequests).toHaveLength(1)
@@ -90,7 +109,7 @@ describe('provider runtime', () => {
     await expect(runtime.listLocators({
       actor: { kind: 'user', actorKey: 'user:usr_123456789012', userId: 'usr_123456789012',
         credentialId: 'credential-owner', assurance: 'verified' },
-      humanEndpointId: 'hep_123456789012', limit: 50
+      humanEndpointId: 'hep_123456789012', agentId: local.agentId, limit: 50
     })).rejects.toMatchObject({ code: 'permission_denied' })
   })
 
@@ -102,6 +121,7 @@ describe('provider runtime', () => {
       providerUserId: '42', displayName: 'Owner endpoint', assurance: 'verified', status: 'active',
       revision: 1, verifiedAt: at, updatedAt: at
     })
+    const local = await seedLocatorAgent(repository, 'usr_123456789012', at)
     const provider = new FakeProvider([])
     provider.locatorListResult = {
       protocolVersion: CURRENT_PROTOCOL_VERSION,
@@ -117,7 +137,7 @@ describe('provider runtime', () => {
     await expect(runtime.listLocators({
       actor: { kind: 'user', actorKey: 'user:usr_123456789012', userId: 'usr_123456789012',
         credentialId: 'credential-owner', assurance: 'verified' },
-      humanEndpointId: 'hep_123456789012', limit: 50
+      humanEndpointId: 'hep_123456789012', agentId: local.agentId, limit: 50
     })).resolves.toEqual({ locators: [LOCATOR] })
     expect(provider.locatorListRequests[0]?.container).toBeUndefined()
   })

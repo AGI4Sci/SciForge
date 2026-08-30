@@ -42,7 +42,7 @@ export function createOpenContentConnectionRendererClient(
     status: (providerInstanceRef, options) => {
       const contract = {
         actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
-        effect: 'read' as const,
+        effect: 'external-write' as const,
         inputSchema: openContentConnectionTargetInputSchema,
         outputSchema: openContentConnectionResultSchema
       }

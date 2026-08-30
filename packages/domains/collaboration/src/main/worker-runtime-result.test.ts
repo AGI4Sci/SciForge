@@ -28,6 +28,28 @@ test('Worker Runtime result is strict and never accepts Markdown-wrapped or extr
   })))
 })
 
+test('Worker Runtime result tolerates bounded prose around one plain JSON object', () => {
+  assert.deepEqual(parseWorkerRuntimeResult(
+    'I completed the requested investigation. Here is the result:\n' +
+    '{"schemaVersion":1,"outcome":"completed","summary":"Result ready."}\n' +
+    'The output is ready for review.'
+  ), {
+    schemaVersion: 1,
+    outcome: 'completed',
+    summary: 'Result ready.'
+  })
+})
+
+test('Worker Runtime result rejects Markdown fences and ambiguous JSON results', () => {
+  assert.throws(
+    () => parseWorkerRuntimeResult(
+      '{"schemaVersion":1,"outcome":"completed","summary":"one"}\n' +
+      '{"schemaVersion":1,"outcome":"completed","summary":"two"}'
+    ),
+    /multiple Worker JSON results/u
+  )
+})
+
 test('Worker prompt binds exact input and output names without inventing a legacy transfer port', () => {
   const prompt = workerTaskPrompt({
     title: 'Prepare minutes',

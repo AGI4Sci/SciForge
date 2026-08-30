@@ -51,6 +51,8 @@ export const taskIdSchema = opaqueId('tsk')
 export const executionIdSchema = opaqueId('exe')
 export const taskOfferIdSchema = opaqueId('ofr')
 export const projectPlanIdSchema = opaqueId('pln')
+export const planItemIdSchema = z.string()
+  .regex(/^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$/u)
 export const resultSubmissionIdSchema = opaqueId('rsu')
 export const reviewDecisionIdSchema = opaqueId('rvw')
 export const collaborationEventIdSchema = opaqueId('evt')
@@ -93,6 +95,7 @@ export type TaskId = z.infer<typeof taskIdSchema>
 export type ExecutionId = z.infer<typeof executionIdSchema>
 export type TaskOfferId = z.infer<typeof taskOfferIdSchema>
 export type ProjectPlanId = z.infer<typeof projectPlanIdSchema>
+export type PlanItemId = z.infer<typeof planItemIdSchema>
 export type ResultSubmissionId = z.infer<typeof resultSubmissionIdSchema>
 export type ReviewDecisionId = z.infer<typeof reviewDecisionIdSchema>
 export type CollaborationEventId = z.infer<typeof collaborationEventIdSchema>

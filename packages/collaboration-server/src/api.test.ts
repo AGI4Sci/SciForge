@@ -39,6 +39,33 @@ afterEach(async () => {
 })
 
 describe('production HTTP OIDC-only boundary', () => {
+  it('returns a JSON error envelope when the command schema is invalid', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const server = createCollaborationHttpServer({ service, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${baseUrl}/v1/commands`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: '1.0',
+        requestId: 'req_InvalidCommand001',
+        type: 'not-a-real-command'
+      })
+    })
+    expect(response.headers.get('content-type')).toMatch(/application\/json/u)
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'rest.error',
+      requestId: 'req_InvalidCommand001',
+      error: { code: 'validation_error' }
+    })
+  })
+
   it('returns Cloud-global online Workers with safe User and exact Agent labels', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -358,6 +385,142 @@ describe('production HTTP OIDC-only boundary', () => {
     })
   })
 
+  it('returns the persisted historical Agent Inbox receipt identity', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = await seedOidcUserDevice(repository, 'http-agent-receipt-owner', now())
+    const bootstrap = createAgentCredentialBootstrap()
+    const registered = await service.ensureAgent(identity.user, {
+      deviceId: identity.deviceId,
+      capabilities: ['collaboration.inbox'],
+      credentialBootstrapPublicKey: bootstrap.publicKey,
+      idempotencyKey: 'idem_http_agent_receipt_ensure'
+    })
+    const credential = bootstrap.open(registered.sealedCredential!)
+    const authentication = new AuthenticationService(repository, now)
+    const agent = await authentication.resolveBearer(credential)
+    if (agent.kind !== 'agent_device') throw new Error('Expected Agent actor')
+    await repository.transaction((tx) => tx.appendInbox({
+      recipient: { kind: 'agent', id: registered.agent.agentId },
+      messageId: 'ibx_HistoricalAgentReceipt01',
+      messageType: 'collaboration.important_failure',
+      payload: { protocolVersion: '1.0', safeMessage: 'Recover the original acknowledgement receipt.' },
+      createdAt: now().toISOString(),
+      expiresAt: new Date(now().getTime() + 60_000).toISOString()
+    }))
+    const command = {
+      protocolVersion: '1.0' as const,
+      requestId: 'req_HistoricalAgentAck01',
+      type: 'inbox.ack' as const,
+      idempotencyKey: 'idem_historical_agent_ack_01',
+      inboxMessageId: 'ibx_HistoricalAgentReceipt01',
+      sequence: 1
+    }
+    await service.ackInboxMessage(agent, {
+      inboxMessageId: command.inboxMessageId,
+      sequence: command.sequence,
+      idempotencyKey: command.idempotencyKey
+    })
+    const receiptKey = `${agent.actorKey}:${command.idempotencyKey}`
+    const storedReceipt = repository.state.receipts.get(receiptKey)
+    if (!storedReceipt) throw new Error('Expected persisted Inbox receipt')
+    const historicalReceiptId = 'rcp_HistoricalAgentReceipt01'
+    repository.state.receipts.set(receiptKey, { ...storedReceipt, receiptId: historicalReceiptId })
+
+    const server = createCollaborationHttpServer({ service, authentication, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const replay = await postCommand(baseUrl, command, credential)
+    expect(replay.status).toBe(200)
+    await expect(replay.json()).resolves.toMatchObject({
+      type: 'rest.receipt',
+      receipt: {
+        type: 'inbox.receipt',
+        receiptId: historicalReceiptId,
+        inboxMessageId: command.inboxMessageId
+      }
+    })
+  })
+
+  it('returns the persisted historical projection publish receipt identity', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const identity = await seedOidcUserDevice(repository, 'http-projection-receipt-owner', now())
+    const bootstrap = createAgentCredentialBootstrap()
+    const registered = await service.ensureAgent(identity.user, {
+      deviceId: identity.deviceId,
+      capabilities: ['collaboration.projection'],
+      credentialBootstrapPublicKey: bootstrap.publicKey,
+      idempotencyKey: 'idem_http_projection_receipt_ensure'
+    })
+    const credential = bootstrap.open(registered.sealedCredential!)
+    const authentication = new AuthenticationService(repository, now)
+    const agent = await authentication.resolveBearer(credential)
+    if (agent.kind !== 'agent_device') throw new Error('Expected Agent actor')
+    await repository.insertProjection({
+      projectionId: 'rsp_HistoricalProjection01',
+      ownerUserId: identity.userId,
+      agentId: registered.agent.agentId,
+      humanEndpointId: 'hep_HistoricalProjection01',
+      locator: {
+        type: 'provider_locator',
+        provider: 'fake-im',
+        realmId: 'historical-realm',
+        containerId: 'historical-container',
+        topicId: 'historical-topic'
+      },
+      locatorRevision: 1,
+      displayName: 'Historical projection',
+      status: 'active',
+      allowedSenderUserIds: [identity.userId],
+      revision: 1,
+      createdAt: now().toISOString(),
+      updatedAt: now().toISOString()
+    })
+    const command = {
+      protocolVersion: '1.0' as const,
+      requestId: 'req_HistoricalProjectionPublish01',
+      type: 'projection.message.publish' as const,
+      idempotencyKey: 'idem_historical_projection_publish_01',
+      projectionId: 'rsp_HistoricalProjection01',
+      projectionRevision: 1,
+      localItemId: 'lit_HistoricalProjection01',
+      kind: 'assistant_final' as const,
+      text: 'Return the first persisted receipt identity.',
+      occurredAt: now().toISOString()
+    }
+    await service.publishProjectionMessage(agent, command)
+    const receiptKey = `${agent.actorKey}:${command.idempotencyKey}`
+    const storedReceipt = repository.state.receipts.get(receiptKey)
+    if (!storedReceipt) throw new Error('Expected persisted projection receipt')
+    const historicalReceiptId = 'rcp_HistoricalProjectionReceipt01'
+    repository.state.receipts.set(receiptKey, { ...storedReceipt, receiptId: historicalReceiptId })
+
+    const server = createCollaborationHttpServer({ service, authentication, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+
+    const replay = await postCommand(baseUrl, command, credential)
+    expect(replay.status).toBe(200)
+    await expect(replay.json()).resolves.toMatchObject({
+      type: 'rest.receipt',
+      receipt: {
+        type: 'operation.receipt',
+        receiptId: historicalReceiptId,
+        idempotencyKey: command.idempotencyKey
+      }
+    })
+  })
+
   it('preserves parsed command request IDs across validation, actor, and service errors only', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })
@@ -584,7 +747,12 @@ describe('production HTTP OIDC-only boundary', () => {
 
     const project = await postCommand(baseUrl, projectCommand, coordinatorCredential)
     expect(project.status).toBe(200)
-    const projectBody = await project.json() as { project: { projectId: string } }
+    const projectBody = await project.json() as { project: {
+      projectId: string
+      revision: number
+      coordinatorAuthorityEpoch: number
+      executionAuthorityEpoch: number
+    } }
     expect(projectBody).toMatchObject({ type: 'rest.project_created',
       project: { ownerUserId: identity.userId, status: 'draft', contentMode: 'none' },
       memberships: [{ userId: identity.userId, state: 'active' }], provisioningIntent: null })
@@ -644,6 +812,42 @@ describe('production HTTP OIDC-only boundary', () => {
       projectId: projectBody.project.projectId, kind: 'observation',
       sourceTaskId: 'tsk_Task00000001', sourceRevision: 1, body: 'Bypass'
     }, token)).status).toBe(400)
+
+    const deleteCommand = {
+      protocolVersion: '1.0', requestId: 'req_HttpProjectDelete1',
+      type: 'project.delete', idempotencyKey: 'idem_http_project_delete_01',
+      projectId: projectBody.project.projectId,
+      expectedRevision: projectBody.project.revision,
+      expectedCoordinatorAuthorityEpoch: projectBody.project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectBody.project.executionAuthorityEpoch
+    }
+    expect((await postCommand(baseUrl, deleteCommand, coordinatorCredential)).status).toBe(403)
+    const deleted = await postCommand(baseUrl, deleteCommand, token)
+    expect(deleted.status).toBe(200)
+    const deletedBody = await deleted.json() as { receipt: Record<string, unknown> }
+    expect(deletedBody).toMatchObject({
+      protocolVersion: '1.0',
+      type: 'rest.receipt',
+      requestId: deleteCommand.requestId,
+      receipt: {
+        type: 'operation.receipt',
+        idempotencyKey: deleteCommand.idempotencyKey,
+        status: 'succeeded'
+      }
+    })
+    const replayedDelete = await postCommand(baseUrl, deleteCommand, token)
+    expect(replayedDelete.status).toBe(200)
+    await expect(replayedDelete.json()).resolves.toMatchObject({
+      type: 'rest.receipt',
+      receipt: deletedBody.receipt
+    })
+    const projectsAfterDelete = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_HttpProjectPage002', type: 'project.list', limit: 10
+    }, token)
+    expect(projectsAfterDelete.status).toBe(200)
+    await expect(projectsAfterDelete.json()).resolves.toMatchObject({
+      type: 'rest.project_page', projects: []
+    })
   })
 })
 

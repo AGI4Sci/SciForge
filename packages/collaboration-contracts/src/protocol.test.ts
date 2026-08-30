@@ -7,6 +7,8 @@ import {
   agentInboxPayloadSchema,
   humanAnswerCommandSchema,
   inboxMessageSchema,
+  projectDeleteCommandSchema,
+  projectDeletedPayloadSchema,
   projectTransferCoordinatorCommandSchema,
   receiptSchema,
   restRequestSchema,
@@ -88,6 +90,42 @@ describe('discriminated transport unions', () => {
       expectedJournalRevision: 3,
       reason: 'The Owner has chosen to stop this exact provisioning attempt.'
     }).type).toBe('project.content.recovery.abandon')
+  })
+
+  it('defines one strict Owner deletion command and one Agent deletion notification', () => {
+    const command = {
+      protocolVersion: '1.0',
+      type: 'project.delete',
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_project_delete_0001',
+      projectId: TEST_IDS.projectId,
+      expectedRevision: 4,
+      expectedCoordinatorAuthorityEpoch: 2,
+      expectedExecutionAuthorityEpoch: 3
+    } as const
+    const notification = {
+      protocolVersion: '1.0',
+      type: 'project.deleted',
+      projectId: TEST_IDS.projectId,
+      deletedAt: TEST_TIMESTAMP
+    } as const
+
+    expect(projectDeleteCommandSchema.parse(command)).toEqual(command)
+    expect(restRequestSchema.parse(command)).toEqual(command)
+    expect(projectDeletedPayloadSchema.parse(notification)).toEqual(notification)
+    expect(agentInboxPayloadSchema.parse(notification)).toEqual(notification)
+    expect(projectDeleteCommandSchema.safeParse({
+      ...command,
+      ownerUserId: TEST_IDS.userId
+    }).success).toBe(false)
+    expect(projectDeleteCommandSchema.safeParse({
+      ...command,
+      expectedExecutionAuthorityEpoch: undefined
+    }).success).toBe(false)
+    expect(projectDeletedPayloadSchema.safeParse({
+      ...notification,
+      deleteContentSpace: true
+    }).success).toBe(false)
   })
 
   it('links Task recovery only from one exact Content Space observation', () => {
@@ -308,6 +346,7 @@ describe('canonical pairing and bidirectional Session commands', () => {
       type: 'managed_container.inspect',
       idempotencyKey: 'idem_managed_inspect_01',
       managedContainerId: 'mco_123456789012',
+      agentId: 'agt_123456789012',
       expectedRevision: 2
     }).type).toBe('managed_container.inspect')
     expect(providerManagedContainerResultSchema.parse({
@@ -492,6 +531,32 @@ describe('provider-neutral contract', () => {
     }).success).toBe(false)
   })
 
+  it('keeps remote approval message actions provider-neutral and exact-message scoped', () => {
+    const event = {
+      protocolVersion: '1.0',
+      provider: 'example-im',
+      type: 'provider.message.action',
+      eventId: 'provider-event-action-1',
+      eventCursor: 'cursor-action-1',
+      occurredAt: TEST_TIMESTAMP,
+      identity: providerIdentityFixture,
+      providerMessageId: 'provider-card-31415',
+      operation: 'add',
+      action: 'allow_once'
+    }
+    expect(providerEventSchema.parse(event)).toEqual(event)
+    expect(providerEventSchema.safeParse({ ...event, emojiCode: '1f44d' }).success).toBe(false)
+    expect(providerEventSchema.safeParse({ ...event, providerMessageId: '' }).success).toBe(false)
+    expect(providerSendRequestSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.ensure.message_action',
+      locator: chineseProviderLocatorFixture,
+      providerMessageId: 'provider-card-31415',
+      clientMessageId: 'client-action-allow',
+      action: 'allow_once'
+    })).toEqual(expect.objectContaining({ action: 'allow_once' }))
+  })
+
   it('round-trips the strict versioned SF1 bind code', () => {
     const challengeId = `chl_${'a'.repeat(32)}`
     const challengeCode = 'Abc_123-xYz0'
@@ -516,7 +581,9 @@ describe('provider-neutral contract', () => {
         locatorDiscovery: true,
         identityChallenge: true,
         directMessages: true,
-        managedContainers: false
+        managedContainers: false,
+        privateContainerDiscovery: true,
+        messageActions: true
       },
       onboarding: {
         realmLabel: '组织',
@@ -526,12 +593,22 @@ describe('provider-neutral contract', () => {
       },
       limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }
     }
-    expect(humanEndpointProviderContractSchema.safeParse(contract).success).toBe(true)
-    const { managedContainers: _managedContainers, ...legacyCapabilities } = contract.capabilities
-    expect(humanEndpointProviderContractSchema.parse({
+    const parsedContract = humanEndpointProviderContractSchema.parse(contract)
+    expect(parsedContract.capabilities.privateContainerDiscovery).toBe(true)
+    expect(parsedContract.capabilities.messageActions).toBe(true)
+    const {
+      managedContainers: _managedContainers,
+      privateContainerDiscovery: _privateContainerDiscovery,
+      messageActions: _messageActions,
+      ...legacyCapabilities
+    } = contract.capabilities
+    const legacyContract = humanEndpointProviderContractSchema.parse({
       ...contract,
       capabilities: legacyCapabilities
-    }).capabilities.managedContainers).toBeUndefined()
+    })
+    expect(legacyContract.capabilities.managedContainers).toBeUndefined()
+    expect(legacyContract.capabilities.privateContainerDiscovery).toBeUndefined()
+    expect(legacyContract.capabilities.messageActions).toBeUndefined()
     expect(humanEndpointProviderContractSchema.safeParse({
       ...contract,
       capabilities: { ...contract.capabilities, directMessages: false }

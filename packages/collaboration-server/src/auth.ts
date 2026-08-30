@@ -185,7 +185,7 @@ export class AuthenticationService {
     }
     return {
       kind: 'agent_device',
-      actorKey: `agent:${agent.agentId}:credential:${credential.credentialId}`,
+      actorKey: `agent:${agent.agentId}`,
       userId: user.userId,
       agentId: agent.agentId,
       deviceId: device.deviceId,

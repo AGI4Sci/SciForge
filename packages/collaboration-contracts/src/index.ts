@@ -1,4 +1,5 @@
 export * from './core.js'
+export * from './canonical-task.js'
 export * from './content-space-task-io.js'
 export * from './cloud-state-protocol.js'
 export * from './entities.js'

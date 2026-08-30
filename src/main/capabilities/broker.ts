@@ -210,6 +210,7 @@ type ActiveCapabilityInvocationState = {
   confirmedInput: CapabilityJsonValue
   invocation: ActiveCapabilityInvocation
   resourceTransaction: InvocationResourceTransaction
+  signal?: AbortSignal
 }
 
 type InvocationResourceIssuance = {
@@ -1227,9 +1228,12 @@ export class CapabilityBroker {
         operationState.consumed = true
         status = 'executing'
         let issuedResources: readonly HostApprovedBatchIssuedResource[] = Object.freeze([])
+        const signal = outerState.signal && options.signal && outerState.signal !== options.signal
+          ? AbortSignal.any([outerState.signal, options.signal])
+          : (options.signal ?? outerState.signal)
         try {
           const result = await this.#invokeAs(operationCaller, request, {
-            signal: options.signal,
+            ...(signal ? { signal } : {}),
             approvedBatchOperation: operationState,
             captureIssuedResources: (resources) => { issuedResources = resources }
           })
@@ -1335,7 +1339,17 @@ export class CapabilityBroker {
       const parsedInput = definition.inputSchema.safeParse(request.input)
       if (!parsedInput.success) {
         throw new CapabilityBrokerError('invalid_input', `Input for ${request.actionId} failed validation.`, {
-          details: { issues: parsedInput.error.issues.map((issue) => issue.message) }
+          // Keep validation diagnostics bounded and field-addressable so an
+          // agent can repair a request from the canonical schema instead of
+          // blindly retrying the same payload. Never include the rejected
+          // input itself (it may contain user content or provider data).
+          details: {
+            issues: parsedInput.error.issues.slice(0, 8).map((issue) => ({
+              path: issue.path.map(String).slice(0, 16),
+              code: issue.code,
+              message: issue.message.slice(0, 256)
+            }))
+          }
         })
       }
 
@@ -1787,6 +1801,7 @@ export class CapabilityBroker {
         approvedBatchCreated: false,
         confirmedInput: request.input,
         resourceTransaction,
+        ...(signal ? { signal } : {}),
         invocation: Object.freeze({
           caller,
           actionId: request.actionId,

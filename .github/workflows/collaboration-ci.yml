@@ -113,8 +113,11 @@ jobs:
       - name: Run full application typecheck
         run: npm run typecheck
 
-      - name: Run installed domain package tests
-        run: npm run domain-packages:test
+      - name: Run full regression suite
+        run: npm test
+
+      - name: Enforce architecture principles
+        run: npm run architecture-principles:test
 
       - name: Run lint
         run: npm run lint
@@ -201,6 +204,16 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
+
+      - name: Verify source Electron application path
+        if: matrix.platform == 'macOS'
+        run: npm run smoke:electron:source
+
+      - name: Verify packaged Electron application path
+        if: matrix.platform == 'macOS'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=6144"
+        run: npm run smoke:electron:packaged:build
 
       - name: Verify Windows provider and package tooling
         if: matrix.platform == 'Windows'

@@ -9,6 +9,8 @@ import {
   COLLABORATION_CAPABILITY_IDS,
   collaborationEndpointChallengePollInputSchema,
   collaborationEndpointChallengePollResultSchema,
+  collaborationPrivateChannelDiscoverInputSchema,
+  collaborationPrivateChannelDiscoverResultSchema,
   collaborationProjectionShareInputSchema,
   collaborationProjectionShareResultSchema,
   collaborationStatusReadInputSchema,
@@ -54,6 +56,9 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       if (contract.actionId === COLLABORATION_CAPABILITY_IDS.projectionShare) {
         return { projection: projection() } as TOutput
       }
+      if (contract.actionId === COLLABORATION_CAPABILITY_IDS.privateChannelDiscover) {
+        return { locatorCount: 2 } as TOutput
+      }
       if (contract.actionId === COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate) {
         return { agentId: 'agent-a', mode: 'automatic' } as TOutput
       }
@@ -73,10 +78,11 @@ test('renderer client invokes only typed public collaboration capabilities', asy
     allowUserIds: ['user-2'],
     expectedRevision: 2
   })
+  await client.discoverPrivateChannels({ humanEndpointId: 'endpoint-a' })
   await client.updateWorkerAcceptancePolicy({ agentId: 'agent-a', mode: 'automatic' })
   await client.decideTaskOffer({
     taskOfferId: 'offer-task-1',
-    decision: 'dismiss'
+    decision: 'reject'
   })
 
   assert.deepEqual(calls.map((call) => call.actionId === COLLABORATION_CAPABILITY_IDS.endpointChallengePoll
@@ -105,6 +111,12 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       options: { approval: { mode: 'confirmation' } }
     },
     {
+      actionId: COLLABORATION_CAPABILITY_IDS.privateChannelDiscover,
+      effect: 'read',
+      input: { humanEndpointId: 'endpoint-a' },
+      options: undefined
+    },
+    {
       actionId: COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
       effect: 'external-write',
       input: { agentId: 'agent-a', mode: 'automatic' },
@@ -115,7 +127,7 @@ test('renderer client invokes only typed public collaboration capabilities', asy
       effect: 'external-write',
       input: {
         taskOfferId: 'offer-task-1',
-        decision: 'dismiss'
+        decision: 'reject'
       },
       options: { approval: { mode: 'confirmation' } }
     }
@@ -140,6 +152,14 @@ test('client contracts reuse the domain strict schemas without a renderer transp
   assert.equal(
     collaborationRendererContracts.projectionShare.outputSchema,
     collaborationProjectionShareResultSchema
+  )
+  assert.equal(
+    collaborationRendererContracts.privateChannelDiscover.inputSchema,
+    collaborationPrivateChannelDiscoverInputSchema
+  )
+  assert.equal(
+    collaborationRendererContracts.privateChannelDiscover.outputSchema,
+    collaborationPrivateChannelDiscoverResultSchema
   )
 })
 

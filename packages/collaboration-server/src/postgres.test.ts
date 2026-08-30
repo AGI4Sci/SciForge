@@ -4,6 +4,31 @@ import { PostgresCollaborationRepository, type SqlConnection, type SqlPool } fro
 import { CollaborationService } from './service.js'
 
 describe('PostgreSQL production transaction path', () => {
+  it('deletes one exact Project through the revision-guarded canonical row', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        return { rows: [], rowCount: 1 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await expect(repository.transaction((tx) => tx.deleteProject('prj_DeleteProject01', 7)))
+      .resolves.toBeUndefined()
+
+    const deletion = queries.find(({ text }) => text.includes('DELETE FROM sciforge_collaboration.projects'))
+    expect(deletion?.text).toContain('WHERE project_id=$1 AND revision=$2')
+    expect(deletion?.text).toContain('RETURNING project_id')
+    expect(deletion?.values).toEqual(['prj_DeleteProject01', 7])
+    expect(queries.at(-1)?.text).toBe('COMMIT')
+  })
+
   it('fences stale managed-container completions by claim attempt inside one transaction', async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = []
     const connection: SqlConnection = {
@@ -707,7 +732,8 @@ describe('PostgreSQL production transaction path', () => {
       await tx.updateTaskOffer({
         taskOfferId: 'tof_Event0000001', executionId: 'exe_Event0000001',
         taskId: 'tsk_Event0000001', projectId: 'prj_Event0000001',
-        workerUserId: 'usr_Worker000001', state: 'accepted', offeredAt: at, expiresAt,
+        workerUserId: 'usr_Worker000001', offeredByCoordinatorAgentId: 'agn_Coordinator01',
+        state: 'accepted', reassignmentTaskRevision: null, offeredAt: at, expiresAt,
         respondedAt: at, revision: 2,
         createdAt: at, updatedAt: at
       }, 1)
@@ -746,8 +772,11 @@ describe('PostgreSQL production transaction path', () => {
     }
     expect(queries.find(({ text }) => text.includes('UPDATE sciforge_collaboration.task_executions'))?.text)
       .toContain('AND $9=$11+1 AND $3=$11+1')
-    expect(queries.find(({ text }) => text.includes('UPDATE sciforge_collaboration.task_offers'))?.text)
-      .toContain('WHERE task_offer_id=$1 AND revision=$7 AND $5=$7+1')
+    const offerUpdate = queries.find(({ text }) => text.includes('UPDATE sciforge_collaboration.task_offers'))
+    expect(offerUpdate?.text)
+      .toContain('WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1')
+    expect(offerUpdate?.text).toContain('reassignment_task_revision=$4')
+    expect(offerUpdate?.values[3]).toBeNull()
     expect(queries.some(({ text }) => text.includes('task_execution_events'))).toBe(false)
   })
 })

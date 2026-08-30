@@ -30,6 +30,8 @@ import type {
   StoredHumanAnswer,
   StoredManagedContainer,
   StoredManagedContainerJob,
+  StoredPrivateContainerClaim,
+  StoredPrivateContainerDiscovery,
   StoredOidcIdentity,
   StoredRemoteCapabilityApproval,
   StoredEndpointChallengeRateWindow,
@@ -176,11 +178,17 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   }
   listProjectionsForOwner(userId: string): Promise<StoredProjection[]> { return this.read().listProjectionsForOwner(userId) }
   getManagedContainer(id: string): Promise<StoredManagedContainer | null> { return this.read().getManagedContainer(id) }
-  getManagedContainerForOwner(ownerUserId: string, provider: string, realmId: string): Promise<StoredManagedContainer | null> {
-    return this.read().getManagedContainerForOwner(ownerUserId, provider, realmId)
+  getManagedContainerForOwner(ownerUserId: string, provider: string, realmId: string, installationId: string): Promise<StoredManagedContainer | null> {
+    return this.read().getManagedContainerForOwner(ownerUserId, provider, realmId, installationId)
   }
   listManagedContainersForOwner(ownerUserId: string): Promise<StoredManagedContainer[]> {
     return this.read().listManagedContainersForOwner(ownerUserId)
+  }
+  getPrivateContainerDiscovery(ownerUserId: string, humanEndpointId: string, installationId: string, provider: string, realmId: string, externalContainerId: string): Promise<StoredPrivateContainerDiscovery | null> {
+    return this.read().getPrivateContainerDiscovery(ownerUserId, humanEndpointId, installationId, provider, realmId, externalContainerId)
+  }
+  getPrivateContainerClaim(provider: string, realmId: string, externalContainerId: string): Promise<StoredPrivateContainerClaim | null> {
+    return this.read().getPrivateContainerClaim(provider, realmId, externalContainerId)
   }
   getProjectEndpointBinding(projectId: string): Promise<StoredProjectEndpointBinding | null> { return this.read().getProjectEndpointBinding(projectId) }
   getProjectEndpointBindingById(id: string): Promise<StoredProjectEndpointBinding | null> {
@@ -205,6 +213,9 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   getRemoteApproval(id: string): Promise<StoredRemoteCapabilityApproval | null> { return this.read().getRemoteApproval(id) }
   getRemoteApprovalByReferenceDigest(digest: string): Promise<StoredRemoteCapabilityApproval | null> {
     return this.read().getRemoteApprovalByReferenceDigest(digest)
+  }
+  getRemoteApprovalByProviderMessage(provider: string, realmId: string, providerMessageId: string): Promise<StoredRemoteCapabilityApproval | null> {
+    return this.read().getRemoteApprovalByProviderMessage(provider, realmId, providerMessageId)
   }
   listExpiredRemoteApprovals(now: string, limit: number): Promise<StoredRemoteCapabilityApproval[]> {
     return this.read().listExpiredRemoteApprovals(now, limit)
@@ -637,12 +648,13 @@ class PostgresReadRepository implements CollaborationReadRepository {
   async getManagedContainerForOwner(
     ownerUserId: string,
     provider: string,
-    realmId: string
+    realmId: string,
+    installationId: string
   ): Promise<StoredManagedContainer | null> {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.managed_provider_containers
-       WHERE owner_user_id=$1 AND provider=$2 AND realm_id=$3`,
-      [ownerUserId, provider, realmId]
+       WHERE owner_user_id=$1 AND provider=$2 AND realm_id=$3 AND installation_id=$4`,
+      [ownerUserId, provider, realmId, installationId]
     )
     return result.rows[0] ? mapManagedContainer(result.rows[0]) : null
   }
@@ -654,6 +666,25 @@ class PostgresReadRepository implements CollaborationReadRepository {
       [ownerUserId]
     )
     return result.rows.map(mapManagedContainer)
+  }
+
+  async getPrivateContainerDiscovery(ownerUserId: string, humanEndpointId: string, installationId: string, provider: string, realmId: string, externalContainerId: string): Promise<StoredPrivateContainerDiscovery | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.provider_private_container_discoveries
+       WHERE owner_user_id=$1 AND human_endpoint_id=$2 AND installation_id=$3
+         AND provider=$4 AND realm_id=$5 AND external_container_id=$6`,
+      [ownerUserId, humanEndpointId, installationId, provider, realmId, externalContainerId]
+    )
+    return result.rows[0] ? mapPrivateContainerDiscovery(result.rows[0]) : null
+  }
+
+  async getPrivateContainerClaim(provider: string, realmId: string, externalContainerId: string): Promise<StoredPrivateContainerClaim | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.provider_private_container_claims
+       WHERE provider=$1 AND realm_id=$2 AND external_container_id=$3`,
+      [provider, realmId, externalContainerId]
+    )
+    return result.rows[0] ? mapPrivateContainerClaim(result.rows[0]) : null
   }
 
   async getProjectBindingByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjectEndpointBinding | null> {
@@ -728,6 +759,15 @@ class PostgresReadRepository implements CollaborationReadRepository {
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.remote_capability_approvals WHERE reference_digest=$1`,
       [referenceDigest]
+    )
+    return result.rows[0] ? mapRemoteApproval(result.rows[0]) : null
+  }
+
+  async getRemoteApprovalByProviderMessage(provider: string, realmId: string, providerMessageId: string): Promise<StoredRemoteCapabilityApproval | null> {
+    const result = await this.sql.query(
+      `SELECT * FROM sciforge_collaboration.remote_capability_approvals
+       WHERE locator->>'provider'=$1 AND locator->>'realmId'=$2 AND provider_card_message_id=$3`,
+      [provider, realmId, providerMessageId]
     )
     return result.rows[0] ? mapRemoteApproval(result.rows[0]) : null
   }
@@ -1502,11 +1542,22 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     projectId: string,
     workerUserId?: string
   ): Promise<StoredTaskOffer[]> {
+    await this.sql.query(
+      `SELECT task.task_id FROM sciforge_collaboration.tasks AS task
+       WHERE task.project_id=$1
+         AND EXISTS (
+           SELECT 1 FROM sciforge_collaboration.task_offers AS offer
+           WHERE offer.task_id=task.task_id AND offer.state='pending'
+             AND ($2::text IS NULL OR offer.worker_user_id=$2)
+         )
+       ORDER BY task.task_id FOR UPDATE OF task`,
+      [projectId, workerUserId ?? null]
+    )
     const result = await this.sql.query(
       `SELECT * FROM sciforge_collaboration.task_offers
        WHERE project_id=$1 AND state='pending'
          AND ($2::text IS NULL OR worker_user_id=$2)
-       ORDER BY task_offer_id FOR UPDATE`,
+       ORDER BY task_id,task_offer_id FOR UPDATE`,
       [projectId, workerUserId ?? null]
     )
     return result.rows.map(mapTaskOffer)
@@ -1918,11 +1969,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async insertManagedContainer(container: StoredManagedContainer): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.managed_provider_containers
-       (managed_container_id,owner_user_id,human_endpoint_id,provider,realm_id,owner_provider_user_id,
+       (managed_container_id,owner_user_id,human_endpoint_id,installation_id,provider,realm_id,owner_provider_user_id,
         stable_key,display_name,external_container_id,policy,observed_checks,status,last_verified_at,safe_error_code,revision,
         created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17)`,
-      [container.managedContainerId, container.ownerUserId, container.humanEndpointId, container.provider,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$16,$17,$18)`,
+      [container.managedContainerId, container.ownerUserId, container.humanEndpointId, container.installationId, container.provider,
         container.realmId, container.ownerProviderUserId, container.stableKey, container.displayName,
         container.externalContainerId ?? null, JSON.stringify(container.policy),
         container.observedChecks ? JSON.stringify(container.observedChecks) : null, container.status,
@@ -1945,6 +1996,28 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
         container.revision, container.updatedAt, expectedRevision]
     )
     expectRevision(result.rowCount)
+  }
+
+  async upsertPrivateContainerDiscovery(discovery: StoredPrivateContainerDiscovery): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.provider_private_container_discoveries
+       (owner_user_id,human_endpoint_id,installation_id,provider,realm_id,external_container_id,display_name,observed_at,expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (owner_user_id,human_endpoint_id,installation_id,provider,realm_id,external_container_id)
+       DO UPDATE SET display_name=EXCLUDED.display_name,observed_at=EXCLUDED.observed_at,expires_at=EXCLUDED.expires_at`,
+      [discovery.ownerUserId, discovery.humanEndpointId, discovery.installationId, discovery.provider,
+        discovery.realmId, discovery.externalContainerId, discovery.displayName, discovery.observedAt, discovery.expiresAt]
+    )
+  }
+
+  async insertPrivateContainerClaim(claim: StoredPrivateContainerClaim): Promise<void> {
+    await this.sql.query(
+      `INSERT INTO sciforge_collaboration.provider_private_container_claims
+       (claim_id,owner_user_id,human_endpoint_id,installation_id,provider,realm_id,external_container_id,display_name,claimed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [claim.claimId, claim.ownerUserId, claim.humanEndpointId, claim.installationId, claim.provider,
+        claim.realmId, claim.externalContainerId, claim.displayName, claim.claimedAt]
+    )
   }
 
   async insertManagedContainerJob(job: StoredManagedContainerJob): Promise<void> {
@@ -2053,13 +2126,13 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.remote_capability_approvals
        (remote_approval_id,owner_user_id,agent_id,projection_id,locator,locator_revision,runtime_id,thread_id,
-        turn_id,capability_request_id,desktop_approval_id,reference_digest,safe_summary,effect,remote_eligible,
+        turn_id,capability_request_id,desktop_approval_id,reference_digest,safe_summary,effect,interaction_mode,remote_eligible,
         status,provider_card_message_id,decision_event_id,decision_id,revision,expires_at,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
       [approval.remoteApprovalId, approval.ownerUserId, approval.agentId, approval.projectionId, approval.locator,
         approval.locatorRevision, approval.runtimeId, approval.threadId, approval.turnId,
         approval.capabilityRequestId, approval.desktopApprovalId, approval.referenceDigest, approval.safeSummary,
-        approval.effect, approval.remoteEligible, approval.status, approval.providerCardMessageId,
+        approval.effect, approval.interactionMode, approval.remoteEligible, approval.status, approval.providerCardMessageId,
         approval.decisionEventId, approval.decisionId, approval.revision, approval.expiresAt,
         approval.createdAt, approval.updatedAt]
     )
@@ -2104,6 +2177,16 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
         project.budget.maxTasksPerRound, project.budget.maxTaskRetries,
         project.budget.maxCoordinationRounds, project.coordinationRound, project.revision,
         project.updatedAt, expectedRevision]
+    )
+    expectRevision(result.rowCount)
+  }
+
+  async deleteProject(projectId: string, expectedRevision: number): Promise<void> {
+    const result = await this.sql.query(
+      `DELETE FROM sciforge_collaboration.projects
+       WHERE project_id=$1 AND revision=$2
+       RETURNING project_id`,
+      [projectId, expectedRevision]
     )
     expectRevision(result.rowCount)
   }
@@ -2540,12 +2623,12 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.task_offers
        (task_offer_id,execution_id,task_id,project_id,worker_user_id,
-        offered_by_coordinator_agent_id,state,offered_at,expires_at,responded_at,
-        revision,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        offered_by_coordinator_agent_id,state,reassignment_task_revision,
+        offered_at,expires_at,responded_at,revision,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [offer.taskOfferId, offer.executionId, offer.taskId, offer.projectId, offer.workerUserId,
-        offer.offeredByCoordinatorAgentId, offer.state, offer.offeredAt, offer.expiresAt,
-        offer.respondedAt, offer.revision,
+        offer.offeredByCoordinatorAgentId, offer.state, offer.reassignmentTaskRevision,
+        offer.offeredAt, offer.expiresAt, offer.respondedAt, offer.revision,
         offer.createdAt, offer.updatedAt]
     )
   }
@@ -2553,10 +2636,11 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
   async updateTaskOffer(offer: StoredTaskOffer, expectedRevision: number): Promise<void> {
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.task_offers
-       SET execution_id=$2,state=$3,responded_at=$4,revision=$5,updated_at=$6
-       WHERE task_offer_id=$1 AND revision=$7 AND $5=$7+1`,
-      [offer.taskOfferId, offer.executionId, offer.state, offer.respondedAt,
-        offer.revision, offer.updatedAt, expectedRevision]
+       SET execution_id=$2,state=$3,reassignment_task_revision=$4,
+           responded_at=$5,revision=$6,updated_at=$7
+       WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1`,
+      [offer.taskOfferId, offer.executionId, offer.state, offer.reassignmentTaskRevision,
+        offer.respondedAt, offer.revision, offer.updatedAt, expectedRevision]
     )
     expectRevision(result.rowCount)
   }
@@ -2941,7 +3025,11 @@ function mapTaskOffer(row: SqlRow): StoredTaskOffer {
     taskId: string(row, 'task_id'), projectId: string(row, 'project_id'),
     workerUserId: string(row, 'worker_user_id'),
     offeredByCoordinatorAgentId: string(row, 'offered_by_coordinator_agent_id'),
-    state: string(row, 'state') as StoredTaskOffer['state'], offeredAt: iso(row.offered_at),
+    state: string(row, 'state') as StoredTaskOffer['state'],
+    reassignmentTaskRevision: row.reassignment_task_revision == null
+      ? null
+      : number(row.reassignment_task_revision),
+    offeredAt: iso(row.offered_at),
     expiresAt: iso(row.expires_at), respondedAt: optionalIso(row.responded_at) ?? null,
     revision: number(row.revision),
     createdAt: iso(row.created_at), updatedAt: iso(row.updated_at)
@@ -3137,6 +3225,7 @@ function mapManagedContainer(row: SqlRow): StoredManagedContainer {
     managedContainerId: string(row, 'managed_container_id'),
     ownerUserId: string(row, 'owner_user_id'),
     humanEndpointId: string(row, 'human_endpoint_id'),
+    installationId: string(row, 'installation_id'),
     provider: string(row, 'provider'),
     realmId: string(row, 'realm_id'),
     ownerProviderUserId: string(row, 'owner_provider_user_id'),
@@ -3153,6 +3242,23 @@ function mapManagedContainer(row: SqlRow): StoredManagedContainer {
     revision: number(row.revision),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
+  }
+}
+function mapPrivateContainerDiscovery(row: SqlRow): StoredPrivateContainerDiscovery {
+  return {
+    ownerUserId: string(row, 'owner_user_id'), humanEndpointId: string(row, 'human_endpoint_id'),
+    installationId: string(row, 'installation_id'), provider: string(row, 'provider'), realmId: string(row, 'realm_id'),
+    externalContainerId: string(row, 'external_container_id'), displayName: string(row, 'display_name'),
+    observedAt: iso(row.observed_at), expiresAt: iso(row.expires_at)
+  }
+}
+function mapPrivateContainerClaim(row: SqlRow): StoredPrivateContainerClaim {
+  return {
+    claimId: string(row, 'claim_id'), ownerUserId: string(row, 'owner_user_id'),
+    humanEndpointId: string(row, 'human_endpoint_id'), installationId: string(row, 'installation_id'),
+    provider: string(row, 'provider'), realmId: string(row, 'realm_id'),
+    externalContainerId: string(row, 'external_container_id'), displayName: string(row, 'display_name'),
+    claimedAt: iso(row.claimed_at)
   }
 }
 function mapManagedContainerJob(row: SqlRow): StoredManagedContainerJob {
@@ -3188,6 +3294,7 @@ function mapRemoteApproval(row: SqlRow): StoredRemoteCapabilityApproval {
     referenceDigest: string(row, 'reference_digest'),
     safeSummary: string(row, 'safe_summary'),
     effect: string(row, 'effect') as StoredRemoteCapabilityApproval['effect'],
+    interactionMode: string(row, 'interaction_mode') as StoredRemoteCapabilityApproval['interactionMode'],
     remoteEligible: Boolean(row.remote_eligible),
     status: string(row, 'status') as StoredRemoteCapabilityApproval['status'],
     providerCardMessageId: optionalString(row, 'provider_card_message_id'),

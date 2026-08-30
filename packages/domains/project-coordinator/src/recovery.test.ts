@@ -7,7 +7,6 @@ import {
   externalOperationRecoveryJournalEntrySchema,
   restResponseSchema,
   taskExecutionSchema,
-  taskOfferReassignCommandSchema,
   taskOfferSchema,
   taskRecoveryAbandonCommandSchema,
   taskRecoveryLinkObservedOutputCommandSchema,
@@ -15,9 +14,6 @@ import {
   visibleRecoveryActionSchema,
   type RestResponse
 } from '@sciforge/collaboration-contracts'
-import type {
-  CoordinatorCloudCommandService
-} from '@sciforge/domain-collaboration/coordinator-cloud-command'
 import {
   CONTENT_SPACE_SYSTEM_OBSERVE_EXACT_OUTPUT_CONTRACT,
   contentSpaceSuccess,
@@ -45,7 +41,6 @@ const executionId = 'exe_RecoveryExec001'
 const recoveryActionId = 'rca_TaskRecovery001'
 const journalEntryId = 'crj_TaskRecovery001'
 const expectedName = 'meeting-summary.recovery-1.md'
-const successorName = 'meeting-summary.recovery-2.md'
 const root = {
   contractVersion: 1 as const,
   kind: 'content-space.container-reference' as const,
@@ -84,9 +79,6 @@ test('Owner observes and links only the exact current unknown-output tuple', asy
       readWorkspace: async () => (++workspaceReads < 3 ? initial : linked)
     },
     transport,
-    coordinatorCloudCommands: coordinatorCloudService(async () => {
-      throw new Error('observe-link must not create a successor execution')
-    }),
     getCapabilities: () => capabilities,
     workspaceRoot: '/private/owner/project-coordinator/content-recovery',
     requestId: () => 'req_TaskRecoveryLink01'
@@ -181,9 +173,6 @@ test('observe-link rejects Cloud tuple drift after Provider observation and send
       commandSent = true
       throw new Error('stale recovery must not reach Cloud')
     }),
-    coordinatorCloudCommands: coordinatorCloudService(async () => {
-      throw new Error('stale observation must not create a successor execution')
-    }),
     getCapabilities: () => capabilityInvoker(async () => (
       contentSpaceSuccess(exactObservationReceipt())
     )),
@@ -211,9 +200,6 @@ test('Owner abandons from freshly read CAS facts without manufacturing an observ
   const port = createProjectCoordinatorRecoveryPort({
     workspace: { readWorkspace: async () => (++workspaceReads === 1 ? initial : abandoned) },
     transport,
-    coordinatorCloudCommands: coordinatorCloudService(async () => {
-      throw new Error('abandon must not create a successor execution')
-    }),
     getCapabilities: () => capabilityInvoker(async () => {
       invoked = true
       throw new Error('abandon must not invoke Content Space')
@@ -243,87 +229,6 @@ test('Owner abandons from freshly read CAS facts without manufacturing an observ
     expectedCoordinatorAuthorityEpoch: 4,
     reason
   })
-})
-
-test('Owner approval asks the current Coordinator Agent to broadcast one freshly named successor offer', async () => {
-  const abandoned = recoveryWorkspace('abandoned')
-  const retried = recoverySuccessorWorkspace()
-  let workspaceReads = 0
-  let userTransportCalled = false
-  const commands: unknown[] = []
-  const coordinatorCloudCommands = coordinatorCloudService(async (rawCommand) => {
-    const command = taskOfferReassignCommandSchema.parse(rawCommand)
-    commands.push(command)
-    return restResponseSchema.parse({
-      protocolVersion: '1.0',
-      type: 'rest.collection',
-      requestId: command.requestId,
-      items: successorResponseItems(retried)
-    })
-  })
-  const port = createProjectCoordinatorRecoveryPort({
-    workspace: {
-      readWorkspace: async () => (++workspaceReads === 1 ? abandoned : retried)
-    },
-    transport: cloudTransport(async () => {
-      userTransportCalled = true
-      throw new Error('Human/User transport must not create a successor offer')
-    }),
-    coordinatorCloudCommands,
-    getCapabilities: () => capabilityInvoker(async () => {
-      throw new Error('successor retry must not invoke Content Space directly')
-    }),
-    workspaceRoot: '/private/owner/project-coordinator/content-recovery',
-    requestId: () => 'req_TaskRecoverySuccessor01'
-  })
-
-  const result = await port.retrySuccessor({
-    projectId,
-    recoveryActionId,
-    workerUserId: 'usr_RecoveryWorker01',
-    nextOutputFileName: successorName,
-    offerExpiresAt: '2026-08-27T02:00:00.000Z'
-  }, 'idem_TaskRecoverySuccessor01')
-
-  assert.equal(userTransportCalled, false)
-  assert.equal(workspaceReads, 2)
-  assert.equal(result.projects[0]?.tasks[0]?.task.currentExecutionId, null)
-  assert.equal(result.projects[0]?.offers.some(({ taskOfferId }) => (
-    taskOfferId === 'ofr_RecoveryOffer002'
-  )), true)
-  assert.deepEqual(commands, [{
-    protocolVersion: '1.0',
-    requestId: 'req_TaskRecoverySuccessor01',
-    type: 'task.offer.reassign',
-    idempotencyKey: 'idem_TaskRecoverySuccessor01',
-    taskId,
-    previousTaskOfferId: 'ofr_RecoveryOffer001',
-    expectedPreviousOfferRevision: 2,
-    expectedProjectRevision: 9,
-    expectedTaskRevision: 7,
-    expectedCoordinatorAuthorityEpoch: 4,
-    expectedExecutionAuthorityEpoch: 2,
-    workerUserId: 'usr_RecoveryWorker01',
-    offerExpiresAt: '2026-08-27T02:00:00.000Z',
-    nextFileIntent: {
-      schemaVersion: 1,
-      bindingRevision: 3,
-      inputs: [],
-      output: {
-        kind: 'content-space.output-new',
-        target: 'project-binding-root',
-        mode: 'upload-new',
-        fileName: successorName,
-        mediaType: 'text/markdown',
-        maxBytes: 65_536
-      }
-    }
-  }])
-  const oldExecution = result.projects[0]?.tasks[0]?.executions.find(({ executionId: id }) => (
-    id === executionId
-  ))
-  assert.equal(oldExecution?.state, 'cancelled')
-  assert.equal(oldExecution?.fence.reason, 'manual_recovery_abandoned')
 })
 
 function recoveryWorkspace(
@@ -525,6 +430,7 @@ function recoveryWorkspace(
         workerUserId: 'usr_RecoveryWorker01',
         offeredByCoordinatorAgentId: 'agt_RecoveryCoord01',
         state: 'accepted',
+        reassignmentTaskRevision: null,
         offeredAt: now,
         expiresAt: '2026-08-26T03:00:00.000Z',
         respondedAt: now,
@@ -620,48 +526,6 @@ function recoveryWorkerGroups() {
   }]
 }
 
-function recoverySuccessorWorkspace(): ProjectCoordinatorWorkspace {
-  const workspace: any = structuredClone(recoveryWorkspace('abandoned'))
-  const project = workspace.projects[0]!
-  const taskView = project.tasks[0]!
-  const succeededAt = '2026-08-26T02:05:00.000Z'
-  taskView.task = taskSchema.parse({
-    ...taskView.task,
-    currentExecutionId: null,
-    currentExecutionState: null,
-    status: 'offered',
-    executionCount: 1,
-    revision: 8,
-    updatedAt: succeededAt,
-    fileIntent: {
-      ...taskView.task.fileIntent!,
-      output: {
-        ...taskView.task.fileIntent!.output,
-        fileName: successorName
-      }
-    }
-  })
-  project.offers.push(taskOfferSchema.parse({
-    schemaVersion: 1,
-    type: 'task_offer',
-    taskOfferId: 'ofr_RecoveryOffer002',
-    projectId,
-    taskId,
-    executionId: null,
-    workerUserId: 'usr_RecoveryWorker01',
-    offeredByCoordinatorAgentId: 'agt_RecoveryCoord01',
-    state: 'pending',
-    offeredAt: succeededAt,
-    expiresAt: '2026-08-27T02:00:00.000Z',
-    respondedAt: null,
-    revision: 1,
-    createdAt: succeededAt,
-    updatedAt: succeededAt
-  }))
-  workspace.observedAt = succeededAt
-  return projectCoordinatorWorkspaceSchema.parse(workspace)
-}
-
 function exactObservationReceipt() {
   return contentSpaceSystemObserveExactOutputReceiptSchema.parse({
     operation: 'observe-exact-output',
@@ -736,14 +600,6 @@ function abandonResponseItems(workspace: ProjectCoordinatorWorkspace) {
   ]
 }
 
-function successorResponseItems(workspace: ProjectCoordinatorWorkspace) {
-  const project = workspace.projects[0]!
-  const offer = project.offers.find(({ taskOfferId }) => (
-    taskOfferId === 'ofr_RecoveryOffer002'
-  ))!
-  return [project.tasks[0]!.task, offer]
-}
-
 function capabilityInvoker(
   invoke: (...input: any[]) => Promise<any>
 ): DomainMainSystemCapabilityInvoker {
@@ -761,18 +617,10 @@ function cloudTransport(
       state: 'ready',
       baseUrl: 'https://cloud.invalid/',
       userId: ownerUserId,
-      deviceId: 'dev_RecoveryOwner01'
+      deviceId: 'dev_RecoveryOwner01',
+      deviceRevision: 1
     }),
     execute: async ({ payload }) => execute(payload)
-  }
-}
-
-function coordinatorCloudService(
-  execute: CoordinatorCloudCommandService['execute']
-): CoordinatorCloudCommandService {
-  return {
-    execute,
-    subscribe: () => () => undefined
   }
 }
 

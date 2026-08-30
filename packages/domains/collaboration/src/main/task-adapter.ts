@@ -16,6 +16,7 @@ import {
   type TaskExecution,
   type TaskExecutionPreflight,
   type TaskOffer,
+  type TaskOfferClosedPayload,
   type TaskOfferedPayload,
   type TaskRecoveryAbandonedPayload,
   type TaskRecoveryOutputLinkedPayload,
@@ -41,6 +42,7 @@ import {
   CollaborationLocalStore,
   type CollaborationExternalOperationJournal,
   type CollaborationPendingTaskOffer,
+  type CollaborationProjectUnavailableFence,
   type CollaborationTaskRun
 } from './store.js'
 import { WorkerAcceptancePolicyService } from './worker-acceptance-policy.js'
@@ -69,16 +71,28 @@ export type CollaborationTaskAdapterOptions = Readonly<{
   now?: () => Date
 }>
 
-export type WorkerOfferDecision = Readonly<
-  | { decision: 'accept' }
-  | { decision: 'dismiss' }
->
+export type WorkerOfferDecision = Readonly<{
+  decision: 'accept' | 'dismiss' | 'reject'
+}>
 
 const TERMINAL_RUN_STATES = new Set<CollaborationTaskRun['state']>([
   'completed',
   'failed',
   'fenced',
   'manual-recovery'
+])
+
+const TERMINAL_PENDING_OFFER_STATES = new Set<CollaborationPendingTaskOffer['state']>([
+  'dismissed',
+  'claimed_elsewhere',
+  'closed',
+  'failed'
+])
+
+const PROJECT_UNAVAILABLE_PRESERVED_RUN_STATES = new Set<CollaborationTaskRun['state']>([
+  'completed',
+  'failed',
+  'fenced'
 ])
 
 const TERMINAL_EXECUTION_EVENT_STATES = new Set<TaskExecution['state']>([
@@ -107,12 +121,14 @@ export class CollaborationTaskAdapter {
   async recover(): Promise<void> {
     this.stopped = false
     for (const offer of this.options.store.snapshot().pendingTaskOffers) {
-      if (offer.state === 'pending' || offer.state === 'claiming') this.schedule(offer.taskOfferId)
+      if (offer.state === 'pending' || offer.state === 'claiming' || offer.state === 'rejecting') {
+        this.schedule(offer.taskOfferId)
+      }
     }
     for (const run of this.options.store.snapshot().taskRuns) {
       if (run.externalJournal.some((entry) => entry.state === 'effect_dispatched')) {
         this.schedule(run.offer.executionId)
-      } else if (!TERMINAL_RUN_STATES.has(run.state) && run.state !== 'needs-human') {
+      } else if (!TERMINAL_RUN_STATES.has(run.state)) {
         this.schedule(run.offer.executionId)
       }
     }
@@ -146,14 +162,17 @@ export class CollaborationTaskAdapter {
   async decideOffer(taskOfferId: string, input: WorkerOfferDecision): Promise<void> {
     const offer = this.requirePendingOffer(taskOfferId)
     if (offer.state !== 'awaiting-manual') {
-      throw new Error('Only an offer awaiting a manual decision can be accepted or dismissed on this Device.')
+      throw new Error('Only an offer awaiting a manual decision can be accepted, rejected, or dismissed on this Device.')
     }
     const decidedAt = this.now().toISOString()
     await this.options.store.transact((draft) => {
       const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === taskOfferId)
       if (!current) throw new Error('Local pending Task offer was not found.')
-      if (input.decision === 'accept') {
-        current.state = 'claiming'
+      if (current.state !== 'awaiting-manual') {
+        throw new Error('Only an offer awaiting a manual decision can be accepted, rejected, or dismissed on this Device.')
+      }
+      if (input.decision !== 'dismiss') {
+        current.state = input.decision === 'accept' ? 'claiming' : 'rejecting'
         current.completedAt = null
         current.error = null
       } else {
@@ -163,7 +182,7 @@ export class CollaborationTaskAdapter {
       }
       current.updatedAt = decidedAt
     })
-    if (input.decision === 'accept') this.schedule(taskOfferId)
+    if (input.decision !== 'dismiss') this.schedule(taskOfferId)
   }
 
   async handleInbox(message: AgentInboxMessage): Promise<void> {
@@ -177,7 +196,7 @@ export class CollaborationTaskAdapter {
       return
     }
     if (payload.type === 'task.offer.closed') {
-      await this.acceptOfferClosed(payload.taskOfferId, payload.outcome)
+      await this.acceptOfferClosed(payload)
       return
     }
     if (payload.type === 'task.recovery.output_linked') {
@@ -186,6 +205,15 @@ export class CollaborationTaskAdapter {
     }
     if (payload.type === 'task.recovery.abandoned') {
       await this.acceptRecoveryAbandoned(payload, message.recipientAgentId)
+      return
+    }
+    if (payload.type === 'task.execution.fenced') {
+      const run = this.findRun(payload.executionId)
+      if (!run) return
+      if (run.offer.projectId !== payload.projectId || run.offer.taskId !== payload.taskId) {
+        throw new Error('Execution-fenced Inbox identity does not match the local Worker journal.')
+      }
+      await this.markFenced(run, payload.reason)
       return
     }
     if (payload.type === 'human.answer.received') {
@@ -219,7 +247,9 @@ export class CollaborationTaskAdapter {
         existing.projectId !== payload.projectId ||
         existing.workerUserId !== payload.workerUserId
       ) throw new Error('Task offer identity was reused for another Worker User or Task.')
-      if (existing.state === 'pending' || existing.state === 'claiming') this.schedule(payload.taskOfferId)
+      if (existing.state === 'pending' || existing.state === 'claiming' || existing.state === 'rejecting') {
+        this.schedule(payload.taskOfferId)
+      }
       return
     }
 
@@ -248,6 +278,7 @@ export class CollaborationTaskAdapter {
     const pending = this.findPendingOffer(taskOfferId)
     if (!pending || pending.state === 'dismissed') return
     if (claimedByAgentId === this.options.localAgentId() && pending.state === 'claiming') return
+    this.controllers.get(taskOfferId)?.abort('Task offer claimed on another Device.')
     const completedAt = this.now().toISOString()
     await this.updatePendingOffer(taskOfferId, {
       state: 'claimed_elsewhere',
@@ -256,14 +287,44 @@ export class CollaborationTaskAdapter {
     })
   }
 
-  private async acceptOfferClosed(taskOfferId: string, outcome: 'withdrawn' | 'timed_out'): Promise<void> {
-    const pending = this.findPendingOffer(taskOfferId)
-    if (!pending || ['dismissed', 'claimed_elsewhere', 'closed'].includes(pending.state)) return
+  private async acceptOfferClosed(payload: TaskOfferClosedPayload): Promise<void> {
+    if (payload.audience !== 'worker') {
+      throw new Error('A Coordinator Task-offer closure cannot enter the Worker handler.')
+    }
+    const pending = this.findPendingOffer(payload.taskOfferId)
+    if (!pending || ['dismissed', 'claimed_elsewhere'].includes(pending.state)) return
+    if (
+      pending.projectId !== payload.projectId ||
+      pending.taskId !== payload.taskId
+    ) {
+      throw new Error('Task-offer closure identity does not match the local User offer.')
+    }
+    if (pending.state === 'closed') {
+      if (
+        pending.currentTaskRevision === payload.taskRevision &&
+        pending.offerRevision === payload.offerRevision
+      ) return
+      throw new Error('Task-offer closure revisions conflict with the local terminal journal.')
+    }
+    if (
+      payload.taskRevision !== pending.currentTaskRevision + 1 ||
+      payload.offerRevision !== pending.offerRevision + 1
+    ) {
+      throw new Error('Task-offer closure did not advance the exact Task and Offer revisions.')
+    }
     const completedAt = this.now().toISOString()
-    await this.updatePendingOffer(taskOfferId, {
+    const error = payload.outcome === 'rejected'
+      ? 'The Worker User rejected the Task offer.'
+      : payload.outcome === 'timed_out'
+        ? 'The Task offer timed out.'
+        : 'The Coordinator withdrew the Task offer.'
+    this.controllers.get(payload.taskOfferId)?.abort(error)
+    await this.updatePendingOffer(payload.taskOfferId, {
       state: 'closed',
+      currentTaskRevision: payload.taskRevision,
+      offerRevision: payload.offerRevision,
       completedAt,
-      error: outcome === 'timed_out' ? 'The Task offer timed out.' : 'The Coordinator withdrew the Task offer.'
+      error
     })
   }
 
@@ -505,10 +566,16 @@ export class CollaborationTaskAdapter {
 
   async fenceLocalAgent(agentId: string, reason: string): Promise<void> {
     const now = this.now().toISOString()
+    const pendingControllers = new Set<AbortController>()
+    for (const [identifier, controller] of this.controllers) {
+      const offer = this.findPendingOffer(identifier)
+      if (offer?.recipientAgentId === agentId) pendingControllers.add(controller)
+    }
+    for (const controller of pendingControllers) controller.abort(reason)
     await this.options.store.transact((draft) => {
       for (const offer of draft.pendingTaskOffers) {
         if (offer.recipientAgentId !== agentId ||
-            ['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state)) continue
+            TERMINAL_PENDING_OFFER_STATES.has(offer.state)) continue
         offer.state = 'failed'
         offer.completedAt = now
         offer.updatedAt = now
@@ -522,8 +589,79 @@ export class CollaborationTaskAdapter {
         run.error = reason.slice(0, 4_000)
       }
     })
-    for (const [executionId, controller] of this.controllers) {
-      if (this.findRun(executionId)?.offer.recipientAgentId === agentId) controller.abort(reason)
+    for (const [identifier, controller] of this.controllers) {
+      const offer = this.findPendingOffer(identifier)
+      const run = this.findRun(identifier)
+      if (offer?.recipientAgentId === agentId || run?.offer.recipientAgentId === agentId) {
+        controller.abort(reason)
+      }
+    }
+  }
+
+  async handleProjectUnavailable(
+    projectId: string,
+    input: Readonly<Pick<CollaborationProjectUnavailableFence, 'kind' | 'reason'>>
+  ): Promise<void> {
+    const snapshot = this.options.store.snapshot()
+    const existingFence = snapshot.projectUnavailableFences.find((fence) => (
+      fence.projectId === projectId
+    ))
+    const effectiveFence = existingFence?.kind === 'permanent'
+      ? existingFence
+      : input
+    const needsStateCleanup = snapshot.pendingTaskOffers.some((offer) => (
+      offer.projectId === projectId &&
+      !TERMINAL_PENDING_OFFER_STATES.has(offer.state)
+    )) || snapshot.taskRuns.some((run) => (
+      run.offer.projectId === projectId && !PROJECT_UNAVAILABLE_PRESERVED_RUN_STATES.has(run.state)
+    )) || snapshot.projects.some((project) => project.projectId === projectId) ||
+      !existingFence || existingFence.kind !== effectiveFence.kind ||
+      existingFence.reason !== effectiveFence.reason
+    if (needsStateCleanup) {
+      const now = this.now().toISOString()
+      await this.options.store.transact((draft) => {
+        const currentFence = draft.projectUnavailableFences.find((fence) => (
+          fence.projectId === projectId
+        ))
+        const nextFence = currentFence?.kind === 'permanent'
+          ? currentFence
+          : { projectId, ...input, observedAt: now }
+        for (const offer of draft.pendingTaskOffers) {
+          if (
+            offer.projectId !== projectId ||
+            TERMINAL_PENDING_OFFER_STATES.has(offer.state)
+          ) continue
+          offer.state = 'closed'
+          offer.completedAt = now
+          offer.updatedAt = now
+          offer.error = nextFence.reason
+        }
+        for (const run of draft.taskRuns) {
+          if (
+            run.offer.projectId !== projectId ||
+            PROJECT_UNAVAILABLE_PRESERVED_RUN_STATES.has(run.state)
+          ) continue
+          run.state = 'fenced'
+          run.completedAt = now
+          run.updatedAt = now
+          run.error = nextFence.reason
+        }
+        draft.projects = draft.projects.filter((project) => project.projectId !== projectId)
+        draft.projectUnavailableFences = [
+          ...draft.projectUnavailableFences.filter((fence) => fence.projectId !== projectId),
+          nextFence
+        ]
+      })
+    }
+    const reason = this.options.store.snapshot().projectUnavailableFences.find((fence) => (
+      fence.projectId === projectId
+    ))?.reason ?? effectiveFence.reason
+    for (const [identifier, controller] of this.controllers) {
+      const offer = this.findPendingOffer(identifier)
+      const run = this.findRun(identifier)
+      if (offer?.projectId === projectId || run?.offer.projectId === projectId) {
+        controller.abort(reason)
+      }
     }
   }
 
@@ -573,11 +711,16 @@ export class CollaborationTaskAdapter {
   private schedule(identifier: string): void {
     if (this.stopped || this.running.has(identifier)) return
     const promise = this.process(identifier).catch(async (error) => {
+      if (this.stopped) return
       const pending = this.findPendingOffer(identifier)
-      if (pending && !['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(pending.state)) {
+      if (pending && !TERMINAL_PENDING_OFFER_STATES.has(pending.state)) {
+        const recoverableClaimFailure = pending.state === 'claiming' && (
+          error instanceof OfferClaimCheckpointError ||
+          this.hasUncertainDurableClaim(pending)
+        )
         await this.updatePendingOffer(identifier, {
-          state: 'failed',
-          completedAt: this.now().toISOString(),
+          state: recoverableClaimFailure ? 'claiming' : 'failed',
+          completedAt: recoverableClaimFailure ? null : this.now().toISOString(),
           error: safeError(error, this.options.sanitizeText)
         })
         return
@@ -591,6 +734,18 @@ export class CollaborationTaskAdapter {
     this.running.set(identifier, promise)
   }
 
+  private scheduleAfterCurrent(identifier: string): void {
+    const current = this.running.get(identifier)
+    if (!current) {
+      this.schedule(identifier)
+      return
+    }
+    void current.then(
+      () => this.schedule(identifier),
+      () => this.schedule(identifier)
+    )
+  }
+
   private async process(identifier: string): Promise<void> {
     if (this.stopped) return
     const pending = this.findPendingOffer(identifier)
@@ -601,60 +756,96 @@ export class CollaborationTaskAdapter {
     const executionId = identifier
     let run = this.requireRun(executionId)
     if (TERMINAL_RUN_STATES.has(run.state)) return
-    const uncertain = run.externalJournal.find((entry) => entry.state === 'effect_dispatched')
-    if (uncertain) {
-      await this.observeUnknownOutcome(run, uncertain, 'desktop_restarted_after_provider_dispatch')
-      return
-    }
-    const preflight = await this.refreshPreflight(run)
-    run = this.requireRun(executionId)
-    if (preflight.outcome === 'denied') {
-      const message = `Worker preflight denied: ${preflight.reasons.join(', ')}`
-      if (requireExecution(run).fence.status === 'open') {
-        await this.failExecution(run, 'worker_preflight_denied', message)
-      } else {
-        await this.markFenced(run, message)
+    const controller = this.controllers.get(executionId) ?? new AbortController()
+    this.controllers.set(executionId, controller)
+    try {
+      const uncertain = run.externalJournal.find((entry) => entry.state === 'effect_dispatched')
+      if (uncertain) {
+        await this.observeUnknownOutcome(run, uncertain, 'desktop_restarted_after_provider_dispatch')
+        return
       }
-      return
+      if (run.state === 'needs-human') {
+        await this.refreshPreflight(run, true, controller.signal)
+        throwIfSignalAborted(controller.signal)
+        return
+      }
+      const preflight = await this.refreshPreflight(run, true, controller.signal)
+      throwIfSignalAborted(controller.signal)
+      run = this.requireRun(executionId)
+      if (TERMINAL_RUN_STATES.has(run.state)) return
+      if (preflight.outcome === 'denied') {
+        const message = `Worker preflight denied: ${preflight.reasons.join(', ')}`
+        if (requireExecution(run).fence.status === 'open') {
+          await this.failExecution(run, 'worker_preflight_denied', message)
+        } else {
+          await this.markFenced(run, message)
+        }
+        return
+      }
+      await this.acceptAndStart(run)
+    } finally {
+      if (this.controllers.get(executionId) === controller) {
+        this.controllers.delete(executionId)
+      }
     }
-    await this.acceptAndStart(run)
   }
 
   private async processPendingOffer(initial: CollaborationPendingTaskOffer): Promise<void> {
     let offer = initial
-    if (['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state) ||
+    if (TERMINAL_PENDING_OFFER_STATES.has(offer.state) ||
         offer.state === 'awaiting-manual') return
-    const acceptanceMode = this.policies.read(offer.recipientAgentId)
-    const preflight = await this.preflightPendingOffer(offer)
-    const preflightReasons = preflight.reason ? [preflight.reason] : []
-    if (offer.state === 'pending' && acceptanceMode === 'manual') {
-      await this.updatePendingOffer(offer.taskOfferId, {
-        state: 'awaiting-manual',
-        preflightReasons,
+    if (offer.state === 'rejecting') {
+      await this.rejectPendingOffer(offer)
+      return
+    }
+    if (offer.state === 'claiming' && await this.resumePendingOfferClaim(offer)) return
+    const controller = new AbortController()
+    this.controllers.set(offer.taskOfferId, controller)
+    try {
+      const acceptanceMode = this.policies.read(offer.recipientAgentId)
+      const preflight = await this.preflightPendingOffer(offer, controller.signal)
+      throwIfSignalAborted(controller.signal)
+      offer = this.requirePendingOffer(offer.taskOfferId)
+      if (TERMINAL_PENDING_OFFER_STATES.has(offer.state)) return
+      const preflightReasons = preflight.reason ? [preflight.reason] : []
+      if (offer.state === 'pending' && acceptanceMode === 'manual') {
+        await this.updatePendingOffer(offer.taskOfferId, {
+          state: 'awaiting-manual',
+          preflightReasons,
+          error: null
+        }, preflight.task, offer.state)
+        return
+      }
+      if (preflight.reason) {
+        const manual = acceptanceMode === 'manual'
+        await this.updatePendingOffer(offer.taskOfferId, {
+          state: manual ? 'awaiting-manual' : 'failed',
+          preflightReasons,
+          completedAt: manual ? null : this.now().toISOString(),
+          error: `${preflight.message} Another Device may still claim the User-level offer.`
+        }, preflight.task, offer.state)
+        return
+      }
+      offer = await this.updatePendingOffer(offer.taskOfferId, {
+        state: 'claiming',
+        preflightReasons: [],
         error: null
-      }, preflight.task)
-      return
+      }, preflight.task, offer.state)
+      throwIfSignalAborted(controller.signal)
+      if (offer.state !== 'claiming') return
+      await this.claimPendingOffer(offer)
+    } finally {
+      if (this.controllers.get(offer.taskOfferId) === controller) {
+        this.controllers.delete(offer.taskOfferId)
+      }
     }
-    if (preflight.reason) {
-      const manual = acceptanceMode === 'manual'
-      await this.updatePendingOffer(offer.taskOfferId, {
-        state: manual ? 'awaiting-manual' : 'failed',
-        preflightReasons,
-        completedAt: manual ? null : this.now().toISOString(),
-        error: `${preflight.message} Another Device may still claim the User-level offer.`
-      }, preflight.task)
-      return
-    }
-    offer = await this.updatePendingOffer(offer.taskOfferId, {
-      state: 'claiming',
-      preflightReasons: [],
-      error: null
-    }, preflight.task)
-    await this.claimPendingOffer(offer)
   }
 
   /** Advisory Device-local checks shared by manual and automatic acceptance before the Cloud claim. */
-  private async preflightPendingOffer(offer: CollaborationPendingTaskOffer): Promise<Readonly<{
+  private async preflightPendingOffer(
+    offer: CollaborationPendingTaskOffer,
+    signal: AbortSignal
+  ): Promise<Readonly<{
     task?: Task
     reason: CollaborationPendingTaskOffer['preflightReasons'][number] | null
     message: string
@@ -742,6 +933,7 @@ export class CollaborationTaskAdapter {
           CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.inputSchema.parse(intent),
           {
             workspaceId: workspaceRoot,
+            signal,
             systemExecutionContext: {
               contractVersion: 1,
               phase: 'task-offer-preflight',
@@ -753,6 +945,7 @@ export class CollaborationTaskAdapter {
             }
           }
         )
+        throwIfSignalAborted(signal)
         if (!result.ok || result.value.status !== 'ready') {
           return {
             task,
@@ -763,6 +956,7 @@ export class CollaborationTaskAdapter {
       }
       return { task, reason: null, message: '' }
     } catch {
+      throwIfSignalAborted(signal)
       return {
         task,
         reason: 'provider_not_ready',
@@ -772,12 +966,7 @@ export class CollaborationTaskAdapter {
   }
 
   private async claimPendingOffer(pending: CollaborationPendingTaskOffer): Promise<void> {
-    const requestFacts = {
-      taskOfferId: pending.taskOfferId,
-      taskId: pending.taskId,
-      expectedTaskRevision: pending.currentTaskRevision,
-      expectedOfferRevision: pending.offerRevision
-    }
+    const requestFacts = pendingOfferClaimRequestFacts(pending)
     const response = await this.options.outbox.enqueueAndWait('task.offer-decision',
       restRequestSchema.parse({
         protocolVersion: '1.0',
@@ -786,6 +975,58 @@ export class CollaborationTaskAdapter {
         idempotencyKey: idempotencyKey('task.offer.accept', requestFacts),
         ...requestFacts
       }))
+    await this.persistClaimedOffer(pending, response)
+  }
+
+  private async resumePendingOfferClaim(pending: CollaborationPendingTaskOffer): Promise<boolean> {
+    const requestFacts = pendingOfferClaimRequestFacts(pending)
+    const claimIdempotencyKey = idempotencyKey('task.offer.accept', requestFacts)
+    const replay = await this.options.outbox.resumeAndWait(
+      'task.offer-decision',
+      claimIdempotencyKey,
+      (request) => {
+        if (
+          request.type !== 'task.offer.accept' ||
+          request.idempotencyKey !== claimIdempotencyKey ||
+          request.taskOfferId !== requestFacts.taskOfferId ||
+          request.taskId !== requestFacts.taskId ||
+          request.expectedTaskRevision !== requestFacts.expectedTaskRevision ||
+          request.expectedOfferRevision !== requestFacts.expectedOfferRevision
+        ) {
+          throw new Error('Durable Task offer claim does not match the pending User offer.')
+        }
+      }
+    )
+    if (!replay) return false
+    await this.persistClaimedOffer(pending, replay.response)
+    return true
+  }
+
+  private hasUncertainDurableClaim(pending: CollaborationPendingTaskOffer): boolean {
+    const requestFacts = pendingOfferClaimRequestFacts(pending)
+    const claimIdempotencyKey = idempotencyKey('task.offer.accept', requestFacts)
+    const entry = this.options.store.snapshot().outbox.find((candidate) => (
+      candidate.idempotencyKey === claimIdempotencyKey
+    ))
+    if (
+      !entry ||
+      entry.kind !== 'task.offer-decision' ||
+      entry.state === 'delivered'
+    ) return false
+    const request = restRequestSchema.safeParse(entry.body)
+    return request.success &&
+      request.data.type === 'task.offer.accept' &&
+      request.data.idempotencyKey === claimIdempotencyKey &&
+      request.data.taskOfferId === requestFacts.taskOfferId &&
+      request.data.taskId === requestFacts.taskId &&
+      request.data.expectedTaskRevision === requestFacts.expectedTaskRevision &&
+      request.data.expectedOfferRevision === requestFacts.expectedOfferRevision
+  }
+
+  private async persistClaimedOffer(
+    pending: CollaborationPendingTaskOffer,
+    response: RestResponse
+  ): Promise<void> {
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.collection') {
       throw new Error(`Task offer claim returned unexpected ${response.type}.`)
@@ -808,55 +1049,59 @@ export class CollaborationTaskAdapter {
       throw new Error('Task offer claim did not return this Device\'s exact immutable execution.')
     }
     const workspaceRoot = this.options.workspaceRootForExecution(execution.executionId)
-    await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
-    await chmod(workspaceRoot, 0o700)
     const acceptedAt = this.now().toISOString()
-    await this.options.store.transact((draft) => {
-      const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === pending.taskOfferId)
-      if (!current || current.state !== 'claiming') {
-        throw new Error('The local offer claim journal is no longer current.')
-      }
-      draft.pendingTaskOffers = draft.pendingTaskOffers.filter((candidate) => (
-        candidate.taskOfferId !== pending.taskOfferId
-      ))
-      draft.taskRuns.push({
-        offer: {
-          projectId: pending.projectId,
-          taskId: pending.taskId,
-          executionId: execution.executionId,
-          taskOfferId: pending.taskOfferId,
-          currentTaskRevision: task.revision,
-          currentExecutionRevision: execution.revision,
-          offerRevision: offer.revision,
-          recipientAgentId: localAgentId,
-          receivedAt: pending.receivedAt
-        },
-        task,
-        execution,
-        latestPreflight: null,
-        decision: { decision: 'accept', decidedAt: acceptedAt },
-        expectedTaskRevision: task.revision,
-        expectedExecutionRevision: execution.revision,
-        state: 'accepting',
-        workspaceRoot,
-        runtimeId: null,
-        threadId: null,
-        humanRequestId: null,
-        humanAnswer: null,
-        resources: [],
-        agentJournal: [],
-        externalJournal: [],
-        outputs: [],
-        recoveryJournalEntryIds: [],
-        resultSummary: null,
-        lateOutcomes: [],
-        startedAt: null,
-        updatedAt: acceptedAt,
-        completedAt: null,
-        error: null
+    try {
+      await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
+      await chmod(workspaceRoot, 0o700)
+      await this.options.store.transact((draft) => {
+        const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === pending.taskOfferId)
+        if (!current || current.state !== 'claiming') {
+          throw new Error('The local offer claim journal is no longer current.')
+        }
+        draft.pendingTaskOffers = draft.pendingTaskOffers.filter((candidate) => (
+          candidate.taskOfferId !== pending.taskOfferId
+        ))
+        draft.taskRuns.push({
+          offer: {
+            projectId: pending.projectId,
+            taskId: pending.taskId,
+            executionId: execution.executionId,
+            taskOfferId: pending.taskOfferId,
+            currentTaskRevision: task.revision,
+            currentExecutionRevision: execution.revision,
+            offerRevision: offer.revision,
+            recipientAgentId: localAgentId,
+            receivedAt: pending.receivedAt
+          },
+          task,
+          execution,
+          latestPreflight: null,
+          decision: { decision: 'accept', decidedAt: acceptedAt },
+          expectedTaskRevision: task.revision,
+          expectedExecutionRevision: execution.revision,
+          state: 'accepting',
+          workspaceRoot,
+          runtimeId: null,
+          threadId: null,
+          humanRequestId: null,
+          humanAnswer: null,
+          resources: [],
+          agentJournal: [],
+          externalJournal: [],
+          outputs: [],
+          recoveryJournalEntryIds: [],
+          resultSummary: null,
+          lateOutcomes: [],
+          startedAt: null,
+          updatedAt: acceptedAt,
+          completedAt: null,
+          error: null
+        })
+        draft.tasks = [...draft.tasks.filter(({ taskId }) => taskId !== task.taskId), task]
       })
-      draft.tasks = [...draft.tasks.filter(({ taskId }) => taskId !== task.taskId), task]
-    })
+    } catch (error) {
+      throw new OfferClaimCheckpointError(error)
+    }
     await this.publishAvailability('online')
     this.schedule(execution.executionId)
   }
@@ -865,7 +1110,12 @@ export class CollaborationTaskAdapter {
     let run = initial
     let execution = requireExecution(run)
     if (execution.state === 'accepted') {
-      const startedAt = run.startedAt ?? this.now().toISOString()
+      const observedAt = this.now().toISOString()
+      const startedAt = run.startedAt ?? timestampNotBefore(observedAt, execution.acceptedAt)
+      if (!run.startedAt) {
+        run = await this.updateRun(run.offer.executionId, { startedAt })
+        execution = requireExecution(run)
+      }
       const requestFacts = {
         taskId: run.offer.taskId,
         executionId: run.offer.executionId,
@@ -887,8 +1137,25 @@ export class CollaborationTaskAdapter {
         task, execution,
         expectedTaskRevision: task.revision,
         expectedExecutionRevision: execution.revision,
-        state: 'running', startedAt, error: null
+        state: 'running', startedAt: execution.startedAt ?? startedAt, error: null
       })
+      if (TERMINAL_RUN_STATES.has(run.state)) return
+    }
+    if (execution.state === 'running') {
+      if (!execution.startedAt) {
+        throw new Error('Running Cloud execution is missing its canonical start timestamp.')
+      }
+      if (run.startedAt && run.startedAt !== execution.startedAt) {
+        throw new Error('Local execution start provenance conflicts with the canonical Cloud execution.')
+      }
+      if (run.state === 'accepting' || !run.startedAt) {
+        run = await this.updateRun(run.offer.executionId, {
+          ...(run.state === 'accepting' ? { state: 'running' as const } : {}),
+          startedAt: execution.startedAt,
+          error: null
+        })
+        if (TERMINAL_RUN_STATES.has(run.state)) return
+      }
     }
     if (execution.state === 'needs_human') {
       await this.updateRun(run.offer.executionId, { state: 'needs-human' })
@@ -906,12 +1173,14 @@ export class CollaborationTaskAdapter {
     const controller = this.controllers.get(run.offer.executionId) ?? new AbortController()
     this.controllers.set(run.offer.executionId, controller)
     try {
-      const preflight = await this.refreshPreflight(run)
+      const preflight = await this.refreshPreflight(run, true, controller.signal)
+      throwIfSignalAborted(controller.signal)
       if (preflight.outcome === 'denied') {
         await this.markFenced(run, `Execution lost authority: ${preflight.reasons.join(', ')}`)
         return
       }
       run = this.requireRun(run.offer.executionId)
+      if (TERMINAL_RUN_STATES.has(run.state)) return
       if (requireExecution(run).fileIntent) {
         await this.downloadInputs(run, controller.signal)
         run = this.requireRun(run.offer.executionId)
@@ -921,7 +1190,12 @@ export class CollaborationTaskAdapter {
       if (!runtimeResult) return
       run = this.requireRun(run.offer.executionId)
       if (runtimeResult.outcome === 'needs_human') {
-        await this.createHumanNeeded(run, runtimeResult.question, runtimeResult.requiredAssurance)
+        await this.createHumanNeeded(
+          run,
+          runtimeResult.question,
+          runtimeResult.requiredAssurance,
+          controller.signal
+        )
         return
       }
       await this.updateRun(run.offer.executionId, {
@@ -935,7 +1209,7 @@ export class CollaborationTaskAdapter {
         run = this.requireRun(run.offer.executionId)
         if (TERMINAL_RUN_STATES.has(run.state)) return
       }
-      await this.submitResult(run)
+      await this.submitResult(run, controller.signal)
     } finally {
       if (this.controllers.get(run.offer.executionId) === controller) {
         this.controllers.delete(run.offer.executionId)
@@ -1073,7 +1347,12 @@ export class CollaborationTaskAdapter {
     }
     const safeText = result.text.slice(0, 32_000)
     const observedAt = this.now().toISOString()
-    const postflight = await this.refreshPreflight(this.requireRun(run.offer.executionId)).catch(() => null)
+    const postflight = await this.refreshPreflight(
+      this.requireRun(run.offer.executionId),
+      true,
+      signal
+    ).catch(() => null)
+    if (signal.aborted && this.stopped) return null
     if (!postflight || postflight.outcome === 'denied') {
       await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
         state: 'late_outcome', observedAt,
@@ -1272,7 +1551,12 @@ export class CollaborationTaskAdapter {
       })
       journal = requireTransferJournal(this.requireRun(run.offer.executionId), operation.logicalInvocationId)
     }
-    const preflight = await this.refreshPreflight(this.requireRun(run.offer.executionId))
+    const preflight = await this.refreshPreflight(
+      this.requireRun(run.offer.executionId),
+      true,
+      operation.signal
+    )
+    throwIfSignalAborted(operation.signal)
     if (preflight.outcome === 'denied') {
       await this.markFenced(this.requireRun(run.offer.executionId),
         `Transfer preflight denied: ${preflight.reasons.join(', ')}`)
@@ -1471,8 +1755,9 @@ export class CollaborationTaskAdapter {
       state: 'outcome_unknown', cloudJournal: response, observedAt,
       safeFailureCode: 'provider_outcome_unknown', safeError: detail.slice(0, 4_000)
     })
-    await this.options.store.transact((draft) => {
+    const enteredManualRecovery = await this.options.store.transact((draft) => {
       const current = requireDraftRun(draft.taskRuns, run.offer.executionId)
+      if (TERMINAL_RUN_STATES.has(current.state)) return false
       current.state = 'manual-recovery'
       current.completedAt = observedAt
       current.updatedAt = observedAt
@@ -1483,8 +1768,53 @@ export class CollaborationTaskAdapter {
         outcome: 'outcome_unknown', observedAt,
         safeDetail: detail.slice(0, 4_000)
       })
+      return true
     })
+    if (!enteredManualRecovery) return
     await this.publishAvailability('online')
+  }
+
+  private async rejectPendingOffer(pending: CollaborationPendingTaskOffer): Promise<void> {
+    const requestFacts = {
+      taskOfferId: pending.taskOfferId,
+      taskId: pending.taskId,
+      expectedTaskRevision: pending.currentTaskRevision,
+      expectedOfferRevision: pending.offerRevision
+    }
+    const response = await this.options.outbox.enqueueAndWait('task.offer-decision',
+      restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'task.offer.reject',
+        idempotencyKey: idempotencyKey('task.offer.reject', requestFacts),
+        ...requestFacts
+      }))
+    if (response.type === 'rest.error') throw new Error(response.error.message)
+    if (response.type !== 'rest.collection') {
+      throw new Error(`Task offer rejection returned unexpected ${response.type}.`)
+    }
+    const task = response.items.find((item): item is Task => item.type === 'task')
+    const offer = response.items.find((item): item is TaskOffer => item.type === 'task_offer')
+    if (
+      response.items.length !== 2 || !task || !offer ||
+      task.taskId !== pending.taskId || task.projectId !== pending.projectId ||
+      task.revision !== pending.currentTaskRevision + 1 ||
+      task.status !== 'revision_requested' || task.currentExecutionId !== null ||
+      offer.taskOfferId !== pending.taskOfferId || offer.projectId !== pending.projectId ||
+      offer.taskId !== pending.taskId || offer.workerUserId !== pending.workerUserId ||
+      offer.revision !== pending.offerRevision + 1 || offer.executionId !== null ||
+      offer.state !== 'rejected'
+    ) {
+      throw new Error('Task offer rejection did not return the exact User-level closure.')
+    }
+    const completedAt = this.now().toISOString()
+    await this.updatePendingOffer(pending.taskOfferId, {
+      state: 'closed',
+      currentTaskRevision: task.revision,
+      offerRevision: offer.revision,
+      completedAt,
+      error: 'The Worker User rejected the Task offer.'
+    }, task)
   }
 
   private async observeLateTransferOutcome(
@@ -1557,7 +1887,8 @@ export class CollaborationTaskAdapter {
   private async createHumanNeeded(
     run: CollaborationTaskRun,
     question: string,
-    requiredAssurance: 'verified' | 'strong'
+    requiredAssurance: 'verified' | 'strong',
+    signal: AbortSignal
   ): Promise<void> {
     const expiresAt = new Date(this.now().getTime() + 7 * 24 * 60 * 60 * 1_000).toISOString()
     const requestFacts = {
@@ -1575,7 +1906,8 @@ export class CollaborationTaskAdapter {
       confirmableAction: null,
       expiresAt
     }
-    await this.updateRun(run.offer.executionId, { state: 'needs-human' })
+    const pending = await this.updateRun(run.offer.executionId, { state: 'needs-human' })
+    if (pending.state !== 'needs-human') return
     const response = await this.options.outbox.enqueueAndWait('task.human-needed',
       restRequestSchema.parse({
         protocolVersion: '1.0', requestId: collaborationRequestId(),
@@ -1588,6 +1920,7 @@ export class CollaborationTaskAdapter {
       humanAnswer: null,
       state: 'needs-human'
     })
+    await this.refreshPreflight(this.requireRun(run.offer.executionId), true, signal)
   }
 
   private async acceptHumanAnswer(answer: HumanAnswer, recipientAgentId: string): Promise<void> {
@@ -1613,7 +1946,7 @@ export class CollaborationTaskAdapter {
       throw new Error('Human answer arrived outside the pending Worker HumanNeeded state.')
     }
     await this.updateRun(executionId, { humanAnswer: answer, state: 'running', error: null })
-    this.schedule(executionId)
+    this.scheduleAfterCurrent(executionId)
   }
 
   private async recoverHumanRequestId(
@@ -1650,8 +1983,9 @@ export class CollaborationTaskAdapter {
     }
   }
 
-  private async submitResult(run: CollaborationTaskRun): Promise<void> {
-    const preflight = await this.refreshPreflight(run)
+  private async submitResult(run: CollaborationTaskRun, signal: AbortSignal): Promise<void> {
+    const preflight = await this.refreshPreflight(run, true, signal)
+    throwIfSignalAborted(signal)
     run = this.requireRun(run.offer.executionId)
     if (preflight.outcome === 'denied') {
       await this.markFenced(run, `Result preflight denied: ${preflight.reasons.join(', ')}`)
@@ -1692,7 +2026,10 @@ export class CollaborationTaskAdapter {
         runtimeId: latestAgent.runtimeId,
         modelId: null,
         startedAt: run.startedAt,
-        completedAt: latestAgent.observedAt ?? this.now().toISOString()
+        completedAt: timestampNotBefore(
+          latestAgent.observedAt ?? this.now().toISOString(),
+          run.startedAt
+        )
       },
       outputs: run.outputs,
       recoveryJournalEntryIds: run.recoveryJournalEntryIds
@@ -1750,7 +2087,10 @@ export class CollaborationTaskAdapter {
       ...submissionFacts,
       submissionDigest: digest(canonicalJson(submissionFacts))
     })
-    if (markSubmitting) await this.updateRun(run.offer.executionId, { state: 'submitting' })
+    if (markSubmitting) {
+      const submitting = await this.updateRun(run.offer.executionId, { state: 'submitting' })
+      if (submitting.state !== 'submitting') return
+    }
     const response = await this.options.outbox.enqueueAndWait('task.result', request)
     const submitted = requireTaskResultBundle(response)
     await this.completeRecoveredRun(run.offer.executionId, submitted.task, submitted.execution)
@@ -1782,7 +2122,10 @@ export class CollaborationTaskAdapter {
       return
     }
     const failedAt = this.now().toISOString()
-    await this.updateRun(run.offer.executionId, { error: safeMessage.slice(0, 4_000) })
+    const failing = await this.updateRun(run.offer.executionId, {
+      error: safeMessage.slice(0, 4_000)
+    })
+    if (TERMINAL_RUN_STATES.has(failing.state)) return
     const requestFacts = {
       taskId: run.offer.taskId,
       executionId: run.offer.executionId,
@@ -1813,8 +2156,10 @@ export class CollaborationTaskAdapter {
 
   private async refreshPreflight(
     run: CollaborationTaskRun,
-    allowRevisionReconcile = true
+    allowRevisionReconcile: boolean,
+    signal: AbortSignal
   ): Promise<CollaborationWorkerPreflight> {
+    throwIfSignalAborted(signal)
     const response = await this.options.connection.executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0', requestId: collaborationRequestId(),
       type: 'task.execution.preflight.get',
@@ -1823,12 +2168,14 @@ export class CollaborationTaskAdapter {
       expectedTaskRevision: run.expectedTaskRevision,
       expectedExecutionRevision: run.expectedExecutionRevision
     }))
+    throwIfSignalAborted(signal)
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.task_execution_preflight') {
       throw new Error(`Task preflight returned unexpected ${response.type}.`)
     }
     const cloud = response.preflight
     const task = await this.readTask(run.offer.taskId)
+    throwIfSignalAborted(signal)
     const reasons: Array<
       'cloud_denied' |
       'runtime_not_ready' |
@@ -1843,6 +2190,7 @@ export class CollaborationTaskAdapter {
     ))
     if (!localAgent || localAgent.lifecycleStatus !== 'active') reasons.push('agent_inactive')
     if (!(await this.runtimeReady())) reasons.push('runtime_not_ready')
+    throwIfSignalAborted(signal)
     if (
       cloud.execution.executionId !== run.offer.executionId ||
       cloud.execution.assigneeAgentId !== run.offer.recipientAgentId ||
@@ -1874,16 +2222,21 @@ export class CollaborationTaskAdapter {
       expectedExecutionRevision: cloud.execution.revision,
       error: uniqueReasons.length ? `Preflight denied: ${uniqueReasons.join(', ')}` : null
     })
+    throwIfSignalAborted(signal)
     const revisionOnlyDenial = cloud.decision.outcome === 'denied' &&
       cloud.decision.reasons.length > 0 &&
       cloud.decision.reasons.every((reason) => (
         reason === 'task_revision_mismatch' || reason === 'execution_revision_mismatch'
       ))
     if (allowRevisionReconcile && revisionOnlyDenial) {
-      return this.refreshPreflight(this.requireRun(run.offer.executionId), false)
+      return this.refreshPreflight(this.requireRun(run.offer.executionId), false, signal)
     }
     if (cloud.execution.fileIntent && uniqueReasons.length === 0) {
-      const content = await this.preflightContentTransfers(this.requireRun(run.offer.executionId))
+      const content = await this.preflightContentTransfers(
+        this.requireRun(run.offer.executionId),
+        signal
+      )
+      throwIfSignalAborted(signal)
       if (!content.ready) reasons.push('provider_not_ready')
       uniqueReasons = [...new Set(reasons)]
       local = {
@@ -1897,11 +2250,15 @@ export class CollaborationTaskAdapter {
         latestPreflight: local,
         error: uniqueReasons.length ? `Preflight denied: ${uniqueReasons.join(', ')}` : null
       })
+      throwIfSignalAborted(signal)
     }
     return local
   }
 
-  private async preflightContentTransfers(run: CollaborationTaskRun): Promise<Readonly<{
+  private async preflightContentTransfers(
+    run: CollaborationTaskRun,
+    signal: AbortSignal
+  ): Promise<Readonly<{
     ready: boolean
     observations: Array<Readonly<{
       operation: 'download' | 'upload-new'
@@ -1943,9 +2300,11 @@ export class CollaborationTaskAdapter {
           CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.inputSchema.parse(intent),
           {
             workspaceId: run.workspaceRoot,
+            signal,
             systemExecutionContext: systemExecutionContext(run)
           }
         )
+        throwIfSignalAborted(signal)
         if (!result.ok) return { ready: false, observations }
         observations.push({
           operation: intent.operation,
@@ -1959,6 +2318,7 @@ export class CollaborationTaskAdapter {
         observations
       }
     } catch {
+      throwIfSignalAborted(signal)
       return { ready: false, observations: [] }
     }
   }
@@ -2126,11 +2486,20 @@ export class CollaborationTaskAdapter {
   private async updatePendingOffer(
     taskOfferId: string,
     update: Partial<CollaborationPendingTaskOffer>,
-    task?: Task
+    task?: Task,
+    expectedState?: CollaborationPendingTaskOffer['state']
   ): Promise<CollaborationPendingTaskOffer> {
     return this.options.store.transact((draft) => {
       const offer = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === taskOfferId)
       if (!offer) throw new Error('Local pending Task offer was not found.')
+      if (expectedState !== undefined && offer.state !== expectedState) {
+        return structuredClone(offer)
+      }
+      if (
+        TERMINAL_PENDING_OFFER_STATES.has(offer.state) &&
+        update.state !== undefined &&
+        update.state !== offer.state
+      ) return structuredClone(offer)
       Object.assign(offer, update, { updatedAt: this.now().toISOString() })
       if (task) {
         draft.tasks = [...draft.tasks.filter((candidate) => candidate.taskId !== task.taskId), task]
@@ -2151,6 +2520,14 @@ export class CollaborationTaskAdapter {
   ): Promise<CollaborationTaskRun> {
     return this.options.store.transact((draft) => {
       const run = requireDraftRun(draft.taskRuns, executionId)
+      if (
+        TERMINAL_RUN_STATES.has(run.state) &&
+        update.state !== undefined &&
+        update.state !== run.state &&
+        !(run.state === 'manual-recovery' && (
+          update.state === 'completed' || update.state === 'fenced'
+        ))
+      ) return structuredClone(run)
       Object.assign(run, update, { updatedAt: this.now().toISOString() })
       if (run.task) {
         draft.tasks = [...draft.tasks.filter((task) => task.taskId !== run.task!.taskId), run.task]
@@ -2444,6 +2821,22 @@ function taskResultRequestFacts(request: Extract<
   }
 }
 
+function pendingOfferClaimRequestFacts(pending: CollaborationPendingTaskOffer) {
+  return {
+    taskOfferId: pending.taskOfferId,
+    taskId: pending.taskId,
+    expectedTaskRevision: pending.currentTaskRevision,
+    expectedOfferRevision: pending.offerRevision
+  }
+}
+
+class OfferClaimCheckpointError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'The accepted TaskRun checkpoint failed.', { cause })
+    this.name = 'OfferClaimCheckpointError'
+  }
+}
+
 function systemExecutionContext(run: CollaborationTaskRun) {
   return {
     contractVersion: 1,
@@ -2452,6 +2845,10 @@ function systemExecutionContext(run: CollaborationTaskRun) {
     executionId: run.offer.executionId,
     executionRevision: run.expectedExecutionRevision
   } as const
+}
+
+function timestampNotBefore(observedAt: string, minimumAt: string): string {
+  return Date.parse(observedAt) < Date.parse(minimumAt) ? minimumAt : observedAt
 }
 
 function idempotencyKey(kind: string, facts: unknown): string {
@@ -2473,6 +2870,14 @@ function canonicalJson(value: unknown): string {
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function throwIfSignalAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new Error(typeof signal.reason === 'string'
+    ? signal.reason
+    : 'Worker operation was cancelled.')
 }
 
 function normalizeSafeCode(value: string): string {

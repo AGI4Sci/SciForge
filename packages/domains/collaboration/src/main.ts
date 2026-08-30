@@ -31,6 +31,8 @@ import {
   collaborationManagedContainerInspectInputSchema,
   collaborationManagedContainerProvisionInputSchema,
   collaborationManagedContainerArchiveInputSchema,
+  collaborationPrivateChannelDiscoverInputSchema,
+  collaborationPrivateChannelDiscoverResultSchema,
   collaborationProjectionLinkInputSchema,
   collaborationProjectionLinkResultSchema,
   collaborationProjectionShareInputSchema,
@@ -52,6 +54,7 @@ import {
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
   type CollaborationManagedContainerManageInput,
+  type CollaborationPrivateChannelDiscoverInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
@@ -177,6 +180,9 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   }
   const coordinatorCloudCommandService = defineCoordinatorCloudCommandService({
     execute: (command) => requireRuntime().executeCoordinatorCloudCommand(command),
+    resume: (idempotencyKey, validateCommand) => (
+      requireRuntime().resumeCoordinatorCloudCommand(idempotencyKey, validateCommand)
+    ),
     subscribe: (handler) => {
       if (coordinatorInboxHandler) {
         throw new Error('The Coordinator Agent Inbox already has its package owner.')
@@ -297,9 +303,9 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
   const define = (input: Omit<
     CollaborationCapabilityOptions,
     'version' | 'audiences' | 'scope' | 'tags'
-  >): CapabilityDefinition => options.defineCapability({
+  >, version = '1.0.0'): CapabilityDefinition => options.defineCapability({
     ...input,
-    version: '1.0.0',
+    version,
     audiences: ['ui'],
     scope: 'global',
     tags: ['collaboration', 'user', 'device', 'session', 'project']
@@ -311,7 +317,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     effect: CapabilityEffect,
     inputSchema: z.ZodType,
     outputSchema: z.ZodType,
-    handler: CollaborationCapabilityOptions['handler']
+    handler: CollaborationCapabilityOptions['handler'],
+    version = '1.0.0'
   ): CapabilityDefinition => define({
     id,
     title,
@@ -325,7 +332,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     inputSchema,
     outputSchema,
     handler
-  })
+  }, version)
 
   return Object.freeze({
     moduleId: COLLABORATION_DOMAIN_MODULE_ID,
@@ -343,12 +350,13 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         'read',
         collaborationStatusReadInputSchema,
         collaborationStatusReadResultSchema,
-        async () => ({ output: await options.getRuntime().status() })
+        async () => ({ output: await options.getRuntime().status() }),
+        '1.1.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.connectionConfigure,
         'Configure collaboration service',
-        'Stores a non-secret HTTPS service location and loads its provider-neutral catalog.',
+        'Stores the active Identity Cloud service location, loads its provider-neutral catalog, and reconnects the local Agent.',
         'external-write',
         collaborationConnectionConfigureInputSchema,
         collaborationConnectionConfigureResultSchema,
@@ -413,7 +421,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.projectionUpdate,
         'Update Session projection',
-        'Explicitly renames, pauses, resumes, closes, or relinks a stable projection.',
+        'Explicitly renames, pauses, or resumes a stable projection.',
         'external-write',
         collaborationProjectionUpdateInputSchema,
         collaborationProjectionUpdateResultSchema,
@@ -455,6 +463,18 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         }
       ),
       capability(
+        COLLABORATION_CAPABILITY_IDS.privateChannelDiscover,
+        'Discover private collaboration Channels',
+        'Discovers Topics only from provider-attested private Channels containing the verified user and message Bot.',
+        'read',
+        collaborationPrivateChannelDiscoverInputSchema,
+        collaborationPrivateChannelDiscoverResultSchema,
+        async (raw) => {
+          const input = collaborationPrivateChannelDiscoverInputSchema.parse(raw) as CollaborationPrivateChannelDiscoverInput
+          return { output: await options.getRuntime().discoverPrivateChannels(input.humanEndpointId) }
+        }
+      ),
+      capability(
         COLLABORATION_CAPABILITY_IDS.taskList,
         'List collaboration Tasks',
         'Reads local canonical cloud Task projections and restart reconciliation state.',
@@ -467,7 +487,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
               collaborationTaskListInputSchema.parse(raw) as CollaborationTaskListInput
             )
           }
-        })
+        }),
+        '1.1.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
@@ -485,7 +506,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
         'Decide a Worker Task offer',
-        'Claims one User-targeted offer or dismisses it only on this exact local Agent Device.',
+        'Claims one User-targeted offer on this Device, rejects it for the Worker User across Devices, or dismisses it only on this Device.',
         'external-write',
         collaborationTaskOfferDecisionInputSchema,
         collaborationTaskOfferDecisionResultSchema,
@@ -494,7 +515,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
             collaborationTaskOfferDecisionInputSchema.parse(raw) as CollaborationTaskOfferDecisionInput
           )
           return { output: { accepted: true as const } }
-        }
+        },
+        '1.1.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.managedContainerInspect,

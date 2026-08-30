@@ -93,7 +93,10 @@ test('local Coordinator Runtime creates an editable durable draft with structure
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.workerUserId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
-  assert.match(prompts[0] ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
+  assert.match(
+    prompts[0] ?? '',
+    /logical Plan declaration selection.*Never include a schemaVersion or bindingRevision/su
+  )
   assert.doesNotMatch(prompts[0] ?? '', /declare bindingRevision 1/u)
   assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
   assert.match(prompts[0] ?? '', /Do not emit id, description, assignee, dependencies, status/u)
@@ -114,6 +117,10 @@ test('local Coordinator Runtime creates an editable durable draft with structure
     projectId: generated.projectId,
     draftId: generated.draftId,
     expectedDraftRevision: generated.draftRevision,
+    // Read projections expose these CAS guards and agents may safely echo them
+    // back when editing the draft.
+    expectedProjectRevision: generated.expectedProjectRevision,
+    expectedCoordinatorAuthorityEpoch: generated.expectedCoordinatorAuthorityEpoch,
     tasks: generated.tasks,
     rationale: generated.rationale,
     assignments: [{
@@ -124,6 +131,17 @@ test('local Coordinator Runtime creates an editable durable draft with structure
   })
   assert.equal(edited.draftRevision, 2)
   assert.equal(edited.assignments[0]?.workerUserId, 'usr_Worker000001')
+
+  await assert.rejects(() => port.editDraft({
+    projectId: edited.projectId,
+    draftId: edited.draftId,
+    expectedDraftRevision: edited.draftRevision,
+    expectedProjectRevision: edited.expectedProjectRevision + 1,
+    expectedCoordinatorAuthorityEpoch: edited.expectedCoordinatorAuthorityEpoch,
+    tasks: edited.tasks,
+    rationale: edited.rationale,
+    assignments: edited.assignments
+  }), /Project revision conflict/u)
 
   await assert.rejects(() => port.editDraft({
     projectId: edited.projectId,
@@ -151,6 +169,102 @@ test('local Coordinator Runtime creates an editable durable draft with structure
       recommendationReason: 'An invented candidate must be rejected.'
     }]
   }), /visible Worker User/u)
+})
+
+test('repeated Plan generation keeps the latest successful task decomposition', async () => {
+  const settings = inMemorySettings()
+  const workspace = planningWorkspaceFixture('draft')
+  let runCount = 0
+  let firstStarted!: () => void
+  const firstStartedPromise = new Promise<void>((resolve) => { firstStarted = resolve })
+  let releaseFirst!: () => void
+  const firstResponse = new Promise<void>((resolve) => { releaseFirst = resolve })
+  const execution: DomainMainAgentExecutionHost = {
+    run: async () => {
+      runCount += 1
+      if (runCount === 1) {
+        firstStarted()
+        await firstResponse
+        return planGenerationResponse('Older decomposition')
+      }
+      return planGenerationResponse('Latest decomposition')
+    }
+  }
+  const port = createProjectCoordinatorPlanPort({
+    settings,
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    getAgentExecution: () => execution,
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+  const request = {
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Split the current goal into reviewable tasks.',
+    sourceInputLocators: [],
+    modelId: null
+  }
+
+  const older = port.generateDraft(request)
+  await firstStartedPromise
+  const latest = await port.generateDraft(request)
+  releaseFirst()
+  const olderResult = await older
+
+  assert.equal(latest.tasks[0]?.title, 'Latest decomposition')
+  assert.deepEqual(olderResult, latest)
+  assert.deepEqual(await port.readDraft({ projectId: request.projectId }), latest)
+  assert.equal(latest.draftRevision, 1)
+})
+
+test('an invalid retry never removes an existing valid Plan draft', async () => {
+  const settings = inMemorySettings()
+  const workspace = planningWorkspaceFixture('draft')
+  let runCount = 0
+  const execution: DomainMainAgentExecutionHost = {
+    run: async () => {
+      runCount += 1
+      return runCount === 1
+        ? planGenerationResponse('Valid decomposition')
+        : {
+            runtimeId: 'codex-runtime',
+            threadId: 'thread-plan-draft-invalid',
+            turnId: 'turn-plan-draft-invalid',
+            state: 'completed' as const,
+            text: '{not-json'
+          }
+    }
+  }
+  const port = createProjectCoordinatorPlanPort({
+    settings,
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspace
+    }),
+    getAgentExecution: () => execution,
+    continuation: {
+      reconcileProject: async () => workspace,
+      reconcileVisibleProjects: async () => undefined
+    },
+    now: () => new Date('2026-08-25T01:06:00.000Z')
+  })
+  const request = {
+    projectId: 'prj_ProjectCreated01',
+    instruction: 'Split the current goal into reviewable tasks.',
+    sourceInputLocators: [],
+    modelId: null
+  }
+
+  const valid = await port.generateDraft(request)
+  await assert.rejects(
+    () => port.generateDraft(request),
+    (error: unknown) => error instanceof ProjectCoordinatorPlanGenerationError &&
+      error.reason === 'invalid_structured_output'
+  )
+  assert.deepEqual(await port.readDraft({ projectId: request.projectId }), valid)
 })
 
 test('paused planning accepts only active membership with project_paused prospective authority', async () => {
@@ -360,6 +474,7 @@ test('file Plan output selects an exact caller locator without predicting a bind
                   expectedSemanticRevision: 'revision-7',
                   expectedMediaType: 'text/markdown'
                 }],
+                dependencyInputs: [],
                 output: {
                   fileName: 'review.md',
                   mediaType: 'text/markdown',
@@ -388,7 +503,10 @@ test('file Plan output selects an exact caller locator without predicting a bind
 
   assert.equal('bindingRevision' in (draft.tasks[0]?.fileIntent ?? {}), false)
   assert.deepEqual(draft.tasks[0]?.fileIntent?.inputs[0]?.locator, sourceLocator)
-  assert.match(request?.prompt ?? '', /logical Plan declaration only.*Never include a bindingRevision/su)
+  assert.match(
+    request?.prompt ?? '',
+    /logical Plan declaration selection.*Never include a schemaVersion or bindingRevision/su
+  )
   assert.match(request?.prompt ?? '', /Never copy or invent a locator identity/u)
   const outputSchema = JSON.stringify(request?.outputSchema)
   assert.match(outputSchema, /"sourceInputIndex"/u)
@@ -403,6 +521,7 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
   const coordinatorCommands: unknown[] = []
   const userCommands: unknown[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    resume: async () => null,
     execute: async (command) => {
       coordinatorCommands.push(command)
       if (command.type === 'project.plan.submit') {
@@ -431,7 +550,8 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
       state: 'ready',
       baseUrl: 'https://cloud.run0.invalid/',
       userId: 'usr_Owner0000001',
-      deviceId: 'dev_Device0000001'
+      deviceId: 'dev_Device0000001',
+      deviceRevision: 1
     }),
     execute: async (request) => {
       userCommands.push(request.payload)
@@ -1035,6 +1155,7 @@ function taskOfferResponse(command: Extract<
     workerUserId: planItem.workerUserId,
     offeredByCoordinatorAgentId: 'agt_Coordinator01',
     state: 'pending',
+    reassignmentTaskRevision: null,
     offeredAt: at,
     expiresAt: command.offerExpiresAt,
     respondedAt: null,
@@ -1069,6 +1190,27 @@ function planAgentExecution(): DomainMainAgentExecutionHost {
         }],
         rationale: 'One ready Worker User can synthesize the meeting.'
       })
+    })
+  }
+}
+
+function planGenerationResponse(title: string): Awaited<ReturnType<DomainMainAgentExecutionHost['run']>> {
+  return {
+    runtimeId: 'codex-runtime',
+    threadId: `thread-plan-draft-${title.replace(/[^A-Za-z0-9]+/gu, '-').toLowerCase()}`,
+    turnId: `turn-plan-draft-${title.replace(/[^A-Za-z0-9]+/gu, '-').toLowerCase()}`,
+    state: 'completed',
+    text: JSON.stringify({
+      tasks: [{
+        planItemId: 'item_generated',
+        title,
+        objective: 'Produce a bounded decomposition for review.',
+        completionCriteria: ['Owner can review the generated task.'],
+        dependencyPlanItemIds: [],
+        requiredCapabilityTags: ['meeting.review'],
+        fileIntent: null
+      }],
+      rationale: 'The current Worker User can review this decomposition.'
     })
   }
 }

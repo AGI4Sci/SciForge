@@ -128,6 +128,12 @@ export class DesktopDeviceService {
     return this.#status
   }
 
+  activeDeviceRevision(): number | undefined {
+    return this.#currentDevice?.status === 'active'
+      ? this.#currentDevice.revision
+      : undefined
+  }
+
   listDevices(): readonly DesktopDeviceSummary[] {
     return [...this.#devices]
   }

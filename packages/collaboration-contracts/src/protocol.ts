@@ -81,6 +81,8 @@ import {
 } from './project-coordination.js'
 import {
   projectContentProvisioningIntentSchema,
+  projectContentReadinessSchema,
+  projectContentSpaceBindingSchema,
   providerDirectoryPrincipalFactSchema
 } from './project-content.js'
 import { taskResultOutputSchema } from './project-review.js'
@@ -240,7 +242,9 @@ export const taskOfferClosedPayloadSchema = z.object({
   projectId: projectIdSchema,
   taskId: taskIdSchema,
   taskOfferId: taskOfferIdSchema,
-  outcome: z.enum(['withdrawn', 'timed_out']),
+  audience: z.enum(['worker', 'coordinator']),
+  outcome: z.enum(['rejected', 'withdrawn', 'timed_out']),
+  taskRevision: revisionSchema,
   offerRevision: revisionSchema
 }).strict()
 export type TaskOfferClosedPayload = z.infer<typeof taskOfferClosedPayloadSchema>
@@ -317,6 +321,128 @@ export const taskResultSubmittedPayloadSchema = z.object({
 }).strict()
 export type TaskResultSubmittedPayload = z.infer<typeof taskResultSubmittedPayloadSchema>
 
+export const providerDirectoryPrincipalChangedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('provider_directory_principal.changed'),
+  providerPrincipalFactId: providerPrincipalFactIdSchema,
+  revision: revisionSchema,
+  readiness: providerDirectoryPrincipalFactSchema.shape.readiness
+}).strict()
+
+export const projectMembershipChangedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.membership.changed'),
+  projectId: projectIdSchema,
+  projectMembershipId: projectMembershipSchema.shape.projectMembershipId,
+  userId: userIdSchema,
+  state: projectMembershipSchema.shape.state,
+  revision: revisionSchema,
+  authorityEpoch: revisionSchema
+}).strict()
+
+export const projectContentBindingChangedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.content.binding.changed'),
+  projectId: projectIdSchema,
+  projectContentBindingId: projectContentSpaceBindingSchema.shape.projectContentBindingId,
+  status: projectContentSpaceBindingSchema.shape.status,
+  revision: revisionSchema
+}).strict()
+
+export const projectContentProvisioningIntentChangedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.content.provisioning_intent.changed'),
+  projectId: projectIdSchema,
+  provisioningIntentId: projectContentProvisioningIntentSchema.shape.provisioningIntentId,
+  provisioningRevision: revisionSchema,
+  state: projectContentProvisioningIntentSchema.shape.state,
+  revision: revisionSchema
+}).strict()
+
+export const projectContentReadinessChangedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.content.readiness.changed'),
+  projectId: projectIdSchema,
+  userId: userIdSchema,
+  state: projectContentReadinessSchema.shape.state,
+  revision: revisionSchema
+}).strict()
+
+export const projectRecoveryActionChangedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.recovery.action.changed'),
+  projectId: projectIdSchema,
+  recoveryActionId: recoveryActionIdSchema,
+  revision: revisionSchema
+}).strict()
+
+export const taskExecutionFencedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.execution.fenced'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  reason: z.string().trim().min(1).max(500)
+}).strict()
+
+export const taskExecutionStartedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.execution.started'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  taskRevision: revisionSchema,
+  executionRevision: revisionSchema
+}).strict()
+
+export const taskExecutionFailedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('task.execution.failed'),
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  executionId: executionIdSchema,
+  taskRevision: revisionSchema,
+  executionRevision: revisionSchema,
+  taskStatus: z.enum(['revision_requested', 'failed']),
+  retryable: z.boolean(),
+  safeFailureCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u),
+  safeMessage: z.string().trim().min(1).max(500)
+}).strict()
+export type TaskExecutionFailedPayload = z.infer<typeof taskExecutionFailedPayloadSchema>
+
+export const projectPlanAwaitingConfirmationPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.plan.awaiting_confirmation'),
+  projectId: projectIdSchema,
+  projectPlanId: projectPlanIdSchema,
+  planDigest: sha256Schema,
+  revision: revisionSchema
+}).strict()
+
+export const projectFinalSummaryCreatedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.final_summary.created'),
+  projectId: projectIdSchema,
+  projectRecordId: projectRecordIdSchema,
+  revision: revisionSchema
+}).strict()
+
+export const projectRecordSubmittedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project_record.submitted'),
+  projectId: projectIdSchema,
+  projectRecordId: projectRecordIdSchema,
+  revision: revisionSchema
+}).strict()
+
+export const projectDeletedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.deleted'),
+  projectId: projectIdSchema,
+  deletedAt: timestampSchema
+}).strict()
+export type ProjectDeletedPayload = z.infer<typeof projectDeletedPayloadSchema>
+
 export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     ...agentInboxEnvelopeShape,
@@ -339,8 +465,17 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   taskRecoveryAbandonedPayloadSchema,
   projectPlanConfirmedPayloadSchema,
   taskResultSubmittedPayloadSchema,
+  projectMembershipChangedPayloadSchema,
+  projectContentBindingChangedPayloadSchema,
+  projectContentProvisioningIntentChangedPayloadSchema,
+  projectContentReadinessChangedPayloadSchema,
+  projectRecoveryActionChangedPayloadSchema,
+  taskExecutionFencedPayloadSchema,
+  taskExecutionStartedPayloadSchema,
+  taskExecutionFailedPayloadSchema,
   projectionUpdatedPayloadSchema,
   projectEndpointUpdatedPayloadSchema,
+  projectDeletedPayloadSchema,
   z.object({
     ...agentInboxEnvelopeShape,
     type: z.literal('collaboration.state.changed'),
@@ -367,13 +502,7 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
     resultProjectRecordId: projectRecordIdSchema.optional(),
     humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u).optional()
   }).strict(),
-  z.object({
-    ...agentInboxEnvelopeShape,
-    type: z.literal('project_record.submitted'),
-    projectId: projectIdSchema,
-    projectRecordId: projectRecordIdSchema,
-    revision: revisionSchema
-  }).strict(),
+  projectRecordSubmittedPayloadSchema,
   z.object({
     ...agentInboxEnvelopeShape,
     type: z.literal('agent.revoked'),
@@ -410,6 +539,12 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
 export type AgentInboxPayload = z.infer<typeof agentInboxPayloadSchema>
 
 export const userInboxPayloadSchema = z.discriminatedUnion('type', [
+  providerDirectoryPrincipalChangedPayloadSchema,
+  projectMembershipChangedPayloadSchema,
+  projectPlanAwaitingConfirmationPayloadSchema,
+  projectFinalSummaryCreatedPayloadSchema,
+  projectRecordSubmittedPayloadSchema,
+  projectRecoveryActionChangedPayloadSchema,
   z.object({
     ...agentInboxEnvelopeShape,
     type: z.literal('human.needed'),
@@ -569,6 +704,16 @@ const writeCommandShape = {
   idempotencyKey: idempotencyKeySchema
 } as const
 
+export const projectDeleteCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('project.delete'),
+  projectId: projectIdSchema,
+  expectedRevision: revisionSchema,
+  expectedCoordinatorAuthorityEpoch: revisionSchema,
+  expectedExecutionAuthorityEpoch: revisionSchema
+}).strict()
+export type ProjectDeleteCommand = z.infer<typeof projectDeleteCommandSchema>
+
 export const humanNeededCreateContextSchema = z.discriminatedUnion('scope', [
   z.object({
     scope: z.literal('worker_execution'),
@@ -662,20 +807,21 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('agent.revoke'), agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('participant.get'), userId: userIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.catalog.get'), provider: providerIdSchema.optional() }).strict(),
-  z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.locator.list'), humanEndpointId: humanEndpointIdSchema, query: z.string().trim().max(200).optional(), cursor: z.string().min(1).max(2_048).optional(), limit: z.number().int().min(1).max(500) }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('managed_container.ensure'), humanEndpointId: humanEndpointIdSchema, displayName: z.string().trim().min(1).max(200).optional(), policy: providerManagedContainerPolicySchema }).strict(),
-  z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.get'), managedContainerId: managedContainerIdSchema }).strict(),
-  z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.list') }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('managed_container.inspect'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('managed_container.reconcile'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('managed_container.archive'), managedContainerId: managedContainerIdSchema, expectedRevision: revisionSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('endpoint.locator.list'), humanEndpointId: humanEndpointIdSchema, agentId: agentIdSchema, query: z.string().trim().max(200).optional(), cursor: z.string().min(1).max(2_048).optional(), limit: z.number().int().min(1).max(500) }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.ensure'), humanEndpointId: humanEndpointIdSchema, agentId: agentIdSchema, displayName: z.string().trim().min(1).max(200).optional(), policy: providerManagedContainerPolicySchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.get'), managedContainerId: managedContainerIdSchema, agentId: agentIdSchema }).strict(),
+  z.object({ ...protocolEnvelopeShape, type: z.literal('managed_container.list'), agentId: agentIdSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.inspect'), managedContainerId: managedContainerIdSchema, agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.reconcile'), managedContainerId: managedContainerIdSchema, agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('managed_container.archive'), managedContainerId: managedContainerIdSchema, agentId: agentIdSchema, expectedRevision: revisionSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('projection.create'), ownerUserId: userIdSchema, agentId: agentIdSchema, humanEndpointId: humanEndpointIdSchema, locator: providerLocatorSchema, displayName: z.string().trim().min(1).max(200), allowedSenderUserIds: z.array(userIdSchema).min(1).max(100) }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('projection.get'), projectionId: projectionIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('projection.list'), ownerUserId: userIdSchema }).strict(),
-  z.object({ ...writeCommandShape, type: z.literal('projection.update'), projectionId: projectionIdSchema, expectedRevision: revisionSchema, displayName: z.string().trim().min(1).max(200).optional(), status: z.enum(['active', 'paused', 'closed']).optional(), locator: providerLocatorSchema.optional(), locatorRevision: revisionSchema.optional(), allowedSenderUserIds: z.array(userIdSchema).min(1).max(100).optional() }).strict(),
+  z.object({ ...writeCommandShape, type: z.literal('projection.update'), projectionId: projectionIdSchema, expectedRevision: revisionSchema, displayName: z.string().trim().min(1).max(200).optional(), status: z.enum(['active', 'paused']).optional(), allowedSenderUserIds: z.array(userIdSchema).min(1).max(100).optional() }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('projection.message.publish'), projectionId: projectionIdSchema, projectionRevision: revisionSchema, localItemId: localItemIdSchema, localTurnId: runtimeTurnIdSchema.optional(), kind: z.enum(['user_message', 'assistant_progress', 'assistant_final', 'system_status']), text: nonEmptyTextSchema, occurredAt: timestampSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.get'), projectId: projectIdSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.transition'), projectId: projectIdSchema, expectedRevision: revisionSchema, expectedCoordinatorAuthorityEpoch: revisionSchema, expectedExecutionAuthorityEpoch: revisionSchema, status: z.enum(['active', 'paused', 'cancelled']) }).strict(),
+  projectDeleteCommandSchema,
   projectTransferCoordinatorCommandSchema,
   z.object({ ...writeCommandShape, type: z.literal('project.input.create'), projectId: projectIdSchema, senderUserId: userIdSchema, sourceHumanEndpointId: humanEndpointIdSchema, providerMessageId: providerMessageIdSchema, text: nonEmptyTextSchema, occurredAt: timestampSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.bind'), projectId: projectIdSchema, locator: providerLocatorSchema }).strict(),

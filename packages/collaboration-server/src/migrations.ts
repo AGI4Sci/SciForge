@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 
 import type { SqlPool } from './postgres.js'
 
-export const COLLABORATION_SCHEMA_VERSION = 18
+export const COLLABORATION_SCHEMA_VERSION = 20
 
 export type CollaborationSchemaRoute =
   | 'fresh-v4'
@@ -18,6 +18,8 @@ export type CollaborationSchemaRoute =
   | 'current-v16'
   | 'current-v17'
   | 'current-v18'
+  | 'current-v19'
+  | 'current-v20'
 
 export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'upstream-v4': '0577af72da028cee0f45daf6bbf8dad873f9ff2fde578662ffb30d50629b9843',
@@ -30,7 +32,9 @@ export const COLLABORATION_SOURCE_CATALOG_FINGERPRINTS = {
   'current-v15': 'd25743e11c40971f2e19557f82ca502ba42295474e87f63c10d4e9475a678082',
   'current-v16': 'ed65abb012242ac52d47d35ae6858266953002ab5c43c69b68abd570f661198a',
   'current-v17': '1d473d990f49aa1f995d673bf5cfb16d1816da7cbfd43ac6e98c7f86bfd214ed',
-  'current-v18': '89d930e6c42e4108bd89571739c3e67d3758753bc67dcfb4b087dc82d9576b73'
+  'current-v18': '89d930e6c42e4108bd89571739c3e67d3758753bc67dcfb4b087dc82d9576b73',
+  'current-v19': '0a551a9fa961868e5df0087c933290e10bfd3ea20beb8bd7ea9fb16fdb461bc3',
+  'current-v20': 'a85a4141bef5b45457232d91397534e60f26a93fbcddf37d7b7f26a5434159bb'
 } as const
 
 const COLLABORATION_V14_CATALOG_FINGERPRINTS = {
@@ -39,10 +43,22 @@ const COLLABORATION_V14_CATALOG_FINGERPRINTS = {
   'staging-v9': '398324e912831ec272e33be7af45b97cee186e95f43ed877c40a6ea47988d875'
 } as const
 
-const COLLABORATION_V16_CATALOG_FINGERPRINTS = {
+export const COLLABORATION_V15_CATALOG_FINGERPRINTS = {
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v15'],
+  'public-v5': 'c73f6befaa308cf3c4d588a06fab0fe576e8271bb68103022ac5d2051c86189d',
+  'staging-v9': '51b6b9be48083a4555857a947e1ee1f2c54993fe1dc9340a411ca04cfb78cf85'
+} as const
+
+export const COLLABORATION_V16_CATALOG_FINGERPRINTS = {
   'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v16'],
   'public-v5': 'cb3be600da76ff30d3ef04570a2026786bfcc3e9c4c3b3001c65718f200b9d69',
   'staging-v9': '39902dbacef236e97375dd7f677c790a1be0d64bd939538abd964bf3dfa34983'
+} as const
+
+export const COLLABORATION_V17_CATALOG_FINGERPRINTS = {
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v17'],
+  'public-v5': 'd9ad3f52d3cc427e984ecdd5d6f9ab772212888e2054c2c2e2686841cb0b7206',
+  'staging-v9': 'a763e02adca74637053a4c23d5d3cfb96da483f9bffd6bea86e44097bcbc1ac2'
 } as const
 
 /**
@@ -60,19 +76,31 @@ export const COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS = {
   'staging-v9-v13': 'ef0e936e2267cb987723925a61c43c085aa22d38cbcc6f8a0d8ebbd15dafda02'
 } as const
 
-/**
- * Full admitted v18 catalogs. PostgreSQL retains the immutable migration
- * ledger and historical column ordinals, so public-v5 and staging-v9 remain
- * distinguishable audit lineages after converging on the same frozen v15
- * collaboration schema.
- */
-export const COLLABORATION_CURRENT_CATALOG_FINGERPRINTS = {
+const COLLABORATION_V18_CATALOG_FINGERPRINTS = {
   'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v18'],
   'public-v5': '775c71bee69038829546cc7a26feea5cafe203e10069a315188e7fc94d42b5c7',
   'staging-v9': '575e3448ab2f1167f0e782da195e63f811aba62c3edc2a29c7a3df15a66bb179'
 } as const
 
-/** Canonical fresh/upstream v18 catalog retained for existing consumers. */
+export const COLLABORATION_V19_CATALOG_FINGERPRINTS = {
+  'base-v4': '0a551a9fa961868e5df0087c933290e10bfd3ea20beb8bd7ea9fb16fdb461bc3',
+  'public-v5': 'db60413a46ccb1058d9c0910b7c661c130f6cfe77f556c66f38c7f66d0d40687',
+  'staging-v9': '47b5d61c657bad947b9b60dab9af00417ec4a4b5fe58cb24bcb74e6bfb0a0385'
+} as const
+
+/**
+ * Full admitted v20 catalogs. PostgreSQL retains the immutable migration
+ * ledger and historical column ordinals, so public-v5 and staging-v9 remain
+ * distinguishable audit lineages after converging on the same frozen v15
+ * collaboration v20 schema.
+ */
+export const COLLABORATION_CURRENT_CATALOG_FINGERPRINTS = {
+  'base-v4': COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v20'],
+  'public-v5': 'fb80009badd27ff3407551cf10b654224d8301a24ef6cb580aed4dbbae259c1c',
+  'staging-v9': 'ccba9ce887c997778dbaa1e4f77c9bd3e09956725ec1483a275d0cd6a324aec3'
+} as const
+
+/** Canonical fresh/upstream v20 catalog retained for existing consumers. */
 export const COLLABORATION_CATALOG_FINGERPRINT =
   COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
 
@@ -102,18 +130,12 @@ Record<Exclude<CollaborationSchemaRoute, 'fresh-v4'>, ReadonlySet<string>>
     COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS['staging-v9-v13']
   ]),
   'current-v14': new Set(Object.values(COLLABORATION_V14_CATALOG_FINGERPRINTS)),
-  'current-v15': new Set([
-    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v15'],
-    'c73f6befaa308cf3c4d588a06fab0fe576e8271bb68103022ac5d2051c86189d',
-    '51b6b9be48083a4555857a947e1ee1f2c54993fe1dc9340a411ca04cfb78cf85'
-  ]),
+  'current-v15': new Set(Object.values(COLLABORATION_V15_CATALOG_FINGERPRINTS)),
   'current-v16': new Set(Object.values(COLLABORATION_V16_CATALOG_FINGERPRINTS)),
-  'current-v17': new Set([
-    COLLABORATION_SOURCE_CATALOG_FINGERPRINTS['current-v17'],
-    'd9ad3f52d3cc427e984ecdd5d6f9ab772212888e2054c2c2e2686841cb0b7206',
-    'a763e02adca74637053a4c23d5d3cfb96da483f9bffd6bea86e44097bcbc1ac2'
-  ]),
-  'current-v18': admittedCurrentCatalogFingerprints
+  'current-v17': new Set(Object.values(COLLABORATION_V17_CATALOG_FINGERPRINTS)),
+  'current-v18': new Set(Object.values(COLLABORATION_V18_CATALOG_FINGERPRINTS)),
+  'current-v19': new Set(Object.values(COLLABORATION_V19_CATALOG_FINGERPRINTS)),
+  'current-v20': admittedCurrentCatalogFingerprints
 }
 
 type LineageFacts = Readonly<{
@@ -143,7 +165,9 @@ const FORWARD_MIGRATIONS = [
   '0015_canonical_project_created_inbox.sql',
   '0016_user_targeted_task_offers.sql',
   '0017_claim_created_task_executions.sql',
-  '0018_project_membership_invitations.sql'
+  '0018_project_membership_invitations.sql',
+  '0019_collaboration_pipeline_fixes.sql',
+  '0020_zulip_phone_link.sql'
 ] as const
 
 const exactColumns = {
@@ -243,7 +267,8 @@ const exactColumns = {
     'state:text:NO', 'offered_at:timestamp with time zone:NO', 'expires_at:timestamp with time zone:NO',
     'responded_at:timestamp with time zone:YES',
     'revision:bigint:NO', 'created_at:timestamp with time zone:NO',
-    'updated_at:timestamp with time zone:NO', 'offered_by_coordinator_agent_id:text:NO'],
+    'updated_at:timestamp with time zone:NO', 'offered_by_coordinator_agent_id:text:NO',
+    'reassignment_task_revision:bigint:YES'],
   task_execution_events: [],
   external_operation_journal: ['content_recovery_journal_entry_id:text:NO', 'scope:text:NO',
     'logical_invocation_id:text:NO', 'project_id:text:NO', 'task_id:text:YES',
@@ -311,11 +336,23 @@ const exactColumns = {
 
 const requiredColumns = {
   agent_nodes: ['device_id:text:NO'],
+  managed_provider_containers: ['installation_id:text:NO'],
+  remote_capability_approvals: ['interaction_mode:text:NO'],
   human_requests: ['request_scope:text:NO', 'execution_id:text:YES',
     'coordinator_authority_epoch:bigint:YES', 'confirmable_action:jsonb:YES'],
   human_answers: ['request_scope:text:NO', 'execution_id:text:YES',
     'coordinator_authority_epoch:bigint:YES', 'answered_from_oidc_identity_id:text:YES',
-    'answered_from_human_endpoint_id:text:YES', 'decision:text:YES', 'confirmation_id:text:YES']
+    'answered_from_human_endpoint_id:text:YES', 'decision:text:YES', 'confirmation_id:text:YES'],
+  provider_private_container_discoveries: [
+    'owner_user_id:text:NO', 'human_endpoint_id:text:NO', 'installation_id:text:NO',
+    'provider:text:NO', 'realm_id:text:NO', 'external_container_id:text:NO', 'display_name:text:NO',
+    'observed_at:timestamp with time zone:NO', 'expires_at:timestamp with time zone:NO'
+  ],
+  provider_private_container_claims: [
+    'claim_id:text:NO', 'owner_user_id:text:NO', 'human_endpoint_id:text:NO', 'installation_id:text:NO',
+    'provider:text:NO', 'realm_id:text:NO', 'external_container_id:text:NO', 'display_name:text:NO',
+    'claimed_at:timestamp with time zone:NO'
+  ]
 } as const
 
 const forbiddenColumns = {
@@ -396,39 +433,47 @@ export async function runCollaborationMigrations(
   if (!sourceFingerprintMatches) {
     throw new Error(`collaboration_schema_source_fingerprint_mismatch:${route}`)
   }
-  if (![11, 12, 13, 14, 15, 16, 17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![11, 12, 13, 14, 15, 16, 17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[0])
     facts = await readLineageFacts(pool)
   }
-  if (![12, 13, 14, 15, 16, 17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![12, 13, 14, 15, 16, 17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[1])
     facts = await readLineageFacts(pool)
   }
-  if (![13, 14, 15, 16, 17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![13, 14, 15, 16, 17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[2])
     facts = await readLineageFacts(pool)
   }
-  if (![14, 15, 16, 17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![14, 15, 16, 17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[3])
     facts = await readLineageFacts(pool)
   }
-  if (![15, 16, 17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![15, 16, 17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[4])
     facts = await readLineageFacts(pool)
   }
-  if (![16, 17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![16, 17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[5])
     facts = await readLineageFacts(pool)
   }
-  if (![17, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+  if (![17, 18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[6])
     facts = await readLineageFacts(pool)
   }
-  if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
+  if (![18, 19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
     await applyMigration(pool, FORWARD_MIGRATIONS[7])
+    facts = await readLineageFacts(pool)
+  }
+  if (![19, COLLABORATION_SCHEMA_VERSION].includes(facts.version ?? -1)) {
+    await applyMigration(pool, FORWARD_MIGRATIONS[8])
+    facts = await readLineageFacts(pool)
+  }
+  if (facts.version !== COLLABORATION_SCHEMA_VERSION) {
+    await applyMigration(pool, FORWARD_MIGRATIONS[9])
   }
   const current = await readLineageFacts(pool)
-  assertRoute(current, 'current-v18')
+  assertRoute(current, 'current-v20')
   const fingerprint = await collaborationSchemaFingerprint(pool)
   if (fingerprint !== COLLABORATION_SCHEMA_FINGERPRINT) {
     throw new Error('collaboration_schema_fingerprint_mismatch')
@@ -461,7 +506,7 @@ export async function isCollaborationDatabaseReady(
   }> = {}
 ): Promise<boolean> {
   try {
-    assertRoute(await readLineageFacts(pool), 'current-v18')
+    assertRoute(await readLineageFacts(pool), 'current-v20')
     return await collaborationSchemaFingerprint(pool) === COLLABORATION_SCHEMA_FINGERPRINT &&
       admittedCurrentCatalogFingerprints.has(
         await (runtime.currentCatalogFingerprint ?? collaborationCatalogFingerprint)(pool)
@@ -535,6 +580,14 @@ export function detectCollaborationSchemaRoute(facts: LineageFacts): Collaborati
   if (facts.version === 18 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
       facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
     return 'current-v18'
+  }
+  if (facts.version === 19 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
+      facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
+    return 'current-v19'
+  }
+  if (facts.version === 20 && facts.managedContainers && facts.remoteApprovals && facts.oidcIdentities &&
+      facts.devices && facts.taskResourceRefs && facts.projectContentSpaceBindings && facts.taskExecutions) {
+    return 'current-v20'
   }
   throw new Error('collaboration_schema_lineage_unsupported')
 }

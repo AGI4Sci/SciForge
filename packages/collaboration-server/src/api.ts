@@ -69,6 +69,7 @@ export interface ProviderDirectory {
   listLocators(input: {
     actor: AuthContext
     humanEndpointId: string
+    agentId: string
     query?: string
     cursor?: string
     limit: number
@@ -114,8 +115,20 @@ async function handle(
   }
   requireJson(request)
   const raw = await readJson(request, maxBodyBytes)
-  const command = restRequestSchema.parse(raw)
+  // Parse inside the guarded boundary. Invalid commands must receive the
+  // canonical JSON error envelope; allowing Zod to escape here causes the
+  // node HTTP server to emit an HTML/plain-text failure, which clients report
+  // as an opaque "invalid JSON response" and cannot recover from.
+  let command: RestRequest
+  const parsedForCorrelation = restRequestSchema.safeParse(raw)
+  const requestId = isRecord(raw) && typeof raw.requestId === 'string' &&
+    (parsedForCorrelation.success || !parsedForCorrelation.error.issues.some(
+      (issue) => issue.code === 'unrecognized_keys'
+    ))
+    ? raw.requestId
+    : undefined
   try {
+    command = restRequestSchema.parse(raw)
     const headerKey = firstHeader(request.headers['idempotency-key'])
     if ('idempotencyKey' in command && headerKey !== command.idempotencyKey) {
       throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict command body.')
@@ -133,8 +146,12 @@ async function handle(
     const validated = restResponseSchema.parse(body)
     sendJson(response, 200, validated)
   } catch (error) {
-    sendFailure(response, error, command.requestId)
+    sendFailure(response, error, requestId)
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 async function handleIdentityRoute(
@@ -280,7 +297,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'endpoint.locator.list': {
       if (!options.providers) throw new CollaborationServiceError('resource_offline', 'No provider directory is running.')
       const page = await options.providers.listLocators({ actor: requiredActor(actor), humanEndpointId: command.humanEndpointId,
-        query: command.query, cursor: command.cursor, limit: command.limit })
+        agentId: command.agentId, query: command.query, cursor: command.cursor, limit: command.limit })
       return response(command, { type: 'endpoint.locator_page', ...page })
     }
     case 'managed_container.ensure': {
@@ -289,11 +306,11 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     }
     case 'managed_container.get': {
       return entityResponse(command, toManagedContainer(
-        await service.getManagedContainer(requiredActor(actor), command.managedContainerId)
+        await service.getManagedContainer(requiredActor(actor), command.managedContainerId, command.agentId)
       ))
     }
     case 'managed_container.list': {
-      return collectionResponse(command, (await service.listManagedContainers(requiredUser(actor))).map(toManagedContainer))
+      return collectionResponse(command, (await service.listManagedContainers(requiredUser(actor), command.agentId)).map(toManagedContainer))
     }
     case 'managed_container.inspect': {
       return entityResponse(command, toManagedContainer(await service.inspectManagedContainer(requiredUser(actor), command)))
@@ -328,7 +345,7 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'projection.message.publish': {
       const device = requiredAgent(actor)
       await service.publishProjectionMessage(device, command)
-      return receiptResponse(command, device)
+      return persistedOperationReceiptResponse(command, device, service)
     }
     case 'provider_directory_principal.publish': return entityResponse(
       command,
@@ -370,6 +387,11 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
     case 'project.transition': {
       const project = await service.transitionProject(requiredUser(actor), command)
       return entityResponse(command, toProject(project))
+    }
+    case 'project.delete': {
+      const user = requiredUser(actor)
+      await service.deleteProject(user, command)
+      return persistedOperationReceiptResponse(command, user, service)
     }
     case 'project.transfer_coordinator': {
       const project = await service.transferCoordinator(requiredUser(actor), command)
@@ -492,6 +514,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const result = await service.acceptTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskExecution(result.execution), toTaskOffer(result.offer)])
     }
+    case 'task.offer.reject': {
+      const result = await service.rejectTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
+    }
     case 'task.offer.withdraw': {
       const result = await service.withdrawTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
@@ -572,9 +598,9 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const inboxActor = requiredInboxActor(actor)
       const acknowledgement = await service.ackInboxMessage(inboxActor, { inboxMessageId: command.inboxMessageId,
         sequence: command.sequence, idempotencyKey: command.idempotencyKey })
+      const persistedReceipt = await requirePersistedReceipt(service, inboxActor, command.idempotencyKey)
       return response(command, { type: 'rest.receipt', receipt: { schemaVersion: 1, type: 'inbox.receipt',
-        receiptId: `rcp_${stableDigest({ actorKey: inboxActor.actorKey,
-          idempotencyKey: command.idempotencyKey }).slice(0, 24)}`, inboxMessageId: acknowledgement.inboxMessageId,
+        receiptId: persistedReceipt.receiptId, inboxMessageId: acknowledgement.inboxMessageId,
         recipientType: inboxActor.kind === 'agent_device' ? 'agent' : 'user', sequence: command.sequence,
         acknowledgedAt: acknowledgement.acknowledgedAt, createdAt: acknowledgement.acknowledgedAt } })
     }
@@ -610,12 +636,31 @@ function entityResponse(command: RestRequest, entity: RestResponse extends never
 function collectionResponse(command: RestRequest, items: unknown[]): RestResponse {
   return response(command, { type: 'rest.collection', items })
 }
-function receiptResponse(command: Extract<RestRequest, { idempotencyKey: string }>, actor: AuthContext): RestResponse {
+async function requirePersistedReceipt(
+  service: CollaborationService,
+  actor: AuthContext,
+  idempotencyKey: string
+) {
+  const receipt = await service.reconcileReceipt(actor, idempotencyKey)
+  if (!receipt) {
+    throw new CollaborationServiceError(
+      'internal_error',
+      'The committed operation receipt could not be read.',
+      { retryable: true }
+    )
+  }
+  return receipt
+}
+async function persistedOperationReceiptResponse(
+  command: Extract<RestRequest, { idempotencyKey: string }>,
+  actor: AuthContext,
+  service: CollaborationService
+): Promise<RestResponse> {
+  const receipt = await requirePersistedReceipt(service, actor, command.idempotencyKey)
   return response(command, { type: 'rest.receipt', receipt: { schemaVersion: 1, type: 'operation.receipt',
-    receiptId: `rcp_${stableDigest({ actorKey: actor.actorKey, idempotencyKey: command.idempotencyKey }).slice(0, 24)}`,
-    actor: contractActor(actor),
-    idempotencyKey: command.idempotencyKey, requestHash: stableDigest(command), status: 'succeeded',
-    resultHash: stableDigest({ accepted: true }), createdAt: new Date().toISOString() } })
+    receiptId: receipt.receiptId, actor: contractActor(actor), idempotencyKey: receipt.idempotencyKey,
+    requestHash: receipt.requestDigest, status: 'succeeded', resultHash: stableDigest(receipt.response),
+    createdAt: receipt.createdAt } })
 }
 
 function contractActor(actor: AuthContext): Record<string, unknown> {

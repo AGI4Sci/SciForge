@@ -300,7 +300,7 @@ const NOOP_OUTBOX: ProjectionCloudOutbox = {
 
 async function projectionStore(): Promise<CollaborationLocalStore> {
   const store = new CollaborationLocalStore(new MemoryBackend({
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 1,
     lastInboxSequence: 0,
     endpoints: [],

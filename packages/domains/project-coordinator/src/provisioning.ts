@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 
 import {
   CURRENT_PROTOCOL_VERSION,
+  canonicalProjectContentProvisioningAttestationFactualPayloadBytes,
   canonicalProjectContentProvisioningFactualPayloadBytes,
   canonicalProvisionedMemberSetBytes,
   externalOperationRecoveryJournalEntrySchema,
@@ -24,6 +25,7 @@ import {
 import {
   CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT,
   CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+  contentSpaceInvocationIdSchema,
   type ContentSpaceResult
 } from '@sciforge/domain-content-space/contract'
 import {
@@ -260,7 +262,10 @@ export function createProjectCoordinatorProvisioningPort(
       expectedPlanRevision: plan.revision,
       planDigest: plan.planDigest,
       purpose,
-      provisioning
+      provisioning,
+      ...(provisioning === null
+        ? {}
+        : { confirmedPlanDigest: provisioning.confirmedPlanDigest })
     }
     return projectCoordinatorWorkflowPlanSchema.parse({
       ...facts,
@@ -450,7 +455,7 @@ function buildFinitePlan(
     add({
       operationId: 'authorize-provider',
       actionId: CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT.actionId,
-      idempotencyKey: operationIdempotencyKey(attemptId, 'authorize-provider'),
+      idempotencyKey: contentSpaceOperationInvocationId(attemptId, 'authorize-provider'),
       input: { providerInstanceRef: intent.providerInstance.providerInstanceRef }
     }, {
       operationId: 'authorize-provider',
@@ -462,7 +467,7 @@ function buildFinitePlan(
     add({
       operationId: rootResourceOperationId,
       actionId: CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT.actionId,
-      idempotencyKey: operationIdempotencyKey(attemptId, rootResourceOperationId),
+      idempotencyKey: contentSpaceOperationInvocationId(attemptId, rootResourceOperationId),
       input: { label: intent.containerDisplayName },
       resource: {
         kind: 'operation-output',
@@ -480,7 +485,7 @@ function buildFinitePlan(
     add({
       operationId: rootResourceOperationId,
       actionId: CONTENT_SPACE_AUTHORIZE_AGENT_ROOT_CONTRACT.actionId,
-      idempotencyKey: operationIdempotencyKey(attemptId, rootResourceOperationId),
+      idempotencyKey: contentSpaceOperationInvocationId(attemptId, rootResourceOperationId),
       input: {
         providerInstanceRef: intent.providerInstance.providerInstanceRef,
         scope: 'shared',
@@ -525,7 +530,7 @@ function buildFinitePlan(
     add({
       operationId,
       actionId: CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT.actionId,
-      idempotencyKey: operationIdempotencyKey(attemptId, operationId),
+      idempotencyKey: contentSpaceOperationInvocationId(attemptId, operationId),
       input: { member: directoryUser(member.principal) },
       resource: rootResource
     }, {
@@ -549,7 +554,7 @@ function buildFinitePlan(
     add({
       operationId,
       actionId: CONTENT_SPACE_AGENT_ADMIN_REMOVE_MEMBER_CONTRACT.actionId,
-      idempotencyKey: operationIdempotencyKey(attemptId, operationId),
+      idempotencyKey: contentSpaceOperationInvocationId(attemptId, operationId),
       input: { member: directoryUser(readiness.providerPrincipal) },
       resource: rootResource
     }, {
@@ -668,7 +673,7 @@ async function executeProvisioning(input: Readonly<{
   requireCompleteMemberPage(after.value)
   observedOperations.push(after.observedOperation)
 
-  const completedAt = after.journal.resolvedAt ?? input.now().toISOString()
+  const completedAt = input.now().toISOString()
   const memberObservations = buildMemberObservations(
     built.project,
     built.intent,
@@ -736,7 +741,12 @@ async function executeProvisioning(input: Readonly<{
         parsed.data.provisioningAttestationId === attestation.provisioningAttestationId
       ))?.data
     : undefined
-  if (!returned || stableDigest(returned) !== stableDigest(attestation)) {
+  if (
+    !returned ||
+    sha256(canonicalProjectContentProvisioningAttestationFactualPayloadBytes(returned)) !==
+      factualDigest ||
+    stableDigest(returned.deviceSignature) !== stableDigest(attestation.deviceSignature)
+  ) {
     throw new Error('Cloud did not return the exact Device-signed provisioning attestation.')
   }
   return options.workspace.readWorkspace({ projectId: built.project.project.projectId })
@@ -1148,6 +1158,12 @@ function stableJson(value: unknown): string {
 
 function operationIdempotencyKey(base: string, operation: string): string {
   return `idem_pcp.${stableDigest({ base, operation }).slice(0, 48)}`
+}
+
+function contentSpaceOperationInvocationId(base: string, operation: string): string {
+  return contentSpaceInvocationIdSchema.parse(
+    `idem_pcp_${stableDigest({ base, operation }).slice(0, 48)}`
+  )
 }
 
 function scopedIdempotencyKey(base: string, operation: string): string {

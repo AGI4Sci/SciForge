@@ -15,6 +15,8 @@ import {
   collaborationManagedContainerInspectInputSchema,
   collaborationManagedContainerProvisionInputSchema,
   collaborationManagedContainerArchiveInputSchema,
+  collaborationPrivateChannelDiscoverInputSchema,
+  collaborationPrivateChannelDiscoverResultSchema,
   collaborationProjectionLinkInputSchema,
   collaborationProjectionLinkResultSchema,
   collaborationProjectionShareInputSchema,
@@ -36,6 +38,7 @@ import {
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
   type CollaborationManagedContainerManageInput,
+  type CollaborationPrivateChannelDiscoverInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
@@ -50,6 +53,7 @@ type ConnectionConfigureResult = z.infer<typeof collaborationConnectionConfigure
 type ConnectionConnectResult = z.infer<typeof collaborationConnectionConnectResultSchema>
 type EndpointChallengeStartResult = z.infer<typeof collaborationEndpointChallengeStartResultSchema>
 type EndpointChallengePollResult = z.infer<typeof collaborationEndpointChallengePollResultSchema>
+type PrivateChannelDiscoverResult = z.infer<typeof collaborationPrivateChannelDiscoverResultSchema>
 type ProjectionLinkResult = z.infer<typeof collaborationProjectionLinkResultSchema>
 type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResultSchema>
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
@@ -114,6 +118,12 @@ const contracts = Object.freeze({
     inputSchema: collaborationSynchronizationRetryInputSchema,
     outputSchema: collaborationSynchronizationRetryResultSchema
   }),
+  privateChannelDiscover: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.privateChannelDiscover,
+    effect: 'read' as const,
+    inputSchema: collaborationPrivateChannelDiscoverInputSchema,
+    outputSchema: collaborationPrivateChannelDiscoverResultSchema
+  }),
   taskList: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.taskList,
     effect: 'read' as const,
@@ -164,6 +174,7 @@ export type CollaborationRendererClient = Readonly<{
   updateProjection(input: CollaborationProjectionUpdateInput): Promise<ProjectionUpdateResult>
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
+  discoverPrivateChannels(input: CollaborationPrivateChannelDiscoverInput): Promise<PrivateChannelDiscoverResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
   updateWorkerAcceptancePolicy(
     input: CollaborationWorkerAcceptanceUpdateInput
@@ -204,6 +215,7 @@ export function createCollaborationRendererClient(
       input,
       CONFIRMED
     ),
+    discoverPrivateChannels: (input) => invoker.invoke(contracts.privateChannelDiscover, input),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
     updateWorkerAcceptancePolicy: (input) => invoker.invoke(
       contracts.workerAcceptanceUpdate,

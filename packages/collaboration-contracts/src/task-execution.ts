@@ -189,9 +189,12 @@ export const taskExecutionSchema = z.object({
 })
 export type TaskExecution = z.infer<typeof taskExecutionSchema>
 
+export const DEFAULT_TASK_OFFER_TTL_MS = 5 * 60_000
+
 export const taskOfferStateSchema = z.enum([
   'pending',
   'accepted',
+  'rejected',
   'withdrawn',
   'timed_out'
 ])
@@ -207,6 +210,11 @@ export const taskOfferSchema = z.object({
   workerUserId: userIdSchema,
   offeredByCoordinatorAgentId: agentIdSchema,
   state: taskOfferStateSchema,
+  /**
+   * Exact Task revision produced when an unclaimed terminal offer makes the
+   * Task eligible for reassignment. Null for non-reassignment transitions.
+   */
+  reassignmentTaskRevision: revisionSchema.nullable(),
   offeredAt: timestampSchema,
   expiresAt: timestampSchema,
   respondedAt: timestampSchema.nullable(),
@@ -223,6 +231,16 @@ export const taskOfferSchema = z.object({
       code: 'custom',
       path: ['executionId'],
       message: 'Only the winning User-level claim binds the immutable execution.'
+    })
+  }
+  if (
+    offer.reassignmentTaskRevision !== null &&
+    !['rejected', 'withdrawn', 'timed_out'].includes(offer.state)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reassignmentTaskRevision'],
+      message: 'Only an unclaimed terminal offer may identify its reassignment Task revision.'
     })
   }
 })

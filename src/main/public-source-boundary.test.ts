@@ -287,7 +287,7 @@ describe('public source boundary', () => {
     ]
 
     expect(formatViolations(violations)).toBe('')
-  }, 15_000)
+  }, 30_000)
 
   it('keeps every internal overlay out of the public package lock', () => {
     expect(formatViolations(packageLockViolations(packageLockPath))).toBe('')

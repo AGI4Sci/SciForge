@@ -6,6 +6,7 @@ import {
   entityMetadataShape,
   executionIdSchema,
   nonEmptyTextSchema,
+  planItemIdSchema,
   projectIdSchema,
   projectPlanIdSchema,
   projectRecordIdSchema,
@@ -26,7 +27,6 @@ import {
 } from './content-space-task-io.js'
 
 const unique = <T>(values: readonly T[]): boolean => new Set(values).size === values.length
-const planItemIdSchema = z.string().regex(/^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$/u)
 const modelIdSchema = z.string().trim().min(1).max(256)
 
 export const projectPlanStateSchema = z.enum([
@@ -78,6 +78,7 @@ export type ProjectPlanTask = z.infer<typeof projectPlanTaskSchema>
 type ProjectPlanTaskDependencyFacts = Readonly<{
   planItemId: string
   dependencyPlanItemIds: readonly string[]
+  fileIntent: ProjectPlanTaskDeclaration['fileIntent']
 }>
 
 function validateProjectPlanTaskGraph(
@@ -102,6 +103,26 @@ function validateProjectPlanTaskGraph(
     }
   }
   if (!referencesValid) return
+
+  const tasksByPlanItemId = new Map(tasks.map((task) => [task.planItemId, task]))
+  for (const [index, task] of tasks.entries()) {
+    for (const [dependencyIndex, dependencyInput] of (task.fileIntent?.dependencyInputs ?? []).entries()) {
+      const source = tasksByPlanItemId.get(dependencyInput.planItemId)
+      if (!task.dependencyPlanItemIds.includes(dependencyInput.planItemId)) {
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'fileIntent', 'dependencyInputs', dependencyIndex, 'planItemId'],
+          message: 'A dependency input must select a direct Task dependency.'
+        })
+      } else if (source?.fileIntent === null) {
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'fileIntent', 'dependencyInputs', dependencyIndex, 'planItemId'],
+          message: 'A dependency input must select output from a file Task.'
+        })
+      }
+    }
+  }
 
   const remainingDependencies = new Map(tasks.map((task) => (
     [task.planItemId, task.dependencyPlanItemIds.length]

@@ -26,6 +26,8 @@ import type {
   StoredHumanAnswer,
   StoredManagedContainer,
   StoredManagedContainerJob,
+  StoredPrivateContainerClaim,
+  StoredPrivateContainerDiscovery,
   StoredOidcIdentity,
   StoredRemoteCapabilityApproval,
   StoredEndpointChallengeRateWindow,
@@ -80,8 +82,10 @@ export interface CollaborationReadRepository {
   getProjectionByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjection | null>
   listProjectionsForOwner(userId: string): Promise<StoredProjection[]>
   getManagedContainer(managedContainerId: string): Promise<StoredManagedContainer | null>
-  getManagedContainerForOwner(ownerUserId: string, provider: string, realmId: string): Promise<StoredManagedContainer | null>
+  getManagedContainerForOwner(ownerUserId: string, provider: string, realmId: string, installationId: string): Promise<StoredManagedContainer | null>
   listManagedContainersForOwner(ownerUserId: string): Promise<StoredManagedContainer[]>
+  getPrivateContainerDiscovery(ownerUserId: string, humanEndpointId: string, installationId: string, provider: string, realmId: string, externalContainerId: string): Promise<StoredPrivateContainerDiscovery | null>
+  getPrivateContainerClaim(provider: string, realmId: string, externalContainerId: string): Promise<StoredPrivateContainerClaim | null>
   getProjectEndpointBinding(projectId: string): Promise<StoredProjectEndpointBinding | null>
   getProjectEndpointBindingById(projectEndpointBindingId: string): Promise<StoredProjectEndpointBinding | null>
   getProjectBindingByLocator(provider: string, realmId: string, containerId: string, topicId: string): Promise<StoredProjectEndpointBinding | null>
@@ -97,6 +101,7 @@ export interface CollaborationReadRepository {
   getHumanAnswerForRequest(humanRequestId: string): Promise<StoredHumanAnswer | null>
   getRemoteApproval(remoteApprovalId: string): Promise<StoredRemoteCapabilityApproval | null>
   getRemoteApprovalByReferenceDigest(referenceDigest: string): Promise<StoredRemoteCapabilityApproval | null>
+  getRemoteApprovalByProviderMessage(provider: string, realmId: string, providerMessageId: string): Promise<StoredRemoteCapabilityApproval | null>
   listExpiredRemoteApprovals(now: string, limit: number): Promise<StoredRemoteCapabilityApproval[]>
   getProject(projectId: string): Promise<StoredProject | null>
   /**
@@ -290,6 +295,8 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   updateProjection(projection: StoredProjection, expectedRevision: number): Promise<void>
   insertManagedContainer(container: StoredManagedContainer): Promise<void>
   updateManagedContainer(container: StoredManagedContainer, expectedRevision: number): Promise<void>
+  upsertPrivateContainerDiscovery(discovery: StoredPrivateContainerDiscovery): Promise<void>
+  insertPrivateContainerClaim(claim: StoredPrivateContainerClaim): Promise<void>
   insertManagedContainerJob(job: StoredManagedContainerJob): Promise<void>
   upsertProjectEndpointBinding(binding: StoredProjectEndpointBinding, expectedRevision: number | null): Promise<void>
   insertProjectInput(input: Omit<StoredProjectInput, 'sequence'>): Promise<StoredProjectInput>
@@ -300,6 +307,7 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   updateRemoteApproval(approval: StoredRemoteCapabilityApproval, expectedRevision: number): Promise<void>
   insertProject(project: StoredProject, members: StoredProjectMember[]): Promise<void>
   updateProject(project: StoredProject, expectedRevision: number): Promise<void>
+  deleteProject(projectId: string, expectedRevision: number): Promise<void>
   insertProjectMember(member: StoredProjectMember): Promise<void>
   updateProjectMember(member: StoredProjectMember, expectedRevision: number): Promise<void>
   upsertWorkerAvailability(availability: StoredWorkerAvailability, expectedRevision: number | null): Promise<void>

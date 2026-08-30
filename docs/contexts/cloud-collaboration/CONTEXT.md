@@ -10,6 +10,14 @@ Cloud Collaboration is the SciForge bounded context for coordinating multiple us
 A cloud-authoritative unit with one owning SciForge User, explicit members, one current Coordinator Agent, Tasks, and shared Project Records.
 _Avoid_: Workspace, Project DAG, shared folder, OpenContent Team
 
+**Project Workbench**:
+A renderer surface for selecting, reading, and operating one Collaboration Project. Its selection is independent of the chat Session that hosts the surface and grants no Project, Task, or Provider authority.
+_Avoid_: Session binding, Project authority, shared Workspace
+
+**Project Workbench Target**:
+The exact `projectId` selected in a Project Workbench and supplied as routing context to a canonical Project Coordinator capability. Each operation still re-reads the current Principal, Project membership, role, revisions, and execution fences before it can read or write.
+_Avoid_: display name, Session ID, authorization token, durable Session binding
+
 **Project Owner**:
 The SciForge User identified by a Collaboration Project's `ownerUserId`. Every current Coordinator Agent belongs to this User, while Workers may belong to any Project Member; ownership does not imply access to another member's Workspace or external accounts.
 _Avoid_: Workspace owner, Coordinator Agent, OpenContent administrator

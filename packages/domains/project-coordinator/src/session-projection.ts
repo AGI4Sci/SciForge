@@ -7,12 +7,10 @@ import type {
 import {
   projectCoordinatorCoordinatorSessionBindingRecordSchema,
   projectCoordinatorCoordinatorSessionBindingSchema,
-  projectCoordinatorSessionBindingSchema,
   projectCoordinatorSessionProjectionSchema,
   projectCoordinatorWorkerSessionBindingSchema,
   type ProjectCoordinatorCoordinatorSessionBindingRecord,
-  type ProjectCoordinatorProjectCreateResult,
-  type ProjectCoordinatorProjectCreateInput,
+  type ProjectCoordinatorProjectCreateReceipt,
   type ProjectCoordinatorSessionBinding,
   type ProjectCoordinatorSessionProjection,
   type ProjectCoordinatorWorkspace,
@@ -23,6 +21,21 @@ import { ProjectCoordinatorStateStore } from './state.js'
 
 export type ProjectCoordinatorSessionAccess = 'coordinator' | 'member'
 
+/**
+ * Authorization returned for an explicit Project target.
+ *
+ * A Project target is intentionally independent from an ordinary Session
+ * binding.  For an otherwise unbound Session, authorization is represented
+ * directly by the current authenticated Principal's access.  Bound
+ * Coordinator/Worker sessions retain their durable role and execution fences.
+ */
+export type ProjectCoordinatorSessionAuthorization = Readonly<{
+  projectId: string
+  principalUserId: string
+  access: 'coordinator' | 'worker' | 'member' | 'read_only'
+  fenceReason: ProjectCoordinatorSessionBinding['fenceReason']
+}>
+
 export type ProjectCoordinatorSessionProjectionPort = Readonly<{
   readProjection(
     session?: DomainMainOrdinarySessionIdentity
@@ -31,20 +44,11 @@ export type ProjectCoordinatorSessionProjectionPort = Readonly<{
     input: ProjectCoordinatorWorkspaceReadInput,
     session: DomainMainOrdinarySessionIdentity
   ): Promise<ProjectCoordinatorWorkspaceReadInput>
-  withUnboundSession<Result>(
-    session: DomainMainOrdinarySessionIdentity,
-    operation: () => Promise<Result>
-  ): Promise<Result>
-  bindCreatedProject(
-    result: ProjectCoordinatorProjectCreateResult,
-    session: DomainMainOrdinarySessionIdentity,
-    input: ProjectCoordinatorProjectCreateInput
-  ): Promise<ProjectCoordinatorSessionBinding>
   authorize(
     projectId: string,
     session: DomainMainOrdinarySessionIdentity,
     requiredAccess: ProjectCoordinatorSessionAccess
-  ): Promise<ProjectCoordinatorSessionBinding>
+  ): Promise<ProjectCoordinatorSessionAuthorization>
   authorizeInvitationAcceptance(
     projectId: string,
     session: DomainMainOrdinarySessionIdentity
@@ -58,16 +62,25 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
   now?: () => Date
 }>): ProjectCoordinatorSessionProjectionPort {
   const now = options.now ?? (() => new Date())
-  const sessionLocks = new Map<string, Promise<void>>()
 
-  const localBinding = (
-    session: DomainMainOrdinarySessionIdentity
+  /**
+   * Find a durable binding only when it targets the explicit Project.  A
+   * binding for another Project must not make an otherwise authorized Session
+   * unable to operate the Project currently selected in the workbench.
+   */
+  const localBindingForProject = (
+    session: DomainMainOrdinarySessionIdentity,
+    projectId: string
   ): ProjectCoordinatorCoordinatorSessionBindingRecord | WorkerSessionExecutionBinding | undefined => {
     const coordinators = coordinatorSnapshot.get()
     const workers = options.workers.listBindings()
     const matches = [
-      ...coordinators.filter((candidate) => sameSession(candidate, session)),
-      ...workers.filter((candidate) => sameSession(candidate, session))
+      ...coordinators.filter((candidate) => (
+        candidate.projectId === projectId && sameSession(candidate, session)
+      )),
+      ...workers.filter((candidate) => (
+        candidate.projectId === projectId && sameSession(candidate, session)
+      ))
     ]
     if (matches.length > 1) {
       throw new Error('The ordinary Session has conflicting Project bindings.')
@@ -85,6 +98,52 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
     } catch {
       return undefined
     }
+  }
+
+  const readAuthorizedPrincipalProject = async (
+    projectId: string
+  ): Promise<Readonly<{
+    workspace: ProjectCoordinatorWorkspace
+    project: ProjectCoordinatorWorkspace['projects'][number]
+    principalUserId: string
+  }>> => {
+    const workspace = await readProjectWorkspace(projectId)
+    if (!workspace || workspace.connection.state !== 'ready') {
+      throw new Error('The exact Project is not visible to the current authenticated Principal.')
+    }
+    const project = workspace.projects.find(({ project: candidate }) => (
+      candidate.projectId === projectId
+    ))
+    if (!project) {
+      throw new Error('The exact Project is not visible to the current authenticated Principal.')
+    }
+    const principalUserId = workspace.connection.userId
+    return { workspace, project, principalUserId }
+  }
+
+  const principalAuthorization = (
+    projectId: string,
+    principalUserId: string,
+    project: ProjectCoordinatorWorkspace['projects'][number]
+  ): ProjectCoordinatorSessionAuthorization => {
+    const membership = project.provisioning.memberships.find(({ userId }) => (
+      userId === principalUserId
+    ))
+    const fenceReason = membership?.state !== 'active'
+      ? 'membership_inactive' as const
+      : ['completed', 'cancelled'].includes(project.project.status)
+        ? 'project_terminal' as const
+        : null
+    return Object.freeze({
+      projectId,
+      principalUserId,
+      access: fenceReason
+        ? 'read_only' as const
+        : project.project.ownerUserId === principalUserId
+          ? 'coordinator' as const
+          : 'member' as const,
+      fenceReason
+    })
   }
 
   const evaluate = (
@@ -105,7 +164,8 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
       return projectCoordinatorSessionProjectionSchema.parse({
         schemaVersion: 1,
         observedAt: now().toISOString(),
-        bindings: []
+        bindings: [],
+        pendingActivations: []
       })
     }
     const currentUserId = identityWorkspace.connection.userId
@@ -127,30 +187,19 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
     const visible = local.map((binding) => (
       evaluate(binding, workspaces.get(binding.projectId))
     )).filter(isPubliclyVisibleBinding)
+    const visibleSessionKeys = new Set(visible.map(({ projectId, runtimeId, threadId }) => (
+      `${projectId}\u0000${runtimeId}\u0000${threadId}`
+    )))
+    const pendingActivations = (await options.state.readPendingProjectActivations()).filter((activation) => (
+      visibleSessionKeys.has(
+        `${activation.projectId}\u0000${activation.coordinatorSession.runtimeId}\u0000${activation.coordinatorSession.threadId}`
+      )
+    ))
     return projectCoordinatorSessionProjectionSchema.parse({
       schemaVersion: 1,
       observedAt: now().toISOString(),
-      bindings: visible
-    })
-  }
-
-  const bindFromWorkspace = async (
-    projectId: string,
-    workspace: ProjectCoordinatorWorkspace,
-    session: DomainMainOrdinarySessionIdentity,
-    createInput?: ProjectCoordinatorProjectCreateInput
-  ): Promise<ProjectCoordinatorSessionBinding> => {
-    const record = coordinatorBindingRecord(projectId, workspace, session, now())
-    if (createInput) {
-      await options.state.bindCoordinatorSessionForCreatedProject(createInput, record)
-    } else {
-      await options.state.bindCoordinatorSession(record)
-    }
-    await coordinatorSnapshot.refresh()
-    return projectCoordinatorSessionBindingSchema.parse({
-      ...record,
-      access: 'coordinator',
-      fenceReason: null
+      bindings: visible,
+      pendingActivations
     })
   }
 
@@ -158,49 +207,31 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
     readProjection,
     scopeWorkspaceRead: async (input, session) => {
       await coordinatorSnapshot.refresh()
-      const binding = localBinding(session)
-      if (!binding) {
-        throw new Error('The ordinary Session is not bound to a Cloud Project.')
+      if (!input.projectId) {
+        // An unbound Session may enumerate the current Principal's visible
+        // Projects.  The workspace port itself applies the authenticated
+        // Principal's listing boundary; no Session binding is required.
+        return Object.freeze({})
       }
-      if (input.projectId && input.projectId !== binding.projectId) {
-        throw new Error('The ordinary Session is bound to a different Cloud Project.')
-      }
-      const evaluated = evaluate(
-        binding,
-        await readProjectWorkspace(binding.projectId)
+      const { workspace } = await readAuthorizedPrincipalProject(
+        input.projectId
       )
-      if (evaluated.access === 'read_only') {
-        throw new Error(`The ordinary Session is fenced: ${evaluated.fenceReason}.`)
-      }
-      return Object.freeze({ projectId: binding.projectId })
+      const binding = localBindingForProject(session, input.projectId)
+      // Read access remains available for a fenced/terminal binding.  The
+      // workspace port returns current canonical facts; only write commands
+      // below enforce Coordinator/Member authority.  Evaluate a matching
+      // binding to preserve the exact target-project lookup and avoid using a
+      // binding from another Project, but do not turn a read into a write gate.
+      if (binding) evaluate(binding, workspace)
+      return Object.freeze({ projectId: input.projectId })
     },
-    withUnboundSession: async (session, operation) => withSessionLock(
-      sessionLocks,
-      session,
-      async () => {
-        await coordinatorSnapshot.refresh()
-        if (localBinding(session)) {
-          throw new Error('The ordinary Session is already bound to a Cloud Project.')
-        }
-        return operation()
-      }
-    ),
-    bindCreatedProject: (result, session, input) => bindFromWorkspace(
-      result.createdProjectId,
-      result.workspace,
-      session,
-      { ...input, createIntentId: result.createIntentId }
-    ),
     authorize: async (projectId, session, requiredAccess) => {
       await coordinatorSnapshot.refresh()
-      const binding = localBinding(session)
-      if (!binding || binding.projectId !== projectId) {
-        throw new Error('The ordinary Session is not bound to this Cloud Project.')
-      }
-      const evaluated = evaluate(
-        binding,
-        await readProjectWorkspace(projectId)
-      )
+      const { workspace, project, principalUserId } = await readAuthorizedPrincipalProject(projectId)
+      const binding = localBindingForProject(session, projectId)
+      const evaluated = binding
+        ? evaluate(binding, workspace)
+        : principalAuthorization(projectId, principalUserId, project)
       if (requiredAccess === 'coordinator' && evaluated.access !== 'coordinator') {
         throw new Error('The ordinary Session does not hold current Coordinator authority.')
       }
@@ -209,12 +240,10 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
       }
       return evaluated
     },
-    authorizeInvitationAcceptance: async (projectId, session) => {
-      await coordinatorSnapshot.refresh()
-      const binding = localBinding(session)
-      if (binding && binding.projectId !== projectId) {
-        throw new Error('The ordinary Session is bound to a different Cloud Project.')
-      }
+    authorizeInvitationAcceptance: async (projectId, _session) => {
+      // Invitation acceptance is an explicit Project operation.  It is
+      // authorized from the current authenticated Principal and does not
+      // depend on whichever Project (if any) this Session previously ran.
       const workspace = await options.workspace.readWorkspace({ projectId })
       if (workspace.connection.state !== 'ready') {
         throw new Error('Project invitation acceptance requires the current authenticated Principal.')
@@ -231,12 +260,13 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
   })
 }
 
-function coordinatorBindingRecord(
-  projectId: string,
-  workspace: ProjectCoordinatorWorkspace,
+export function projectCoordinatorCreatedSessionBindingRecord(
+  receipt: ProjectCoordinatorProjectCreateReceipt,
   session: DomainMainOrdinarySessionIdentity,
-  now: Date
+  now: Date = new Date()
 ): ProjectCoordinatorCoordinatorSessionBindingRecord {
+  const projectId = receipt.createdProjectId
+  const workspace = receipt.workspace
   if (workspace.connection.state !== 'ready') {
     throw new Error('Coordinator Session binding requires the current authenticated Principal.')
   }
@@ -428,25 +458,5 @@ function createCoordinatorBindingSnapshot(state: ProjectCoordinatorStateStore) {
       records = await state.readCoordinatorSessionBindings()
       return records
     }
-  }
-}
-
-async function withSessionLock<Result>(
-  locks: Map<string, Promise<void>>,
-  session: DomainMainOrdinarySessionIdentity,
-  operation: () => Promise<Result>
-): Promise<Result> {
-  const key = `${session.runtimeId}\u0000${session.threadId}`
-  const previous = locks.get(key) ?? Promise.resolve()
-  let release!: () => void
-  const current = new Promise<void>((resolve) => { release = resolve })
-  const tail = previous.then(() => current)
-  locks.set(key, tail)
-  await previous
-  try {
-    return await operation()
-  } finally {
-    release()
-    if (locks.get(key) === tail) locks.delete(key)
   }
 }

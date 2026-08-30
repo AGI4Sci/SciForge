@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
@@ -7,6 +8,7 @@ import {
   externalOperationRecoveryJournalEntrySchema,
   humanAnswerSchema,
   humanEndpointBindingSchema,
+  localSessionProjectionBindingSchema,
   managedProviderContainerSchema,
   participantProfileSchema,
   projectSchema,
@@ -16,6 +18,7 @@ import {
   taskExecutionSchema,
   taskResultOutputSchema,
   taskSchema,
+  type RemoteSessionProjection,
   userPrincipalSchema
 } from '@sciforge/collaboration-contracts'
 
@@ -31,6 +34,13 @@ export const collaborationWorkerAcceptancePolicySchema = z.object({
   agentId: agentNodeSchema.shape.agentId,
   mode: collaborationWorkerAcceptanceModeSchema,
   updatedAt: timestampSchema
+}).strict()
+
+export const collaborationProjectUnavailableFenceSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  kind: z.enum(['permanent', 'permission-denied']),
+  reason: z.string().trim().min(1).max(4_000),
+  observedAt: timestampSchema
 }).strict()
 
 export const collaborationLocalProjectionSchema = z.object({
@@ -202,7 +212,16 @@ export const collaborationPendingTaskOfferSchema = z.object({
     'content_not_ready',
     'provider_not_ready'
   ])).max(5),
-  state: z.enum(['pending', 'awaiting-manual', 'claiming', 'dismissed', 'claimed_elsewhere', 'closed', 'failed']),
+  state: z.enum([
+    'pending',
+    'awaiting-manual',
+    'claiming',
+    'rejecting',
+    'dismissed',
+    'claimed_elsewhere',
+    'closed',
+    'failed'
+  ]),
   updatedAt: timestampSchema,
   completedAt: timestampSchema.nullable(),
   error: z.string().trim().min(1).max(4_000).nullable()
@@ -419,8 +438,7 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
   updatedAt: timestampSchema
 }).strict()
 
-export const collaborationLocalStateSchema = z.object({
-  schemaVersion: z.literal(2),
+const collaborationLocalStateShape = {
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -433,7 +451,24 @@ export const collaborationLocalStateSchema = z.object({
   agents: z.array(agentNodeSchema).max(64),
   participant: participantProfileSchema.optional(),
   projections: z.array(collaborationLocalProjectionSchema).max(10_000),
+  sessionBindings: z.array(localSessionProjectionBindingSchema).max(10_000).optional(),
   projects: z.array(projectSchema).max(10_000),
+  projectUnavailableFences: z.array(collaborationProjectUnavailableFenceSchema)
+    .max(10_000)
+    .default([])
+    .superRefine((fences, context) => {
+      const seen = new Set<string>()
+      for (const [index, fence] of fences.entries()) {
+        if (seen.has(fence.projectId)) {
+          context.addIssue({
+            code: 'custom',
+            path: [index, 'projectId'],
+            message: 'Each Project has at most one local unavailable fence.'
+          })
+        }
+        seen.add(fence.projectId)
+      }
+    }),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
   pendingTaskOffers: z.array(collaborationPendingTaskOfferSchema).max(100_000).default([]),
@@ -458,6 +493,11 @@ export const collaborationLocalStateSchema = z.object({
   outbox: z.array(collaborationOutboxEntrySchema).max(100_000),
   diagnostics: z.array(collaborationDiagnosticRecordSchema).max(256),
   remoteApprovals: z.array(collaborationLocalRemoteApprovalSchema).max(10_000).default([])
+} as const
+
+export const collaborationLocalStateSchema = z.object({
+  schemaVersion: z.literal(3),
+  ...collaborationLocalStateShape
 }).strict()
 
 export type CollaborationLocalState = z.infer<typeof collaborationLocalStateSchema>
@@ -476,10 +516,13 @@ export type CollaborationWorkerAcceptanceMode = z.infer<
 export type CollaborationWorkerAcceptancePolicy = z.infer<
   typeof collaborationWorkerAcceptancePolicySchema
 >
+export type CollaborationProjectUnavailableFence = z.infer<
+  typeof collaborationProjectUnavailableFenceSchema
+>
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
-  schemaVersion: 2,
+  schemaVersion: 3,
   revision: 0,
   lastInboxSequence: 0,
   endpoints: [],
@@ -487,7 +530,9 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   managedContainers: [],
   agents: [],
   projections: [],
+  sessionBindings: [],
   projects: [],
+  projectUnavailableFences: [],
   tasks: [],
   taskRuns: [],
   pendingTaskOffers: [],
@@ -502,6 +547,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
 export interface CollaborationStateBackend {
   read(): Promise<unknown | undefined>
   write(value: CollaborationLocalState): Promise<void>
+  quarantineUnsupportedState?(): Promise<void>
 }
 
 export class FileCollaborationStateBackend implements CollaborationStateBackend {
@@ -531,17 +577,18 @@ export class FileCollaborationStateBackend implements CollaborationStateBackend 
       }
       await rename(temporaryPath, this.path)
       await chmod(this.path, 0o600)
-      const directory = await open(directoryPath, 'r')
-      try {
-        await directory.sync().catch((error: unknown) => {
-          if (!isUnsupportedDirectorySync(error)) throw error
-        })
-      } finally {
-        await directory.close()
-      }
+      await syncDirectory(directoryPath)
     } finally {
       await rm(temporaryPath, { force: true }).catch(() => undefined)
     }
+  }
+
+  async quarantineUnsupportedState(): Promise<void> {
+    const directoryPath = dirname(this.path)
+    const preservedPath = `${this.path}.unsupported-${Date.now()}-${randomUUID()}`
+    await rename(this.path, preservedPath)
+    await chmod(preservedPath, 0o600)
+    await syncDirectory(directoryPath)
   }
 }
 
@@ -557,15 +604,21 @@ export class CollaborationLocalStore {
     if (
       stored !== undefined &&
       (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
-        (stored as { schemaVersion?: unknown }).schemaVersion !== 2)
+        (stored as { schemaVersion?: number }).schemaVersion !== 3)
     ) {
-      throw new Error(
-        'Collaboration local state is not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud.'
-      )
+      if (!this.backend.quarantineUnsupportedState) {
+        throw new Error(
+          'Collaboration local state is not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud.'
+        )
+      }
+      await this.backend.quarantineUnsupportedState()
+      this.state = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
+      await this.backend.write(this.state)
+      return this.snapshot()
     }
     this.state = stored === undefined
       ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
-      : collaborationLocalStateSchema.parse(stored)
+      : collaborationLocalStateSchema.parse(normalizePersistedState(stored))
     await this.recoverInterruptedWork()
     return this.snapshot()
   }
@@ -601,6 +654,24 @@ export class CollaborationLocalStore {
     return result
   }
 
+  async prepareForAuthenticatedUser(userId: string): Promise<void> {
+    const snapshot = this.snapshot()
+    if (!snapshot.user || snapshot.user.userId === userId) return
+    await this.transact((draft) => {
+      if (!draft.user || draft.user.userId === userId) return
+      if (!isReplaceableIdentityCache(draft)) {
+        throw new Error(
+          'This Desktop already has Phone Link or Session data for another signed-in SciForge User.'
+        )
+      }
+      const revision = draft.revision
+      Object.assign(draft, structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+      delete draft.user
+      delete draft.participant
+      draft.revision = revision
+    })
+  }
+
   private async recoverInterruptedWork(): Promise<void> {
     if (!this.state) return
     let changed = false
@@ -628,6 +699,128 @@ export class CollaborationLocalStore {
     const parsed = collaborationLocalStateSchema.parse(draft)
     await this.backend.write(parsed)
     this.state = parsed
+  }
+}
+
+function isReplaceableIdentityCache(state: CollaborationLocalState): boolean {
+  return state.lastInboxSequence === 0 &&
+    state.endpoints.length === 0 &&
+    state.endpointLocators.length === 0 &&
+    state.managedContainers.length === 0 &&
+    !state.participant?.primaryHumanEndpointId &&
+    state.projections.length === 0 &&
+    (state.sessionBindings?.length ?? 0) === 0 &&
+    state.projects.length === 0 &&
+    state.tasks.length === 0 &&
+    state.taskRuns.length === 0 &&
+    state.workerAcceptancePolicies.length === 0 &&
+    state.queue.length === 0 &&
+    state.receipts.length === 0 &&
+    state.remoteApprovals.length === 0 &&
+    state.outbox.every((entry) => (
+      entry.kind === 'worker.availability' || entry.kind === 'agent.heartbeat'
+    ))
+}
+
+export function claimLocalSessionProjectionBinding(
+  state: CollaborationLocalState,
+  projection: RemoteSessionProjection,
+  runtimeId: string,
+  threadId: string,
+  at: string
+): void {
+  const bindings = state.sessionBindings ??= []
+  const sessionBinding = bindings.find((binding) => (
+    binding.runtimeId === runtimeId && binding.threadId === threadId
+  ))
+  if (sessionBinding && sessionBinding.projectionId !== projection.projectionId) {
+    throw new Error('This local Session is permanently bound to another phone Topic.')
+  }
+  const projectionBinding = bindings.find((binding) => binding.projectionId === projection.projectionId)
+  if (projectionBinding && (
+    projectionBinding.runtimeId !== runtimeId || projectionBinding.threadId !== threadId
+  )) {
+    throw new Error('A phone Topic cannot be rebound to another local Session.')
+  }
+  if (sessionBinding || projectionBinding) return
+  bindings.push(localSessionProjectionBindingSchema.parse({
+    schemaVersion: 1,
+    type: 'local_session_projection_binding',
+    projectionId: projection.projectionId,
+    agentId: projection.agentId,
+    runtimeId,
+    threadId,
+    createdAt: at,
+    updatedAt: at
+  }))
+}
+
+export function localSessionProjectionBindingFor(
+  state: CollaborationLocalState,
+  runtimeId: string,
+  threadId: string
+) {
+  return state.sessionBindings?.find((binding) => (
+    binding.runtimeId === runtimeId && binding.threadId === threadId
+  ))
+}
+
+function normalizePersistedState(stored: unknown): unknown {
+  const scoped = dropUnscopedManagedContainerCache(stored)
+  if (!scoped || typeof scoped !== 'object' || Array.isArray(scoped)) return scoped
+  const record = scoped as Record<string, unknown>
+  if (Array.isArray(record.sessionBindings)) return scoped
+  const projections = Array.isArray(record.projections) ? record.projections : []
+  const bindings: unknown[] = []
+  const occupiedSessions = new Set<string>()
+  for (const candidate of projections) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+    const local = candidate as Record<string, unknown>
+    const projection = local.projection
+    if (!projection || typeof projection !== 'object' || Array.isArray(projection)) continue
+    const remote = projection as Record<string, unknown>
+    if (
+      typeof local.runtimeId !== 'string' || typeof local.threadId !== 'string' ||
+      typeof remote.projectionId !== 'string' || typeof remote.agentId !== 'string' ||
+      typeof remote.createdAt !== 'string' || typeof remote.updatedAt !== 'string'
+    ) continue
+    const sessionKey = JSON.stringify([local.runtimeId, local.threadId])
+    if (occupiedSessions.has(sessionKey)) continue
+    occupiedSessions.add(sessionKey)
+    bindings.push({
+      schemaVersion: 1,
+      type: 'local_session_projection_binding',
+      projectionId: remote.projectionId,
+      agentId: remote.agentId,
+      runtimeId: local.runtimeId,
+      threadId: local.threadId,
+      createdAt: remote.createdAt,
+      updatedAt: remote.updatedAt
+    })
+  }
+  return { ...record, sessionBindings: bindings }
+}
+
+function dropUnscopedManagedContainerCache(stored: unknown): unknown {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return stored
+  const record = stored as Record<string, unknown>
+  if (!Array.isArray(record.managedContainers)) return stored
+  const managedContainers = record.managedContainers.filter((container) => (
+    container !== null && typeof container === 'object' && !Array.isArray(container) &&
+    typeof (container as Record<string, unknown>).installationId === 'string'
+  ))
+  if (managedContainers.length === record.managedContainers.length) return stored
+  return { ...record, managedContainers }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const directory = await open(path, 'r')
+  try {
+    await directory.sync().catch((error: unknown) => {
+      if (!isUnsupportedDirectorySync(error)) throw error
+    })
+  } finally {
+    await directory.close()
   }
 }
 

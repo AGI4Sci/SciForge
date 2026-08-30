@@ -215,6 +215,11 @@ export type CapabilityAgentToolResult =
   | { tool: typeof CAPABILITY_AGENT_TOOL_NAMES.look; value: AgentVisualLookOutput }
   | { tool: typeof CAPABILITY_AGENT_TOOL_NAMES.capture; value: AgentVisualCaptureOutput }
 
+type CapabilityAgentToolRecovery = Readonly<{
+  action: string
+  instruction: string
+}>
+
 export type CapabilityAgentBroker = Readonly<{
   discover: (
     caller: CapabilityCallerContext,
@@ -281,7 +286,7 @@ type CallerCache = {
 const toolDefinitions = Object.freeze([
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.discover,
-    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters. When a user names an external or provider-backed service, search native operations first with the user\'s action and library terms before considering an unrelated managed tool; set providerFamily=managed-mcp only when the user explicitly selected that managed provider or native discovery is unsuitable. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
+    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters; omit scope unless the user explicitly requires one (do not infer it from workspace or UI wording). A workspace-facing operation may legitimately be global-scope. When a user names an external or provider-backed service, search native operations first with the user\'s action and library terms before considering an unrelated managed tool; set providerFamily=managed-mcp only when the user explicitly selected that managed provider or native discovery is unsuitable. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
     agentDiscoverRequestSchema
   ),
   defineTool(
@@ -373,7 +378,11 @@ export class CapabilityAgentToolSurface {
 
     switch (request.name) {
       case CAPABILITY_AGENT_TOOL_NAMES.discover: {
-        const parsed = agentDiscoverRequestSchema.parse(rawArguments)
+        const parsed = parseAgentToolRequest(
+          agentDiscoverRequestSchema,
+          rawArguments,
+          CAPABILITY_AGENT_TOOL_NAMES.discover
+        )
         if (parsed.operationRef) {
           const descriptor = this.#operation(cache, parsed.operationRef)
           const result: CapabilityAgentToolResult = {
@@ -409,8 +418,16 @@ export class CapabilityAgentToolSurface {
           const diagnostic = emptyDiscoveryDiagnostic(parsed)
           throw new CapabilityAgentToolError(
             'capability_discovery_empty',
-            `No capability matched the discovery request. ${JSON.stringify(diagnostic)}`,
-            { details: diagnostic }
+            'No capability matched the discovery request.',
+            {
+              details: diagnostic,
+              failureClass: 'capability_not_found',
+              retryable: true,
+              recovery: {
+                action: 'use_suggested_query',
+                instruction: 'Use at most one entry from error.details.suggestedQueries as the next discovery query. Preserve the original objective and stop if that query also returns no operation.'
+              }
+            }
           )
         }
         const includeSchema = parsed.includeSchema === true && descriptors.length === 1
@@ -422,7 +439,11 @@ export class CapabilityAgentToolSurface {
         return result
       }
       case CAPABILITY_AGENT_TOOL_NAMES.observe: {
-        const parsed = agentObserveRequestSchema.parse(rawArguments)
+        const parsed = parseAgentToolRequest(
+          agentObserveRequestSchema,
+          rawArguments,
+          CAPABILITY_AGENT_TOOL_NAMES.observe
+        )
         const observation = await this.#observe(caller, cache, parsed.resourceRef, request.context)
         const result: CapabilityAgentToolResult = {
           tool: CAPABILITY_AGENT_TOOL_NAMES.observe,
@@ -432,7 +453,11 @@ export class CapabilityAgentToolSurface {
         return result
       }
       case CAPABILITY_AGENT_TOOL_NAMES.invoke: {
-        const parsed = agentInvokeRequestSchema.parse(rawArguments)
+        const parsed = parseAgentToolRequest(
+          agentInvokeRequestSchema,
+          rawArguments,
+          CAPABILITY_AGENT_TOOL_NAMES.invoke
+        )
         const descriptor = this.#operation(cache, parsed.operationRef)
         const result = await this.#invokeOperation(
           caller,
@@ -452,7 +477,11 @@ export class CapabilityAgentToolSurface {
         return result
       }
       case CAPABILITY_AGENT_TOOL_NAMES.events: {
-        const parsed = agentEventsRequestSchema.parse(rawArguments)
+        const parsed = parseAgentToolRequest(
+          agentEventsRequestSchema,
+          rawArguments,
+          CAPABILITY_AGENT_TOOL_NAMES.events
+        )
         const [events, descriptors] = await Promise.all([
           this.#broker.listEvents(caller, {
           ...(parsed.afterEventId ? { afterEventId: parsed.afterEventId } : {}),
@@ -980,7 +1009,6 @@ export class CapabilityAgentToolSurface {
 function remoteApprovalPolicy(
   descriptor: CapabilityDescriptor
 ): CapabilityAgentApprovalRequest['remoteApproval'] | undefined {
-  if (descriptor.effect !== 'workspace-write') return undefined
   return {
     eligible: true,
     safeSummary: descriptor.title,
@@ -999,6 +1027,7 @@ export class CapabilityAgentToolError extends Error {
     | 'unknown_resource_ref'
     | 'resource_ref_retired'
     | 'capability_discovery_empty'
+    | 'invalid_arguments'
     | 'broker_scope_denied'
     | 'capability_identity_mismatch'
     | 'stale_resource_ref'
@@ -1010,18 +1039,93 @@ export class CapabilityAgentToolError extends Error {
     | 'visual_runtime_unavailable'
     | 'invalid_visual_result'
   readonly details?: CapabilityJsonValue
+  readonly failureClass?: string
   readonly retryable?: boolean
+  readonly recovery?: CapabilityAgentToolRecovery
+  readonly providerStage?: string
+  readonly resourceIdentity?: string
+  readonly evidenceDelta?: boolean
+  readonly stateChanged?: boolean
 
   constructor(
     code: CapabilityAgentToolError['code'],
     message: string,
-    options: { details?: CapabilityJsonValue; retryable?: boolean } = {}
+    options: {
+      details?: CapabilityJsonValue
+      failureClass?: string
+      retryable?: boolean
+      recovery?: CapabilityAgentToolRecovery
+      providerStage?: string
+      resourceIdentity?: string
+      evidenceDelta?: boolean
+      stateChanged?: boolean
+    } = {}
   ) {
     super(message)
     this.name = 'CapabilityAgentToolError'
     this.code = code
     this.details = options.details
+    this.failureClass = options.failureClass
     this.retryable = options.retryable
+    this.recovery = options.recovery
+    this.providerStage = options.providerStage
+    this.resourceIdentity = options.resourceIdentity
+    this.evidenceDelta = options.evidenceDelta
+    this.stateChanged = options.stateChanged
+  }
+}
+
+function parseAgentToolRequest<T>(
+  schema: z.ZodType<T>,
+  rawArguments: unknown,
+  toolName: string
+): T {
+  const raw = isRecord(rawArguments) ? rawArguments : {}
+  const suppliedCapabilityId = typeof raw.capabilityId === 'string'
+    ? raw.capabilityId.trim()
+    : ''
+  const operationRefMisuse = toolName === CAPABILITY_AGENT_TOOL_NAMES.discover &&
+    suppliedCapabilityId.startsWith('op_')
+  if (operationRefMisuse) {
+    throw new CapabilityAgentToolError(
+      'invalid_arguments',
+      'Invalid sciforge_discover arguments: an opaque operationRef was supplied as capabilityId.',
+      {
+        details: {
+          receivedReference: suppliedCapabilityId.slice(0, 256)
+        },
+        failureClass: 'invalid_arguments',
+        retryable: false,
+        recovery: {
+          action: 'use_operation_ref',
+          instruction: 'Call sciforge_discover with operationRef set to the op_... value and includeSchema=true. capabilityId accepts only a namespaced lowercase capability identifier.'
+        }
+      }
+    )
+  }
+  try {
+    return schema.parse(rawArguments)
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) throw error
+    const issue = error.issues[0]
+    const issueDetails = error.issues.slice(0, 4).map((entry) => ({
+      path: entry.path.map(String),
+      message: entry.message
+    }))
+    const details: CapabilityJsonValue = { issues: issueDetails }
+    throw new CapabilityAgentToolError(
+      'invalid_arguments',
+      `Invalid ${toolName} arguments: ${issue?.message ?? 'schema validation failed'}.`,
+      {
+        details,
+        failureClass: 'invalid_arguments',
+        retryable: false,
+        recovery: {
+          action: 'correct_arguments',
+          instruction: `Correct the ${toolName} arguments using the published tool schema; do not invent opaque references.`
+        }
+      }
+    )
   }
 }
 

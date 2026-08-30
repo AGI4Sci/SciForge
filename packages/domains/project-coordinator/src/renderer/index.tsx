@@ -62,7 +62,7 @@ export function createProjectCoordinatorRightPanelContribution(
 ): ProjectCoordinatorRightPanelContribution {
   const client = createProjectCoordinatorRendererClient(host.capabilityInvoker)
   return Object.freeze({
-    render: ({ activation, className, onCollapse, session }) => {
+    render: ({ activation, active, className, focused, onCollapse, session, surfaceId }) => {
       const parsedActivation = activation
         ? projectCoordinatorActivationSchema.safeParse(activation.payload)
         : undefined
@@ -73,6 +73,10 @@ export function createProjectCoordinatorRightPanelContribution(
           className={className}
           onCollapse={onCollapse}
           session={session}
+          visibleContext={host.visibleContext}
+          active={active}
+          focused={focused}
+          surfaceId={surfaceId}
           workspaceSections={workspaceSections}
           {...(host.workbench?.openResource ? {
             onOpenArtifact: async (input: ProjectCoordinatorArtifactReviewPrepareInput) => {
@@ -163,6 +167,18 @@ export function createProjectCoordinatorNavigationSectionContribution(
           sessionId: context.session.id,
           payload: { projectId, view }
         })}
+        onActivateProject={(projectId, sessionId) => {
+          context.selectSession(sessionId)
+          openCommand.execute({
+            sessionId,
+            // A pending activation is emitted when the coordinator Session is
+            // created.  Re-acknowledging it during a later workspace refresh
+            // (for example after assigning a Worker) must return to the
+            // Project workflow surface rather than replacing the user's
+            // task-dispatch context with the overview dashboard.
+            payload: { projectId, view: 'tasks' }
+          })
+        }}
       />
     )
   })
@@ -216,3 +232,4 @@ export * from './composer-context-provider.js'
 export * from './messages.js'
 export * from './project-coordinator-capability-client.js'
 export * from './workspace-sections.js'
+export * from './panel-context.js'

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
+  agentNodeFixture,
+  humanEndpointBindingFixture,
+  participantProfileFixture,
   TEST_HASH,
   TEST_IDS,
   TEST_TIMESTAMP,
@@ -9,13 +15,60 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 import {
   CollaborationLocalStore,
+  EMPTY_COLLABORATION_LOCAL_STATE,
+  FileCollaborationStateBackend,
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
 
+test('a new signed-in User may replace only an unbound identity cache', async () => {
+  const store = new CollaborationLocalStore(new MemoryBackend(replaceableOtherUserCache()))
+  await store.open()
+
+  await store.prepareForAuthenticatedUser(TEST_IDS.userId)
+
+  const state = store.snapshot()
+  assert.equal(state.revision, 5)
+  assert.equal(state.user, undefined)
+  assert.equal(state.participant, undefined)
+  assert.deepEqual(state.agents, [])
+  assert.deepEqual(state.outbox, [])
+  assert.deepEqual(state.diagnostics, [])
+})
+
+test('a new signed-in User cannot replace a cache with a bound phone endpoint', async () => {
+  const cached = replaceableOtherUserCache()
+  cached.endpoints = [{ ...humanEndpointBindingFixture, userId: TEST_IDS.secondUserId }]
+  cached.participant = {
+    ...participantProfileFixture,
+    userId: TEST_IDS.secondUserId
+  }
+  const store = new CollaborationLocalStore(new MemoryBackend(cached))
+  await store.open()
+
+  await assert.rejects(
+    store.prepareForAuthenticatedUser(TEST_IDS.userId),
+    /already has Phone Link or Session data/u
+  )
+
+  const state = store.snapshot()
+  assert.equal(state.user?.userId, TEST_IDS.secondUserId)
+  assert.equal(state.endpoints.length, 1)
+  assert.equal(state.revision, 4)
+})
+
+test('schema v3 state defaults the persisted Project unavailable fence collection', async () => {
+  const { projectUnavailableFences: _omitted, ...stored } = EMPTY_COLLABORATION_LOCAL_STATE
+  const store = new CollaborationLocalStore(new MemoryBackend(stored))
+
+  await store.open()
+
+  assert.deepEqual(store.snapshot().projectUnavailableFences, [])
+})
+
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     revision: 4,
     lastInboxSequence: 8,
     user: userPrincipalFixture,
@@ -31,6 +84,7 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
       nextSequence: 2
     }],
     projects: [],
+    projectUnavailableFences: [],
     tasks: [],
     taskRuns: [],
     pendingTaskOffers: [],
@@ -76,16 +130,75 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
   assert.equal(recovered.revision, 5)
 })
 
-test('obsolete local Collaboration state fails with an explicit recovery boundary', async () => {
-  const store = new CollaborationLocalStore(new MemoryBackend({ schemaVersion: 1 }))
+test('schema v2 local Collaboration state fails closed without being rewritten', async () => {
+  const backend = new MemoryBackend({ schemaVersion: 2 })
+  const store = new CollaborationLocalStore(backend)
   await assert.rejects(
     store.open(),
-    /not schema version 2; clear the obsolete local Collaboration state and reconnect to Cloud/u
+    /not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud/u
   )
+  assert.equal(backend.writes, 0)
+})
+
+test('file-backed obsolete Collaboration state is preserved and replaced with current empty state', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-collaboration-state-'))
+  context.after(async () => rm(directory, { recursive: true, force: true }))
+  const statePath = join(directory, 'state.json')
+  const obsoleteState = '{"schemaVersion":2,"sentinel":"preserve-this-state"}\n'
+  await writeFile(statePath, obsoleteState, { encoding: 'utf8', mode: 0o600 })
+
+  const store = new CollaborationLocalStore(new FileCollaborationStateBackend(statePath))
+  const recovered = await store.open()
+
+  assert.equal(recovered.schemaVersion, 3)
+  assert.equal(recovered.revision, 0)
+  assert.deepEqual(recovered.outbox, [])
+  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).schemaVersion, 3)
+  const preserved = (await readdir(directory)).filter((name) =>
+    name.startsWith('state.json.unsupported-')
+  )
+  assert.equal(preserved.length, 1)
+  assert.equal(await readFile(join(directory, preserved[0]!), 'utf8'), obsoleteState)
 })
 
 class MemoryBackend implements CollaborationStateBackend {
+  writes = 0
   constructor(private value: unknown) {}
   async read(): Promise<unknown> { return structuredClone(this.value) }
-  async write(value: CollaborationLocalState): Promise<void> { this.value = structuredClone(value) }
+  async write(value: CollaborationLocalState): Promise<void> {
+    this.value = structuredClone(value)
+    this.writes += 1
+  }
+}
+
+function replaceableOtherUserCache(): CollaborationLocalState {
+  return {
+    ...structuredClone(EMPTY_COLLABORATION_LOCAL_STATE),
+    revision: 4,
+    user: { ...userPrincipalFixture, userId: TEST_IDS.secondUserId },
+    participant: {
+      ...participantProfileFixture,
+      userId: TEST_IDS.secondUserId,
+      primaryHumanEndpointId: null,
+      status: 'incomplete'
+    },
+    agents: [{ ...agentNodeFixture, ownerUserId: TEST_IDS.secondUserId }],
+    outbox: [{
+      outboxId: 'obx_OtherUser0001',
+      idempotencyKey: 'idem_worker.availability.other-user-1',
+      kind: 'worker.availability',
+      body: {},
+      state: 'pending',
+      attempts: 0,
+      createdAt: TEST_TIMESTAMP,
+      updatedAt: TEST_TIMESTAMP
+    }],
+    diagnostics: [{
+      code: 'collaboration.connection_error',
+      severity: 'error',
+      message: 'Safe cached diagnostic.',
+      recoverable: true,
+      occurredAt: TEST_TIMESTAMP
+    }]
+  }
 }

@@ -2,12 +2,13 @@ import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 
 import {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
+  projectCoordinatorActivationAcknowledgeInputSchema,
+  projectCoordinatorActivationAcknowledgeResultSchema,
   projectCoordinatorArtifactReviewPrepareInputSchema,
   projectCoordinatorArtifactReviewPreparedSchema,
   projectCoordinatorCompleteInputSchema,
   projectCoordinatorContentRecoveryAbandonInputSchema,
   projectCoordinatorContentRecoveryObserveLinkInputSchema,
-  projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorMembershipAddInputSchema,
@@ -26,19 +27,22 @@ import {
   projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorProjectDeleteInputSchema,
+  projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorSessionProjectionReadInputSchema,
   projectCoordinatorSessionProjectionSchema,
+  projectCoordinatorTaskOfferReassignInputSchema,
   projectCoordinatorResultReviewInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorPlanConfirmInput,
+  type ProjectCoordinatorActivationAcknowledgeInput,
   type ProjectCoordinatorArtifactReviewPrepareInput,
   type ProjectCoordinatorArtifactReviewPrepared,
   type ProjectCoordinatorCompleteInput,
   type ProjectCoordinatorContentRecoveryAbandonInput,
   type ProjectCoordinatorContentRecoveryObserveLinkInput,
-  type ProjectCoordinatorContentRecoveryRetrySuccessorInput,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorMembershipAddInput,
@@ -56,7 +60,10 @@ import {
   type ProjectCoordinatorWorkflowPrepareInput,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorProjectDeleteInput,
+  type ProjectCoordinatorProjectDeleteResult,
   type ProjectCoordinatorSessionProjection,
+  type ProjectCoordinatorTaskOfferReassignInput,
   type ProjectCoordinatorResultReviewInput,
   type ProjectCoordinatorTransferInput,
   type ProjectCoordinatorWorkspace,
@@ -76,6 +83,20 @@ const projectCreateContract = Object.freeze({
   effect: 'external-write' as const,
   inputSchema: projectCoordinatorProjectCreateInputSchema,
   outputSchema: projectCoordinatorProjectCreateResultSchema
+})
+
+const projectDeleteContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+  effect: 'destructive' as const,
+  inputSchema: projectCoordinatorProjectDeleteInputSchema,
+  outputSchema: projectCoordinatorProjectDeleteResultSchema
+})
+
+const projectActivationAcknowledgeContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge,
+  effect: 'workspace-write' as const,
+  inputSchema: projectCoordinatorActivationAcknowledgeInputSchema,
+  outputSchema: projectCoordinatorActivationAcknowledgeResultSchema
 })
 
 const sessionProjectionReadContract = Object.freeze({
@@ -151,17 +172,17 @@ const contentRecoveryObserveLinkContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const taskOfferReassignContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorTaskOfferReassignInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
 const contentRecoveryAbandonContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
   effect: 'destructive' as const,
   inputSchema: projectCoordinatorContentRecoveryAbandonInputSchema,
-  outputSchema: projectCoordinatorWorkspaceSchema
-})
-
-const contentRecoveryRetrySuccessorContract = Object.freeze({
-  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryRetrySuccessor,
-  effect: 'external-write' as const,
-  inputSchema: projectCoordinatorContentRecoveryRetrySuccessorInputSchema,
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
@@ -235,6 +256,8 @@ const confirmationApproval = Object.freeze({
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
+  deleteProject(input: ProjectCoordinatorProjectDeleteInput): Promise<ProjectCoordinatorProjectDeleteResult>
+  acknowledgeProjectActivation(input: ProjectCoordinatorActivationAcknowledgeInput): Promise<void>
   readSessionProjection(): Promise<ProjectCoordinatorSessionProjection>
   readPlanDraft(input: ProjectCoordinatorPlanDraftReadInput): Promise<ProjectCoordinatorPlanDraft | null>
   generatePlanDraft(input: ProjectCoordinatorPlanDraftGenerateInput): Promise<ProjectCoordinatorPlanDraft>
@@ -243,14 +266,14 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   confirmPlan(input: ProjectCoordinatorPlanConfirmInput): Promise<ProjectCoordinatorWorkspace>
   prepareWorkflow(input: ProjectCoordinatorWorkflowPrepareInput): Promise<ProjectCoordinatorWorkflowPlan>
   continueWorkflow(input: ProjectCoordinatorWorkflowContinueInput): Promise<ProjectCoordinatorWorkspace>
+  reassignTaskOffer(
+    input: ProjectCoordinatorTaskOfferReassignInput
+  ): Promise<ProjectCoordinatorWorkspace>
   observeAndLinkRecovery(
     input: ProjectCoordinatorContentRecoveryObserveLinkInput
   ): Promise<ProjectCoordinatorWorkspace>
   abandonRecovery(
     input: ProjectCoordinatorContentRecoveryAbandonInput
-  ): Promise<ProjectCoordinatorWorkspace>
-  retryRecoverySuccessor(
-    input: ProjectCoordinatorContentRecoveryRetrySuccessorInput
   ): Promise<ProjectCoordinatorWorkspace>
   addMember(input: ProjectCoordinatorMembershipAddInput): Promise<ProjectCoordinatorWorkspace>
   acceptInvitation(input: ProjectCoordinatorMembershipAcceptInput): Promise<ProjectCoordinatorWorkspace>
@@ -269,12 +292,25 @@ export type ProjectCoordinatorRendererClient = Readonly<{
 export function createProjectCoordinatorRendererClient(
   invoker: DomainRendererCapabilityInvoker
 ): ProjectCoordinatorRendererClient {
+  const invokeMutation = async <T>(
+    operation: () => Promise<T>
+  ): Promise<T> => {
+    const result = await operation()
+    publishProjectCoordinatorWorkspaceInvalidation()
+    return result
+  }
   return Object.freeze({
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
     createProject: async (input) => {
-      const result = await invoker.invoke(projectCreateContract, input, confirmationApproval)
+      return invokeMutation(() => invoker.invoke(projectCreateContract, input, confirmationApproval))
+    },
+    deleteProject: async (input) => {
+      const result = await invoker.invoke(projectDeleteContract, input, confirmationApproval)
       publishProjectCoordinatorWorkspaceInvalidation()
       return result
+    },
+    acknowledgeProjectActivation: async (input) => {
+      await invokeMutation(() => invoker.invoke(projectActivationAcknowledgeContract, input))
     },
     readSessionProjection: () => invoker.invoke(sessionProjectionReadContract, {}),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
@@ -298,21 +334,21 @@ export function createProjectCoordinatorRendererClient(
       input,
       confirmationApproval
     ),
-    observeAndLinkRecovery: (input) => invoker.invoke(
+    reassignTaskOffer: (input) => invokeMutation(() => invoker.invoke(
+      taskOfferReassignContract,
+      input,
+      confirmationApproval
+    )),
+    observeAndLinkRecovery: (input) => invokeMutation(() => invoker.invoke(
       contentRecoveryObserveLinkContract,
       input,
       confirmationApproval
-    ),
-    abandonRecovery: (input) => invoker.invoke(
+    )),
+    abandonRecovery: (input) => invokeMutation(() => invoker.invoke(
       contentRecoveryAbandonContract,
       input,
       confirmationApproval
-    ),
-    retryRecoverySuccessor: (input) => invoker.invoke(
-      contentRecoveryRetrySuccessorContract,
-      input,
-      confirmationApproval
-    ),
+    )),
     addMember: (input) => invoker.invoke(
       membershipAddContract,
       input,

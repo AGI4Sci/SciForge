@@ -1,14 +1,25 @@
 import { readFile } from 'node:fs/promises'
 
+import {
+  idempotencyComparableCommandProjection,
+  restResponseSchema
+} from '@sciforge/collaboration-contracts'
 import { describe, expect, it } from 'vitest'
 
-import type { AgentActor } from './actor.js'
+import type { AgentActor, UserActor } from './actor.js'
+import { AuthenticationService } from './auth.js'
 import { createCollaborationServerRuntime } from './bootstrap.js'
+import { toProjectPlan } from './contracts.js'
+import { digestSecret, stableDigest } from './crypto.js'
 import {
   COLLABORATION_CURRENT_CATALOG_FINGERPRINTS,
   COLLABORATION_SCHEMA_FINGERPRINT,
   COLLABORATION_SOURCE_CATALOG_FINGERPRINTS,
   COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS,
+  COLLABORATION_V15_CATALOG_FINGERPRINTS,
+  COLLABORATION_V16_CATALOG_FINGERPRINTS,
+  COLLABORATION_V17_CATALOG_FINGERPRINTS,
+  COLLABORATION_V19_CATALOG_FINGERPRINTS,
   type CollaborationSchemaRoute,
   collaborationCatalogFingerprint,
   collaborationSchemaFingerprint,
@@ -36,7 +47,7 @@ describe.skipIf(connectionString === undefined).sequential(
           await installRoute(pool, route)
           if (route !== 'fresh-v4') {
             expect(await collaborationCatalogFingerprint(pool), route)
-              .toBe(COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route])
+              .toBe(expectedSourceCatalog(route))
           }
 
           await runCollaborationMigrations(pool)
@@ -54,6 +65,238 @@ describe.skipIf(connectionString === undefined).sequential(
         await pool.end()
       }
     }, 120_000)
+
+    it('upgrades a populated v18 file Plan to v2 without changing its historical digest', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v18')
+        const fixture = await seedV18FilePlanFixture(pool)
+        const before = (await pool.query<{
+          plan_digest: unknown
+          revision: unknown
+          updated_at: unknown
+        }>(
+          `SELECT plan_digest,revision,updated_at
+           FROM sciforge_collaboration.project_plans
+           WHERE project_plan_id='pln_LegacyFile01'`
+        )).rows[0]
+        const beforeReceiptIdentity = await v18FilePlanReceiptIdentitySnapshot(pool)
+        const beforeInbox = await v18FilePlanInboxSnapshot(pool)
+
+        await runCollaborationMigrations(pool)
+
+        const repository = new PostgresCollaborationRepository(pool)
+        const plan = await repository.getProjectPlan('pln_LegacyFile01')
+        expect(plan?.tasks.map(({ planItemId }) => planItemId)).toEqual([
+          'item_legacy_text',
+          'item_legacy_file'
+        ])
+        expect(plan?.tasks[0]?.fileIntent).toBeNull()
+        expect(plan?.tasks[1]?.fileIntent).toMatchObject({
+          schemaVersion: 2,
+          dependencyInputs: []
+        })
+        expect(plan?.planDigest).toBe(fixture.planDigest)
+
+        const after = (await pool.query<{
+          plan_digest: unknown
+          revision: unknown
+          updated_at: unknown
+        }>(
+          `SELECT plan_digest,revision,updated_at
+           FROM sciforge_collaboration.project_plans
+           WHERE project_plan_id='pln_LegacyFile01'`
+        )).rows[0]
+        expect(after).toEqual(before)
+        expect(await v18FilePlanReceiptIdentitySnapshot(pool)).toEqual(beforeReceiptIdentity)
+        expect(await v18FilePlanInboxSnapshot(pool)).toEqual(beforeInbox)
+
+        const receiptTasks = await pool.query<{ receipt_id: unknown; tasks: unknown }>(
+          `SELECT receipt_id,response#>'{entity,tasks}' AS tasks
+           FROM sciforge_collaboration.receipts
+           WHERE resource_id='pln_LegacyFile01'
+           ORDER BY receipt_id`
+        )
+        expect(receiptTasks.rows).toHaveLength(2)
+        for (const receipt of receiptTasks.rows) {
+          const tasks = receipt.tasks as Array<{ fileIntent: null | Record<string, unknown> }>
+          expect(tasks[0]?.fileIntent).toBeNull()
+          expect(tasks[1]?.fileIntent).toMatchObject({ schemaVersion: 2, dependencyInputs: [] })
+        }
+
+        const beforeReplay = await persistentDatabaseSnapshot(pool)
+        const service = new CollaborationService({
+          repository,
+          now: () => new Date('2026-08-28T00:03:00.000Z')
+        })
+        const replayCommand = {
+          ...fixture.confirmCommand,
+          requestId: 'req_LegacyFilePlanConfirmReplay01'
+        } as const
+        const replayedPlan = toProjectPlan(
+          await service.confirmProjectPlan(fixture.owner, replayCommand)
+        )
+        expect(restResponseSchema.parse({
+          protocolVersion: '1.0',
+          type: 'rest.entity',
+          requestId: replayCommand.requestId,
+          entity: replayedPlan
+        })).toMatchObject({
+          type: 'rest.entity',
+          entity: {
+            type: 'project_plan',
+            projectPlanId: 'pln_LegacyFile01',
+            planDigest: fixture.planDigest,
+            tasks: [
+              { planItemId: 'item_legacy_text', fileIntent: null },
+              {
+                planItemId: 'item_legacy_file',
+                fileIntent: { schemaVersion: 2, dependencyInputs: [] }
+              }
+            ]
+          }
+        })
+        expect(await persistentDatabaseSnapshot(pool)).toEqual(beforeReplay)
+        await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
+      } finally {
+        await pool.end()
+      }
+    }, 30_000)
+
+    it('rejects a divergent retained v18 Plan receipt without committing a partial upgrade', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v18')
+        await seedV18FilePlanFixture(pool)
+        await pool.query(
+          `UPDATE sciforge_collaboration.receipts
+           SET response=jsonb_set(
+             response,
+             '{entity,planDigest}',
+             to_jsonb(repeat('f',64)),
+             false
+           )
+           WHERE operation='project.plan.confirm'`
+        )
+        const before = await persistentDatabaseSnapshot(pool)
+
+        await expect(runCollaborationMigrations(pool))
+          .rejects.toThrow(/migration_0019_requires_migratable_plan_receipts/u)
+
+        expect(await persistentDatabaseSnapshot(pool)).toEqual(before)
+        expect(await currentSchemaVersion(pool)).toBe(18)
+      } finally {
+        await pool.end()
+      }
+    }, 30_000)
+
+    it('normalizes exact Agent credential receipt duplicates and preserves the first receipt identity', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v18')
+        const fixture = await seedV18AgentCredentialReceiptFixture(pool)
+
+        await runCollaborationMigrations(pool)
+
+        const repository = new PostgresCollaborationRepository(pool)
+        const authentication = new AuthenticationService(
+          repository,
+          () => new Date('2026-08-28T01:03:00.000Z')
+        )
+        const actor = await authentication.resolveBearer(fixture.currentCredential)
+        if (actor.kind !== 'agent_device') throw new Error('Expected Agent actor')
+        expect(actor.actorKey).toBe(`agent:${fixture.agentId}`)
+
+        const service = new CollaborationService({
+          repository,
+          now: () => new Date('2026-08-28T01:03:00.000Z')
+        })
+        await expect(service.heartbeatAgent(actor, fixture.command))
+          .resolves.toEqual(fixture.firstResponse)
+        await expect(service.heartbeatAgent(actor, {
+          ...fixture.command,
+          connectionStatus: 'offline'
+        })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+
+        const receipt = await service.reconcileReceipt(actor, fixture.command.idempotencyKey)
+        expect(receipt).toMatchObject({
+          receiptId: fixture.historicalReceiptId,
+          actorKey: `agent:${fixture.agentId}`,
+          createdAt: '2026-08-28T01:00:00.000Z',
+          expiresAt: '2026-10-28T01:01:00.000Z'
+        })
+        expect(await service.getReceipt(actor, fixture.historicalReceiptId)).toEqual(receipt)
+        expect(await service.getReceipt(actor, fixture.duplicateReceiptId)).toBeNull()
+        expect(await repository.getAgent(fixture.agentId)).toMatchObject({
+          credentialGeneration: 2,
+          revision: 3,
+          connectionStatus: 'offline'
+        })
+        const rows = await pool.query(
+          `SELECT receipt_id,actor_key,idempotency_key
+           FROM sciforge_collaboration.receipts`
+        )
+        expect(rows.rows).toEqual([{
+          receipt_id: fixture.historicalReceiptId,
+          actor_key: `agent:${fixture.agentId}`,
+          idempotency_key: fixture.command.idempotencyKey
+        }])
+        await expect(isCollaborationDatabaseReady(pool)).resolves.toBe(true)
+      } finally {
+        await pool.end()
+      }
+    }, 30_000)
+
+    it('rejects divergent Agent credential receipt collisions without committing a partial upgrade', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v18')
+        const fixture = await seedV18AgentCredentialReceiptFixture(pool)
+        await pool.query(
+          `UPDATE sciforge_collaboration.receipts
+           SET response=jsonb_set(response,'{entity,connectionStatus}','"offline"'::jsonb,false)
+           WHERE receipt_id=$1`,
+          [fixture.duplicateReceiptId]
+        )
+        const before = await persistentDatabaseSnapshot(pool)
+
+        await expect(runCollaborationMigrations(pool))
+          .rejects.toThrow(/migration_0019_agent_receipt_idempotency_conflict/u)
+
+        expect(await persistentDatabaseSnapshot(pool)).toEqual(before)
+        expect(await currentSchemaVersion(pool)).toBe(18)
+      } finally {
+        await pool.end()
+      }
+    }, 30_000)
+
+    it('rejects an unmappable Agent credential receipt actor without guessing its principal', async () => {
+      assertSafeStage3Database(connectionString!)
+      const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
+      try {
+        await installRoute(pool, 'current-v18')
+        const fixture = await seedV18AgentCredentialReceiptFixture(pool)
+        await pool.query(
+          `UPDATE sciforge_collaboration.receipts
+           SET actor_key='agent:' || $2 || ':credential:credential_MissingReceipt01'
+           WHERE receipt_id=$1`,
+          [fixture.historicalReceiptId, fixture.agentId]
+        )
+        const before = await persistentDatabaseSnapshot(pool)
+
+        await expect(runCollaborationMigrations(pool))
+          .rejects.toThrow(/migration_0019_agent_receipt_actor_unmappable/u)
+
+        expect(await persistentDatabaseSnapshot(pool)).toEqual(before)
+        expect(await currentSchemaVersion(pool)).toBe(18)
+      } finally {
+        await pool.end()
+      }
+    }, 30_000)
 
     it('v17 removes every pre-claim pseudo Execution and preserves claimed retry provenance', async () => {
       assertSafeStage3Database(connectionString!)
@@ -103,7 +346,8 @@ describe.skipIf(connectionString === undefined).sequential(
         ])
 
         const offers = await pool.query(
-          `SELECT task_offer_id,state,execution_id,offered_by_coordinator_agent_id
+          `SELECT task_offer_id,state,execution_id,offered_by_coordinator_agent_id,
+                  reassignment_task_revision::text AS reassignment_task_revision
            FROM sciforge_collaboration.task_offers
            ORDER BY task_offer_id`
         )
@@ -111,19 +355,23 @@ describe.skipIf(connectionString === undefined).sequential(
           {
             task_offer_id: 'ofr_stage3_v17_accepted', state: 'accepted',
             execution_id: 'exe_stage3_v17_claimed',
-            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord',
+            reassignment_task_revision: null
           },
           {
             task_offer_id: 'ofr_stage3_v17_pending', state: 'pending', execution_id: null,
-            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord',
+            reassignment_task_revision: null
           },
           {
             task_offer_id: 'ofr_stage3_v17_timedout', state: 'timed_out', execution_id: null,
-            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord',
+            reassignment_task_revision: '2'
           },
           {
             task_offer_id: 'ofr_stage3_v17_withdrawn', state: 'withdrawn', execution_id: null,
-            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord'
+            offered_by_coordinator_agent_id: 'agn_stage3_v17_coord',
+            reassignment_task_revision: null
           }
         ])
 
@@ -279,15 +527,16 @@ describe.skipIf(connectionString === undefined).sequential(
       const pool = createPostgresPool({ connectionString: connectionString!, maxConnections: 1 })
       try {
         for (const sourceRoute of ['public-v5', 'staging-v9'] as const) {
-          for (const [version, forwardCount] of [[11, 1], [12, 2], [13, 3]] as const) {
+          for (const [version, forwardCount] of [
+            [11, 1], [12, 2], [13, 3], [14, 4], [15, 5], [16, 6], [17, 7]
+          ] as const) {
             await installRoute(pool, sourceRoute)
             for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
               await pool.query(await migrationSource(name))
             }
-            const checkpoint = `${sourceRoute}-v${version}` as
-              keyof typeof COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS
+            const checkpoint = `${sourceRoute}-v${version}`
             expect(await collaborationCatalogFingerprint(pool), checkpoint)
-              .toBe(COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS[checkpoint])
+              .toBe(expectedCheckpointCatalog(sourceRoute, version))
 
             await runCollaborationMigrations(pool)
             expect(await collaborationCatalogFingerprint(pool), checkpoint)
@@ -609,7 +858,9 @@ const ROUTES: readonly CollaborationSchemaRoute[] = [
   'current-v15',
   'current-v16',
   'current-v17',
-  'current-v18'
+  'current-v18',
+  'current-v19',
+  'current-v20'
 ]
 
 const BASELINE_MIGRATIONS = [
@@ -627,7 +878,9 @@ const FORWARD_MIGRATIONS = [
   '0015_canonical_project_created_inbox.sql',
   '0016_user_targeted_task_offers.sql',
   '0017_claim_created_task_executions.sql',
-  '0018_project_membership_invitations.sql'
+  '0018_project_membership_invitations.sql',
+  '0019_collaboration_pipeline_fixes.sql',
+  '0020_zulip_phone_link.sql'
 ] as const
 
 const HISTORICAL_MIGRATIONS = [
@@ -676,11 +929,456 @@ async function installRoute(pool: SqlPool, route: CollaborationSchemaRoute): Pro
     'current-v15': 5,
     'current-v16': 6,
     'current-v17': 7,
-    'current-v18': 8
+    'current-v18': 8,
+    'current-v19': 9,
+    'current-v20': 10
   }[route]
   for (const name of FORWARD_MIGRATIONS.slice(0, forwardCount)) {
     await pool.query(await migrationSource(name))
   }
+}
+
+type V18FilePlanFixture = Readonly<{
+  planDigest: string
+  confirmCommand: Readonly<{
+    protocolVersion: '1.0'
+    type: 'project.plan.confirm'
+    requestId: string
+    idempotencyKey: string
+    projectId: string
+    projectPlanId: string
+    expectedProjectRevision: number
+    expectedCoordinatorAuthorityEpoch: number
+    expectedPlanRevision: number
+    planDigest: string
+    initialTeam: null
+  }>
+  owner: UserActor
+}>
+
+async function seedV18FilePlanFixture(pool: SqlPool): Promise<V18FilePlanFixture> {
+  const submittedAt = '2026-08-28T00:00:00.000Z'
+  const confirmedAt = '2026-08-28T00:01:00.000Z'
+  const expiresAt = '2026-09-28T00:01:00.000Z'
+  const projectId = 'prj_LegacyFile01'
+  const projectPlanId = 'pln_LegacyFile01'
+  const ownerUserId = 'usr_LegacyOwner01'
+  const coordinatorAgentId = 'agt_LegacyCoord01'
+  const coordinatorDeviceId = 'dev_LegacyOwner01'
+  const coordinatorActorKey = `agent-device:${coordinatorAgentId}:${coordinatorDeviceId}`
+  const ownerActorKey = 'oidc-user:legacy-file-owner'
+  const sourceLocator = {
+    contractVersion: 1,
+    kind: 'content-space.file-reference',
+    authority: 'opencontent.run0',
+    identity: { fileId: 'legacy-source-001' }
+  }
+  const tasks = [{
+    planItemId: 'item_legacy_text',
+    title: 'Read legacy context',
+    objective: 'Retain the original text Task declaration.',
+    completionCriteria: ['The text Task remains first.'],
+    dependencyPlanItemIds: [],
+    requiredCapabilityTags: [],
+    fileIntent: null,
+    workerUserId: ownerUserId
+  }, {
+    planItemId: 'item_legacy_file',
+    title: 'Review legacy file',
+    objective: 'Retain a legitimate v18 file Task declaration.',
+    completionCriteria: ['The output declaration remains exact.'],
+    dependencyPlanItemIds: ['item_legacy_text'],
+    requiredCapabilityTags: ['meeting.review'],
+    fileIntent: {
+      schemaVersion: 1,
+      inputs: [{
+        kind: 'content-space.input-file',
+        locator: sourceLocator,
+        destinationName: 'source.md',
+        expectedSemanticRevision: null,
+        expectedMediaType: 'text/markdown'
+      }],
+      output: {
+        kind: 'content-space.output-new',
+        target: 'project-binding-root',
+        mode: 'upload-new',
+        fileName: 'review.md',
+        mediaType: 'text/markdown',
+        maxBytes: 65_536
+      }
+    },
+    workerUserId: ownerUserId
+  }]
+
+  const runtimeProvenance = {
+    runtimeId: 'codex-runtime',
+    modelId: null,
+    generatedByCoordinatorAgentId: coordinatorAgentId,
+    generatedAt: submittedAt
+  }
+  const planFacts = {
+    projectId,
+    expectedProjectRevision: 2,
+    expectedCoordinatorAuthorityEpoch: 1,
+    supersedesProjectPlanId: null,
+    sourceInputLocators: [sourceLocator],
+    tasks,
+    rationale: 'Retain the exact v18 Plan.',
+    runtimeProvenance
+  }
+  const planDigest = stableDigest(planFacts)
+  if (planDigest !== '2cabc139ee290f5249477bf0012e81e4c8a3b914b515604440dc66b227e4eafb') {
+    throw new Error('stage3_v18_file_plan_fixture_digest_drift')
+  }
+  const submitCommand = {
+    protocolVersion: '1.0' as const,
+    type: 'project.plan.submit' as const,
+    requestId: 'req_LegacyFilePlanSubmit01',
+    idempotencyKey: 'idem_LegacyFilePlanSubmit01',
+    ...planFacts,
+    planDigest
+  }
+  const confirmCommand = {
+    protocolVersion: '1.0' as const,
+    type: 'project.plan.confirm' as const,
+    requestId: 'req_LegacyFilePlanConfirm01',
+    idempotencyKey: 'idem_LegacyFilePlanConfirm01',
+    projectId,
+    projectPlanId,
+    expectedProjectRevision: 3,
+    expectedCoordinatorAuthorityEpoch: 1,
+    expectedPlanRevision: 1,
+    planDigest,
+    initialTeam: null
+  }
+  const submittedPlan = {
+    projectPlanId,
+    projectId,
+    coordinatorAuthorityEpoch: 1,
+    state: 'awaiting_confirmation',
+    planRevision: 1,
+    sourceInputLocators: [sourceLocator],
+    tasks,
+    rationale: planFacts.rationale,
+    runtimeProvenance,
+    planDigest,
+    submittedAt,
+    revision: 1,
+    confirmedByUserId: null,
+    confirmedAt: null,
+    supersededAt: null,
+    createdAt: submittedAt,
+    updatedAt: submittedAt
+  }
+  const confirmedPlan = {
+    ...submittedPlan,
+    state: 'confirmed',
+    revision: 2,
+    confirmedByUserId: ownerUserId,
+    confirmedAt,
+    updatedAt: confirmedAt
+  }
+  const owner: UserActor = {
+    kind: 'user',
+    authentication: 'oidc',
+    actorKey: ownerActorKey,
+    userId: ownerUserId,
+    identityId: 'oid_LegacyFileOwner01',
+    issuer: 'https://issuer.stage3.invalid',
+    subject: 'legacy-file-owner',
+    authTime: 1_777_334_400,
+    expiresAt: 1_780_012_800,
+    assurance: 'verified'
+  }
+
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES ($1,'Legacy owner','active',1,$2,$2)`,
+    [ownerUserId, submittedAt]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,
+        capability_summary,status,revision,created_at,updated_at)
+     VALUES ($1,$2,'ins_LegacyOwner01','Legacy device',
+       '{"os":"linux"}'::jsonb,'{"kty":"OKP"}'::jsonb,'[]'::jsonb,'active',1,$3,$3)`,
+    [coordinatorDeviceId, ownerUserId, submittedAt]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,owner_user_id,display_name,node_type,capabilities,status,connection_status,
+        credential_generation,revision,last_seen_at,updated_at,device_id)
+     VALUES ($1,$2,'Legacy Coordinator','desktop',
+       '[]'::jsonb,'active','online',1,1,$3,$3,$4)`,
+    [coordinatorAgentId, ownerUserId, submittedAt, coordinatorDeviceId]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.projects
+       (project_id,owner_user_id,display_name,goal,status,coordinator_agent_id,max_tasks,
+        max_tasks_per_round,max_task_retries,max_coordination_rounds,coordination_round,
+        revision,created_at,updated_at,content_mode,coordinator_authority_epoch,
+        execution_authority_epoch,content_owner_user_id)
+     VALUES ($1,$2,'Legacy file Project',
+       'Prove a populated v18 file Plan upgrades without losing its frozen identity.',
+       'paused',$3,20,5,2,4,1,4,$4,$5,'none',1,1,NULL)`,
+    [projectId, ownerUserId, coordinatorAgentId, submittedAt, confirmedAt]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.project_plans
+       (project_plan_id,project_id,coordinator_authority_epoch,state,plan_revision,
+        source_input_locators,tasks,rationale,runtime_provenance,plan_digest,submitted_at,
+        confirmed_by_user_id,confirmed_at,superseded_at,revision,created_at,updated_at)
+     VALUES ($1,$2,1,'confirmed',1,$3::jsonb,$4::jsonb,$5,$6::jsonb,$7,$8,
+       $9,$10,NULL,2,$8,$10)`,
+    [
+      projectPlanId,
+      projectId,
+      JSON.stringify([sourceLocator]),
+      JSON.stringify(tasks),
+      planFacts.rationale,
+      JSON.stringify(runtimeProvenance),
+      planDigest,
+      submittedAt,
+      ownerUserId,
+      confirmedAt
+    ]
+  )
+
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.inbox_cursors
+       (recipient_kind,recipient_id,next_sequence,acked_sequence,updated_at)
+     VALUES
+       ('user',$1,2,0,$3),
+       ('agent',$2,2,0,$3)`,
+    [ownerUserId, coordinatorAgentId, confirmedAt]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.inbox_messages
+       (recipient_kind,recipient_id,sequence,message_id,message_type,payload,created_at,expires_at)
+     VALUES
+       ('user',$1,1,'ibx_LegacyFilePlanAwaiting01','project.plan.awaiting_confirmation',
+        $3::jsonb,$5,$7),
+       ('agent',$2,1,'ibx_LegacyFilePlanConfirmed01','project.plan.confirmed',
+        $4::jsonb,$6,$7)`,
+    [
+      ownerUserId,
+      coordinatorAgentId,
+      JSON.stringify({
+        protocolVersion: '1.0',
+        type: 'project.plan.awaiting_confirmation',
+        projectId,
+        projectPlanId,
+        planDigest,
+        revision: 1
+      }),
+      JSON.stringify({
+        protocolVersion: '1.0',
+        type: 'project.plan.confirmed',
+        projectId,
+        projectPlanId,
+        planDigest,
+        revision: 2
+      }),
+      submittedAt,
+      confirmedAt,
+      expiresAt
+    ]
+  )
+
+  const submitReceiptId = `rcp_${stableDigest({
+    actorKey: coordinatorActorKey,
+    idempotencyKey: submitCommand.idempotencyKey
+  }).slice(0, 24)}`
+  const confirmReceiptId = `rcp_${stableDigest({
+    actorKey: ownerActorKey,
+    idempotencyKey: confirmCommand.idempotencyKey
+  }).slice(0, 24)}`
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.receipts
+       (receipt_id,actor_key,idempotency_key,request_digest,operation,resource_kind,
+        resource_id,response,created_at,expires_at)
+     VALUES
+       ($1,$2,$3,$4,'project.plan.submit','project_plan',$5,$6::jsonb,$7,$9),
+       ($10,$11,$12,$13,'project.plan.confirm','project_plan',$5,$14::jsonb,$8,$9)`,
+    [
+      submitReceiptId,
+      coordinatorActorKey,
+      submitCommand.idempotencyKey,
+      Buffer.from(stableDigest(idempotencyComparableCommandProjection(submitCommand)), 'hex'),
+      projectPlanId,
+      JSON.stringify({
+        protocolVersion: '1.0',
+        type: 'project.plan.submitted',
+        entity: submittedPlan
+      }),
+      submittedAt,
+      confirmedAt,
+      expiresAt,
+      confirmReceiptId,
+      ownerActorKey,
+      confirmCommand.idempotencyKey,
+      Buffer.from(stableDigest(idempotencyComparableCommandProjection(confirmCommand)), 'hex'),
+      JSON.stringify({
+        protocolVersion: '1.0',
+        type: 'project.plan.confirmed',
+        entity: confirmedPlan
+      })
+    ]
+  )
+
+  return Object.freeze({ planDigest, confirmCommand, owner })
+}
+
+async function v18FilePlanReceiptIdentitySnapshot(pool: SqlPool): Promise<readonly unknown[]> {
+  const result = await pool.query(
+    `SELECT receipt_id,actor_key,idempotency_key,encode(request_digest,'hex') AS request_digest,
+            operation,resource_kind,resource_id,response #- '{entity,tasks}' AS response_without_tasks,
+            created_at::text AS created_at,expires_at::text AS expires_at
+     FROM sciforge_collaboration.receipts
+     WHERE resource_id='pln_LegacyFile01'
+     ORDER BY receipt_id`
+  )
+  return result.rows
+}
+
+async function v18FilePlanInboxSnapshot(pool: SqlPool): Promise<readonly unknown[]> {
+  const result = await pool.query(
+    `SELECT recipient_kind,recipient_id,sequence::text AS sequence,message_id,message_type,payload,
+            created_at::text AS created_at,expires_at::text AS expires_at
+     FROM sciforge_collaboration.inbox_messages
+     WHERE message_id IN ('ibx_LegacyFilePlanAwaiting01','ibx_LegacyFilePlanConfirmed01')
+     ORDER BY message_id`
+  )
+  return result.rows
+}
+
+type V18AgentCredentialReceiptFixture = Readonly<{
+  agentId: string
+  currentCredential: string
+  command: Readonly<{
+    expectedRevision: number
+    connectionStatus: 'online'
+    idempotencyKey: string
+  }>
+  firstResponse: Readonly<Record<string, unknown>>
+  historicalReceiptId: string
+  duplicateReceiptId: string
+}>
+
+async function seedV18AgentCredentialReceiptFixture(
+  pool: SqlPool
+): Promise<V18AgentCredentialReceiptFixture> {
+  const firstAt = '2026-08-28T01:00:00.000Z'
+  const rotatedAt = '2026-08-28T01:01:00.000Z'
+  const userId = 'usr_AgentReceiptOwner01'
+  const deviceId = 'dev_AgentReceiptDevice01'
+  const agentId = 'agt_AgentReceiptAgent01'
+  const oldCredentialId = 'credential_AgentReceiptOld01'
+  const currentCredentialId = 'credential_AgentReceiptCurrent01'
+  const oldCredential = `agent.${'O'.repeat(32)}`
+  const currentCredential = `agent.${'N'.repeat(32)}`
+  const historicalReceiptId = 'rcp_AgentReceiptHistorical01'
+  const duplicateReceiptId = 'rcp_AgentReceiptDuplicate001'
+  const command = {
+    expectedRevision: 1,
+    connectionStatus: 'online' as const,
+    idempotencyKey: 'idem_stage3_agent_rotation_replay_01'
+  }
+  const firstResponse = {
+    agentId,
+    deviceId,
+    ownerUserId: userId,
+    displayName: 'Receipt Agent',
+    nodeType: 'desktop',
+    capabilities: ['collaboration.replay'],
+    status: 'active',
+    connectionStatus: 'online',
+    credentialGeneration: 1,
+    revision: 2,
+    lastSeenAt: firstAt,
+    updatedAt: firstAt
+  }
+  const receiptResponse = {
+    protocolVersion: '1.0',
+    type: 'agent.heartbeat.accepted',
+    entity: firstResponse
+  }
+  const requestDigest = stableDigest(idempotencyComparableCommandProjection(command))
+  const oldActorKey = `agent:${agentId}:credential:${oldCredentialId}`
+  const currentActorKey = `agent:${agentId}:credential:${currentCredentialId}`
+
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.user_principals
+       (user_id,display_name,status,revision,created_at,updated_at)
+     VALUES ($1,'Agent receipt owner','active',1,$2,$2)`,
+    [userId, firstAt]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.devices
+       (device_id,user_id,installation_id,display_name,platform,public_key_jwk,
+        capability_summary,status,revision,created_at,updated_at)
+     VALUES ($1,$2,'ins_AgentReceiptDevice01','Receipt device',
+       '{"os":"linux"}'::jsonb,'{"kty":"OKP"}'::jsonb,'[]'::jsonb,
+       'active',1,$3,$3)`,
+    [deviceId, userId, firstAt]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.agent_nodes
+       (agent_id,owner_user_id,display_name,node_type,capabilities,status,connection_status,
+        credential_generation,revision,last_seen_at,updated_at,device_id)
+     VALUES ($1,$2,'Receipt Agent','desktop',$3::jsonb,'active','offline',2,3,$4,$5,$6)`,
+    [agentId, userId, JSON.stringify(firstResponse.capabilities), firstAt, rotatedAt, deviceId]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.credentials
+       (credential_id,kind,subject_user_id,subject_agent_id,token_digest,assurance,
+        generation,created_at,expires_at,revoked_at)
+     VALUES
+       ($1,'agent_device',$2,$3,$4,'device',1,$5,NULL,$6),
+       ($7,'agent_device',$2,$3,$8,'device',2,$6,NULL,NULL)`,
+    [
+      oldCredentialId,
+      userId,
+      agentId,
+      Buffer.from(digestSecret(oldCredential), 'hex'),
+      firstAt,
+      rotatedAt,
+      currentCredentialId,
+      Buffer.from(digestSecret(currentCredential), 'hex')
+    ]
+  )
+  await pool.query(
+    `INSERT INTO sciforge_collaboration.receipts
+       (receipt_id,actor_key,idempotency_key,request_digest,operation,resource_kind,
+        resource_id,response,created_at,expires_at)
+     VALUES
+       ($1,$2,$3,$4,'agent.heartbeat','agent',$5,$6::jsonb,$7,$8),
+       ($9,$10,$3,$4,'agent.heartbeat','agent',$5,$6::jsonb,$11,$12)`,
+    [
+      historicalReceiptId,
+      oldActorKey,
+      command.idempotencyKey,
+      Buffer.from(requestDigest, 'hex'),
+      agentId,
+      JSON.stringify(receiptResponse),
+      firstAt,
+      '2026-09-28T01:00:00.000Z',
+      duplicateReceiptId,
+      currentActorKey,
+      rotatedAt,
+      '2026-10-28T01:01:00.000Z'
+    ]
+  )
+
+  return Object.freeze({
+    agentId,
+    currentCredential,
+    command,
+    firstResponse,
+    historicalReceiptId,
+    duplicateReceiptId
+  })
 }
 
 async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
@@ -735,7 +1433,7 @@ async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
         NULL,NULL,2,'[]'::jsonb),
        ('tsk_stage3_v17_timedout','prj_stage3_v17','Timed out task','Remove an old timeout',
         '["done"]'::jsonb,'[]'::jsonb,'revision_requested',3,1,2,'2026-08-26T00:00:00Z',
-        '2026-08-26T00:02:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,1,'[]'::jsonb),
+        '2026-08-26T00:02:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,0,'[]'::jsonb),
        ('tsk_stage3_v17_cancelled','prj_stage3_v17','Cancelled task','Retire a cancelled pre-claim row',
         '["done"]'::jsonb,'[]'::jsonb,'revision_requested',3,1,2,'2026-08-26T00:00:00Z',
         '2026-08-26T00:02:00Z',NULL,NULL,'agn_stage3_v17_coord',NULL,NULL,1,'[]'::jsonb),
@@ -778,9 +1476,6 @@ async function seedV16PreclaimExecutionFixture(pool: SqlPool): Promise<void> {
      SET status='failed',completed_at='2026-08-26T00:03:00Z',
          current_execution_id='exe_stage3_v17_claimed',current_execution_state='failed'
      WHERE task_id='tsk_stage3_v17_retry';
-     UPDATE sciforge_collaboration.tasks
-     SET current_execution_id='exe_stage3_v17_timedout',current_execution_state='timed_out'
-     WHERE task_id='tsk_stage3_v17_timedout';
      UPDATE sciforge_collaboration.tasks
      SET status='cancelled',completed_at='2026-08-26T00:02:00Z',
          current_execution_id='exe_stage3_v17_cancelled',current_execution_state='cancelled'
@@ -940,6 +1635,30 @@ function expectedCurrentCatalog(route: CollaborationSchemaRoute): string {
   if (route === 'public-v5') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['public-v5']
   if (route === 'staging-v9') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['staging-v9']
   return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
+}
+
+function expectedSourceCatalog(route: Exclude<CollaborationSchemaRoute, 'fresh-v4'>): string {
+  if (route === 'current-v19') return COLLABORATION_V19_CATALOG_FINGERPRINTS['base-v4']
+  if (route === 'current-v20') return COLLABORATION_CURRENT_CATALOG_FINGERPRINTS['base-v4']
+  return COLLABORATION_SOURCE_CATALOG_FINGERPRINTS[route]
+}
+
+function expectedCheckpointCatalog(
+  route: 'public-v5' | 'staging-v9',
+  version: 11 | 12 | 13 | 14 | 15 | 16 | 17
+): string {
+  if (version <= 13) {
+    const checkpoint = `${route}-v${version}` as keyof typeof COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS
+    return COLLABORATION_TRANSITION_CATALOG_FINGERPRINTS[checkpoint]
+  }
+  const lineage = route
+  if (version === 14) return {
+    'public-v5': '7413f6ac9d926784b10a84a83cbb80cfbff25be6e7f04ae1efdda2bf6763cf0d',
+    'staging-v9': '398324e912831ec272e33be7af45b97cee186e95f43ed877c40a6ea47988d875'
+  }[lineage]
+  if (version === 15) return COLLABORATION_V15_CATALOG_FINGERPRINTS[lineage]
+  if (version === 16) return COLLABORATION_V16_CATALOG_FINGERPRINTS[lineage]
+  return COLLABORATION_V17_CATALOG_FINGERPRINTS[lineage]
 }
 
 async function migrationSource(name: string): Promise<string> {
@@ -1182,6 +1901,7 @@ async function seedUserOffer(
       workerUserId: IDS.workerUser,
       offeredByCoordinatorAgentId: IDS.coordinator,
       state: 'pending',
+      reassignmentTaskRevision: null,
       offeredAt: at,
       expiresAt,
       respondedAt: null,

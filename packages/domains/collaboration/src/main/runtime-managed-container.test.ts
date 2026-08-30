@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+
 import { managedContainerEnsureIdempotencyKey } from './runtime.js'
 
 test('managed Channel retries use a fresh key while one request remains replay-safe', () => {

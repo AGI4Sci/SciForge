@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   bindTaskFileDeclaration,
   portableContentSpaceLocatorSchema,
+  taskFileDependencyInputSchema,
   taskFileDeclarationFromIntent,
   taskFileDeclarationSchema,
+  taskFileDestinationNameSchema,
   taskExecutionFileIntentSchema,
   taskFileIntentSchema
 } from './content-space-task-io.js'
@@ -26,7 +28,7 @@ const fileLocator = {
 }
 
 const fileDeclaration = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   inputs: [{
     kind: 'content-space.input-file' as const,
     locator: fileLocator,
@@ -34,6 +36,7 @@ const fileDeclaration = {
     expectedSemanticRevision: null,
     expectedMediaType: 'text/csv'
   }],
+  dependencyInputs: [],
   output: {
     kind: 'content-space.output-new' as const,
     target: 'project-binding-root' as const,
@@ -46,6 +49,65 @@ const fileDeclaration = {
 const fileIntent = bindTaskFileDeclaration(fileDeclaration, 3)
 
 describe('Project Content Space and Task file I/O contracts', () => {
+  it('keeps Task file destinations portable and collision-free', () => {
+    for (const destinationName of [
+      'CON',
+      'nul.txt',
+      'report?.md',
+      'report:.md',
+      'trailing.',
+      'σ.txt',
+      'ς.txt',
+      'ß.txt'
+    ]) {
+      expect(taskFileDestinationNameSchema.safeParse(destinationName).success).toBe(false)
+    }
+    expect(taskFileIntentSchema.safeParse({
+      ...fileIntent,
+      inputs: [fileIntent.inputs[0], {
+        ...fileIntent.inputs[0],
+        locator: { ...fileLocator, identity: { fileId: 'file-two' } },
+        destinationName: 'INPUT.csv'
+      }]
+    }).success).toBe(false)
+    expect(taskFileIntentSchema.safeParse({
+      ...fileIntent,
+      inputs: [{ ...fileIntent.inputs[0], destinationName: 'résumé.md' }, {
+        ...fileIntent.inputs[0],
+        locator: { ...fileLocator, identity: { fileId: 'file-two' } },
+        destinationName: 'résumé.md'
+      }]
+    }).success).toBe(false)
+  })
+
+  it('keeps a new Task output distinct from every input on portable filesystems', () => {
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      output: { ...fileDeclaration.output, fileName: 'INPUT.csv' }
+    }).success).toBe(false)
+    expect(taskFileIntentSchema.safeParse({
+      ...fileIntent,
+      output: { ...fileIntent.output, fileName: 'INPUT.csv' }
+    }).success).toBe(false)
+    expect(taskExecutionFileIntentSchema.safeParse({
+      schemaVersion: 1,
+      type: 'task_execution_file_intent',
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      assignmentTaskRevision: 4,
+      bindingRevision: 3,
+      declarationDigest: TEST_HASH,
+      inputs: [{ resourceRefId: TEST_IDS.resourceRefId, destinationName: 'input.csv' }],
+      output: {
+        rootResourceRefId: 'rrf_OutputRoot001',
+        fileName: 'INPUT.csv',
+        mediaType: 'text/markdown',
+        maxBytes: 1_000_000
+      }
+    }).success).toBe(false)
+  })
+
   it('treats a portable envelope only as a bounded locator', () => {
     expect(portableContentSpaceLocatorSchema.parse(rootLocator)).toEqual(rootLocator)
     expect(portableContentSpaceLocatorSchema.safeParse({
@@ -56,6 +118,10 @@ describe('Project Content Space and Task file I/O contracts', () => {
 
   it('separates the Plan declaration from Cloud Task and execution binding', () => {
     expect(taskFileDeclarationSchema.parse(fileDeclaration)).toEqual(fileDeclaration)
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      schemaVersion: 1
+    }).success).toBe(false)
     expect(taskFileDeclarationSchema.safeParse(fileIntent).success).toBe(false)
     expect(taskFileIntentSchema.parse(fileIntent)).toEqual(fileIntent)
     expect(taskFileDeclarationFromIntent(fileIntent)).toEqual(fileDeclaration)
@@ -82,6 +148,107 @@ describe('Project Content Space and Task file I/O contracts', () => {
         maxBytes: 1_000_000
       }
     }).success).toBe(true)
+  })
+
+  it('binds mixed static and dependency inputs in the exact declared order', () => {
+    const declaration = {
+      ...fileDeclaration,
+      dependencyInputs: [{
+        planItemId: 'item_source_one',
+        outputIndex: 0,
+        destinationName: 'source-one.md'
+      }, {
+        planItemId: 'item_source_two',
+        outputIndex: 99,
+        destinationName: 'source-two.md'
+      }]
+    }
+    const resolvedDependencyInputs = [{
+      kind: 'content-space.input-file' as const,
+      locator: {
+        ...fileLocator,
+        identity: { fileId: 'cloud-source-one' }
+      },
+      destinationName: 'source-one.md',
+      expectedSemanticRevision: null,
+      expectedMediaType: null
+    }, {
+      kind: 'content-space.input-file' as const,
+      locator: {
+        ...fileLocator,
+        identity: { fileId: 'cloud-source-two' }
+      },
+      destinationName: 'source-two.md',
+      expectedSemanticRevision: null,
+      expectedMediaType: null
+    }]
+
+    expect(bindTaskFileDeclaration(declaration, 7, resolvedDependencyInputs)).toEqual({
+      schemaVersion: 1,
+      inputs: [...declaration.inputs, ...resolvedDependencyInputs],
+      output: declaration.output,
+      bindingRevision: 7
+    })
+    expect(() => bindTaskFileDeclaration(
+      declaration,
+      7,
+      [...resolvedDependencyInputs].reverse()
+    )).toThrow(/declared destination order/u)
+  })
+
+  it('bounds dependency selectors and rejects ambiguous declaration input roles', () => {
+    const selector = {
+      planItemId: 'item_source_one',
+      outputIndex: 0,
+      destinationName: 'source-one.md'
+    }
+    expect(taskFileDependencyInputSchema.safeParse(selector).success).toBe(true)
+    expect(taskFileDependencyInputSchema.safeParse({ ...selector, outputIndex: 99 }).success).toBe(true)
+    for (const outputIndex of [-1, 0.5, 100]) {
+      expect(taskFileDependencyInputSchema.safeParse({ ...selector, outputIndex }).success).toBe(false)
+    }
+
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      dependencyInputs: [selector, {
+        ...selector,
+        destinationName: 'same-output-again.md'
+      }]
+    }).success).toBe(false)
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      dependencyInputs: [selector, {
+        ...selector,
+        outputIndex: 1,
+        destinationName: 'source-one-second-output.md'
+      }]
+    }).success).toBe(true)
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      dependencyInputs: [{
+        ...selector,
+        destinationName: fileDeclaration.inputs[0]!.destinationName
+      }]
+    }).success).toBe(false)
+
+    const staticInputs = Array.from({ length: 100 }, (_, index) => ({
+      ...fileDeclaration.inputs[0]!,
+      locator: {
+        ...fileDeclaration.inputs[0]!.locator,
+        identity: { fileId: `static-file-${index}` }
+      },
+      destinationName: `static-${index}.csv`
+    }))
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      inputs: staticInputs.slice(0, 99),
+      dependencyInputs: [selector]
+    }).success).toBe(true)
+    expect(taskFileDeclarationSchema.safeParse({
+      ...fileDeclaration,
+      inputs: staticInputs,
+      dependencyInputs: [selector]
+    }).success).toBe(false)
   })
 
   it('uses task.offer.create as the only initial Task dispatch path', () => {

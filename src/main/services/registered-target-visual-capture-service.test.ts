@@ -74,7 +74,7 @@ describe('processRegisteredTargetCapture', () => {
       redacted: true
     })
     expect(await pixel(result.png, 85, 45)).toEqual([17, 24, 39, 255])
-    expect(await pixel(result.png, 20, 22)).toEqual([245, 158, 11, 255])
+    expect(await pixel(result.png, 10, 25)).toEqual([245, 158, 11, 255])
   })
 
   it('does not render a callout when the SDK request selects none', async () => {

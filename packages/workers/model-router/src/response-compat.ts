@@ -30,6 +30,14 @@ export type ResponsesRequest = {
   thinking?: unknown;
   stop?: unknown;
   stream?: unknown;
+  /** SciForge's provider-neutral structured-output contract. */
+  outputSchema?: unknown;
+  /** Native Responses API text configuration supplied by an upstream caller. */
+  text?: unknown;
+  /** Native Chat Completions structured-output configuration supplied by an upstream caller. */
+  response_format?: unknown;
+  /** Native Anthropic structured-output configuration supplied by an upstream caller. */
+  output_config?: unknown;
 };
 
 type ResponseToolDescriptor = {
@@ -110,6 +118,7 @@ export function responsesToChatCompletions(
   const toolAliases = chatToolNameAliasesFromResponsesTools(request.tools);
   const reasoning = isRecord(request.reasoning) ? request.reasoning : undefined;
   const reasoningEffort = stringValue(request.reasoning_effort) || (reasoning ? stringValue(reasoning.effort) : '');
+  const structuredOutput = chatStructuredOutputFormat(request.outputSchema);
   return compactJsonObject({
     model: stringValue(request.model) || options.defaultModel || '',
     messages: responsesInputToMessages(request, toolAliases),
@@ -123,6 +132,7 @@ export function responsesToChatCompletions(
     asr_options: request.asr_options,
     reasoning_effort: reasoningEffort || undefined,
     stop: request.stop,
+    response_format: structuredOutput ?? request.response_format,
   });
 }
 
@@ -247,6 +257,7 @@ export function responsesToAnthropicMessages(
   }
   const maxTokens = numberValue(request.max_output_tokens) || numberValue(request.max_tokens);
   const effectiveMaxTokens = maxTokens && maxTokens > 0 ? maxTokens : 4096;
+  const structuredOutput = anthropicStructuredOutputFormat(request.outputSchema);
   return compactJsonObject({
     model: stringValue(request.model) || options.defaultModel || '',
     system: system.length > 0 ? system : undefined,
@@ -260,7 +271,48 @@ export function responsesToAnthropicMessages(
     thinking: responsesReasoningToAnthropicThinking(request, effectiveMaxTokens),
     stop_sequences: request.stop,
     stream: request.stream,
+    output_config: structuredOutput ?? request.output_config,
   });
+}
+
+/**
+ * Converts the Host-owned schema into the native structured-output envelope
+ * understood by provider APIs. Keeping this conversion at the wire boundary
+ * prevents protocol negotiation from silently dropping output constraints.
+ */
+function structuredOutputFormat(schema: unknown): JsonObject | undefined {
+  const normalized = jsonValue(schema);
+  if (!isRecord(normalized)) return undefined;
+  return {
+    type: 'json_schema',
+    name: 'sciforge_output',
+    strict: true,
+    schema: normalized,
+  };
+}
+
+function chatStructuredOutputFormat(schema: unknown): JsonObject | undefined {
+  const format = structuredOutputFormat(schema);
+  if (!format) return undefined;
+  return {
+    type: 'json_schema',
+    json_schema: {
+      name: format.name,
+      strict: format.strict,
+      schema: format.schema,
+    },
+  };
+}
+
+function anthropicStructuredOutputFormat(schema: unknown): JsonObject | undefined {
+  const format = structuredOutputFormat(schema);
+  if (!format) return undefined;
+  return {
+    format: {
+      type: 'json_schema',
+      schema: format.schema,
+    },
+  };
 }
 
 export function responsesReasoningToAnthropicThinking(
