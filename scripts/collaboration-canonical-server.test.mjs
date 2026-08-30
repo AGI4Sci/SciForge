@@ -104,10 +104,13 @@ async function addActiveDevice(rig, participant, slot) {
 }
 
 async function activatePersonalContainer(rig, owner, containerId) {
+  const device = await rig.repository.getDevice(owner.deviceId)
+  assert.ok(device)
   await rig.repository.insertManagedContainer({
     managedContainerId: `mco-test-${owner.userId}`,
     ownerUserId: owner.userId,
     humanEndpointId: owner.endpointId,
+    installationId: device.installationId,
     provider: 'fake-im',
     realmId: 'fake-realm',
     ownerProviderUserId: owner.providerUserId,

@@ -400,6 +400,8 @@ export class FakeCollaborationRepository {
       participants: new Map(),
       projections: new Map(),
       managedContainers: new Map(),
+      privateContainerDiscoveries: new Map(),
+      privateContainerClaims: new Map(),
       managedContainerJobs: new Map(),
       projectEndpointBindings: new Map(),
       projectInputs: new Map(),
@@ -738,9 +740,10 @@ export class FakeCollaborationRepository {
     return copy(this.state.managedContainers.get(managedContainerId) ?? null)
   }
 
-  async getManagedContainerForOwner(ownerUserId, provider, realmId) {
+  async getManagedContainerForOwner(ownerUserId, provider, realmId, installationId) {
     return copy([...this.state.managedContainers.values()].find((item) => (
-      item.ownerUserId === ownerUserId && item.provider === provider && item.realmId === realmId
+      item.ownerUserId === ownerUserId && item.provider === provider && item.realmId === realmId &&
+      item.installationId === installationId
     )) ?? null)
   }
 
@@ -755,6 +758,28 @@ export class FakeCollaborationRepository {
 
   async updateManagedContainer(container, expectedRevision) {
     revisionUpdate(this.state.managedContainers, container.managedContainerId, container, expectedRevision)
+  }
+
+  async getPrivateContainerDiscovery(ownerUserId, humanEndpointId, installationId, provider, realmId, externalContainerId) {
+    const key = [ownerUserId, humanEndpointId, installationId, provider, realmId, externalContainerId].join('\u0000')
+    return copy(this.state.privateContainerDiscoveries.get(key) ?? null)
+  }
+
+  async upsertPrivateContainerDiscovery(discovery) {
+    const key = [discovery.ownerUserId, discovery.humanEndpointId, discovery.installationId,
+      discovery.provider, discovery.realmId, discovery.externalContainerId].join('\u0000')
+    this.state.privateContainerDiscoveries.set(key, copy(discovery))
+  }
+
+  async getPrivateContainerClaim(provider, realmId, externalContainerId) {
+    const key = [provider, realmId, externalContainerId].join('\u0000')
+    return copy(this.state.privateContainerClaims.get(key) ?? null)
+  }
+
+  async insertPrivateContainerClaim(claim) {
+    const key = [claim.provider, claim.realmId, claim.externalContainerId].join('\u0000')
+    if (this.state.privateContainerClaims.has(key)) throw new Error('fake repository duplicate private container claim')
+    this.state.privateContainerClaims.set(key, copy(claim))
   }
 
   async insertManagedContainerJob(job) {
@@ -869,6 +894,14 @@ export class FakeCollaborationRepository {
     return copy([...this.state.remoteApprovals.values()].find(
       (approval) => approval.referenceDigest === referenceDigest
     ) ?? null)
+  }
+
+  async getRemoteApprovalByProviderMessage(provider, realmId, providerMessageId) {
+    return copy([...this.state.remoteApprovals.values()].find((item) => (
+      item.locator.provider === provider &&
+      item.locator.realmId === realmId &&
+      item.providerCardMessageId === providerMessageId
+    )) ?? null)
   }
 
   async listExpiredRemoteApprovals(now, limit) {

@@ -235,6 +235,11 @@ type CapabilityApprovalRecord = {
   removeAbortListener?: () => void
 }
 
+type NativeRemoteApprovalRecord = Readonly<{
+  runtimeApprovalId: string
+  approval: DomainRemoteCapabilityApproval
+}>
+
 type CapabilityApprovalSubscriber = {
   push: (event: AgentRuntimeEvent) => void
   next: () => Promise<IteratorResult<AgentRuntimeEvent>>
@@ -244,6 +249,8 @@ type CapabilityApprovalSubscriber = {
 const CAPABILITY_APPROVAL_HISTORY_LIMIT = 256
 const CAPABILITY_APPROVAL_PENDING_LIMIT = 64
 const CAPABILITY_APPROVAL_PREVIEW_MAX_BYTES = 4 * 1_024
+const NATIVE_REMOTE_APPROVAL_HISTORY_LIMIT = 256
+const NATIVE_REMOTE_APPROVAL_TTL_MS = 4 * 60_000 + 30_000
 const TERMINAL_TURN_PRINCIPAL_RETENTION_LIMIT = 256
 const EMPTY_AGENT_PRINCIPAL_CONTEXT = definePrincipalContextSnapshot({
   identityVersion: 0,
@@ -305,6 +312,9 @@ export class AgentRuntimeHost {
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
+  private readonly nativeRemoteApprovals = new Map<string, NativeRemoteApprovalRecord>()
+  private readonly nativeRemoteApprovalOrder: string[] = []
+  private readonly nativeRemoteApprovalDecisions = new Set<string>()
   private readonly remoteCapabilityApprovalSubscribers = new Set<
     (approval: DomainRemoteCapabilityApproval) => void | Promise<void>
   >()
@@ -1507,6 +1517,7 @@ export class AgentRuntimeHost {
       input.workspaceLocator
     )
     this.cancelCapabilityApprovalsForTurn(input.runtimeId, input.threadId, input.turnId, 'Turn interrupted.')
+    this.cancelNativeRemoteApprovalsForTurn(input.runtimeId, input.threadId, input.turnId)
     await adapter.interruptTurn(context, input)
   }
 
@@ -1701,6 +1712,10 @@ export class AgentRuntimeHost {
       }
       this.options.services?.contextState?.observeEvent(event)
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
+      this.observeNativeRemoteApproval(event)
+      if (isTerminalTurnEvent(event)) {
+        this.cancelNativeRemoteApprovalsForTurn(adapter.id, event.threadId, event.turnId)
+      }
       this.observeThreadTurnLifecycle(adapter.id, event)
       await this.publishTerminalTurnLifecycle(adapter.id, context, event)
     }
@@ -1860,13 +1875,33 @@ export class AgentRuntimeHost {
       )
       return
     }
-    const { adapter, context } = await this.resolveRequiredRuntime(
-      input.runtimeId,
-      input.threadId,
-      input.workspaceLocator
-    )
-    if (!adapter.resolveApproval) throw unsupported(adapter.id, 'approval')
-    await adapter.resolveApproval(context, input)
+    const nativeEntry = [...this.nativeRemoteApprovals.entries()].find(([, candidate]) => (
+      candidate.approval.runtimeId === input.runtimeId
+      && candidate.approval.threadId === input.threadId
+      && candidate.runtimeApprovalId === input.approvalId
+      && candidate.approval.state === 'pending'
+    ))
+    const nativeKey = nativeEntry?.[0] ?? ''
+    const nativeRecord = nativeEntry?.[1]
+    if (nativeRecord) {
+      if (
+        nativeRecord.approval.state !== 'pending'
+        || this.nativeRemoteApprovalDecisions.has(nativeKey)
+      ) throw new Error(`Approval ${input.approvalId} is no longer pending.`)
+      this.nativeRemoteApprovalDecisions.add(nativeKey)
+    }
+    try {
+      const { adapter, context } = await this.resolveRequiredRuntime(
+        input.runtimeId,
+        input.threadId,
+        input.workspaceLocator
+      )
+      if (!adapter.resolveApproval) throw unsupported(adapter.id, 'approval')
+      await adapter.resolveApproval(context, input)
+      this.settleNativeRemoteApproval(input)
+    } finally {
+      if (nativeRecord) this.nativeRemoteApprovalDecisions.delete(nativeKey)
+    }
   }
 
   requestCapabilityApproval(
@@ -1954,6 +1989,10 @@ export class AgentRuntimeHost {
       const record = this.capabilityApprovals.get(approvalId)
       if (record?.resolve) void listener(this.remoteCapabilityApproval(record))
     }
+    for (const key of this.nativeRemoteApprovalOrder) {
+      const record = this.nativeRemoteApprovals.get(key)
+      if (record?.approval.state === 'pending') void listener(record.approval)
+    }
     return () => { this.remoteCapabilityApprovalSubscribers.delete(listener) }
   }
 
@@ -1961,7 +2000,38 @@ export class AgentRuntimeHost {
     input: DomainRemoteCapabilityApprovalDecision
   ): Promise<'applied' | 'already_terminal' | 'not_pending' | 'not_eligible'> {
     const record = this.capabilityApprovals.get(input.approvalId)
-    if (!record) return 'not_pending'
+    if (!record) {
+      const native = [...this.nativeRemoteApprovals.values()].find((candidate) => (
+        candidate.approval.approvalId === input.approvalId
+      ))
+      if (!native) return 'not_pending'
+      if (
+        native.approval.runtimeId !== input.runtimeId
+        || native.approval.threadId !== input.threadId
+        || native.approval.turnId !== input.turnId
+        || native.approval.capabilityRequestId !== input.capabilityRequestId
+      ) return 'not_pending'
+      if (native.approval.state !== 'pending') return 'already_terminal'
+      if (!native.approval.remoteEligible) return 'not_eligible'
+      const nativeKey = nativeRemoteApprovalKey(
+        native.approval.runtimeId,
+        native.approval.threadId,
+        native.approval.turnId,
+        native.runtimeApprovalId
+      )
+      if (this.nativeRemoteApprovalDecisions.has(nativeKey)) return 'already_terminal'
+      if (native.approval.expiresAt <= new Date().toISOString()) return 'not_pending'
+      const nativeRuntimeId = optionalRuntimeId(native.approval.runtimeId)
+      if (!nativeRuntimeId) return 'not_pending'
+      await this.resolveApproval({
+        runtimeId: nativeRuntimeId,
+        threadId: native.approval.threadId,
+        approvalId: native.runtimeApprovalId,
+        decision: input.decision === 'allow_once' ? 'allowed' : 'denied',
+        message: `Remote runtime approval ${input.decision}.`
+      })
+      return 'applied'
+    }
     if (!record.resolve) return 'already_terminal'
     if (
       record.runtimeId !== input.runtimeId
@@ -2008,6 +2078,12 @@ export class AgentRuntimeHost {
     for (const record of this.capabilityApprovals.values()) {
       if (record.resolve) this.settleCapabilityApproval(record, 'cancelled', 'Agent runtime host stopped.')
     }
+    for (const record of this.nativeRemoteApprovals.values()) {
+      if (record.approval.state === 'pending') this.publishNativeRemoteApproval({
+        ...record,
+        approval: Object.freeze({ ...record.approval, state: 'cancelled' })
+      })
+    }
     for (const subscribers of this.capabilityApprovalSubscribers.values()) {
       for (const subscriber of subscribers) subscriber.close()
     }
@@ -2015,6 +2091,9 @@ export class AgentRuntimeHost {
     this.remoteCapabilityApprovalSubscribers.clear()
     this.capabilityApprovals.clear()
     this.capabilityApprovalOrder.splice(0)
+    this.nativeRemoteApprovals.clear()
+    this.nativeRemoteApprovalOrder.splice(0)
+    this.nativeRemoteApprovalDecisions.clear()
   }
 
   async resolveUserInput(input: AgentRuntimeUserInputResolveInput): Promise<void> {
@@ -3623,6 +3702,100 @@ export class AgentRuntimeHost {
     this.options.services?.contextState?.observeEvent(event)
     void this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
     void this.options.services?.trace?.observeEvent(record.runtimeId, event).catch(() => undefined)
+  }
+
+  private observeNativeRemoteApproval(event: AgentRuntimeEvent): void {
+    if (
+      event.kind !== 'approval_requested'
+      || event.meta?.source === 'sciforge-capability-broker'
+    ) return
+    const runtimeId = event.runtimeId
+    const turnId = event.turnId?.trim()
+    if (!runtimeId || !turnId) return
+    const key = nativeRemoteApprovalKey(runtimeId, event.threadId, turnId, event.approvalId)
+    if (this.nativeRemoteApprovals.has(key)) return
+    const createdAt = new Date().toISOString()
+    const descriptor = nativeRemoteApprovalDescriptor(event)
+    const approvalId = `runtime-approval-${createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 40)}`
+    const record: NativeRemoteApprovalRecord = Object.freeze({
+      runtimeApprovalId: event.approvalId,
+      approval: Object.freeze({
+        approvalId,
+        runtimeId,
+        threadId: event.threadId,
+        turnId,
+        capabilityRequestId: approvalId,
+        actionId: descriptor.actionId,
+        invocationId: approvalId,
+        safeSummary: descriptor.safeSummary,
+        effect: descriptor.effect,
+        remoteEligible: true,
+        createdAt,
+        expiresAt: new Date(Date.parse(createdAt) + NATIVE_REMOTE_APPROVAL_TTL_MS).toISOString(),
+        state: 'pending'
+      })
+    })
+    this.nativeRemoteApprovals.set(key, record)
+    this.nativeRemoteApprovalOrder.push(key)
+    this.publishNativeRemoteApproval(record)
+    this.pruneNativeRemoteApprovalHistory()
+  }
+
+  private settleNativeRemoteApproval(input: AgentRuntimeApprovalResolveInput): void {
+    const record = [...this.nativeRemoteApprovals.values()].find((candidate) => (
+      candidate.approval.runtimeId === input.runtimeId
+      && candidate.approval.threadId === input.threadId
+      && candidate.runtimeApprovalId === input.approvalId
+      && candidate.approval.state === 'pending'
+    ))
+    if (!record || record.approval.state !== 'pending') return
+    this.publishNativeRemoteApproval(Object.freeze({
+      ...record,
+      approval: Object.freeze({
+        ...record.approval,
+        state: input.decision === 'allowed' ? 'approved' : 'denied'
+      })
+    }))
+  }
+
+  private cancelNativeRemoteApprovalsForTurn(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId?: string
+  ): void {
+    for (const record of this.nativeRemoteApprovals.values()) {
+      if (record.approval.state !== 'pending') continue
+      if (record.approval.runtimeId !== runtimeId || record.approval.threadId !== threadId) continue
+      if (turnId && record.approval.turnId !== turnId) continue
+      this.publishNativeRemoteApproval(Object.freeze({
+        ...record,
+        approval: Object.freeze({ ...record.approval, state: 'cancelled' })
+      }))
+    }
+  }
+
+  private publishNativeRemoteApproval(record: NativeRemoteApprovalRecord): void {
+    const key = nativeRemoteApprovalKey(
+      record.approval.runtimeId,
+      record.approval.threadId,
+      record.approval.turnId,
+      record.runtimeApprovalId
+    )
+    this.nativeRemoteApprovals.set(key, record)
+    for (const listener of this.remoteCapabilityApprovalSubscribers) void listener(record.approval)
+  }
+
+  private pruneNativeRemoteApprovalHistory(): void {
+    if (this.nativeRemoteApprovalOrder.length <= NATIVE_REMOTE_APPROVAL_HISTORY_LIMIT) return
+    for (let index = 0; index < this.nativeRemoteApprovalOrder.length; index += 1) {
+      const key = this.nativeRemoteApprovalOrder[index]!
+      const record = this.nativeRemoteApprovals.get(key)
+      if (record?.approval.state === 'pending') continue
+      this.nativeRemoteApprovals.delete(key)
+      this.nativeRemoteApprovalOrder.splice(index, 1)
+      index -= 1
+      if (this.nativeRemoteApprovalOrder.length <= NATIVE_REMOTE_APPROVAL_HISTORY_LIMIT) return
+    }
   }
 
   private remoteCapabilityApproval(record: CapabilityApprovalRecord): DomainRemoteCapabilityApproval {
@@ -5924,6 +6097,37 @@ function isSuccessfulTurnEvent(event: AgentRuntimeEvent): boolean {
 
 function capabilityApprovalRecordKey(record: CapabilityApprovalRecord): string {
   return threadTurnKey(record.runtimeId, record.threadId)
+}
+
+function nativeRemoteApprovalKey(
+  runtimeId: string,
+  threadId: string,
+  turnId: string,
+  runtimeApprovalId: string
+): string {
+  return [runtimeId.trim(), threadId.trim(), turnId.trim(), runtimeApprovalId.trim()].join('\u0000')
+}
+
+function nativeRemoteApprovalDescriptor(
+  event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>
+): Readonly<{
+  actionId: string
+  safeSummary: string
+  effect: DomainRemoteCapabilityApproval['effect']
+}> {
+  const method = typeof event.meta?.codexRequestMethod === 'string'
+    ? event.meta.codexRequestMethod
+    : ''
+  if (method.includes('/fileChange/')) {
+    return { actionId: 'runtime.file-change', safeSummary: '文件修改', effect: 'workspace-write' }
+  }
+  if (method.includes('/commandExecution/')) {
+    return { actionId: 'runtime.command-execution', safeSummary: '命令执行', effect: 'destructive' }
+  }
+  if (method.includes('/permissions/')) {
+    return { actionId: 'runtime.permission-request', safeSummary: '权限请求', effect: 'destructive' }
+  }
+  return { actionId: 'runtime.desktop-operation', safeSummary: '电脑端操作', effect: 'destructive' }
 }
 
 function capabilityApprovalInputPreview(

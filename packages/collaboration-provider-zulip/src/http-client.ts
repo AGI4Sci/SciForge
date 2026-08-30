@@ -92,6 +92,9 @@ function statusError(
   if (status === 400 && providerCode === 'STREAM_DOES_NOT_EXIST') {
     return new ZulipProviderError('not_found', 'The Zulip Channel was not found.', { status })
   }
+  if (status === 400 && providerCode === 'REACTION_ALREADY_EXISTS') {
+    return new ZulipProviderError('reaction_already_exists', 'The Zulip reaction already exists.', { status })
+  }
   if (status === 401) {
     return new ZulipProviderError('authentication_failed', 'Zulip rejected the provider credential.', { status })
   }

@@ -13,6 +13,7 @@ export type ZulipProviderErrorCode =
   | 'delivery_uncertain'
   | 'retry_exhausted'
   | 'queue_expired'
+  | 'reaction_already_exists'
   | 'aborted'
 
 export type ZulipProviderErrorOptions = {

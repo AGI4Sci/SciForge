@@ -176,12 +176,12 @@ Host sciforge-hk
 分支部署。
 
 桌面应用与云端服务各自维护版本号、tag 和 release，可以独立发布；但每个 release 都必须记录完整的
-`contractCommit`。兼容的桌面/云端组合中该值必须相同。云端还要记录三个 tarball 的版本与 SHA-256；
+`contractCommit`。兼容的桌面/云端组合中该值必须相同。云端还要记录四个 tarball 的版本与 SHA-256；
 tag 名或版本号相同不能代替 commit 校验。两个端可以用各自的 tag 指向同一获批 commit，不需要创建
 第二条长期分支。
 
 生产构建先批准一个确实位于 `origin/gui` 历史中的完整 commit，切到 detached HEAD 并确认 worktree
-干净。后续三个 package 必须全部从这个精确 commit 的同一 worktree 构建：
+干净。后续四个 package 必须全部从这个精确 commit 的同一 worktree 构建：
 
 ```sh
 git fetch --tags origin refs/heads/gui:refs/remotes/origin/gui
@@ -195,19 +195,23 @@ test -z "$(git status --porcelain)"
 桌面 release 记录的 `contractCommit` 也必须等于这里的 `release_commit`。若两端记录不同，先停止发布并
 重新选择兼容构建，不能通过修改版本字符串、临时 cherry-pick 或云端专用分支规避。
 
-### 5.2 三包 bundle 与 ECS 安装
+### 5.2 四包 bundle 与 ECS 安装
 
 要求 Node.js `>=22.12.0`、npm 和 PostgreSQL 客户端。不要在 ECS 上从工作树直接运行 TypeScript。
-可信构建机从上一步锁定的 commit 构建 contracts、Zulip provider 和 server 三个 package，并把三个
-tarball 作为同一 release 传输：
+可信构建机从上一步锁定的 commit 构建 contracts、Zulip provider 和 server，并验证 contracts 的
+生产依赖 Domain SDK；四个 tarball 必须作为同一 release 传输。Domain SDK 当前没有独立 build
+产物，但其公共 runtime JavaScript 仍须通过同一 commit 的 tarball 固定，不能在 ECS 上从 registry
+临时解析：
 
 ```sh
 npm --workspace @sciforge/collaboration-contracts run build
 npm --workspace @sciforge/collaboration-provider-zulip run build
 npm --workspace @sciforge/collaboration-server run build
+npm --workspace @sciforge/domain-sdk run typecheck
 node scripts/collaboration-providers.mjs --check
 
 artifact_dir="$(mktemp -d)"
+npm pack --workspace @sciforge/domain-sdk --pack-destination "$artifact_dir"
 npm pack --workspace @sciforge/collaboration-contracts --pack-destination "$artifact_dir"
 npm pack --workspace @sciforge/collaboration-provider-zulip --pack-destination "$artifact_dir"
 npm pack --workspace @sciforge/collaboration-server --pack-destination "$artifact_dir"
@@ -220,11 +224,12 @@ shasum -a 256 *.tgz package.json package-lock.json CONTRACT_COMMIT > SHA256SUMS
 ```
 
 先核对 `npm pack --dry-run`/tarball 清单包含 server `dist/`、`migrations/`、`deploy/`，且不包含 `.env`、
-日志、测试真实数据或任何 secret。`package-lock.json` 把本次审核过的传递依赖和三个 tarball integrity 固定
-下来；不要在 ECS 上临时解析一个新的依赖集合。把三个 tarball、`package.json`、`package-lock.json`、
+日志、测试真实数据或任何 secret；Domain SDK 清单还必须包含 contracts 运行时导入的
+`src/file-transfer-portability.js`。`package-lock.json` 把本次审核过的传递依赖和四个 tarball integrity 固定
+下来；不要在 ECS 上临时解析一个新的依赖集合。把四个 tarball、`package.json`、`package-lock.json`、
 `CONTRACT_COMMIT` 和 `SHA256SUMS` 作为同一 bundle 传到服务器权限受限的暂存目录。ECS 不 clone
-SciForge 仓库，不复制或部署 Electron、renderer、桌面 domain 源码和整个 workspace；服务器上的应用
-代码只能来自这三个 tarball。以下步骤在服务器执行，先校验 bundle 和获批 commit，再创建不可变
+SciForge 仓库，不复制或部署 Electron、renderer、桌面 domain 实现和整个 workspace；服务器上的应用
+代码与共享合同只能来自这四个已审核 tarball。以下步骤在服务器执行，先校验 bundle 和获批 commit，再创建不可变
 release：
 
 ```sh
@@ -254,7 +259,7 @@ cat "$release_dir/CONTRACT_COMMIT"
 ```
 
 最后一行只输出非敏感 commit ID，用于和桌面 release 证明比对。发布记录应同时保存桌面 tag/release、
-云端 tag/release、共同的 `contractCommit`、三包版本和 SHA-256；不要把任何凭据写入记录。
+云端 tag/release、共同的 `contractCommit`、四包版本和 SHA-256；不要把任何凭据写入记录。
 
 维护窗口中再按第 8 节停止旧服务、创建发布前备份、原子切换 `current`、运行新 migration 并启动。
 `current` 只指向完整、只读 release。不要在运行目录内执行升级或修改 `node_modules`。至少保留当前和
@@ -377,7 +382,10 @@ runuser --user sciforge_collab -- \
   --command='SELECT max(version) FROM sciforge_collaboration.schema_migrations;'
 ```
 
-当前版本预期输出 `19`。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
+当前版本预期输出 `20`。schema v19 保留当前 Collaboration closed-loop pipeline 修复；schema v20
+增加 reaction 审批交互模式、Desktop installation 级托管 Channel 归属，以及手机原生私人 Channel
+的短期发现证明和独占 claim。同一 Zulip 用户在每台电脑上也不能复用已被其他 installation 占用的
+Channel。迁移失败时保持服务停止，先回滚或修复，不能跳过版本检查
 强行启动。服务使用 768 MiB 内存上限、空
 capability set、只读系统目录、受限地址族；provider 出站只通过 HTTPS，数据库只通过本机 socket。
 
@@ -445,10 +453,10 @@ free -h
 
 ## 11. Zulip 组织、Bot 与手机
 
-如需启用“每用户私人 Channel + 多 Topic + 固定 Session”，必须使用独立 provisioning 身份，不能给
-Generic Bot 添加成员或 Channel 管理权限。配置、schema v3、staging 验收和生产批准闸门见
-[每用户私人 Zulip Channel 运维说明](./zulip-private-channel-provisioning.zh-CN.md)。该功能与 `/bind`
-身份绑定分离：`/bind` 只确认 Zulip 用户归属，不创建项目 Topic，也不改变普通私聊不能控制 Agent 的边界。
+当前客户端要求用户在官方 Zulip 手机端原生创建私人 Channel，并把已验证用户与 Generic Bot 都加入成员。
+Provider 只从 Bot 的订阅中发现 `invite_only=true`、非 Web public 且成员列表同时包含二者的 Channel；Server
+在真正创建 Projection 时才原子写入 installation claim。SciForge 不再向 Desktop 暴露 Channel 创建、修复或
+归档能力。该功能与 `/bind` 身份绑定分离：`/bind` 只确认 Zulip 用户归属，不创建 Channel 或 Topic。
 
 每名真人使用独立 Zulip 账号，不能共用管理员或 Bot 账号。专用 Generic bot 订阅允许协作的 channel；
 Bot 的 API key 只注入云端 provider secret，不再下发到每台桌面。
@@ -542,7 +550,7 @@ Zulip 继续使用其官方 backup/restore 工具，备份包按 secret 级别�
 
 ## 13. 升级与回滚
 
-升级顺序固定为：批准 `gui` 精确 commit 并核对桌面/云端相同 `contractCommit` → 构建并校验三包
+升级顺序固定为：批准 `gui` 精确 commit 并核对桌面/云端相同 `contractCommit` → 构建并校验四包
 bundle → 安装完整新 release → 执行并验证发布前备份 → 停止服务 → 原子切换 `current` → 运行
 migration → 启动并检查 loopback → 检查公网路径与未认证 401 → 做单用户真实冒烟。Nginx snippet 未
 变化时不应重复覆盖；变化时必须先 `nginx -t` 再 reload。任何一步失败都停止推进，不在已运行 release
