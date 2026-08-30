@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-change-inspector",
   "version": "1.0.2",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Package-owned session change inspection and unified diff review for SciForge.",

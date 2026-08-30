@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/collaboration-provider-zulip",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Zulip Human Endpoint Provider adapter for SciForge collaboration.",

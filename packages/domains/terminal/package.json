@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-terminal",
   "version": "1.0.1",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Official controlled terminal domain package for SciForge.",

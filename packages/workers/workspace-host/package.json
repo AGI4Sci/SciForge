@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/workspace-host",
   "version": "0.1.4",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Headless SciForge Workspace Host server and framed transport.",

@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/write-assist",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "SciForge writing support for bounded retrieval and PDF text extraction.",

@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/sci-modality-router",
   "version": "0.1.1",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "SciForge sci-modality router worker: translates non-text scientific inputs into natural-language evidence via an operator-configured native-to-text expert provider. Translate-only; never reasons. Called by @sciforge/model-router during input pre-extraction.",

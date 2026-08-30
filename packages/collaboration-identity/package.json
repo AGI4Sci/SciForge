@@ -2,7 +2,7 @@
   "name": "@sciforge/collaboration-identity",
   "version": "0.1.0",
   "private": false,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Provider-neutral SciForge Cloud identity client and local test adapter.",
   "exports": {

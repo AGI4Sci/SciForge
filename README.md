@@ -194,7 +194,7 @@ npm run build
 
 欢迎提交 Issue、Showcase、科学 worker、Skill、runtime adapter、文档和 UI 改进。提交 PR 前请运行与改动范围相符的 typecheck、test 和 build；协作约定见[贡献指南](./docs/CONTRIBUTING.zh-CN.md)。
 
-SciForge 使用 [MIT License](./LICENSE)。第三方依赖、参考项目与资产来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+SciForge 使用 [Apache License 2.0](./LICENSE)。第三方依赖、参考项目与资产来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
 
 <a href="https://github.com/AGI4Sci/SciForge/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=AGI4Sci/SciForge" alt="SciForge contributors">

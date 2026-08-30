@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "SciForge first-party worker MCP adapter for ppt-master.",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": false,
   "bin": {
     "sciforge-ppt-master": "./src/cli.ts"

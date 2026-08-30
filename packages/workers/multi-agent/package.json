@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/multi-agent",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Shared SciForge multi-agent child-run contract, store, and supervised runtime.",

@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/workspace-egress",
   "version": "0.1.4",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Workspace-scoped network egress leases and loopback HTTP CONNECT relay for SciForge.",

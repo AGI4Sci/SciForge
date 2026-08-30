@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/scientific-plotting",
   "version": "0.1.1",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "SciForge controlled scientific plotting and K-Dense scientific skills MCP workers.",
