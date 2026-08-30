@@ -264,6 +264,7 @@ export function ProjectCoordinatorSidebarSection({
     setDeleteError(undefined)
     try {
       await client.deleteProject({ projectId })
+      if (mountedRef.current) await refresh('foreground')
       if (!mountedRef.current) return
       setExpandedProjectId((current) => current === projectId ? undefined : current)
     } catch (cause) {
@@ -287,7 +288,7 @@ export function ProjectCoordinatorSidebarSection({
       deletingProjectIdRef.current = undefined
       if (mountedRef.current) setDeletingProjectId(undefined)
     }
-  }, [client, t])
+  }, [client, refresh, t])
 
   return (
     <ProjectCoordinatorSidebarView
