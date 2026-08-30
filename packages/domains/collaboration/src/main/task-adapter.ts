@@ -1008,7 +1008,12 @@ export class CollaborationTaskAdapter {
     let run = initial
     let execution = requireExecution(run)
     if (execution.state === 'accepted') {
-      const startedAt = run.startedAt ?? this.now().toISOString()
+      const observedAt = this.now().toISOString()
+      const startedAt = run.startedAt ?? timestampNotBefore(observedAt, execution.acceptedAt)
+      if (!run.startedAt) {
+        run = await this.updateRun(run.offer.executionId, { startedAt })
+        execution = requireExecution(run)
+      }
       const requestFacts = {
         taskId: run.offer.taskId,
         executionId: run.offer.executionId,
@@ -1030,7 +1035,7 @@ export class CollaborationTaskAdapter {
         task, execution,
         expectedTaskRevision: task.revision,
         expectedExecutionRevision: execution.revision,
-        state: 'running', startedAt, error: null
+        state: 'running', startedAt: execution.startedAt ?? startedAt, error: null
       })
     }
     if (execution.state === 'running') {
@@ -1905,7 +1910,10 @@ export class CollaborationTaskAdapter {
         runtimeId: latestAgent.runtimeId,
         modelId: null,
         startedAt: run.startedAt,
-        completedAt: latestAgent.observedAt ?? this.now().toISOString()
+        completedAt: timestampNotBefore(
+          latestAgent.observedAt ?? this.now().toISOString(),
+          run.startedAt
+        )
       },
       outputs: run.outputs,
       recoveryJournalEntryIds: run.recoveryJournalEntryIds
@@ -2702,6 +2710,10 @@ function systemExecutionContext(run: CollaborationTaskRun) {
     executionId: run.offer.executionId,
     executionRevision: run.expectedExecutionRevision
   } as const
+}
+
+function timestampNotBefore(observedAt: string, minimumAt: string): string {
+  return Date.parse(observedAt) < Date.parse(minimumAt) ? minimumAt : observedAt
 }
 
 function idempotencyKey(kind: string, facts: unknown): string {
