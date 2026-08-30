@@ -549,13 +549,12 @@ export class CollaborationTaskAdapter {
 
   async fenceLocalAgent(agentId: string, reason: string): Promise<void> {
     const now = this.now().toISOString()
+    const pendingControllers = new Set<AbortController>()
     for (const [identifier, controller] of this.controllers) {
       const offer = this.findPendingOffer(identifier)
-      const run = this.findRun(identifier)
-      if (offer?.recipientAgentId === agentId || run?.offer.recipientAgentId === agentId) {
-        controller.abort(reason)
-      }
+      if (offer?.recipientAgentId === agentId) pendingControllers.add(controller)
     }
+    for (const controller of pendingControllers) controller.abort(reason)
     await this.options.store.transact((draft) => {
       for (const offer of draft.pendingTaskOffers) {
         if (offer.recipientAgentId !== agentId ||
@@ -573,6 +572,13 @@ export class CollaborationTaskAdapter {
         run.error = reason.slice(0, 4_000)
       }
     })
+    for (const [identifier, controller] of this.controllers) {
+      const offer = this.findPendingOffer(identifier)
+      const run = this.findRun(identifier)
+      if (offer?.recipientAgentId === agentId || run?.offer.recipientAgentId === agentId) {
+        controller.abort(reason)
+      }
+    }
   }
 
   /** Publishes local facts only; Cloud joins Device, Agent, membership, and Project readiness. */
