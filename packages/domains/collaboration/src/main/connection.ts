@@ -185,17 +185,18 @@ export class CollaborationConnection {
   }
 
   async configure(baseUrl: string): Promise<void> {
-    await this.disconnect()
     const status = this.requireIdentityReady()
     if (normalizeCollaborationBaseUrl(baseUrl) !== normalizeCollaborationBaseUrl(status.baseUrl)) {
       throw new Error('Collaboration Cloud must use the active Identity Cloud endpoint.')
     }
+    await this.disconnect()
     await this.options.settings.configure(status.baseUrl)
     this.connectionState = { state: 'disconnected' }
     try {
       await this.refreshProviderCatalog()
       const agent = await this.ensureLocalAgent()
       await this.refreshParticipant(agent.ownerUserId)
+      await this.connect()
     } catch (error) {
       this.recordError(error, true)
       throw error

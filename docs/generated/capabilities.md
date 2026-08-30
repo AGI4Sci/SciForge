@@ -16770,7 +16770,7 @@ Issues a read-only resource for one session change snapshot.
 
 ## `collaboration.connection.configure`
 
-Stores a non-secret HTTPS service location and loads its provider-neutral catalog.
+Stores the active Identity Cloud service location, loads its provider-neutral catalog, and reconnects the local Agent.
 
 - Version: `1.0.0`
 - Audiences: ui

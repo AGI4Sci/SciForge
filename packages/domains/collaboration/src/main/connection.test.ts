@@ -127,9 +127,10 @@ test('Runtime authority loss stops delivery and fences local executions before r
   assert.equal(connection.state().state, 'error')
 })
 
-test('configuration and endpoint challenge use only OIDC User transport', async () => {
+test('configuration loads the provider catalog and reconnects through Agent authority', async () => {
   const store = await localStore([])
   const requests: RestRequest[] = []
+  const agentRequests: string[] = []
   const challengeId = `chl_${'c'.repeat(32)}`
   const challengeCode = 'z'.repeat(12)
   const connection = new CollaborationConnection({
@@ -171,13 +172,39 @@ test('configuration and endpoint challenge use only OIDC User transport', async 
       }
     }),
     agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: readyAuthority,
       ensureAgent: async () => agentNodeFixture,
-      execute: async () => { throw new Error('Agent runtime must not execute User commands.') }
+      execute: async (agentId, request) => {
+        assert.equal(agentId, TEST_IDS.agentId)
+        agentRequests.push(request.type)
+        assert.equal(request.type, 'agent.heartbeat')
+        if (request.type !== 'agent.heartbeat') throw new Error('Expected the exact Agent heartbeat command.')
+        return {
+          protocolVersion: '1.0',
+          type: 'rest.entity',
+          requestId: request.requestId,
+          entity: {
+            ...agentNodeFixture,
+            capabilities: request.capabilities,
+            connectionStatus: 'online',
+            revision: agentNodeFixture.revision + 1
+          }
+        }
+      }
     }),
     inboxHandler: { handle: async () => undefined }
   })
 
   await connection.configure(BASE_URL)
+  assert.equal(connection.state().state, 'connected')
+  assert.deepEqual(connection.providers().map(({ providerKey }) => providerKey), ['zulip'])
+  await connection.configure(BASE_URL)
+  assert.equal(connection.state().state, 'connected')
+  await assert.rejects(
+    connection.configure('https://another-cloud.example.test'),
+    /must use the active Identity Cloud endpoint/u
+  )
+  assert.equal(connection.state().state, 'connected')
   const started = await connection.startChallenge({
     providerKey: 'zulip',
     locator: { realmId: 'research-lab', providerUserId: 'zulip-user-42' }
@@ -193,9 +220,13 @@ test('configuration and endpoint challenge use only OIDC User transport', async 
   assert.deepEqual(requests.map(({ type }) => type), [
     'endpoint.catalog.get',
     'participant.get',
+    'endpoint.catalog.get',
+    'participant.get',
     'endpoint.challenge.create',
     'endpoint.challenge.get'
   ])
+  assert.deepEqual(agentRequests, ['agent.heartbeat', 'agent.heartbeat'])
+  await connection.dispose()
 })
 
 test('activation automatically ensures the current Device Agent then connects it', async () => {
@@ -535,7 +566,36 @@ function endpointCatalogResponse(requestId: string): RestResponse {
     protocolVersion: '1.0',
     type: 'endpoint.catalog',
     requestId,
-    providers: []
+    providers: [{
+      protocolVersion: '1.0',
+      type: 'human_endpoint_provider_contract',
+      provider: 'zulip',
+      displayName: 'Zulip',
+      capabilities: {
+        textMessages: true,
+        stableLocators: true,
+        eventCursor: true,
+        locatorRename: true,
+        locatorMove: true,
+        locatorDiscovery: true,
+        identityChallenge: true,
+        directMessages: true,
+        managedContainers: false,
+        privateContainerDiscovery: true,
+        messageUpdates: true,
+        messageActions: true
+      },
+      onboarding: {
+        realmLabel: 'Zulip server URL',
+        accountLabel: 'Zulip user ID',
+        containerLabel: 'Stream',
+        topicLabel: 'Topic'
+      },
+      limits: {
+        maxTextLength: 10_000,
+        maxLocatorDisplayLength: 200
+      }
+    }]
   }
 }
 

@@ -356,7 +356,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       capability(
         COLLABORATION_CAPABILITY_IDS.connectionConfigure,
         'Configure collaboration service',
-        'Stores a non-secret HTTPS service location and loads its provider-neutral catalog.',
+        'Stores the active Identity Cloud service location, loads its provider-neutral catalog, and reconnects the local Agent.',
         'external-write',
         collaborationConnectionConfigureInputSchema,
         collaborationConnectionConfigureResultSchema,

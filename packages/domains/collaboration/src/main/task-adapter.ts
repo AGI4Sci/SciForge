@@ -114,7 +114,13 @@ export class CollaborationTaskAdapter {
     for (const run of this.options.store.snapshot().taskRuns) {
       if (run.externalJournal.some((entry) => entry.state === 'effect_dispatched')) {
         this.schedule(run.offer.executionId)
-      } else if (!TERMINAL_RUN_STATES.has(run.state) && run.state !== 'needs-human') {
+      } else if (run.state === 'needs-human') {
+        await this.refreshPreflight(run).catch(async (error) => {
+          await this.updateRun(run.offer.executionId, {
+            error: safeError(error, this.options.sanitizeText)
+          })
+        })
+      } else if (!TERMINAL_RUN_STATES.has(run.state)) {
         this.schedule(run.offer.executionId)
       }
     }
@@ -635,6 +641,18 @@ export class CollaborationTaskAdapter {
       if (this.running.get(identifier) === promise) this.running.delete(identifier)
     })
     this.running.set(identifier, promise)
+  }
+
+  private scheduleAfterCurrent(identifier: string): void {
+    const current = this.running.get(identifier)
+    if (!current) {
+      this.schedule(identifier)
+      return
+    }
+    void current.then(
+      () => this.schedule(identifier),
+      () => this.schedule(identifier)
+    )
   }
 
   private async process(identifier: string): Promise<void> {
@@ -1748,6 +1766,7 @@ export class CollaborationTaskAdapter {
       humanAnswer: null,
       state: 'needs-human'
     })
+    await this.refreshPreflight(this.requireRun(run.offer.executionId))
   }
 
   private async acceptHumanAnswer(answer: HumanAnswer, recipientAgentId: string): Promise<void> {
@@ -1773,7 +1792,7 @@ export class CollaborationTaskAdapter {
       throw new Error('Human answer arrived outside the pending Worker HumanNeeded state.')
     }
     await this.updateRun(executionId, { humanAnswer: answer, state: 'running', error: null })
-    this.schedule(executionId)
+    this.scheduleAfterCurrent(executionId)
   }
 
   private async recoverHumanRequestId(

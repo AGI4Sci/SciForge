@@ -543,7 +543,9 @@ describe('provider-neutral contract', () => {
         locatorDiscovery: true,
         identityChallenge: true,
         directMessages: true,
-        managedContainers: false
+        managedContainers: false,
+        privateContainerDiscovery: true,
+        messageActions: true
       },
       onboarding: {
         realmLabel: '组织',
@@ -553,12 +555,22 @@ describe('provider-neutral contract', () => {
       },
       limits: { maxTextLength: 10_000, maxLocatorDisplayLength: 200 }
     }
-    expect(humanEndpointProviderContractSchema.safeParse(contract).success).toBe(true)
-    const { managedContainers: _managedContainers, ...legacyCapabilities } = contract.capabilities
-    expect(humanEndpointProviderContractSchema.parse({
+    const parsedContract = humanEndpointProviderContractSchema.parse(contract)
+    expect(parsedContract.capabilities.privateContainerDiscovery).toBe(true)
+    expect(parsedContract.capabilities.messageActions).toBe(true)
+    const {
+      managedContainers: _managedContainers,
+      privateContainerDiscovery: _privateContainerDiscovery,
+      messageActions: _messageActions,
+      ...legacyCapabilities
+    } = contract.capabilities
+    const legacyContract = humanEndpointProviderContractSchema.parse({
       ...contract,
       capabilities: legacyCapabilities
-    }).capabilities.managedContainers).toBeUndefined()
+    })
+    expect(legacyContract.capabilities.managedContainers).toBeUndefined()
+    expect(legacyContract.capabilities.privateContainerDiscovery).toBeUndefined()
+    expect(legacyContract.capabilities.messageActions).toBeUndefined()
     expect(humanEndpointProviderContractSchema.safeParse({
       ...contract,
       capabilities: { ...contract.capabilities, directMessages: false }
