@@ -673,7 +673,7 @@ async function executeProvisioning(input: Readonly<{
   requireCompleteMemberPage(after.value)
   observedOperations.push(after.observedOperation)
 
-  const completedAt = after.journal.resolvedAt ?? input.now().toISOString()
+  const completedAt = input.now().toISOString()
   const memberObservations = buildMemberObservations(
     built.project,
     built.intent,
