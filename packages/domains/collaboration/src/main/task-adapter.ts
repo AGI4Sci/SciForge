@@ -261,6 +261,7 @@ export class CollaborationTaskAdapter {
     const pending = this.findPendingOffer(taskOfferId)
     if (!pending || pending.state === 'dismissed') return
     if (claimedByAgentId === this.options.localAgentId() && pending.state === 'claiming') return
+    this.controllers.get(taskOfferId)?.abort('Task offer claimed on another Device.')
     const completedAt = this.now().toISOString()
     await this.updatePendingOffer(taskOfferId, {
       state: 'claimed_elsewhere',
@@ -300,6 +301,7 @@ export class CollaborationTaskAdapter {
       : payload.outcome === 'timed_out'
         ? 'The Task offer timed out.'
         : 'The Coordinator withdrew the Task offer.'
+    this.controllers.get(payload.taskOfferId)?.abort(error)
     await this.updatePendingOffer(payload.taskOfferId, {
       state: 'closed',
       currentTaskRevision: payload.taskRevision,
@@ -547,6 +549,13 @@ export class CollaborationTaskAdapter {
 
   async fenceLocalAgent(agentId: string, reason: string): Promise<void> {
     const now = this.now().toISOString()
+    for (const [identifier, controller] of this.controllers) {
+      const offer = this.findPendingOffer(identifier)
+      const run = this.findRun(identifier)
+      if (offer?.recipientAgentId === agentId || run?.offer.recipientAgentId === agentId) {
+        controller.abort(reason)
+      }
+    }
     await this.options.store.transact((draft) => {
       for (const offer of draft.pendingTaskOffers) {
         if (offer.recipientAgentId !== agentId ||
@@ -564,9 +573,6 @@ export class CollaborationTaskAdapter {
         run.error = reason.slice(0, 4_000)
       }
     })
-    for (const [executionId, controller] of this.controllers) {
-      if (this.findRun(executionId)?.offer.recipientAgentId === agentId) controller.abort(reason)
-    }
   }
 
   /** Publishes local facts only; Cloud joins Device, Agent, membership, and Project readiness. */
@@ -615,6 +621,7 @@ export class CollaborationTaskAdapter {
   private schedule(identifier: string): void {
     if (this.stopped || this.running.has(identifier)) return
     const promise = this.process(identifier).catch(async (error) => {
+      if (this.stopped) return
       const pending = this.findPendingOffer(identifier)
       if (pending && !['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(pending.state)) {
         const recoverableClaimFailure = pending.state === 'claiming' && (
@@ -647,23 +654,32 @@ export class CollaborationTaskAdapter {
     const executionId = identifier
     let run = this.requireRun(executionId)
     if (TERMINAL_RUN_STATES.has(run.state)) return
-    const uncertain = run.externalJournal.find((entry) => entry.state === 'effect_dispatched')
-    if (uncertain) {
-      await this.observeUnknownOutcome(run, uncertain, 'desktop_restarted_after_provider_dispatch')
-      return
-    }
-    const preflight = await this.refreshPreflight(run)
-    run = this.requireRun(executionId)
-    if (preflight.outcome === 'denied') {
-      const message = `Worker preflight denied: ${preflight.reasons.join(', ')}`
-      if (requireExecution(run).fence.status === 'open') {
-        await this.failExecution(run, 'worker_preflight_denied', message)
-      } else {
-        await this.markFenced(run, message)
+    const controller = this.controllers.get(executionId) ?? new AbortController()
+    this.controllers.set(executionId, controller)
+    try {
+      const uncertain = run.externalJournal.find((entry) => entry.state === 'effect_dispatched')
+      if (uncertain) {
+        await this.observeUnknownOutcome(run, uncertain, 'desktop_restarted_after_provider_dispatch')
+        return
       }
-      return
+      const preflight = await this.refreshPreflight(run, true, controller.signal)
+      throwIfSignalAborted(controller.signal)
+      run = this.requireRun(executionId)
+      if (preflight.outcome === 'denied') {
+        const message = `Worker preflight denied: ${preflight.reasons.join(', ')}`
+        if (requireExecution(run).fence.status === 'open') {
+          await this.failExecution(run, 'worker_preflight_denied', message)
+        } else {
+          await this.markFenced(run, message)
+        }
+        return
+      }
+      await this.acceptAndStart(run)
+    } finally {
+      if (this.controllers.get(executionId) === controller) {
+        this.controllers.delete(executionId)
+      }
     }
-    await this.acceptAndStart(run)
   }
 
   private async processPendingOffer(initial: CollaborationPendingTaskOffer): Promise<void> {
@@ -675,37 +691,53 @@ export class CollaborationTaskAdapter {
       return
     }
     if (offer.state === 'claiming' && await this.resumePendingOfferClaim(offer)) return
-    const acceptanceMode = this.policies.read(offer.recipientAgentId)
-    const preflight = await this.preflightPendingOffer(offer)
-    const preflightReasons = preflight.reason ? [preflight.reason] : []
-    if (offer.state === 'pending' && acceptanceMode === 'manual') {
-      await this.updatePendingOffer(offer.taskOfferId, {
-        state: 'awaiting-manual',
-        preflightReasons,
+    const controller = new AbortController()
+    this.controllers.set(offer.taskOfferId, controller)
+    try {
+      const acceptanceMode = this.policies.read(offer.recipientAgentId)
+      const preflight = await this.preflightPendingOffer(offer, controller.signal)
+      throwIfSignalAborted(controller.signal)
+      offer = this.requirePendingOffer(offer.taskOfferId)
+      if (['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state)) return
+      const preflightReasons = preflight.reason ? [preflight.reason] : []
+      if (offer.state === 'pending' && acceptanceMode === 'manual') {
+        await this.updatePendingOffer(offer.taskOfferId, {
+          state: 'awaiting-manual',
+          preflightReasons,
+          error: null
+        }, preflight.task, offer.state)
+        return
+      }
+      if (preflight.reason) {
+        const manual = acceptanceMode === 'manual'
+        await this.updatePendingOffer(offer.taskOfferId, {
+          state: manual ? 'awaiting-manual' : 'failed',
+          preflightReasons,
+          completedAt: manual ? null : this.now().toISOString(),
+          error: `${preflight.message} Another Device may still claim the User-level offer.`
+        }, preflight.task, offer.state)
+        return
+      }
+      offer = await this.updatePendingOffer(offer.taskOfferId, {
+        state: 'claiming',
+        preflightReasons: [],
         error: null
-      }, preflight.task)
-      return
+      }, preflight.task, offer.state)
+      throwIfSignalAborted(controller.signal)
+      if (offer.state !== 'claiming') return
+      await this.claimPendingOffer(offer)
+    } finally {
+      if (this.controllers.get(offer.taskOfferId) === controller) {
+        this.controllers.delete(offer.taskOfferId)
+      }
     }
-    if (preflight.reason) {
-      const manual = acceptanceMode === 'manual'
-      await this.updatePendingOffer(offer.taskOfferId, {
-        state: manual ? 'awaiting-manual' : 'failed',
-        preflightReasons,
-        completedAt: manual ? null : this.now().toISOString(),
-        error: `${preflight.message} Another Device may still claim the User-level offer.`
-      }, preflight.task)
-      return
-    }
-    offer = await this.updatePendingOffer(offer.taskOfferId, {
-      state: 'claiming',
-      preflightReasons: [],
-      error: null
-    }, preflight.task)
-    await this.claimPendingOffer(offer)
   }
 
   /** Advisory Device-local checks shared by manual and automatic acceptance before the Cloud claim. */
-  private async preflightPendingOffer(offer: CollaborationPendingTaskOffer): Promise<Readonly<{
+  private async preflightPendingOffer(
+    offer: CollaborationPendingTaskOffer,
+    signal: AbortSignal
+  ): Promise<Readonly<{
     task?: Task
     reason: CollaborationPendingTaskOffer['preflightReasons'][number] | null
     message: string
@@ -793,6 +825,7 @@ export class CollaborationTaskAdapter {
           CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.inputSchema.parse(intent),
           {
             workspaceId: workspaceRoot,
+            signal,
             systemExecutionContext: {
               contractVersion: 1,
               phase: 'task-offer-preflight',
@@ -804,6 +837,7 @@ export class CollaborationTaskAdapter {
             }
           }
         )
+        throwIfSignalAborted(signal)
         if (!result.ok || result.value.status !== 'ready') {
           return {
             task,
@@ -814,6 +848,7 @@ export class CollaborationTaskAdapter {
       }
       return { task, reason: null, message: '' }
     } catch {
+      throwIfSignalAborted(signal)
       return {
         task,
         reason: 'provider_not_ready',
@@ -1023,7 +1058,8 @@ export class CollaborationTaskAdapter {
     const controller = this.controllers.get(run.offer.executionId) ?? new AbortController()
     this.controllers.set(run.offer.executionId, controller)
     try {
-      const preflight = await this.refreshPreflight(run)
+      const preflight = await this.refreshPreflight(run, true, controller.signal)
+      throwIfSignalAborted(controller.signal)
       if (preflight.outcome === 'denied') {
         await this.markFenced(run, `Execution lost authority: ${preflight.reasons.join(', ')}`)
         return
@@ -1052,7 +1088,7 @@ export class CollaborationTaskAdapter {
         run = this.requireRun(run.offer.executionId)
         if (TERMINAL_RUN_STATES.has(run.state)) return
       }
-      await this.submitResult(run)
+      await this.submitResult(run, controller.signal)
     } finally {
       if (this.controllers.get(run.offer.executionId) === controller) {
         this.controllers.delete(run.offer.executionId)
@@ -1190,7 +1226,12 @@ export class CollaborationTaskAdapter {
     }
     const safeText = result.text.slice(0, 32_000)
     const observedAt = this.now().toISOString()
-    const postflight = await this.refreshPreflight(this.requireRun(run.offer.executionId)).catch(() => null)
+    const postflight = await this.refreshPreflight(
+      this.requireRun(run.offer.executionId),
+      true,
+      signal
+    ).catch(() => null)
+    if (signal.aborted && this.stopped) return null
     if (!postflight || postflight.outcome === 'denied') {
       await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
         state: 'late_outcome', observedAt,
@@ -1389,7 +1430,12 @@ export class CollaborationTaskAdapter {
       })
       journal = requireTransferJournal(this.requireRun(run.offer.executionId), operation.logicalInvocationId)
     }
-    const preflight = await this.refreshPreflight(this.requireRun(run.offer.executionId))
+    const preflight = await this.refreshPreflight(
+      this.requireRun(run.offer.executionId),
+      true,
+      operation.signal
+    )
+    throwIfSignalAborted(operation.signal)
     if (preflight.outcome === 'denied') {
       await this.markFenced(this.requireRun(run.offer.executionId),
         `Transfer preflight denied: ${preflight.reasons.join(', ')}`)
@@ -1810,8 +1856,9 @@ export class CollaborationTaskAdapter {
     }
   }
 
-  private async submitResult(run: CollaborationTaskRun): Promise<void> {
-    const preflight = await this.refreshPreflight(run)
+  private async submitResult(run: CollaborationTaskRun, signal: AbortSignal): Promise<void> {
+    const preflight = await this.refreshPreflight(run, true, signal)
+    throwIfSignalAborted(signal)
     run = this.requireRun(run.offer.executionId)
     if (preflight.outcome === 'denied') {
       await this.markFenced(run, `Result preflight denied: ${preflight.reasons.join(', ')}`)
@@ -1973,8 +2020,10 @@ export class CollaborationTaskAdapter {
 
   private async refreshPreflight(
     run: CollaborationTaskRun,
-    allowRevisionReconcile = true
+    allowRevisionReconcile: boolean,
+    signal: AbortSignal
   ): Promise<CollaborationWorkerPreflight> {
+    throwIfSignalAborted(signal)
     const response = await this.options.connection.executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0', requestId: collaborationRequestId(),
       type: 'task.execution.preflight.get',
@@ -1983,12 +2032,14 @@ export class CollaborationTaskAdapter {
       expectedTaskRevision: run.expectedTaskRevision,
       expectedExecutionRevision: run.expectedExecutionRevision
     }))
+    throwIfSignalAborted(signal)
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.task_execution_preflight') {
       throw new Error(`Task preflight returned unexpected ${response.type}.`)
     }
     const cloud = response.preflight
     const task = await this.readTask(run.offer.taskId)
+    throwIfSignalAborted(signal)
     const reasons: Array<
       'cloud_denied' |
       'runtime_not_ready' |
@@ -2003,6 +2054,7 @@ export class CollaborationTaskAdapter {
     ))
     if (!localAgent || localAgent.lifecycleStatus !== 'active') reasons.push('agent_inactive')
     if (!(await this.runtimeReady())) reasons.push('runtime_not_ready')
+    throwIfSignalAborted(signal)
     if (
       cloud.execution.executionId !== run.offer.executionId ||
       cloud.execution.assigneeAgentId !== run.offer.recipientAgentId ||
@@ -2034,16 +2086,21 @@ export class CollaborationTaskAdapter {
       expectedExecutionRevision: cloud.execution.revision,
       error: uniqueReasons.length ? `Preflight denied: ${uniqueReasons.join(', ')}` : null
     })
+    throwIfSignalAborted(signal)
     const revisionOnlyDenial = cloud.decision.outcome === 'denied' &&
       cloud.decision.reasons.length > 0 &&
       cloud.decision.reasons.every((reason) => (
         reason === 'task_revision_mismatch' || reason === 'execution_revision_mismatch'
       ))
     if (allowRevisionReconcile && revisionOnlyDenial) {
-      return this.refreshPreflight(this.requireRun(run.offer.executionId), false)
+      return this.refreshPreflight(this.requireRun(run.offer.executionId), false, signal)
     }
     if (cloud.execution.fileIntent && uniqueReasons.length === 0) {
-      const content = await this.preflightContentTransfers(this.requireRun(run.offer.executionId))
+      const content = await this.preflightContentTransfers(
+        this.requireRun(run.offer.executionId),
+        signal
+      )
+      throwIfSignalAborted(signal)
       if (!content.ready) reasons.push('provider_not_ready')
       uniqueReasons = [...new Set(reasons)]
       local = {
@@ -2057,11 +2114,15 @@ export class CollaborationTaskAdapter {
         latestPreflight: local,
         error: uniqueReasons.length ? `Preflight denied: ${uniqueReasons.join(', ')}` : null
       })
+      throwIfSignalAborted(signal)
     }
     return local
   }
 
-  private async preflightContentTransfers(run: CollaborationTaskRun): Promise<Readonly<{
+  private async preflightContentTransfers(
+    run: CollaborationTaskRun,
+    signal: AbortSignal
+  ): Promise<Readonly<{
     ready: boolean
     observations: Array<Readonly<{
       operation: 'download' | 'upload-new'
@@ -2103,9 +2164,11 @@ export class CollaborationTaskAdapter {
           CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT.inputSchema.parse(intent),
           {
             workspaceId: run.workspaceRoot,
+            signal,
             systemExecutionContext: systemExecutionContext(run)
           }
         )
+        throwIfSignalAborted(signal)
         if (!result.ok) return { ready: false, observations }
         observations.push({
           operation: intent.operation,
@@ -2119,6 +2182,7 @@ export class CollaborationTaskAdapter {
         observations
       }
     } catch {
+      throwIfSignalAborted(signal)
       return { ready: false, observations: [] }
     }
   }
@@ -2286,11 +2350,15 @@ export class CollaborationTaskAdapter {
   private async updatePendingOffer(
     taskOfferId: string,
     update: Partial<CollaborationPendingTaskOffer>,
-    task?: Task
+    task?: Task,
+    expectedState?: CollaborationPendingTaskOffer['state']
   ): Promise<CollaborationPendingTaskOffer> {
     return this.options.store.transact((draft) => {
       const offer = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === taskOfferId)
       if (!offer) throw new Error('Local pending Task offer was not found.')
+      if (expectedState !== undefined && offer.state !== expectedState) {
+        return structuredClone(offer)
+      }
       Object.assign(offer, update, { updatedAt: this.now().toISOString() })
       if (task) {
         draft.tasks = [...draft.tasks.filter((candidate) => candidate.taskId !== task.taskId), task]
@@ -2649,6 +2717,14 @@ function canonicalJson(value: unknown): string {
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function throwIfSignalAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new Error(typeof signal.reason === 'string'
+    ? signal.reason
+    : 'Worker operation was cancelled.')
 }
 
 function normalizeSafeCode(value: string): string {

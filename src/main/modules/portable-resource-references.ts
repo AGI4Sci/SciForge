@@ -320,6 +320,7 @@ export class PortableResourceReferenceService {
         identity,
         resourceKind: ownedCodec.codec.resourceKind,
         authority,
+        audience: caller.audience,
         principal,
         assertPrincipalCurrent: assertCurrentPrincipal,
         ...(options.signal ? { signal: options.signal } : {})
@@ -454,6 +455,7 @@ export class PortableResourceReferenceService {
       assertCurrentPrincipal()
       const projected = await binding.projection.project({
         consumer: owner,
+        audience: caller.audience,
         principal,
         assertPrincipalCurrent: assertCurrentPrincipal,
         ...(options.signal ? { signal: options.signal } : {})
@@ -973,7 +975,7 @@ function toBrokerRegistration(input: Readonly<{
     ...(registration.audiences ? { audiences: [...registration.audiences] } : {}),
     semanticRevision: registration.semanticRevision,
     ...(registration.layoutRevision ? { layoutRevision: registration.layoutRevision } : {}),
-    observe: async (_caller, context) => {
+    observe: async (caller, context) => {
       const assertCurrentPrincipal = principalLeaseAssertion(
         principal,
         currentPrincipal,
@@ -981,6 +983,7 @@ function toBrokerRegistration(input: Readonly<{
       )
       assertCurrentPrincipal()
       const observed = await registration.observe({
+        audience: caller.audience,
         principal,
         assertPrincipalCurrent: assertCurrentPrincipal,
         ...(context.signal ? { signal: context.signal } : {})
