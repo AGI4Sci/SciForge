@@ -85,6 +85,7 @@ import {
   currentProjectCoordinatorPanelContext,
   setProjectCoordinatorPanelContext
 } from './panel-context.js'
+import { subscribeProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
   'coordinator',
@@ -785,6 +786,17 @@ export function ProjectCoordinatorPanel({
       globalThis.document?.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [busyAction, initialProjectId, refresh, selectedProjectId, workspace?.connection.state])
+
+  // Mutations may be initiated by another surface (for example an Agent
+  // retry/reassignment) while this panel remains mounted.  The local client
+  // invalidation is the canonical cross-component signal; refresh the
+  // currently selected Project immediately instead of waiting for the polling
+  // interval or leaving the HCI on stale failure facts.
+  useEffect(() => subscribeProjectCoordinatorWorkspaceInvalidation(() => {
+    if (busyAction || globalThis.document?.visibilityState === 'hidden') return
+    const projectId = selectedProjectId || initialProjectId || undefined
+    void refresh(projectId, undefined, 'background')
+  }), [busyAction, initialProjectId, refresh, selectedProjectId])
 
   const connectionMessage = workspace && workspace.connection.state !== 'ready'
     ? connectionMessageKey(workspace.connection.state)
