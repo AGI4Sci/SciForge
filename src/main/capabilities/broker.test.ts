@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
+import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
   capabilityResourceChangeEventSchema,
@@ -2437,6 +2438,35 @@ describe('CapabilityBroker', () => {
       .rejects.toSatisfy((error) => expectBrokerCode(error, 'handler_failed'))
     expect(handler).toHaveBeenCalledOnce()
     expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('preserves typed external navigation outcomes instead of hiding them as handler_failed', async () => {
+    const capability = defineCapability({
+      id: 'external-navigation.typed-outcome',
+      version: '1',
+      title: 'Open an external portal',
+      description: 'Exercises preservation of the existing external navigation error contract.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async () => {
+        throw new DomainExternalNavigationError(
+          'outcome_unknown',
+          'The external portal may have opened after authorization changed.'
+        )
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([capability]))
+
+    await expect(broker.invoke(agent, {
+      actionId: capability.descriptor.id,
+      invocationId: 'external-navigation-typed-outcome-1',
+      input: {}
+    })).rejects.toSatisfy((error) => expectBrokerCode(error, 'outcome_unknown'))
   })
 
   it('removes only the new handle when a failed invocation reuses a live resource', async () => {

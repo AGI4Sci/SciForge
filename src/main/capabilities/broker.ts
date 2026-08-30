@@ -15,6 +15,7 @@ import {
   type PrincipalContextSnapshot,
   type PrincipalSnapshot
 } from '@sciforge/domain-sdk/principal'
+import { DomainExternalNavigationError } from '@sciforge/domain-sdk/external-navigation'
 import {
   capabilityAuditRecordSchema,
   capabilityAudienceSchema,
@@ -94,6 +95,22 @@ export class CapabilityBrokerError extends Error {
     this.category = options.category ?? 'rejected'
     this.details = options.details
   }
+}
+
+function normalizeCapabilityHandlerError(actionId: string, error: unknown): CapabilityBrokerError {
+  if (error instanceof DomainExternalNavigationError) {
+    // External navigation already has a typed, fail-closed result contract.
+    // Preserve its code so callers can distinguish an uncertain dispatch from
+    // an ordinary handler failure without changing the public Broker protocol.
+    return new CapabilityBrokerError(error.code, error.message, {
+      category: 'failed',
+      cause: error
+    })
+  }
+  return new CapabilityBrokerError('handler_failed', `Handler for ${actionId} failed.`, {
+    category: 'failed',
+    cause: error
+  })
 }
 
 export type CapabilityBrokerOptions = {
@@ -1876,10 +1893,7 @@ export class CapabilityBroker {
       options.captureAcceptedPrincipalLease?.(acceptedPrincipalLease)
     } catch (error) {
       if (error instanceof CapabilityBrokerError) throw error
-      throw new CapabilityBrokerError('handler_failed', `Handler for ${request.actionId} failed.`, {
-        category: 'failed',
-        cause: error
-      })
+      throw normalizeCapabilityHandlerError(request.actionId, error)
     }
     if (!rawResult || typeof rawResult !== 'object' || !Object.hasOwn(rawResult, 'output')) {
       throw new CapabilityBrokerError('invalid_handler_result', 'Capability handler must return an output envelope.', {

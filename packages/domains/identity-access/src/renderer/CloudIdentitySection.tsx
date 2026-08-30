@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   CircleAlert,
   ExternalLink,
@@ -12,6 +12,7 @@ import {
   UserRound
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import type { CloudIdentitySnapshot } from '../contract.js'
 import type { IdentityRendererProjection } from './projection.js'
 
 type AccountDeletionStep = 'idle' | 'confirm'
@@ -28,12 +29,13 @@ const DEVICE_STATUS_MESSAGE = Object.freeze({
 export function CloudIdentitySection(props: Readonly<{
   projection: IdentityRendererProjection
   localAccountSelected: boolean
-  openAccount: (url: string) => void | Promise<void>
 }>): React.JSX.Element {
   const { t } = useTranslation('identity')
   const [accountDeletionStep, setAccountDeletionStep] = useState<AccountDeletionStep>('idle')
   const [accountDeletionBusy, setAccountDeletionBusy] = useState(false)
   const [accountDeletionError, setAccountDeletionError] = useState<string | null>(null)
+  const accountDeletionTargetRef = useRef<string | null>(null)
+  const accountDeletionAttemptRef = useRef(0)
   const snapshot = useSyncExternalStore(
     props.projection.subscribe,
     props.projection.getSnapshot
@@ -43,29 +45,69 @@ export function CloudIdentitySection(props: Readonly<{
   const activeDeviceId = cloud?.device.state === 'active'
     ? cloud.device.device.deviceId
     : null
+  const accountDeletionTarget = cloud ? accountDeletionTargetKey(cloud) : null
+  useEffect(() => {
+    if (
+      accountDeletionTargetRef.current === null ||
+      accountDeletionTargetRef.current === accountDeletionTarget
+    ) return
+    accountDeletionTargetRef.current = null
+    accountDeletionAttemptRef.current += 1
+    setAccountDeletionStep('idle')
+    setAccountDeletionBusy(false)
+    setAccountDeletionError(t('cloudDeleteIdentityChanged'))
+  }, [accountDeletionTarget, t])
+
   const run = (operation: () => Promise<void>): void => {
     void operation().catch(() => undefined)
   }
   const beginAccountDeletion = (): void => {
+    if (!accountDeletionTarget) return
+    accountDeletionTargetRef.current = accountDeletionTarget
     setAccountDeletionError(null)
     setAccountDeletionStep('confirm')
   }
   const openAccountConsole = (): void => {
-    if (!cloud || cloud.identity.state !== 'signed-in') return
-    const accountUrl = buildAccountConsoleUrl(cloud.identity.user.issuer)
-    if (!accountUrl) {
-      setAccountDeletionError(t('cloudDeleteUnavailable'))
+    const capturedTarget = accountDeletionTargetRef.current
+    if (
+      !capturedTarget ||
+      !accountDeletionTarget ||
+      capturedTarget !== accountDeletionTarget
+    ) {
+      accountDeletionTargetRef.current = null
+      accountDeletionAttemptRef.current += 1
+      setAccountDeletionStep('idle')
+      setAccountDeletionBusy(false)
+      setAccountDeletionError(t('cloudDeleteIdentityChanged'))
       return
     }
+    const attempt = ++accountDeletionAttemptRef.current
     setAccountDeletionBusy(true)
     setAccountDeletionError(null)
-    void Promise.resolve()
-      .then(() => props.openAccount(accountUrl))
-      .then(() => setAccountDeletionStep('idle'))
+    void props.projection.openCloudAccountDeletion()
+      .then(() => {
+        if (accountDeletionAttemptRef.current !== attempt) return
+        accountDeletionTargetRef.current = null
+        setAccountDeletionStep('idle')
+      })
       .catch((error: unknown) => {
+        if (accountDeletionAttemptRef.current !== attempt) return
+        if (errorCode(error) === 'outcome_unknown') {
+          accountDeletionTargetRef.current = null
+          setAccountDeletionStep('idle')
+        }
         setAccountDeletionError(error instanceof Error ? error.message : String(error))
       })
-      .finally(() => setAccountDeletionBusy(false))
+      .finally(() => {
+        if (accountDeletionAttemptRef.current === attempt) setAccountDeletionBusy(false)
+      })
+  }
+  const cancelAccountDeletion = (): void => {
+    accountDeletionTargetRef.current = null
+    accountDeletionAttemptRef.current += 1
+    setAccountDeletionBusy(false)
+    setAccountDeletionStep('idle')
+    setAccountDeletionError(null)
   }
 
   return (
@@ -200,12 +242,15 @@ export function CloudIdentitySection(props: Readonly<{
                   {t('cloudDeleteWarning')}
                 </p>
               </div>
+              <p className="text-xs text-muted-foreground">
+                {t('cloudDeleteCheck')}
+              </p>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
                   disabled={accountDeletionBusy}
-                  onClick={() => setAccountDeletionStep('idle')}
+                  onClick={cancelAccountDeletion}
                 >
                   {t('cloudDeleteCancel')}
                 </button>
@@ -242,18 +287,21 @@ export function CloudIdentitySection(props: Readonly<{
   )
 }
 
-function buildAccountConsoleUrl(issuer: string): string | null {
-  try {
-    const url = new URL(issuer)
-    const isLoopbackHttp = url.protocol === 'http:' &&
-      ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)
-    if (url.username || url.password || url.search || url.hash) return null
-    if (url.protocol !== 'https:' && !isLoopbackHttp) return null
-    const issuerPath = url.pathname.replace(/\/+$/u, '')
-    if (!issuerPath || issuerPath === '/') return null
-    url.pathname = `${issuerPath}/account/`
-    return url.toString()
-  } catch {
-    return null
-  }
+function accountDeletionTargetKey(cloud: CloudIdentitySnapshot): string | null {
+  if (cloud.identity.state !== 'signed-in') return null
+  return JSON.stringify([
+    cloud.revision,
+    cloud.identity.user.userId,
+    cloud.identity.user.oidcIdentityId,
+    cloud.identity.user.issuer,
+    cloud.identity.user.subject,
+    cloud.device.state === 'active' ? cloud.device.device.deviceId : null
+  ])
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error &&
+    typeof error.code === 'string'
+    ? error.code
+    : undefined
 }

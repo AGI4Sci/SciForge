@@ -16,7 +16,8 @@ export const IDENTITY_CAPABILITY_IDS = Object.freeze({
   cloudLogout: 'identity.cloud.logout',
   cloudEnrollDevice: 'identity.cloud.enroll-device',
   cloudRefreshDevices: 'identity.cloud.refresh-devices',
-  cloudRevokeDevice: 'identity.cloud.revoke-device'
+  cloudRevokeDevice: 'identity.cloud.revoke-device',
+  cloudOpenAccountDeletion: 'identity.cloud.open-account-deletion'
 } as const)
 
 export const IDENTITY_RESET_CONFIRMATION = 'RESET LOCAL IDENTITY' as const

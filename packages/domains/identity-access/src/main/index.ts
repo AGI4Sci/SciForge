@@ -18,7 +18,8 @@ import {
 } from '../agent-cloud-runtime.js'
 import {
   principalDeviceIdSchema,
-  type DomainMainPrincipalProvider
+  type DomainMainPrincipalProvider,
+  type PrincipalSnapshot
 } from '@sciforge/domain-sdk/principal'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
@@ -72,9 +73,13 @@ type IdentityCloudCapabilityRuntime = Readonly<{
   enrollDevice: () => Promise<unknown>
   refreshDevices: () => Promise<unknown>
   revokeDevice: (deviceId: string) => Promise<unknown>
+  openAccountDeletionPortal: (principal: PrincipalSnapshot) => Promise<unknown>
 }>
 type IdentityCapabilityContext = Readonly<{
-  caller: Readonly<{ audience: 'ui' | 'agent' | 'system' }>
+  caller: Readonly<{
+    audience: 'ui' | 'agent' | 'system'
+    principal?: PrincipalSnapshot
+  }>
   assertPrincipalCurrent: () => void
   resource?: Readonly<{
     resourceId: string
@@ -424,6 +429,19 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
     }
     return { output }
   }
+  const mutateCloudStrict = async (
+    context: IdentityCapabilityContext,
+    operation: (runtime: IdentityCloudCapabilityRuntime) => Promise<unknown>
+  ): Promise<Readonly<{
+    output: unknown
+  }>> => {
+    requireHumanUi(context)
+    context.assertPrincipalCurrent()
+    const runtime = options.getCloudRuntime()
+    const output = cloudIdentitySnapshotSchema.parse(await operation(runtime))
+    context.assertPrincipalCurrent()
+    return { output }
+  }
 
   return Object.freeze({
     moduleId: IDENTITY_ACCESS_DOMAIN_MODULE_ID,
@@ -573,7 +591,7 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
           }
         }
       }),
-      ...cloudMutationDefinitions(options.defineCapability, mutateCloud)
+      ...cloudMutationDefinitions(options.defineCapability, mutateCloud, mutateCloudStrict)
     ]
   })
 }
@@ -581,6 +599,12 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
 function cloudMutationDefinitions<CapabilityDefinition>(
   defineCapability: (options: IdentityCapabilityOptions) => CapabilityDefinition,
   mutate: (
+    context: IdentityCapabilityContext,
+    operation: (runtime: IdentityCloudCapabilityRuntime) => Promise<unknown>
+  ) => Promise<Readonly<{
+    output: unknown
+  }>>,
+  mutateStrict: (
     context: IdentityCapabilityContext,
     operation: (runtime: IdentityCloudCapabilityRuntime) => Promise<unknown>
   ) => Promise<Readonly<{
@@ -655,14 +679,49 @@ function cloudMutationDefinitions<CapabilityDefinition>(
       'Revokes one Device owned by the authenticated cloud User.',
       cloudDeviceRevokeInputSchema,
       (runtime, input) => runtime.revokeDevice(input.deviceId)
-    )
+    ),
+    defineCapability({
+      id: IDENTITY_CAPABILITY_IDS.cloudOpenAccountDeletion,
+      version: '1.0.0',
+      title: 'Open Keycloak Account Deletion',
+      description: 'Reauthenticates the current Cloud identity and opens its Keycloak account portal. Deleting the Keycloak identity does not delete SciForge Cloud projects, Devices, Agents, files, or other Cloud data.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'destructive',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['identity-access', 'cloud', 'oidc', 'account'],
+      inputSchema: emptyIdentityInputSchema,
+      outputSchema: cloudIdentitySnapshotSchema,
+      handler: (_input, context) => {
+        const principal = requireCloudDeletionPrincipal(context)
+        return mutateStrict(
+          context,
+          (runtime) => runtime.openAccountDeletionPortal(principal)
+        )
+      }
+    })
   ]
 }
 
 function requireHumanUi(context: IdentityCapabilityContext): void {
   if (context.caller.audience !== 'ui') {
-    throw new Error('Local Account operations require trusted Human UI.')
+    throw new Error('Identity operations require trusted Human UI.')
   }
+}
+
+function requireCloudDeletionPrincipal(context: IdentityCapabilityContext): PrincipalSnapshot {
+  const principal = context.caller.principal
+  if (
+    !principal ||
+    principal.authority !== 'sciforge-cloud' ||
+    principal.assurance !== 'cloud-authenticated'
+  ) {
+    throw new Error(
+      'Account deletion requires the current cloud-authenticated SciForge Principal.'
+    )
+  }
+  return principal
 }
 
 function requireIssueResource(

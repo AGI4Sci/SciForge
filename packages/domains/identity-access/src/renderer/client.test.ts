@@ -39,4 +39,27 @@ describe('IdentityRendererClient', () => {
     ])
     for (const call of invoke.mock.calls) expect(call[2]).toBeUndefined()
   })
+
+  it('invokes account deletion as a destructive confirmed capability', async () => {
+    const invoke = vi.fn(async (
+      _contract: Readonly<{ actionId: string }>,
+      _input: unknown,
+      _options?: unknown
+    ) => cloudSignedOut)
+    const client = createIdentityRendererClient({
+      invoke,
+      observe: vi.fn()
+    } as unknown as DomainRendererCapabilityInvoker)
+
+    await client.openCloudAccountDeletion()
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionId: IDENTITY_CAPABILITY_IDS.cloudOpenAccountDeletion,
+        effect: 'destructive'
+      }),
+      {},
+      { approval: { mode: 'confirmation' } }
+    )
+  })
 })

@@ -13,7 +13,8 @@ import type {
   DesktopDeviceActionResult,
   DesktopDeviceStatus,
   DesktopIdentityActionResult,
-  DesktopIdentityStatus
+  DesktopIdentityStatus,
+  DesktopIdentityUser
 } from '../contract.js'
 import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 import {
@@ -29,6 +30,7 @@ import type {
   DeviceFactSignatureMetadata,
   DeviceFactSigningRequest
 } from '@sciforge/collaboration-contracts'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import { restResponseSchema } from '@sciforge/collaboration-contracts'
 
 type CloudIdentityRuntimeError = NonNullable<CloudIdentitySnapshot['error']>
@@ -60,6 +62,7 @@ export class CloudIdentityRuntime {
   readonly #cloudBaseUrl: string | null
   readonly #transportUnavailableReason: string | null
   readonly #fetch: typeof fetch
+  readonly #openExternal: (url: string) => Promise<void>
   readonly #onAuthorityInvalidated: (reason: string) => void
   #revision = 1
   #identityError: CloudIdentityRuntimeError | undefined
@@ -76,6 +79,7 @@ export class CloudIdentityRuntime {
     cloudBaseUrl: string | null
     transportUnavailableReason: string | null
     fetchImpl: typeof fetch
+    openExternal: (url: string) => Promise<void>
     onAuthorityInvalidated: (reason: string) => void
     runtimeError?: CloudIdentityRuntimeError
   }>) {
@@ -85,6 +89,7 @@ export class CloudIdentityRuntime {
     this.#cloudBaseUrl = input.cloudBaseUrl
     this.#transportUnavailableReason = input.transportUnavailableReason
     this.#fetch = input.fetchImpl
+    this.#openExternal = input.openExternal
     this.#onAuthorityInvalidated = input.onAuthorityInvalidated
     this.#runtimeError = input.runtimeError
     this.#authorityIdentityKey = authorityIdentityKey(
@@ -178,6 +183,7 @@ export class CloudIdentityRuntime {
         cloudBaseUrl,
         transportUnavailableReason: configurationError || null,
         fetchImpl: options.fetchImpl ?? fetch,
+        openExternal,
         onAuthorityInvalidated: options.onAuthorityInvalidated ?? (() => undefined),
         ...(linkResult.error ? { runtimeError: linkResult.error } : {})
       })
@@ -263,6 +269,61 @@ export class CloudIdentityRuntime {
     if (result.ok && result.status.state === 'signed-in') {
       this.#acceptDeviceResult(await this.#device.ensureRegistered())
     }
+    return this.snapshot()
+  }
+
+  async openAccountDeletionPortal(expectedPrincipal: PrincipalSnapshot): Promise<CloudIdentitySnapshot> {
+    this.#assertOpen()
+    const before = this.#identity.getStatus()
+    if (before.state !== 'signed-in') {
+      throw new Error('A signed-in SciForge Cloud identity is required to delete the account.')
+    }
+    if (
+      expectedPrincipal.authority !== 'sciforge-cloud' ||
+      expectedPrincipal.assurance !== 'cloud-authenticated'
+    ) {
+      throw new Error(
+        'Account deletion requires the current cloud-authenticated SciForge Principal.'
+      )
+    }
+    const activeDevice = this.#device.getStatus()
+    if (activeDevice.state !== 'active') {
+      throw new Error(
+        'Account deletion requires an active Desktop Device for the current Cloud identity.'
+      )
+    }
+    if (
+      expectedPrincipal.subject !== before.user.userId ||
+      expectedPrincipal.deviceId !== activeDevice.device.deviceId
+    ) {
+      throw new Error(
+        'The current Cloud identity or Desktop Device no longer matches the account deletion request.'
+      )
+    }
+
+    // Re-authenticate through the existing PKCE flow before opening the
+    // account console, so a different browser cookie cannot select another
+    // account silently.
+    const reauthenticated = await this.#identity.reauthenticate()
+    this.#acceptIdentityResult(reauthenticated)
+    if (!reauthenticated.ok) throw new Error(reauthenticated.error.message)
+    if (
+      reauthenticated.status.state !== 'signed-in' ||
+      !sameCloudIdentityUser(reauthenticated.status.user, before.user)
+    ) {
+      throw new Error('Reauthentication completed for a different SciForge user.')
+    }
+    const deviceAfterReauthentication = this.#device.getStatus()
+    if (
+      deviceAfterReauthentication.state !== 'active' ||
+      deviceAfterReauthentication.device.deviceId !== expectedPrincipal.deviceId
+    ) {
+      throw new Error(
+        'The Desktop Device changed during account deletion reauthentication.'
+      )
+    }
+
+    await this.#openExternal(buildAccountConsoleUrl(reauthenticated.status.user.issuer))
     return this.snapshot()
   }
 
@@ -535,6 +596,32 @@ function authenticatedCloudIdempotencyHeader(
   return 'idempotencyKey' in payload
     ? { 'idempotency-key': payload.idempotencyKey }
     : {}
+}
+
+function sameCloudIdentityUser(left: DesktopIdentityUser, right: DesktopIdentityUser): boolean {
+  return left.userId === right.userId &&
+    left.oidcIdentityId === right.oidcIdentityId &&
+    left.issuer === right.issuer &&
+    left.subject === right.subject
+}
+
+export function buildAccountConsoleUrl(issuer: string): string {
+  const url = new URL(issuer)
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error('The configured Keycloak issuer must be a clean HTTPS URL.')
+  }
+  const issuerPath = url.pathname.replace(/\/+$/u, '')
+  if (!issuerPath || issuerPath === '/') {
+    throw new Error('The configured Keycloak issuer path is invalid.')
+  }
+  url.pathname = `${issuerPath}/account/`
+  return url.toString()
 }
 
 const MAX_AUTHENTICATED_CLOUD_RESPONSE_BYTES = 1_048_576

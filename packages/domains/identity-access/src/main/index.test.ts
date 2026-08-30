@@ -21,6 +21,7 @@ import {
   IDENTITY_CAPABILITY_IDS,
   IDENTITY_RESET_CONFIRMATION
 } from '../contract.js'
+import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
   createDomainMainEntry,
   createIdentityCapabilityFactory,
@@ -164,6 +165,16 @@ describe('Identity main contributions', () => {
     }
     expect(definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.backupAndReset))
       .toMatchObject({ effect: 'destructive', approval: 'confirmation' })
+    expect(definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudOpenAccountDeletion))
+      .toMatchObject({
+        effect: 'destructive',
+        approval: 'confirmation',
+        audiences: ['ui'],
+        scope: 'global',
+        concurrency: { revision: 'none', idempotency: 'required' }
+      })
+    expect(definitions.find(({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudOpenAccountDeletion))
+      .not.toHaveProperty('principalTransition')
     expect(definitions.filter((definition) => (
       definition.principalTransition === 'host-authority'
     )).map(({ id }) => id)).toEqual([
@@ -178,6 +189,57 @@ describe('Identity main contributions', () => {
       IDENTITY_CAPABILITY_IDS.cloudRefreshDevices,
       IDENTITY_CAPABILITY_IDS.cloudRevokeDevice
     ])
+  })
+
+  it('routes account deletion through a strict current-Principal capability', async () => {
+    const snapshot = {
+      identity: { state: 'signed-out' as const },
+      device: { state: 'signed-out' as const },
+      devices: [],
+      revision: 'cloud-1'
+    }
+    const principal: PrincipalSnapshot = {
+      authority: 'sciforge-cloud',
+      subject: 'usr_CloudUser000001',
+      assurance: 'cloud-authenticated',
+      deviceId: 'dev_CloudDevice0001',
+      identityVersion: 1
+    }
+    const openAccountDeletionPortal = vi.fn(async (_principal: PrincipalSnapshot) => snapshot)
+    const definitions = createIdentityCapabilityFactory({
+      defineCapability: (definition) => definition,
+      getService: () => ({}) as never,
+      getCloudRuntime: () => ({ openAccountDeletionPortal }) as never
+    }).createDefinitions() as IdentityCapabilityOptions[]
+    const deletion = definitions.find(
+      ({ id }) => id === IDENTITY_CAPABILITY_IDS.cloudOpenAccountDeletion
+    )!
+    const assertPrincipalCurrent = vi.fn()
+
+    await expect(deletion.handler({}, {
+      caller: { audience: 'ui', principal },
+      assertPrincipalCurrent
+    })).resolves.toEqual({ output: snapshot })
+    expect(assertPrincipalCurrent).toHaveBeenCalledTimes(2)
+    expect(openAccountDeletionPortal).toHaveBeenCalledOnce()
+
+    const principalChanged = Object.assign(new Error('principal changed'), {
+      code: 'principal_changed'
+    })
+    const postNavigationAssert = vi.fn()
+    postNavigationAssert.mockImplementationOnce(() => undefined)
+    postNavigationAssert.mockImplementationOnce(() => { throw principalChanged })
+    await expect(deletion.handler({}, {
+      caller: { audience: 'ui', principal },
+      assertPrincipalCurrent: postNavigationAssert
+    })).rejects.toBe(principalChanged)
+    expect(openAccountDeletionPortal).toHaveBeenCalledTimes(2)
+
+    expect(() => deletion.handler({}, {
+      caller: { audience: 'ui' },
+      assertPrincipalCurrent: vi.fn()
+    })).toThrow('cloud-authenticated SciForge Principal')
+    expect(openAccountDeletionPortal).toHaveBeenCalledTimes(2)
   })
 
   it('shares one lazy service between capabilities and Principal provider and rejects Agent calls', async () => {

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 import { resolveDesktopIdentityRuntimeConfig } from './cloud-runtime-config.js'
-import { CloudIdentityRuntime } from './cloud-runtime.js'
+import { buildAccountConsoleUrl, CloudIdentityRuntime } from './cloud-runtime.js'
 import { DesktopDeviceService } from './device-service.js'
 import { DesktopIdentityService } from './oidc-service.js'
 import { IdentityStore } from './store.js'
@@ -18,6 +18,29 @@ afterEach(() => {
 })
 
 describe('CloudIdentityRuntime', () => {
+  it.each([
+    [
+      'https://identity.example.test/realms/SciForge',
+      'https://identity.example.test/realms/SciForge/account/'
+    ],
+    [
+      'https://identity.example.test/realms/SciForge/',
+      'https://identity.example.test/realms/SciForge/account/'
+    ]
+  ])('derives the account portal from a clean HTTPS issuer', (issuer, expected) => {
+    expect(buildAccountConsoleUrl(issuer)).toBe(expected)
+  })
+
+  it.each([
+    'http://identity.example.test/realms/SciForge',
+    'https://identity.example.test/realms/SciForge?redirect=https://evil.example.test',
+    'https://identity.example.test/realms/SciForge#account',
+    'https://user:password@identity.example.test/realms/SciForge',
+    'https://identity.example.test'
+  ])('rejects an untrusted account portal issuer: %s', (issuer) => {
+    expect(() => buildAccountConsoleUrl(issuer)).toThrow()
+  })
+
   it('uses the real HTTP client only when both endpoints are explicitly configured', () => {
     expect(resolveDesktopIdentityRuntimeConfig({
       oidcIssuer: 'https://identity.example.test/realms/SciForge',

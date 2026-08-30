@@ -74,7 +74,6 @@ export function createDomainRendererEntry(
           projection={projection}
           firstRun={isFirstRunActivation(context.activation?.payload)}
           onClose={context.onClose}
-          openAccount={host.openExternal}
         />
       )
     })

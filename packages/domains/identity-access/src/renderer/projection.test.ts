@@ -471,6 +471,7 @@ function clientFixture(
     enrollCloudDevice: vi.fn(async () => cloudSignedOut),
     refreshCloudDevices: vi.fn(async () => cloudSignedOut),
     revokeCloudDevice: vi.fn(async () => cloudSignedOut),
+    openCloudAccountDeletion: vi.fn(async () => cloudSignedOut),
     ...overrides
   }
 }

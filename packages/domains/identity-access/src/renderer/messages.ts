@@ -41,11 +41,13 @@ export const identityI18nResourceContribution = Object.freeze({
       cloudDeviceEnrolling: 'Registering this Desktop',
       cloudDeviceNotEnrolled: 'This Desktop is not connected',
       cloudDeviceError: 'Desktop registration needs attention',
-      cloudDeleteAccount: 'Permanently close cloud account',
-      cloudDeleteWarning: 'This permanently deletes the SciForge Cloud identity in the account portal. SciForge Cloud projects and files are not deleted by this action.',
+      cloudDeleteAccount: 'Permanently delete Keycloak identity',
+      cloudDeleteWarning: 'This opens the Keycloak account portal and permanently deletes the current Keycloak login identity. It does not delete SciForge Cloud projects, files, Devices, or other Cloud data. Return to SciForge and sign out separately; this action does not revoke an existing Cloud session.',
+      cloudDeleteCheck: 'Before continuing, verify that the account shown in the browser is the account you intend to delete.',
       cloudDeleteCancel: 'Cancel',
-      cloudDeleteContinue: 'Open account deletion',
-      cloudDeleteUnavailable: 'The account portal is unavailable for this identity.'
+      cloudDeleteContinue: 'Open Keycloak account deletion',
+      cloudDeleteIdentityChanged: 'The signed-in Cloud identity or Desktop Device changed. Start account deletion again.',
+      cloudDeleteUnavailable: 'The Keycloak account portal is unavailable for this identity.'
     }),
     zh: Object.freeze({
       accountTitle: '本地账户',
@@ -87,11 +89,13 @@ export const identityI18nResourceContribution = Object.freeze({
       cloudDeviceEnrolling: '正在注册此 Desktop',
       cloudDeviceNotEnrolled: '此 Desktop 尚未连接',
       cloudDeviceError: 'Desktop 注册需要处理',
-      cloudDeleteAccount: '永久注销云端账号',
-      cloudDeleteWarning: '此操作会在账户门户中永久删除 SciForge 云端身份。此操作不会删除 SciForge Cloud 中的项目和文件。',
+      cloudDeleteAccount: '永久注销 Keycloak 登录身份',
+      cloudDeleteWarning: '此操作会打开 Keycloak 账户页面，并永久删除当前 Keycloak 登录身份。它不会删除 SciForge Cloud 的项目、文件、设备或其他云端数据。请返回 SciForge 另行退出登录；此操作不会撤销已有的云端会话。',
+      cloudDeleteCheck: '继续前，请核对浏览器中显示的账号确实是你要注销的账号。',
       cloudDeleteCancel: '取消',
-      cloudDeleteContinue: '打开账号注销页面',
-      cloudDeleteUnavailable: '当前身份没有可用的账户门户。'
+      cloudDeleteContinue: '打开 Keycloak 注销页面',
+      cloudDeleteIdentityChanged: '当前云端身份或 Desktop 设备已变化，请重新开始注销流程。',
+      cloudDeleteUnavailable: '当前身份没有可用的 Keycloak 账户页面。'
     })
   })
 })

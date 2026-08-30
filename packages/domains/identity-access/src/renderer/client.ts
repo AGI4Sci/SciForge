@@ -51,6 +51,7 @@ export type IdentityRendererClient = Readonly<{
   enrollCloudDevice(): Promise<CloudIdentitySnapshot>
   refreshCloudDevices(): Promise<CloudIdentitySnapshot>
   revokeCloudDevice(deviceId: string): Promise<CloudIdentitySnapshot>
+  openCloudAccountDeletion(): Promise<CloudIdentitySnapshot>
 }>
 
 export function createIdentityRendererClient(
@@ -159,6 +160,12 @@ export function createIdentityRendererClient(
       IDENTITY_CAPABILITY_IDS.cloudRevokeDevice,
       cloudDeviceRevokeInputSchema,
       { deviceId }
-    )
+    ),
+    openCloudAccountDeletion: () => invoker.invoke({
+      actionId: IDENTITY_CAPABILITY_IDS.cloudOpenAccountDeletion,
+      effect: 'destructive',
+      inputSchema: emptyIdentityInputSchema,
+      outputSchema: cloudIdentitySnapshotSchema
+    }, {}, { approval: { mode: 'confirmation' } })
   })
 }

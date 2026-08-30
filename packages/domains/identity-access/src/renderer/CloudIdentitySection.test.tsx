@@ -41,7 +41,6 @@ describe('CloudIdentitySection', () => {
       root.render(createElement(CloudIdentitySection, {
         projection,
         localAccountSelected: false,
-        openAccount: vi.fn()
       }))
     })
 
@@ -63,7 +62,6 @@ describe('CloudIdentitySection', () => {
       root.render(createElement(CloudIdentitySection, {
         projection,
         localAccountSelected: true,
-        openAccount: vi.fn()
       }))
     })
     const revoke = Array.from(container!.querySelectorAll('button'))
@@ -90,7 +88,6 @@ describe('CloudIdentitySection', () => {
         projection,
         firstRun: false,
         onClose: vi.fn(),
-        openAccount: vi.fn()
       }))
     })
 
@@ -111,7 +108,6 @@ describe('CloudIdentitySection', () => {
         projection: transportProjection,
         firstRun: false,
         onClose: vi.fn(),
-        openAccount: vi.fn()
       }))
     })
 
@@ -120,17 +116,19 @@ describe('CloudIdentitySection', () => {
     expect(alerts[0]?.textContent).toBe(transportError)
   })
 
-  it('opens the trusted account portal only after confirmation without invoking cloud logout', async () => {
+  it('invokes account deletion only after confirmation without invoking cloud logout', async () => {
     const logoutCloud = vi.fn(async () => undefined)
-    const openAccount = vi.fn(async (_url: string) => undefined)
-    const projection = projectionFixture(snapshotWith(activeCloud()), { logoutCloud })
+    const openCloudAccountDeletion = vi.fn(async () => undefined)
+    const projection = projectionFixture(snapshotWith(activeCloud()), {
+      logoutCloud,
+      openCloudAccountDeletion
+    })
 
     await act(async () => {
       root = createRoot(container!)
       root.render(createElement(CloudIdentitySection, {
         projection,
         localAccountSelected: true,
-        openAccount
       }))
     })
 
@@ -138,14 +136,11 @@ describe('CloudIdentitySection', () => {
     expect(deleteButton).toBeDefined()
     await act(async () => deleteButton?.click())
     expect(findButton('cloudDeleteContinue')).toBeDefined()
-    expect(openAccount).not.toHaveBeenCalled()
+    expect(openCloudAccountDeletion).not.toHaveBeenCalled()
 
     await act(async () => findButton('cloudDeleteContinue')?.click())
-    expect(openAccount).toHaveBeenCalledWith(
-      'https://login-test.sciforge.cn/realms/SciForge/account/'
-    )
+    expect(openCloudAccountDeletion).toHaveBeenCalledOnce()
     expect(logoutCloud).not.toHaveBeenCalled()
-    expect(String(openAccount.mock.calls[0]?.[0])).not.toContain('usr_')
   })
 
   it('does not expose account deletion while signed out', async () => {
@@ -156,17 +151,19 @@ describe('CloudIdentitySection', () => {
       root.render(createElement(CloudIdentitySection, {
         projection,
         localAccountSelected: true,
-        openAccount: vi.fn()
       }))
     })
 
     expect(findButton('cloudDeleteAccount')).toBeUndefined()
   })
 
-  it('fails closed when the identity issuer cannot produce a trusted account URL', async () => {
-    const openAccount = vi.fn()
+  it('surfaces a trusted account URL failure from the Identity capability', async () => {
+    const openCloudAccountDeletion = vi.fn(async () => {
+      throw new Error('The configured Keycloak issuer must be a clean HTTPS URL.')
+    })
     const projection = projectionFixture(
-      snapshotWith(activeCloud('http://untrusted.example/realms/SciForge'))
+      snapshotWith(activeCloud({ issuer: 'http://untrusted.example/realms/SciForge' })),
+      { openCloudAccountDeletion }
     )
 
     await act(async () => {
@@ -174,15 +171,50 @@ describe('CloudIdentitySection', () => {
       root.render(createElement(CloudIdentitySection, {
         projection,
         localAccountSelected: true,
-        openAccount
       }))
     })
 
     await act(async () => findButton('cloudDeleteAccount')?.click())
     await act(async () => findButton('cloudDeleteContinue')?.click())
 
-    expect(openAccount).not.toHaveBeenCalled()
-    expect(container!.querySelector('[role="alert"]')?.textContent).toBe('cloudDeleteUnavailable')
+    expect(openCloudAccountDeletion).toHaveBeenCalledOnce()
+    expect(container!.querySelector('[role="alert"]')?.textContent)
+      .toContain('clean HTTPS URL')
+  })
+
+  it('invalidates a pending confirmation when the Cloud identity or Device changes', async () => {
+    const firstProjection = projectionFixture(snapshotWith(activeCloud()))
+    const secondOpen = vi.fn(async () => undefined)
+    const secondProjection = projectionFixture(
+      snapshotWith(activeCloud({
+        userId: 'usr_CloudUser000002',
+        subject: 'keycloak-subject-b',
+        deviceId: 'dev_CloudDevice0002',
+        revision: 'cloud-3'
+      })),
+      { openCloudAccountDeletion: secondOpen }
+    )
+
+    await act(async () => {
+      root = createRoot(container!)
+      root.render(createElement(CloudIdentitySection, {
+        projection: firstProjection,
+        localAccountSelected: true
+      }))
+    })
+    await act(async () => findButton('cloudDeleteAccount')?.click())
+    expect(findButton('cloudDeleteContinue')).toBeDefined()
+
+    await act(async () => {
+      root?.render(createElement(CloudIdentitySection, {
+        projection: secondProjection,
+        localAccountSelected: true
+      }))
+    })
+
+    expect(findButton('cloudDeleteContinue')).toBeUndefined()
+    expect(container!.textContent).toContain('cloudDeleteIdentityChanged')
+    expect(secondOpen).not.toHaveBeenCalled()
   })
 
   function findButton(label: string): HTMLButtonElement | undefined {
@@ -227,6 +259,7 @@ function projectionFixture(
     enrollCloudDevice: vi.fn(),
     refreshCloudDevices: vi.fn(),
     revokeCloudDevice: vi.fn(),
+    openCloudAccountDeletion: vi.fn(async () => undefined),
     ...overrides
   } as unknown as IdentityRendererProjection
 }
@@ -240,9 +273,15 @@ function signedOutCloud(): CloudIdentitySnapshot {
   }
 }
 
-function activeCloud(issuer = 'https://login-test.sciforge.cn/realms/SciForge'): CloudIdentitySnapshot {
+function activeCloud(options: Readonly<{
+  issuer?: string
+  userId?: string
+  subject?: string
+  deviceId?: string
+  revision?: string
+}> = {}): CloudIdentitySnapshot {
   const device = {
-    deviceId: 'dev_CloudDevice0001',
+    deviceId: options.deviceId ?? 'dev_CloudDevice0001',
     displayName: 'Lab Desktop',
     status: 'active' as const,
     platform: { os: 'windows' as const, arch: 'x64' as const, appVersion: '0.2.17' },
@@ -252,16 +291,16 @@ function activeCloud(issuer = 'https://login-test.sciforge.cn/realms/SciForge'):
     identity: {
       state: 'signed-in',
       user: {
-        userId: 'usr_CloudUser000001',
+        userId: options.userId ?? 'usr_CloudUser000001',
         oidcIdentityId: 'oid_CloudIdent0001',
-        issuer,
-        subject: 'keycloak-subject-a',
+        issuer: options.issuer ?? 'https://login-test.sciforge.cn/realms/SciForge',
+        subject: options.subject ?? 'keycloak-subject-a',
         displayName: 'Cloud Person'
       },
       accessTokenExpiresAt: '2026-08-21T20:00:00.000Z'
     },
     device: { state: 'active', device },
     devices: [device],
-    revision: 'cloud-2'
+    revision: options.revision ?? 'cloud-2'
   }
 }

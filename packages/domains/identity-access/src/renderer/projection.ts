@@ -140,6 +140,10 @@ export class IdentityRendererProjection {
     await this.mutateCloud(() => this.client.revokeCloudDevice(deviceId))
   }
 
+  async openCloudAccountDeletion(): Promise<void> {
+    await this.mutateCloud(() => this.client.openCloudAccountDeletion())
+  }
+
   dispose(): void {
     this.disposed = true
     this.cloudSubscriptionEpoch += 1

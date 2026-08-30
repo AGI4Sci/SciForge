@@ -36,6 +36,18 @@ The Keycloak account console is also available at `http://127.0.0.1:8080/realms/
 
 The HTTP issuer is deliberately limited to loopback development. The shared SciForge identity contract permits loopback HTTP for local integration and requires HTTPS for every non-loopback issuer.
 
+## Account deletion
+
+The Desktop account action opens the authenticated Keycloak Account Console. It permanently deletes only the current Keycloak login identity. It does not deprovision the SciForge Cloud user, Device, Agent, projects, files, or other Cloud data, and it does not revoke an already-issued SciForge Cloud session. After returning to SciForge, sign out of the Cloud session separately.
+
+The built-in Keycloak action must be enabled in the target realm before users can complete the flow:
+
+- enable the `delete_account` required action;
+- grant the built-in `account` client's `delete-account` role;
+- preferably add that client role to the realm's `default-roles-<realm>` composite so newly registered users inherit it.
+
+Verify the flow with an authenticated test user in the target realm. Do not commit administrator credentials, access tokens, user exports, or other secret material. The Desktop uses the existing OIDC/PKCE and Host external-navigation path; it does not receive a Keycloak administrator credential and does not add a SciForge Cloud deletion endpoint.
+
 ## Imported clients
 
 | Client | Purpose | Authentication |
