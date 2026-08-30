@@ -1,6 +1,10 @@
 import {
   VISIBLE_CONTEXT_DEFAULT_STALE_AFTER_MS,
+  VISIBLE_CONTEXT_MAX_COMPONENTS,
   VISIBLE_CONTEXT_SCHEMA_VERSION,
+  sanitizeVisibleContextPublishInput,
+  visibleContextComponentSnapshotSchema,
+  visibleContextPublishInputSchema,
   type VisibleContextBounds,
   type VisibleContextComponentSnapshot,
   type VisibleContextPublishInput,
@@ -33,6 +37,11 @@ let nextSensitiveTargetId = 0
 let shell: VisibleContextShell = {}
 let publishTimer: number | null = null
 let revision = readPersistedRevision()
+let pendingPublish: Readonly<{
+  publish: (snapshot: VisibleContextPublishInput) => Promise<unknown>
+  snapshot: VisibleContextPublishInput
+}> | null = null
+let publishInFlight: Promise<void> | null = null
 
 export function setVisibleContextShell(next: VisibleContextShell): void {
   ensureVisibleContextRefreshListener()
@@ -282,7 +291,15 @@ function publishVisibleContext(): void {
   const publishedAt = new Date().toISOString()
   revision += 1
   persistRevision(revision)
-  const snapshot: VisibleContextPublishInput = {
+  const visibleComponents = [...components.values()]
+    .filter((component) => component.visible)
+    .map(withRegisteredVisualTargets)
+    .sort((a, b) => {
+      const priority = (b.priority ?? 0) - (a.priority ?? 0)
+      return priority || a.region.localeCompare(b.region) || a.id.localeCompare(b.id)
+    })
+    .slice(0, VISIBLE_CONTEXT_MAX_COMPONENTS)
+  const candidate: VisibleContextPublishInput = {
     schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
     revision,
     publishedAt,
@@ -294,15 +311,45 @@ function publishVisibleContext(): void {
     ...(shell.activeThreadId !== undefined ? { activeThreadId: shell.activeThreadId } : {}),
     ...(shell.workspaceRoot ? { workspaceRoot: shell.workspaceRoot } : {}),
     ...(shell.route ? { route: shell.route } : {}),
-    components: [...components.values()]
-      .filter((component) => component.visible)
-      .map(withRegisteredVisualTargets)
-      .sort((a, b) => {
-        const priority = (b.priority ?? 0) - (a.priority ?? 0)
-        return priority || a.region.localeCompare(b.region) || a.id.localeCompare(b.id)
-      })
+    components: visibleComponents
   }
-  void publish(snapshot).catch(() => undefined)
+  const sanitized = sanitizeVisibleContextPublishInput(candidate)
+  const validComponents = sanitized.components.flatMap((component) => {
+    const parsed = visibleContextComponentSnapshotSchema.safeParse(component)
+    return parsed.success ? [parsed.data] : []
+  })
+  const parsed = visibleContextPublishInputSchema.safeParse({
+    ...sanitized,
+    components: validComponents
+  })
+  if (!parsed.success) return
+  queueVisibleContextPublish(publish, parsed.data)
+}
+
+function queueVisibleContextPublish(
+  publish: (snapshot: VisibleContextPublishInput) => Promise<unknown>,
+  snapshot: VisibleContextPublishInput
+): void {
+  pendingPublish = { publish, snapshot }
+  flushVisibleContextPublish()
+}
+
+function flushVisibleContextPublish(): void {
+  if (publishInFlight || !pendingPublish) return
+  const next = pendingPublish
+  pendingPublish = null
+  let result: Promise<unknown>
+  try {
+    result = next.publish(next.snapshot)
+  } catch (error) {
+    result = Promise.reject(error)
+  }
+  publishInFlight = Promise.resolve(result)
+    .then(() => undefined, () => undefined)
+    .finally(() => {
+      publishInFlight = null
+      flushVisibleContextPublish()
+    })
 }
 
 function readPersistedRevision(): number {

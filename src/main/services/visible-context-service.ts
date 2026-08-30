@@ -5,12 +5,11 @@ import { lstat, open, readdir, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import {
   emptyVisibleContextSnapshot,
+  sanitizeVisibleContextSnapshot,
   visibleContextSnapshotSchema,
   type VisibleContextBounds,
   type VisibleContextCapturePreviewResult,
   type VisibleContextCaptureResult,
-  type VisibleContextComponentSnapshot,
-  type VisibleContextResource,
   type VisibleContextSnapshot,
   type VisibleContextTargetRefRequest,
   type VisibleContextVisualSnapshotResource,
@@ -26,10 +25,6 @@ import {
 export const VISIBLE_CONTEXT_STORE_SEGMENTS = ['visible-context', 'snapshot.json'] as const
 export const VISIBLE_CONTEXT_CAPTURE_DIRECTORY_SEGMENTS = ['visible-context', 'captures'] as const
 
-const MAX_OBJECT_KEYS = 64
-const MAX_ARRAY_ITEMS = 64
-const MAX_STRING_CHARS = 4096
-const MAX_JSON_DEPTH = 6
 const DEFAULT_CAPTURE_RETENTION_LIMIT = 64
 const DEFAULT_CAPTURE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
 const MAX_CAPTURE_PREVIEW_BYTES = 32 * 1024 * 1024
@@ -874,16 +869,6 @@ function intersectBounds(
   return { x, y, width: right - x, height: bottom - y }
 }
 
-function sanitizeVisibleContextSnapshot(snapshot: VisibleContextSnapshot): VisibleContextSnapshot {
-  return {
-    ...snapshot,
-    activeThreadId: snapshot.activeThreadId ?? null,
-    components: snapshot.components
-      .filter((component) => component.visible)
-      .map(sanitizeVisibleContextComponent)
-  }
-}
-
 function snapshotResourceRefs(snapshot: VisibleContextSnapshot): string[] {
   return [...new Set(snapshot.components.flatMap((component) => (
     component.resources?.flatMap((resource) => {
@@ -891,51 +876,4 @@ function snapshotResourceRefs(snapshot: VisibleContextSnapshot): string[] {
       return resourceRef ? [resourceRef] : []
     }) ?? []
   )))]
-}
-
-function sanitizeVisibleContextComponent(
-  component: VisibleContextComponentSnapshot
-): VisibleContextComponentSnapshot {
-  return {
-    ...component,
-    resources: component.resources?.map(sanitizeVisibleContextResource),
-    visualTargets: component.visualTargets?.map((target) => ({
-      ...target,
-      metadata: sanitizeJsonObject(target.metadata)
-    })),
-    state: sanitizeJsonObject(component.state)
-  }
-}
-
-function sanitizeVisibleContextResource(resource: VisibleContextResource): VisibleContextResource {
-  return {
-    ...resource,
-    metadata: sanitizeJsonObject(resource.metadata)
-  }
-}
-
-function sanitizeJsonObject(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  const sanitized = sanitizeJsonValue(value, 0)
-  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
-    ? sanitized as Record<string, unknown>
-    : undefined
-}
-
-function sanitizeJsonValue(value: unknown, depth: number): unknown {
-  if (value === null || value === undefined) return value
-  if (typeof value === 'string') return value.slice(0, MAX_STRING_CHARS)
-  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
-  if (typeof value === 'boolean') return value
-  if (depth >= MAX_JSON_DEPTH) return '[truncated]'
-  if (Array.isArray(value)) {
-    return value.slice(0, MAX_ARRAY_ITEMS).map((item) => sanitizeJsonValue(item, depth + 1))
-  }
-  if (typeof value === 'object') {
-    const output: Record<string, unknown> = {}
-    for (const [key, entry] of Object.entries(value).slice(0, MAX_OBJECT_KEYS)) {
-      output[key.slice(0, 256)] = sanitizeJsonValue(entry, depth + 1)
-    }
-    return output
-  }
-  return undefined
 }
