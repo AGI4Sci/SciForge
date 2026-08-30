@@ -2263,6 +2263,68 @@ export class CollaborationService {
     }).then(responseEntity<StoredProject>)
   }
 
+  async deleteProject(
+    actor: UserActor,
+    input: RestCommand<'project.delete'>
+  ): Promise<void> {
+    await this.commit(actor, 'project.delete', input.idempotencyKey, input, async (tx, at) => {
+      const project = required(await tx.getProjectForUpdate(input.projectId), 'Project')
+      requireProjectOwner(project, actor)
+      expectRevision(project.revision, input.expectedRevision)
+      expectRevision(project.coordinatorAuthorityEpoch, input.expectedCoordinatorAuthorityEpoch)
+      expectRevision(project.executionAuthorityEpoch, input.expectedExecutionAuthorityEpoch)
+
+      const unresolvedExternalOperation = (await tx.listExternalOperationJournal(project.projectId))
+        .find(({ state }) => state === 'dispatched' || state === 'outcome_unknown')
+      if (unresolvedExternalOperation) {
+        fail(
+          'invalid_state_transition',
+          'A Project with a dispatched or unresolved external operation cannot be deleted.'
+        )
+      }
+
+      const memberships = await tx.listProjectMembers(project.projectId)
+      const memberAgents = (await Promise.all(
+        memberships.map(({ userId }) => tx.listAgentsForUser(userId))
+      )).flat()
+      const recipientAgentIds = new Set(
+        memberAgents.filter(({ status }) => status === 'active').map(({ agentId }) => agentId)
+      )
+      recipientAgentIds.add(project.coordinatorAgentId)
+
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      const payload = agentInboxPayloadSchema.parse({
+        protocolVersion: '1.0',
+        type: 'project.deleted',
+        projectId: project.projectId,
+        deletedAt: at
+      })
+      for (const agentId of recipientAgentIds) {
+        const message = await this.appendInbox(
+          tx,
+          { kind: 'agent', id: agentId },
+          'project.deleted',
+          payload,
+          at
+        )
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+
+      await tx.deleteProject(project.projectId, project.revision)
+      return {
+        response: {
+          protocolVersion: '1.0',
+          type: 'project.deleted',
+          projectId: project.projectId,
+          deletedAt: at
+        },
+        resourceKind: 'project',
+        resourceId: project.projectId,
+        notifications
+      }
+    })
+  }
+
   async publishWorkerAvailability(
     actor: AgentActor,
     input: CloudCommand<'worker.availability.publish'>

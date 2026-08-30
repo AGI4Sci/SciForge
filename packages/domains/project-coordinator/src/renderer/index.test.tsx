@@ -278,6 +278,7 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
         projects: []
       }),
       createProject: async () => { throw new Error('unused') },
+      deleteProject: async () => { throw new Error('unused') },
       acknowledgeProjectActivation: async () => { throw new Error('unused') },
       readSessionProjection: async () => ({
         schemaVersion: 1 as const,

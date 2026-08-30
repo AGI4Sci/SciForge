@@ -11,6 +11,11 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorSidebarDecisions: 'Decisions',
     projectCoordinatorSidebarActivityRecovery: 'Activity / Recovery',
     projectCoordinatorSidebarRetry: 'Retry',
+    projectCoordinatorSidebarDeleteProject: 'Delete Cloud Project',
+    projectCoordinatorSidebarDeleteProjectLabel: 'Delete Cloud Project "{{name}}"',
+    projectCoordinatorSidebarDeleteConfirm:
+      'Delete the Cloud Project "{{name}}" for all members?\n\nThis stops Agent collaboration and removes the Project from Workbench. Linked local Sessions and external Content Spaces/files are kept. This cannot be undone.',
+    projectCoordinatorSidebarDeleteFailed: 'The Cloud Project could not be deleted.',
     projectCoordinatorSidebarStatusDraft: 'Draft',
     projectCoordinatorSidebarStatusActive: 'Working',
     projectCoordinatorSidebarStatusPaused: 'Paused',
@@ -305,6 +310,11 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorSidebarDecisions: '决定',
     projectCoordinatorSidebarActivityRecovery: '活动 / 恢复',
     projectCoordinatorSidebarRetry: '重试',
+    projectCoordinatorSidebarDeleteProject: '删除云端项目',
+    projectCoordinatorSidebarDeleteProjectLabel: '删除云端项目“{{name}}”',
+    projectCoordinatorSidebarDeleteConfirm:
+      '确定为所有成员删除云端项目“{{name}}”吗？\n\n这会停止 Agent 协作，并将该项目移出 Workbench。关联的本地 Session 以及外部 Content Space/文件会保留。此操作无法撤销。',
+    projectCoordinatorSidebarDeleteFailed: '无法删除云端项目。',
     projectCoordinatorSidebarStatusDraft: '草稿',
     projectCoordinatorSidebarStatusActive: '进行中',
     projectCoordinatorSidebarStatusPaused: '已暂停',

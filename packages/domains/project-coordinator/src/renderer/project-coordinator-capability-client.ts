@@ -27,6 +27,8 @@ import {
   projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorProjectDeleteInputSchema,
+  projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorSessionProjectionReadInputSchema,
   projectCoordinatorSessionProjectionSchema,
   projectCoordinatorTaskOfferReassignInputSchema,
@@ -58,6 +60,8 @@ import {
   type ProjectCoordinatorWorkflowPrepareInput,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateResult,
+  type ProjectCoordinatorProjectDeleteInput,
+  type ProjectCoordinatorProjectDeleteResult,
   type ProjectCoordinatorSessionProjection,
   type ProjectCoordinatorTaskOfferReassignInput,
   type ProjectCoordinatorResultReviewInput,
@@ -79,6 +83,13 @@ const projectCreateContract = Object.freeze({
   effect: 'external-write' as const,
   inputSchema: projectCoordinatorProjectCreateInputSchema,
   outputSchema: projectCoordinatorProjectCreateResultSchema
+})
+
+const projectDeleteContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+  effect: 'destructive' as const,
+  inputSchema: projectCoordinatorProjectDeleteInputSchema,
+  outputSchema: projectCoordinatorProjectDeleteResultSchema
 })
 
 const projectActivationAcknowledgeContract = Object.freeze({
@@ -245,6 +256,7 @@ const confirmationApproval = Object.freeze({
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
+  deleteProject(input: ProjectCoordinatorProjectDeleteInput): Promise<ProjectCoordinatorProjectDeleteResult>
   acknowledgeProjectActivation(input: ProjectCoordinatorActivationAcknowledgeInput): Promise<void>
   readSessionProjection(): Promise<ProjectCoordinatorSessionProjection>
   readPlanDraft(input: ProjectCoordinatorPlanDraftReadInput): Promise<ProjectCoordinatorPlanDraft | null>
@@ -284,6 +296,11 @@ export function createProjectCoordinatorRendererClient(
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
     createProject: async (input) => {
       const result = await invoker.invoke(projectCreateContract, input, confirmationApproval)
+      publishProjectCoordinatorWorkspaceInvalidation()
+      return result
+    },
+    deleteProject: async (input) => {
+      const result = await invoker.invoke(projectDeleteContract, input, confirmationApproval)
       publishProjectCoordinatorWorkspaceInvalidation()
       return result
     },

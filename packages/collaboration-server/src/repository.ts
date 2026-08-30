@@ -300,6 +300,7 @@ export interface CollaborationTransaction extends CollaborationReadRepository {
   updateRemoteApproval(approval: StoredRemoteCapabilityApproval, expectedRevision: number): Promise<void>
   insertProject(project: StoredProject, members: StoredProjectMember[]): Promise<void>
   updateProject(project: StoredProject, expectedRevision: number): Promise<void>
+  deleteProject(projectId: string, expectedRevision: number): Promise<void>
   insertProjectMember(member: StoredProjectMember): Promise<void>
   updateProjectMember(member: StoredProjectMember, expectedRevision: number): Promise<void>
   upsertWorkerAvailability(availability: StoredWorkerAvailability, expectedRevision: number | null): Promise<void>

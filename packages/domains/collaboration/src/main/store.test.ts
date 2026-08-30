@@ -9,9 +9,19 @@ import {
 } from '@sciforge/collaboration-contracts/testing'
 import {
   CollaborationLocalStore,
+  EMPTY_COLLABORATION_LOCAL_STATE,
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
+
+test('schema v3 state defaults the persisted Project unavailable fence collection', async () => {
+  const { projectUnavailableFences: _omitted, ...stored } = EMPTY_COLLABORATION_LOCAL_STATE
+  const store = new CollaborationLocalStore(new MemoryBackend(stored))
+
+  await store.open()
+
+  assert.deepEqual(store.snapshot().projectUnavailableFences, [])
+})
 
 test('restart recovery only rewinds safely replayable local and outbox work', async () => {
   const state: CollaborationLocalState = {
@@ -31,6 +41,7 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
       nextSequence: 2
     }],
     projects: [],
+    projectUnavailableFences: [],
     tasks: [],
     taskRuns: [],
     pendingTaskOffers: [],

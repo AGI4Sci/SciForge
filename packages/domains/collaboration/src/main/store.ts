@@ -33,6 +33,13 @@ export const collaborationWorkerAcceptancePolicySchema = z.object({
   updatedAt: timestampSchema
 }).strict()
 
+export const collaborationProjectUnavailableFenceSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  kind: z.enum(['permanent', 'permission-denied']),
+  reason: z.string().trim().min(1).max(4_000),
+  observedAt: timestampSchema
+}).strict()
+
 export const collaborationLocalProjectionSchema = z.object({
   projection: remoteSessionProjectionSchema,
   runtimeId: z.string().trim().min(1).max(128),
@@ -442,6 +449,22 @@ const collaborationLocalStateShape = {
   participant: participantProfileSchema.optional(),
   projections: z.array(collaborationLocalProjectionSchema).max(10_000),
   projects: z.array(projectSchema).max(10_000),
+  projectUnavailableFences: z.array(collaborationProjectUnavailableFenceSchema)
+    .max(10_000)
+    .default([])
+    .superRefine((fences, context) => {
+      const seen = new Set<string>()
+      for (const [index, fence] of fences.entries()) {
+        if (seen.has(fence.projectId)) {
+          context.addIssue({
+            code: 'custom',
+            path: [index, 'projectId'],
+            message: 'Each Project has at most one local unavailable fence.'
+          })
+        }
+        seen.add(fence.projectId)
+      }
+    }),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
   pendingTaskOffers: z.array(collaborationPendingTaskOfferSchema).max(100_000).default([]),
@@ -489,6 +512,9 @@ export type CollaborationWorkerAcceptanceMode = z.infer<
 export type CollaborationWorkerAcceptancePolicy = z.infer<
   typeof collaborationWorkerAcceptancePolicySchema
 >
+export type CollaborationProjectUnavailableFence = z.infer<
+  typeof collaborationProjectUnavailableFenceSchema
+>
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
@@ -501,6 +527,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   agents: [],
   projections: [],
   projects: [],
+  projectUnavailableFences: [],
   tasks: [],
   taskRuns: [],
   pendingTaskOffers: [],

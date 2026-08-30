@@ -7,6 +7,8 @@ import {
   agentInboxPayloadSchema,
   humanAnswerCommandSchema,
   inboxMessageSchema,
+  projectDeleteCommandSchema,
+  projectDeletedPayloadSchema,
   projectTransferCoordinatorCommandSchema,
   receiptSchema,
   restRequestSchema,
@@ -88,6 +90,42 @@ describe('discriminated transport unions', () => {
       expectedJournalRevision: 3,
       reason: 'The Owner has chosen to stop this exact provisioning attempt.'
     }).type).toBe('project.content.recovery.abandon')
+  })
+
+  it('defines one strict Owner deletion command and one Agent deletion notification', () => {
+    const command = {
+      protocolVersion: '1.0',
+      type: 'project.delete',
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_project_delete_0001',
+      projectId: TEST_IDS.projectId,
+      expectedRevision: 4,
+      expectedCoordinatorAuthorityEpoch: 2,
+      expectedExecutionAuthorityEpoch: 3
+    } as const
+    const notification = {
+      protocolVersion: '1.0',
+      type: 'project.deleted',
+      projectId: TEST_IDS.projectId,
+      deletedAt: TEST_TIMESTAMP
+    } as const
+
+    expect(projectDeleteCommandSchema.parse(command)).toEqual(command)
+    expect(restRequestSchema.parse(command)).toEqual(command)
+    expect(projectDeletedPayloadSchema.parse(notification)).toEqual(notification)
+    expect(agentInboxPayloadSchema.parse(notification)).toEqual(notification)
+    expect(projectDeleteCommandSchema.safeParse({
+      ...command,
+      ownerUserId: TEST_IDS.userId
+    }).success).toBe(false)
+    expect(projectDeleteCommandSchema.safeParse({
+      ...command,
+      expectedExecutionAuthorityEpoch: undefined
+    }).success).toBe(false)
+    expect(projectDeletedPayloadSchema.safeParse({
+      ...notification,
+      deleteContentSpace: true
+    }).success).toBe(false)
   })
 
   it('links Task recovery only from one exact Content Space observation', () => {

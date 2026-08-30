@@ -62,6 +62,8 @@ import {
   projectCoordinatorWorkflowPrepareInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorProjectDeleteInputSchema,
+  projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorSessionProjectionReadInputSchema,
   projectCoordinatorSessionProjectionSchema,
   projectCoordinatorTaskOfferReassignInputSchema,
@@ -207,6 +209,36 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
               assertPrincipalCurrent: context.assertPrincipalCurrent
             })
           }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+        version: '1.0.0',
+        title: 'Delete Project',
+        description: 'Deletes one Cloud-authoritative Project owned by the current OIDC User and fences its local coordination state.',
+        audiences: agentAudiences,
+        scope: 'global',
+        effect: 'destructive',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'delete', 'owner'],
+        inputSchema: projectCoordinatorProjectDeleteInputSchema,
+        outputSchema: projectCoordinatorProjectDeleteResultSchema,
+        handler: async (raw, context) => {
+          const input = projectCoordinatorProjectDeleteInputSchema.parse(raw)
+          context.assertPrincipalCurrent()
+          const output = await options.ports.actions.deleteProject(
+            input,
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete, context),
+            () => authorizeAgentProject(
+              options.sessions,
+              context,
+              input.projectId,
+              'coordinator'
+            )
+          )
+          context.assertPrincipalCurrent()
+          return { output }
         }
       }),
       options.defineCapability({

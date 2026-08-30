@@ -224,6 +224,7 @@ function clientFixture(overrides: Pick<
       projects: []
     }),
     createProject: unused,
+    deleteProject: unused,
     acknowledgeProjectActivation: overrides.acknowledgeProjectActivation,
     readSessionProjection: overrides.readSessionProjection,
     readPlanDraft: unused,

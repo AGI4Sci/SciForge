@@ -922,6 +922,43 @@ export class FakeCollaborationRepository {
     revisionUpdate(this.state.projects, project.projectId, project, expectedRevision)
   }
 
+  async deleteProject(projectId, expectedRevision) {
+    const project = this.state.projects.get(projectId)
+    if (!project || project.revision !== expectedRevision) {
+      throw new Error('fake repository Project revision conflict')
+    }
+    const projectOwnedMaps = [
+      this.state.projectEndpointBindings,
+      this.state.projectInputs,
+      this.state.humanRequests,
+      this.state.humanAnswers,
+      this.state.projectMembers,
+      this.state.projectProviderMembershipObservations,
+      this.state.projectContentReadiness,
+      this.state.taskAuthorities,
+      this.state.projectContentProvisioningIntents,
+      this.state.projectContentProvisioningAttestations,
+      this.state.projectContentBindings,
+      this.state.externalOperationJournal,
+      this.state.visibleRecoveryActions,
+      this.state.cloudResourceRefs,
+      this.state.tasks,
+      this.state.taskExecutions,
+      this.state.taskOffers,
+      this.state.projectPlans,
+      this.state.taskResultSubmissions,
+      this.state.taskResultReviews,
+      this.state.projectFinalSummaries,
+      this.state.projectRecords
+    ]
+    for (const map of projectOwnedMaps) {
+      for (const [key, value] of map) {
+        if (value.projectId === projectId) map.delete(key)
+      }
+    }
+    this.state.projects.delete(projectId)
+  }
+
   async getProjectMember(projectId, userId) {
     return copy(this.state.projectMembers.get(`${projectId}:${userId}`) ?? null)
   }

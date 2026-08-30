@@ -56,6 +56,7 @@ import { RemoteApprovalCoordinator } from './remote-approval-coordinator.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
+  type CollaborationLocalState,
   type CollaborationPendingTaskOffer,
   type CollaborationLocalProjection,
   type CollaborationTaskRun,
@@ -100,6 +101,17 @@ export function isCoordinatorProjectInboxPayload(
     payload.type === 'human.answer.received' &&
     payload.answer.context.scope === 'coordinator_project'
   )
+}
+
+function projectIdForInboxPayload(
+  payload: AgentInboxMessage['payload']
+): string | undefined {
+  if ('projectId' in payload) return payload.projectId
+  if (payload.type === 'human.answer.received') return payload.answer.projectId
+  if (payload.type === 'collaboration.state.changed' && 'projectId' in payload.event) {
+    return payload.event.projectId
+  }
+  return undefined
 }
 
 export class CollaborationRuntime {
@@ -177,15 +189,23 @@ export class CollaborationRuntime {
           await projections.acceptPersonalInbox(message)
           return
         }
+        if (message.payload.type === 'project.deleted') {
+          await tasks.handleProjectUnavailable(message.payload.projectId, {
+            kind: 'permanent',
+            reason: 'Cloud deleted this Project; local execution was fenced.'
+          })
+          const handler = this.options.coordinatorInboxHandler?.()
+          if (handler) await handler(message)
+          return
+        }
+        const projectId = projectIdForInboxPayload(message.payload)
+        if (projectId && !await this.canHandleProjectInbox(projectId)) return
         if (isCoordinatorProjectInboxPayload(message.payload)) {
           const handler = this.options.coordinatorInboxHandler?.()
           if (!handler) {
             throw new Error('The Project Coordinator Inbox owner is unavailable.')
           }
           await handler(message)
-          if (message.payload.type === 'coordinator.transferred') {
-            await this.refreshCollaborationFact(message)
-          }
           return
         }
         if (message.payload.type === 'human.answer.received') {
@@ -194,7 +214,6 @@ export class CollaborationRuntime {
         }
         if (isWorkerTaskInboxPayload(message.payload)) {
           await tasks.handleInbox(message)
-          await this.refreshCollaborationFact(message)
           return
         }
         if (message.payload.type === 'agent.revoked') {
@@ -213,7 +232,6 @@ export class CollaborationRuntime {
           )
           return
         }
-        await this.refreshCollaborationFact(message)
       }
     }
     connection = new CollaborationConnection({
@@ -223,7 +241,12 @@ export class CollaborationRuntime {
       authenticatedCloudTransport: this.options.authenticatedCloudTransport,
       agentCloudRuntime: this.options.agentCloudRuntime,
       inboxHandler,
-      afterHeartbeat: (connectionStatus) => tasks.publishAvailability(connectionStatus),
+      afterHeartbeat: async (connectionStatus) => {
+        if (connectionStatus === 'online' && connection.state().state !== 'connected') {
+          await this.reconcileProjectFacts()
+        }
+        await tasks.publishAvailability(connectionStatus)
+      },
       onAuthorityLost: (agentId, reason) => tasks.fenceLocalAgent(
         agentId,
         `Identity or Runtime authority was lost: ${reason}`
@@ -282,10 +305,8 @@ export class CollaborationRuntime {
     this.syncTranscriptSubscriptions()
     await connection.activate()
     this.localAgentIdentity = await connection.localAgentId()
-    await this.recoverTaskProjectFacts()
-    // Task reconciliation consults canonical cloud state before executing. Run
-    // it only after the connection has initialized; an offline activation keeps
-    // the runs durable in reconciling state until an explicit recovery/restart.
+    // Each canonical online transition reconciles Project visibility before
+    // Task recovery can execute; offline runs remain durable until that transition.
     await tasks.recover()
     await tasks.publishAvailability(connection.state().state === 'connected' ? 'online' : 'offline')
 
@@ -370,24 +391,14 @@ export class CollaborationRuntime {
     const projections = state.projections.map((projection) => (
       this.projectionView(projection.projection)
     ))
+    const taskViews = this.taskViews(state, {})
     const projectViews = state.projects.map((project) => ({
       projectId: project.projectId,
       name: project.displayName,
       state: mapProjectState(project.status),
       revision: project.revision,
       coordinatorAgentId: project.coordinatorAgentId,
-      tasks: [
-        ...state.pendingTaskOffers
-          .filter((offer) => offer.projectId === project.projectId)
-          .map((offer) => mapPendingTaskOfferView(
-            offer,
-            this.requireTasks().acceptanceMode(offer.recipientAgentId),
-            state.tasks.find((task) => task.taskId === offer.taskId)
-          )),
-        ...state.taskRuns
-          .filter((run) => run.offer.projectId === project.projectId)
-          .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
-      ]
+      tasks: taskViews.filter((task) => task.projectId === project.projectId)
     }))
     return {
       revision: state.revision,
@@ -747,18 +758,29 @@ export class CollaborationRuntime {
   }
 
   listTasks(input: CollaborationTaskListInput): readonly CollaborationTaskView[] {
+    return this.taskViews(this.store.snapshot(), input)
+  }
+
+  private taskViews(
+    snapshot: CollaborationLocalState,
+    input: CollaborationTaskListInput
+  ): readonly CollaborationTaskView[] {
     const states = new Set(input.states ?? [])
-    const snapshot = this.store.snapshot()
+    const projectIds = new Set(snapshot.projects.map(({ projectId }) => projectId))
     return [
       ...snapshot.pendingTaskOffers
-        .filter((offer) => !input.projectId || offer.projectId === input.projectId)
+        .filter((offer) => (
+          projectIds.has(offer.projectId) && (!input.projectId || offer.projectId === input.projectId)
+        ))
         .map((offer) => mapPendingTaskOfferView(
           offer,
           this.requireTasks().acceptanceMode(offer.recipientAgentId),
           snapshot.tasks.find((task) => task.taskId === offer.taskId)
         )),
       ...snapshot.taskRuns
-        .filter((run) => !input.projectId || run.offer.projectId === input.projectId)
+        .filter((run) => (
+          projectIds.has(run.offer.projectId) && (!input.projectId || run.offer.projectId === input.projectId)
+        ))
         .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
     ]
       .filter((task) => states.size === 0 || states.has(task.state))
@@ -766,8 +788,15 @@ export class CollaborationRuntime {
 
   listWorkerSessionBindings(): readonly WorkerSessionExecutionBinding[] {
     const snapshot = this.store.snapshot()
+    const projectIds = new Set(snapshot.projects.map(({ projectId }) => projectId))
     return Object.freeze(snapshot.taskRuns.flatMap((run) => {
-      if (!run.runtimeId || !run.threadId || !run.execution || !run.task) return []
+      if (
+        !projectIds.has(run.offer.projectId) ||
+        !run.runtimeId ||
+        !run.threadId ||
+        !run.execution ||
+        !run.task
+      ) return []
       return [workerSessionExecutionBindingSchema.parse({
         schemaVersion: 1,
         projectId: run.offer.projectId,
@@ -882,37 +911,59 @@ export class CollaborationRuntime {
     }
   }
 
-  private async refreshCollaborationFact(message: AgentInboxMessage): Promise<void> {
-    const projectId = 'projectId' in message.payload ? message.payload.projectId : undefined
-    if (!projectId) return
-    await this.refreshProjectFact(projectId)
+  private async canHandleProjectInbox(projectId: string): Promise<boolean> {
+    return await this.refreshProjectFact(projectId) === 'available'
   }
 
-  private async recoverTaskProjectFacts(): Promise<void> {
-    if (this.requireConnection().state().state !== 'connected') return
+  private async reconcileProjectFacts(): Promise<void> {
     const state = this.store.snapshot()
-    const knownProjectIds = new Set(state.projects.map(({ projectId }) => projectId))
-    const referencedProjectIds = new Set([
+    const projectIds = new Set([
+      ...state.projects.map(({ projectId }) => projectId),
+      ...state.projectUnavailableFences.map(({ projectId }) => projectId),
       ...state.pendingTaskOffers.map(({ projectId }) => projectId),
       ...state.taskRuns.map(({ offer }) => offer.projectId)
     ])
-    await Promise.allSettled([...referencedProjectIds]
-      .filter((projectId) => !knownProjectIds.has(projectId))
-      .map((projectId) => this.refreshProjectFact(projectId)))
+    await Promise.allSettled([...projectIds].map((projectId) => this.refreshProjectFact(projectId)))
   }
 
-  private async refreshProjectFact(projectId: string): Promise<void> {
+  private async refreshProjectFact(projectId: string): Promise<'available' | 'unavailable'> {
+    const fence = this.store.snapshot().projectUnavailableFences.find((candidate) => (
+      candidate.projectId === projectId
+    ))
+    if (fence?.kind === 'permanent') return 'unavailable'
     const response = await this.requireConnection().executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'project.get',
       projectId
     }))
-    if (response.type !== 'rest.entity' || response.entity.type !== 'project') return
+    if (response.type === 'rest.error') {
+      if (response.error.code === 'not_found' || response.error.code === 'permission_denied') {
+        await this.requireTasks().handleProjectUnavailable(projectId, {
+          kind: response.error.code === 'not_found' ? 'permanent' : 'permission-denied',
+          reason: response.error.code === 'not_found'
+            ? 'Cloud deleted this Project; local execution was fenced.'
+            : 'Cloud revoked visibility for this Project; local execution was fenced.'
+        })
+        return 'unavailable'
+      }
+      throw new Error(response.error.message)
+    }
+    if (response.type !== 'rest.entity' || response.entity.type !== 'project') {
+      throw new Error(`Project refresh returned unexpected ${response.type}.`)
+    }
     const project = response.entity
-    await this.store.transact((draft) => {
+    const restored = await this.store.transact((draft) => {
+      if (draft.projectUnavailableFences.some((candidate) => (
+        candidate.projectId === projectId && candidate.kind === 'permanent'
+      ))) return false
       draft.projects = replaceById(draft.projects, project, (candidate) => candidate.projectId)
+      draft.projectUnavailableFences = draft.projectUnavailableFences.filter((candidate) => (
+        candidate.projectId !== projectId
+      ))
+      return true
     })
+    return restored ? 'available' : 'unavailable'
   }
 
   private async refreshProjectionFromInbox(

@@ -18,6 +18,7 @@ import {
   projectContentProvisioningIntentSchema,
   projectContentSpaceBindingSchema,
   projectCreateCommandSchema,
+  projectDeleteCommandSchema,
   projectFinalSummarySchema,
   projectFinalSummarySubmitCommandSchema,
   projectIdSchema,
@@ -57,6 +58,7 @@ const safeReasonSchema = z.string().trim().min(1).max(2_000)
 export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   workspaceRead: 'project-coordinator.workspace.read',
   projectCreate: 'project-coordinator.project.create',
+  projectDelete: 'project-coordinator.project.delete',
   projectActivationAcknowledge: 'project-coordinator.project-activation.acknowledge',
   sessionProjectionRead: 'project-coordinator.session-projection.read',
   planDraftRead: 'project-coordinator.plan-draft.read',
@@ -203,6 +205,15 @@ export const projectCoordinatorProjectCreateInputSchema = projectCreateCommandSc
   type: true,
   idempotencyKey: true
 }).readonly()
+
+export const projectCoordinatorProjectDeleteInputSchema = projectDeleteCommandSchema.pick({
+  projectId: true
+}).readonly()
+
+export const projectCoordinatorProjectDeleteResultSchema = z.object({
+  projectId: projectIdSchema,
+  deleted: z.literal(true)
+}).strict().readonly()
 
 export const projectCoordinatorActivationAcknowledgeInputSchema = z.object({
   activationRequestId: projectCoordinatorActivationRequestIdSchema
@@ -1007,6 +1018,12 @@ export type ProjectCoordinatorProjectCreateReceipt = z.infer<
 >
 export type ProjectCoordinatorProjectCreateResult = z.infer<
   typeof projectCoordinatorProjectCreateResultSchema
+>
+export type ProjectCoordinatorProjectDeleteInput = z.infer<
+  typeof projectCoordinatorProjectDeleteInputSchema
+>
+export type ProjectCoordinatorProjectDeleteResult = z.infer<
+  typeof projectCoordinatorProjectDeleteResultSchema
 >
 export type ProjectCoordinatorActivationAcknowledgeInput = z.infer<
   typeof projectCoordinatorActivationAcknowledgeInputSchema
