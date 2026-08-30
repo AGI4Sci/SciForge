@@ -623,6 +623,78 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         ['ui', 'agent']
       ),
       capability(
+        COLLABORATION_CAPABILITY_IDS.taskInteractionRead,
+        'Read local Task interactions',
+        'Reads durable local human interventions and checkpoints together with the observed Cloud execution state.',
+        'read',
+        collaborationTaskInteractionReadInputSchema,
+        collaborationTaskInteractionReadResultSchema,
+        async (raw) => {
+          const input = collaborationTaskInteractionReadInputSchema.parse(raw) as CollaborationTaskInteractionReadInput
+          return {
+            output: {
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId
+              )
+            }
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit,
+        'Queue a local Task interaction',
+        'Queues a durable local intervention for the exact Worker Runtime Session without changing Cloud Task facts.',
+        'workspace-write',
+        collaborationTaskInteractionSubmitInputSchema,
+        collaborationTaskInteractionSubmitResultSchema,
+        async (raw) => {
+          const input = collaborationTaskInteractionSubmitInputSchema.parse(raw) as CollaborationTaskInteractionSubmitInput
+          const interaction = await options.getRuntime().submitTaskInteraction(input)
+          return {
+            output: {
+              interaction,
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId
+              )
+            },
+            changed: true
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend,
+        'Append a local Task checkpoint',
+        'Appends a durable local progress checkpoint without changing Cloud Task or Execution state.',
+        'workspace-write',
+        collaborationTaskCheckpointAppendInputSchema,
+        collaborationTaskCheckpointAppendResultSchema,
+        async (raw) => {
+          const input = collaborationTaskCheckpointAppendInputSchema.parse(raw) as CollaborationTaskCheckpointAppendInput
+          const checkpoint = await options.getRuntime().appendTaskCheckpoint(input)
+          return {
+            output: {
+              checkpoint,
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId ?? undefined
+              )
+            },
+            changed: true
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
         COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
         'Update local Worker acceptance policy',
         'Stores manual or automatic Task offer handling for this exact local Agent Device.',
