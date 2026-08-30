@@ -69,6 +69,7 @@ export function createContentSpacePortableAuthorityResolver(input: Readonly<{
       identity,
       resourceKind,
       authority,
+      audience,
       principal,
       assertPrincipalCurrent,
       signal
@@ -83,6 +84,7 @@ export function createContentSpacePortableAuthorityResolver(input: Readonly<{
       const initial = await service.observeEntry(reference, {
         reauthorizedPrincipal: principal,
         assertPrincipalCurrent,
+        audience,
         ...(signal ? { signal } : {})
       })
       return resolution(reference, resourceKind, service, initial.entry)
@@ -100,11 +102,13 @@ function resolution(
   const observe = async (
     currentPrincipal: Parameters<ContentSpaceService['observeEntry']>[1]['reauthorizedPrincipal'],
     assertPrincipalCurrent: PortableResourceUseContext['assertPrincipalCurrent'],
+    audience: PortableResourceUseContext['audience'],
     currentSignal?: AbortSignal
   ): Promise<PortableResourceObservation> => {
     const observation = await service.observeEntry(reference, {
       reauthorizedPrincipal: currentPrincipal,
       assertPrincipalCurrent,
+      audience,
       ...(currentSignal ? { signal: currentSignal } : {})
     })
     return Object.freeze({
@@ -123,20 +127,22 @@ function resolution(
       semanticRevision,
       expiresInMs: 5 * 60_000,
       observe: ({
+        audience,
         principal: currentPrincipal,
         assertPrincipalCurrent,
         signal: currentSignal
       }: PortableResourceUseContext) =>
-        observe(currentPrincipal, assertPrincipalCurrent, currentSignal)
+        observe(currentPrincipal, assertPrincipalCurrent, audience, currentSignal)
     }),
     exportProjection: Object.freeze({
       consumerModuleIds: CONTENT_SPACE_PORTABLE_EXPORT_CONSUMER_MODULE_IDS,
       project: async ({
+        audience,
         principal: currentPrincipal,
         assertPrincipalCurrent,
         signal: currentSignal
       }: PortableResourceExportContext) => {
-        await observe(currentPrincipal, assertPrincipalCurrent, currentSignal)
+        await observe(currentPrincipal, assertPrincipalCurrent, audience, currentSignal)
         return portableIdentity(reference)
       }
     })

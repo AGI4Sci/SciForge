@@ -210,6 +210,7 @@ type ActiveCapabilityInvocationState = {
   confirmedInput: CapabilityJsonValue
   invocation: ActiveCapabilityInvocation
   resourceTransaction: InvocationResourceTransaction
+  signal?: AbortSignal
 }
 
 type InvocationResourceIssuance = {
@@ -1227,9 +1228,12 @@ export class CapabilityBroker {
         operationState.consumed = true
         status = 'executing'
         let issuedResources: readonly HostApprovedBatchIssuedResource[] = Object.freeze([])
+        const signal = outerState.signal && options.signal && outerState.signal !== options.signal
+          ? AbortSignal.any([outerState.signal, options.signal])
+          : (options.signal ?? outerState.signal)
         try {
           const result = await this.#invokeAs(operationCaller, request, {
-            signal: options.signal,
+            ...(signal ? { signal } : {}),
             approvedBatchOperation: operationState,
             captureIssuedResources: (resources) => { issuedResources = resources }
           })
@@ -1797,6 +1801,7 @@ export class CapabilityBroker {
         approvedBatchCreated: false,
         confirmedInput: request.input,
         resourceTransaction,
+        ...(signal ? { signal } : {}),
         invocation: Object.freeze({
           caller,
           actionId: request.actionId,
