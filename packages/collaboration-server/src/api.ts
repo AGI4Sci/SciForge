@@ -114,8 +114,20 @@ async function handle(
   }
   requireJson(request)
   const raw = await readJson(request, maxBodyBytes)
-  const command = restRequestSchema.parse(raw)
+  // Parse inside the guarded boundary. Invalid commands must receive the
+  // canonical JSON error envelope; allowing Zod to escape here causes the
+  // node HTTP server to emit an HTML/plain-text failure, which clients report
+  // as an opaque "invalid JSON response" and cannot recover from.
+  let command: RestRequest
+  const parsedForCorrelation = restRequestSchema.safeParse(raw)
+  const requestId = isRecord(raw) && typeof raw.requestId === 'string' &&
+    (parsedForCorrelation.success || !parsedForCorrelation.error.issues.some(
+      (issue) => issue.code === 'unrecognized_keys'
+    ))
+    ? raw.requestId
+    : undefined
   try {
+    command = restRequestSchema.parse(raw)
     const headerKey = firstHeader(request.headers['idempotency-key'])
     if ('idempotencyKey' in command && headerKey !== command.idempotencyKey) {
       throw new CollaborationServiceError('validation_failed', 'Idempotency-Key header must match the strict command body.')
@@ -133,8 +145,12 @@ async function handle(
     const validated = restResponseSchema.parse(body)
     sendJson(response, 200, validated)
   } catch (error) {
-    sendFailure(response, error, command.requestId)
+    sendFailure(response, error, requestId)
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 async function handleIdentityRoute(
