@@ -304,6 +304,11 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
   const pending = created.store.snapshot().taskRuns[0]
   assert.equal(pending?.state, 'needs-human')
   assert.equal(pending?.humanRequestId, TEST_IDS.humanRequestId)
+  assert.equal(pending?.task?.revision, cloud.task.revision)
+  assert.equal(pending?.execution?.revision, cloud.execution.revision)
+  assert.equal(pending?.execution?.state, 'needs_human')
+  assert.equal(pending?.expectedTaskRevision, cloud.task.revision)
+  assert.equal(pending?.expectedExecutionRevision, cloud.execution.revision)
   const humanRequest = cloud.requests.find((request) => request.type === 'human.needed.create')
   assert.equal(humanRequest?.type, 'human.needed.create')
   if (humanRequest?.type !== 'human.needed.create') throw new Error('Missing Worker HumanNeeded command.')
@@ -366,8 +371,8 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
     'task.result.submit'
   ])
   const reconciliationIndex = cloud.preflightExpectedRevisions.findIndex((revision, index, all) => (
-    revision.task === 3 &&
-    revision.execution === 2 &&
+    revision.task === 4 &&
+    revision.execution === 3 &&
     all[index + 1]?.task === 5 &&
     all[index + 1]?.execution === 4
   ))
@@ -384,6 +389,143 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
   await created.adapter.waitForIdle()
   assert.equal(runtimeRequests.length, 2)
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+})
+
+test('Worker HumanNeeded preserves an answer received while its Cloud revisions are refreshing', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const refreshStarted = deferred<void>()
+  const releaseRefresh = deferred<void>()
+  cloud.delayNextPreflight('needs_human', refreshStarted.resolve, releaseRefresh.promise)
+  let runtimeRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      runtimeRuns += 1
+      if (runtimeRuns === 1) {
+        return {
+          runtimeId: 'codex',
+          threadId: 'worker-human-race-thread',
+          turnId: 'worker-human-race-question',
+          state: 'completed',
+          text: JSON.stringify({
+            schemaVersion: 1,
+            outcome: 'needs_human',
+            question: 'Continue after the revision refresh?',
+            requiredAssurance: 'verified'
+          })
+        }
+      }
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-human-race-thread',
+        turnId: 'worker-human-race-answer',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'The concurrent HumanNeeded answer resumed the Worker.'
+        })
+      }
+    }
+  }, initial)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await refreshStarted.promise
+  cloud.answerHumanNeeded()
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    inboxMessageId: 'ibx_WorkerHumanAnswerDuringRefresh',
+    sequence: 2,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'human.answer.received',
+      answer: humanAnswerFixture
+    }
+  }))
+  releaseRefresh.resolve()
+  await created.adapter.waitForIdle()
+
+  const completed = created.store.snapshot().taskRuns[0]
+  assert.equal(runtimeRuns, 2)
+  assert.equal(completed?.state, 'completed')
+  assert.equal(completed?.resultSummary, 'The concurrent HumanNeeded answer resumed the Worker.')
+})
+
+test('Worker recovery refreshes a durable needs-human run without restarting its Runtime', async () => {
+  const cloud = new FakeWorkerCloud('running')
+  const legacyRun = durableTaskRun(cloud, {
+    state: 'needs-human',
+    runtimeId: 'codex',
+    threadId: 'worker-human-thread',
+    humanRequestId: TEST_IDS.humanRequestId
+  })
+  cloud.enterHumanNeeded()
+  const initial = emptyState()
+  if (!legacyRun.task) throw new Error('Missing legacy Worker Task.')
+  initial.tasks = [legacyRun.task]
+  initial.taskRuns = [legacyRun]
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      agentRuns += 1
+      throw new Error('A pending HumanNeeded recovery must not restart the Worker Runtime.')
+    }
+  }, initial)
+
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+
+  const recovered = created.store.snapshot().taskRuns[0]
+  assert.equal(agentRuns, 0)
+  assert.equal(recovered?.state, 'needs-human')
+  assert.equal(recovered?.humanRequestId, TEST_IDS.humanRequestId)
+  assert.equal(recovered?.task?.revision, cloud.task.revision)
+  assert.equal(recovered?.execution?.revision, cloud.execution.revision)
+  assert.equal(recovered?.execution?.state, 'needs_human')
+  assert.equal(recovered?.expectedTaskRevision, cloud.task.revision)
+  assert.equal(recovered?.expectedExecutionRevision, cloud.execution.revision)
+})
+
+test('Worker recovery does not rerun a needs-human journal while its Cloud transition is pending', async () => {
+  const cloud = new FakeWorkerCloud('running')
+  const pendingRun = durableTaskRun(cloud, {
+    state: 'needs-human',
+    runtimeId: 'codex',
+    threadId: 'worker-human-thread',
+    humanRequestId: null
+  })
+  const initial = emptyState()
+  if (!pendingRun.task) throw new Error('Missing pending Worker Task.')
+  initial.tasks = [pendingRun.task]
+  initial.taskRuns = [pendingRun]
+  let agentRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: async () => ({
+      state: 'unavailable',
+      reason: 'Runtime remains unavailable while the HumanNeeded transition is pending.'
+    }),
+    run: async () => {
+      agentRuns += 1
+      throw new Error('Recovery must not rerun a Worker awaiting its HumanNeeded transition.')
+    }
+  }, initial)
+
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+
+  const recovered = created.store.snapshot().taskRuns[0]
+  assert.equal(agentRuns, 0)
+  assert.equal(recovered?.state, 'needs-human')
+  assert.equal(recovered?.execution?.state, 'running')
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+  assert.equal(cloud.commands.includes('task.execution.fail'), false)
 })
 
 test('post-claim Cloud authority denial closes the execution through the canonical failure command', async () => {
@@ -2214,6 +2356,11 @@ class FakeWorkerCloud {
   >>()
   private recoveryJournalOrdinal = 0
   private preflightDenial: 'none' | 'execution_fenced' | 'membership_removal' = 'none'
+  private preflightDelay: Readonly<{
+    state: FakeWorkerExecutionState
+    started: () => void
+    release: Promise<void>
+  }> | null = null
   private readonly recoveryResources = new Map<string, ReturnType<typeof cloudResourceRefSchema.parse>>()
 
   constructor(
@@ -2343,6 +2490,12 @@ class FakeWorkerCloud {
     return {
       executeAsAgent: async (request: RestRequest) => {
         if (request.type === 'task.execution.preflight.get') {
+          const delay = this.preflightDelay
+          if (delay?.state === this.execution.state) {
+            this.preflightDelay = null
+            delay.started()
+            await delay.release
+          }
           this.preflightExpectedRevisions.push({
             task: request.expectedTaskRevision,
             execution: request.expectedExecutionRevision
@@ -2557,6 +2710,11 @@ class FakeWorkerCloud {
     this.preflightDenial = reason
   }
 
+  delayNextPreflight(state: FakeWorkerExecutionState, started: () => void, release: Promise<void>): void {
+    assert.equal(this.preflightDelay, null)
+    this.preflightDelay = { state, started, release }
+  }
+
   enterManualRecovery(resource: ReturnType<typeof cloudResourceRefSchema.parse>): void {
     assert.equal(this.fileMode, true)
     this.execution = taskExecutionSchema.parse({
@@ -2622,6 +2780,11 @@ class FakeWorkerCloud {
   answerHumanNeeded(): void {
     assert.equal(this.execution.state, 'needs_human')
     this.advance('running')
+  }
+
+  enterHumanNeeded(): void {
+    assert.equal(this.execution.state, 'running')
+    this.advance('needs_human')
   }
 
   private advance(state: FakeWorkerExecutionState, startedAt = TEST_LATER_TIMESTAMP): void {
