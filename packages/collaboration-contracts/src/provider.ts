@@ -430,7 +430,9 @@ export const humanEndpointProviderContractSchema = z.object({
     identityChallenge: z.literal(true),
     directMessages: z.literal(true),
     managedContainers: z.boolean().optional(),
-    messageUpdates: z.boolean().optional()
+    privateContainerDiscovery: z.boolean().optional(),
+    messageUpdates: z.boolean().optional(),
+    messageActions: z.boolean().optional()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,
