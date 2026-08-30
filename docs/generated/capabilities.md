@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **294**
+Registered actions: **295**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |

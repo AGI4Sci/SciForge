@@ -62,4 +62,3 @@ export function currentProjectCoordinatorPanelContext(): ProjectCoordinatorPanel
 export function clearProjectCoordinatorPanelContexts(): void {
   contexts.clear()
 }
-
