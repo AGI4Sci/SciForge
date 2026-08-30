@@ -179,6 +179,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   assert.deepEqual(factory.createDefinitions().map(({ id }) => id), [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
@@ -314,6 +315,7 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   assert.deepEqual(definitions.map(({ id }) => id), [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
@@ -341,6 +343,13 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   assert.equal(create.effect, 'external-write')
   assert.equal(create.approval, 'confirmation')
   assert.equal(create.concurrency.idempotency, 'required')
+  const projectDelete = definitions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete
+  )!
+  assert.equal(projectDelete.version, '1.0.0')
+  assert.equal(projectDelete.effect, 'destructive')
+  assert.equal(projectDelete.approval, 'confirmation')
+  assert.equal(projectDelete.concurrency.idempotency, 'required')
   const generate = definitions.find(
     ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate
   )!
@@ -462,6 +471,7 @@ test('Agent reads target an explicit Project independently of ordinary Session b
   )).map(({ id }) => id), [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftGenerate,
@@ -540,6 +550,116 @@ test('membership-inactive Agent scope rejects external writes before the canonic
   assert.equal(addMemberCalls, 0)
 })
 
+test('Project delete requires exact Coordinator Session authority and derives a stable invocation key', async () => {
+  const projectId = 'prj_ProjectCreated01'
+  const calls: Array<Readonly<{ input: unknown; idempotencyKey: string }>> = []
+  const authorizations: Array<Readonly<{
+    projectId: string
+    session: unknown
+    access: string
+  }>> = []
+  const deleted = Object.freeze({ projectId, deleted: true as const })
+  let deleteIntentStarted = false
+  const basePorts = projectCreatePorts(async () => createdProjectResult())
+  const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: (input) => input,
+    ports: {
+      ...basePorts,
+      actions: {
+        ...coordinatorActionPort(),
+        deleteProject: async (
+          input: unknown,
+          idempotencyKey: string,
+          authorizeFirstAttempt: () => Promise<void>
+        ) => {
+          if (!deleteIntentStarted) {
+            await authorizeFirstAttempt()
+            deleteIntentStarted = true
+          }
+          calls.push({ input, idempotencyKey })
+          return deleted
+        }
+      }
+    } as never,
+    sessions: {
+      ...sessionProjectionPort(),
+      authorize: async (authorizedProjectId, session, access) => {
+        authorizations.push({ projectId: authorizedProjectId, session, access })
+        return {
+          schemaVersion: 1,
+          role: 'coordinator',
+          projectId: authorizedProjectId,
+          principalUserId: 'usr_Owner0000001',
+          coordinatorAgentId: 'agt_Coordinator01',
+          coordinatorAuthorityEpoch: 1,
+          runtimeId: session.runtimeId,
+          threadId: session.threadId,
+          boundAt: '2026-08-28T01:00:00.000Z',
+          access: 'coordinator',
+          fenceReason: null
+        }
+      }
+    },
+    projectCreation: projectCreationStub()
+  })
+  const capability = factory.createDefinitions().find(({ id }) => (
+    id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete
+  ))!
+  const invocation = agentInvocationContext('invocation-project-delete-1')
+
+  assert.deepEqual(await capability.handler({ projectId }, invocation), { output: deleted })
+  assert.deepEqual(await capability.handler({ projectId }, invocation), { output: deleted })
+  assert.deepEqual(authorizations, [{
+    projectId,
+    session: invocation.ordinarySession,
+    access: 'coordinator'
+  }])
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls.map(({ input }) => input), [{ projectId }, { projectId }])
+  assert.equal(calls[0]!.idempotencyKey, calls[1]!.idempotencyKey)
+  assert.match(calls[0]!.idempotencyKey, /^idem_project-coordinator\.[a-f0-9]{48}$/u)
+
+  let fencedCalls = 0
+  const fenced = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: (input) => input,
+    ports: {
+      ...basePorts,
+      actions: {
+        ...coordinatorActionPort(),
+        deleteProject: async (
+          _input: unknown,
+          _idempotencyKey: string,
+          authorizeFirstAttempt: () => Promise<void>
+        ) => {
+          await authorizeFirstAttempt()
+          fencedCalls += 1
+          return deleted
+        }
+      }
+    } as never,
+    sessions: {
+      ...sessionProjectionPort(),
+      authorize: async () => {
+        throw new Error('The ordinary Session is fenced: membership_inactive.')
+      }
+    },
+    projectCreation: projectCreationStub()
+  }).createDefinitions().find(({ id }) => (
+    id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete
+  ))!
+  await assert.rejects(
+    fenced.handler({ projectId }, agentInvocationContext('invocation-project-delete-fenced')),
+    /membership_inactive/u
+  )
+  assert.equal(fencedCalls, 0)
+
+  await assert.rejects(
+    capability.handler({ projectId }, uiInvocationContext()),
+    /Host invocation ID is required/u
+  )
+  assert.equal(calls.length, 2)
+})
+
 test('Plan generation capability returns only a bounded package-owned failure reason', async () => {
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
@@ -600,6 +720,7 @@ test('Plan generation capability returns only a bounded package-owned failure re
 
 function coordinatorActionPort() {
   return Object.freeze({
+    deleteProject: async () => { throw new Error('unused') },
     transferCoordinator: async () => { throw new Error('unused') },
     createHumanNeeded: async () => { throw new Error('unused') },
     answerHumanNeeded: async () => { throw new Error('unused') },

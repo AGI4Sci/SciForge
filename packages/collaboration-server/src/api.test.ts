@@ -747,7 +747,12 @@ describe('production HTTP OIDC-only boundary', () => {
 
     const project = await postCommand(baseUrl, projectCommand, coordinatorCredential)
     expect(project.status).toBe(200)
-    const projectBody = await project.json() as { project: { projectId: string } }
+    const projectBody = await project.json() as { project: {
+      projectId: string
+      revision: number
+      coordinatorAuthorityEpoch: number
+      executionAuthorityEpoch: number
+    } }
     expect(projectBody).toMatchObject({ type: 'rest.project_created',
       project: { ownerUserId: identity.userId, status: 'draft', contentMode: 'none' },
       memberships: [{ userId: identity.userId, state: 'active' }], provisioningIntent: null })
@@ -807,6 +812,42 @@ describe('production HTTP OIDC-only boundary', () => {
       projectId: projectBody.project.projectId, kind: 'observation',
       sourceTaskId: 'tsk_Task00000001', sourceRevision: 1, body: 'Bypass'
     }, token)).status).toBe(400)
+
+    const deleteCommand = {
+      protocolVersion: '1.0', requestId: 'req_HttpProjectDelete1',
+      type: 'project.delete', idempotencyKey: 'idem_http_project_delete_01',
+      projectId: projectBody.project.projectId,
+      expectedRevision: projectBody.project.revision,
+      expectedCoordinatorAuthorityEpoch: projectBody.project.coordinatorAuthorityEpoch,
+      expectedExecutionAuthorityEpoch: projectBody.project.executionAuthorityEpoch
+    }
+    expect((await postCommand(baseUrl, deleteCommand, coordinatorCredential)).status).toBe(403)
+    const deleted = await postCommand(baseUrl, deleteCommand, token)
+    expect(deleted.status).toBe(200)
+    const deletedBody = await deleted.json() as { receipt: Record<string, unknown> }
+    expect(deletedBody).toMatchObject({
+      protocolVersion: '1.0',
+      type: 'rest.receipt',
+      requestId: deleteCommand.requestId,
+      receipt: {
+        type: 'operation.receipt',
+        idempotencyKey: deleteCommand.idempotencyKey,
+        status: 'succeeded'
+      }
+    })
+    const replayedDelete = await postCommand(baseUrl, deleteCommand, token)
+    expect(replayedDelete.status).toBe(200)
+    await expect(replayedDelete.json()).resolves.toMatchObject({
+      type: 'rest.receipt',
+      receipt: deletedBody.receipt
+    })
+    const projectsAfterDelete = await postCommand(baseUrl, {
+      protocolVersion: '1.0', requestId: 'req_HttpProjectPage002', type: 'project.list', limit: 10
+    }, token)
+    expect(projectsAfterDelete.status).toBe(200)
+    await expect(projectsAfterDelete.json()).resolves.toMatchObject({
+      type: 'rest.project_page', projects: []
+    })
   })
 })
 

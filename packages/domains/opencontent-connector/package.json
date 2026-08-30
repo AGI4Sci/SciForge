@@ -96,7 +96,7 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "5.1.0",
-    "@sciforge/domain-identity-access": "^4.0.0",
+    "@sciforge/domain-identity-access": "^4.0.1",
     "@sciforge/domain-sdk": "^0.2.8",
     "@sciforge/internal-runtime-integrity": "0.1.1",
     "lucide-react": "^0.544.0",

@@ -56,6 +56,8 @@ import type {
 import {
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateReceiptSchema,
+  projectCoordinatorProjectDeleteInputSchema,
+  projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
   projectCoordinatorCompleteInputSchema,
@@ -74,6 +76,8 @@ import {
   type ProjectCoordinatorProject,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateReceipt,
+  type ProjectCoordinatorProjectDeleteInput,
+  type ProjectCoordinatorProjectDeleteResult,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
   type ProjectCoordinatorCompleteInput,
@@ -137,6 +141,11 @@ export type ProjectCoordinatorPlanPort = Readonly<{
 }>
 
 export type ProjectCoordinatorActionPort = Readonly<{
+  deleteProject(
+    input: ProjectCoordinatorProjectDeleteInput,
+    idempotencyKey: string,
+    authorizeFirstAttempt: () => Promise<void>
+  ): Promise<ProjectCoordinatorProjectDeleteResult>
   transferCoordinator(
     input: ProjectCoordinatorTransferInput,
     idempotencyKey: string
@@ -940,6 +949,107 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     })
   }
   return Object.freeze({
+    deleteProject: async (rawInput, idempotencyKey, authorizeFirstAttempt) => {
+      const input = projectCoordinatorProjectDeleteInputSchema.parse(rawInput)
+      const identity = options.transport.status()
+      if (identity.state !== 'ready') {
+        throw new Error('Project deletion requires the current authenticated User and Device.')
+      }
+      let intent = await options.state.readProjectDeleteIntent(
+        identity.userId,
+        input.projectId,
+        idempotencyKey
+      )
+      const isDurableReplay = intent !== null
+      if (!intent) {
+        const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
+        const projectView = requireReadyProject(workspace, input.projectId)
+        if (
+          workspace.connection.state !== 'ready' ||
+          workspace.connection.userId !== identity.userId ||
+          projectView.project.ownerUserId !== identity.userId
+        ) {
+          throw new Error('Only the current Project Owner may delete this Project.')
+        }
+        await authorizeFirstAttempt()
+        intent = await options.state.beginProjectDelete({
+          projectId: input.projectId,
+          principalUserId: identity.userId,
+          idempotencyKey,
+          expectedRevision: projectView.project.revision,
+          expectedCoordinatorAuthorityEpoch: projectView.project.coordinatorAuthorityEpoch,
+          expectedExecutionAuthorityEpoch: projectView.project.executionAuthorityEpoch
+        })
+      }
+      if (intent.state === 'succeeded') {
+        return projectCoordinatorProjectDeleteResultSchema.parse({
+          projectId: input.projectId,
+          deleted: true
+        })
+      }
+      const completeDelete = async (): Promise<ProjectCoordinatorProjectDeleteResult> => {
+        await options.state.completeProjectDelete(
+          identity.userId,
+          input.projectId,
+          intent.idempotencyKey
+        )
+        return projectCoordinatorProjectDeleteResultSchema.parse({
+          projectId: input.projectId,
+          deleted: true
+        })
+      }
+
+      const command = {
+        protocolVersion: CURRENT_PROTOCOL_VERSION,
+        requestId: requestId(),
+        type: 'project.delete' as const,
+        idempotencyKey: intent.idempotencyKey,
+        projectId: intent.projectId,
+        expectedRevision: intent.expectedRevision,
+        expectedCoordinatorAuthorityEpoch: intent.expectedCoordinatorAuthorityEpoch,
+        expectedExecutionAuthorityEpoch: intent.expectedExecutionAuthorityEpoch
+      }
+      const response = await options.transport.execute({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: command
+      })
+      if (
+        isDurableReplay &&
+        response.status === 404 &&
+        response.body.type === 'rest.error' &&
+        response.body.requestId === command.requestId &&
+        response.body.error.code === 'not_found' &&
+        response.body.error.httpStatus === 404
+      ) {
+        return completeDelete()
+      }
+      if (response.status >= 400 || response.body.type === 'rest.error') {
+        if (response.status < 500) {
+          await options.state.abandonProjectDelete(
+            identity.userId,
+            input.projectId,
+            intent.idempotencyKey
+          )
+        }
+        const detail = response.body.type === 'rest.error'
+          ? `${response.body.error.code}: ${response.body.error.message}`
+          : `HTTP ${response.status}`
+        throw new Error(`SciForge Cloud request failed: ${detail}`)
+      }
+      if (
+        response.body.type !== 'rest.receipt' ||
+        response.body.requestId !== command.requestId ||
+        response.body.receipt.type !== 'operation.receipt' ||
+        response.body.receipt.idempotencyKey !== intent.idempotencyKey ||
+        response.body.receipt.status !== 'succeeded' ||
+        response.body.receipt.actor.actorType !== 'user' ||
+        response.body.receipt.actor.userId !== identity.userId
+      ) {
+        throw new Error(`Project delete returned ${response.body.type}.`)
+      }
+      return completeDelete()
+    },
     transferCoordinator: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorTransferInputSchema.parse(rawInput)
       const workspace = await options.workspace.readWorkspace({ projectId: input.projectId })
@@ -1147,6 +1257,10 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     handleInbox: async (rawMessage) => {
       const message = agentInboxMessageSchema.parse(rawMessage)
+      if (message.payload.type === 'project.deleted') {
+        await options.state.clearProjectLocalState(message.payload.projectId)
+        return
+      }
       if (message.payload.type === 'project.started') {
         const started = message.payload
         const workspace = await options.workspace.readWorkspace({ projectId: started.projectId })

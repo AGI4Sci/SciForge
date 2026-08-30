@@ -66,6 +66,10 @@ const FILE_LOCATOR = {
 }
 const ROOT_LOCATOR_DIGEST = digestFixture(ROOT_LOCATOR)
 const FILE_LOCATOR_DIGEST = digestFixture(FILE_LOCATOR)
+const DELETED_PROJECT_FENCE = {
+  kind: 'permanent',
+  reason: 'Cloud deleted this Project; local execution was fenced.'
+} as const
 
 test('duplicate User offers persist once and a Device dismissal remains local', async () => {
   const cloud = new FakeWorkerCloud()
@@ -1094,6 +1098,91 @@ test('restart after Provider dispatch records outcome unknown and requires manua
   assert.equal(recovered?.lateOutcomes[0]?.outcome, 'outcome_unknown')
 })
 
+test('Project deletion during unknown-outcome persistence cannot restore manual recovery', async () => {
+  const cloud = new FakeWorkerCloud('running', true)
+  const cloudJournal = externalOperationRecoveryJournalEntrySchema.parse({
+    schemaVersion: 1,
+    type: 'external_operation_recovery_journal_entry',
+    contentRecoveryJournalEntryId: 'crj_WorkerJournalRace1',
+    scope: 'task_content_transfer',
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    preparedTaskRevision: cloud.task.revision,
+    preparedExecutionRevision: cloud.execution.revision,
+    provisioningIntentId: null,
+    provisioningRevision: null,
+    logicalInvocationId: `download.${TEST_IDS.executionId}.delete-race`,
+    operation: 'download',
+    state: 'dispatched',
+    requestDigest: TEST_HASH,
+    receiptDigest: null,
+    observationDigest: null,
+    safeFailureCode: null,
+    preparedAt: TEST_TIMESTAMP,
+    dispatchedAt: TEST_LATER_TIMESTAMP,
+    resolvedAt: null,
+    revision: 2,
+    createdAt: TEST_TIMESTAMP,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  cloud.seedRecoveryJournal(cloudJournal)
+  const initial = emptyState()
+  initial.tasks = [cloud.task]
+  initial.taskRuns = [durableTaskRun(cloud, {
+    resources: fileResources(cloud.execution.fence.assignmentTaskRevision),
+    externalJournal: [{
+      logicalInvocationId: cloudJournal.logicalInvocationId,
+      operation: 'download',
+      workspaceRelativePath: 'input.csv',
+      requestDigest: cloudJournal.requestDigest,
+      state: 'effect_dispatched',
+      cloudJournal,
+      receiptDigest: null,
+      observationDigest: null,
+      preparedAt: TEST_TIMESTAMP,
+      effectDispatchedAt: TEST_LATER_TIMESTAMP,
+      observedAt: null,
+      safeFailureCode: null,
+      safeError: null
+    }]
+  })]
+  let deleteWhenObserved = false
+  let deletion: Promise<void> | undefined
+  let deleteProject = async (): Promise<void> => undefined
+  let currentJournalState = (): string | undefined => undefined
+  const created = await createRunner(
+    cloud,
+    neverAgent(),
+    initial,
+    noContentCapabilities(),
+    new MemoryBackend(initial),
+    undefined,
+    () => {
+      if (deleteWhenObserved && currentJournalState() === 'outcome_unknown') {
+        deleteWhenObserved = false
+        deletion = deleteProject()
+      }
+      return new Date(TEST_TIMESTAMP)
+    }
+  )
+  deleteProject = () => created.adapter.handleProjectUnavailable(
+    TEST_IDS.projectId,
+    DELETED_PROJECT_FENCE
+  )
+  currentJournalState = () => created.store.snapshot().taskRuns[0]?.externalJournal[0]?.state
+
+  deleteWhenObserved = true
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+  await deletion
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(run?.state, 'fenced')
+  assert.equal(run?.externalJournal[0]?.state, 'outcome_unknown')
+  assert.match(run?.error ?? '', /Cloud deleted this Project/u)
+})
+
 test('a linked exact Provider observation submits the preserved Worker result without rerunning Runtime or upload', async () => {
   const cloud = new FakeWorkerCloud('running', true)
   const recovery = manualRecoveryFixture(cloud)
@@ -1837,6 +1926,270 @@ test('a terminal execution event aborts the active Runtime and journals its fenc
   assert.equal(cloud.commands.includes('task.result.submit'), false)
 })
 
+test('Project deletion closes active offers and fences the matching active Runtime exactly once', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const runtimeStarted = deferred<void>()
+  const runtimeAborted = deferred<void>()
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      runtimeStarted.resolve()
+      if (!request.signal?.aborted) {
+        await new Promise<void>((resolve) => {
+          request.signal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+      }
+      runtimeAborted.resolve()
+      throw new Error('Runtime stopped because its Cloud Project was deleted.')
+    }
+  }, initial)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await runtimeStarted.promise
+  await created.store.transact((draft) => {
+    draft.pendingTaskOffers.push({
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      taskOfferId: 'ofr_DeletePending001',
+      workerUserId: TEST_IDS.userId,
+      currentTaskRevision: cloud.task.revision,
+      offerRevision: 1,
+      recipientAgentId: TEST_IDS.agentId,
+      receivedAt: TEST_TIMESTAMP,
+      preflightReasons: [],
+      state: 'awaiting-manual',
+      updatedAt: TEST_TIMESTAMP,
+      completedAt: null,
+      error: null
+    }, {
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      taskOfferId: 'ofr_DeleteDismissed01',
+      workerUserId: TEST_IDS.userId,
+      currentTaskRevision: cloud.task.revision,
+      offerRevision: 1,
+      recipientAgentId: TEST_IDS.agentId,
+      receivedAt: TEST_TIMESTAMP,
+      preflightReasons: [],
+      state: 'dismissed',
+      updatedAt: TEST_TIMESTAMP,
+      completedAt: TEST_TIMESTAMP,
+      error: null
+    })
+  })
+
+  await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
+  await runtimeAborted.promise
+  await created.adapter.waitForIdle()
+
+  const deleted = created.store.snapshot()
+  assert.equal(deleted.tasks.length, 1, 'durable Task history remains available locally')
+  assert.equal(deleted.taskRuns.length, 1, 'durable execution history remains available locally')
+  assert.equal(deleted.taskRuns[0]?.state, 'fenced')
+  assert.match(deleted.taskRuns[0]?.error ?? '', /Cloud deleted this Project/u)
+  assert.equal(deleted.taskRuns[0]?.agentJournal[0]?.state, 'late_outcome')
+  assert.equal(deleted.taskRuns[0]?.lateOutcomes[0]?.outcome, 'failed_after_fence')
+  assert.deepEqual(deleted.pendingTaskOffers.map(({ state }) => state), ['closed', 'dismissed'])
+  assert.deepEqual(deleted.projectUnavailableFences.map(({ kind }) => kind), ['permanent'])
+  assert.match(deleted.pendingTaskOffers[0]?.error ?? '', /Cloud deleted this Project/u)
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+
+  const revisionAfterCleanup = deleted.revision
+  await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
+  assert.equal(created.store.snapshot().revision, revisionAfterCleanup)
+})
+
+test('Project deletion fences manual recovery because deleted work is no longer recoverable', async () => {
+  const cloud = new FakeWorkerCloud('running', true)
+  const recovery = manualRecoveryFixture(cloud)
+  const created = await createRunner(cloud, neverAgent(), recovery.initial)
+
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'manual-recovery')
+  await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
+
+  const deleted = created.store.snapshot().taskRuns[0]
+  assert.equal(deleted?.state, 'fenced')
+  assert.match(deleted?.error ?? '', /Cloud deleted this Project/u)
+  assert.equal(deleted?.externalJournal.some(({ state }) => state === 'outcome_unknown'), true)
+  assert.deepEqual(created.store.snapshot().projectUnavailableFences.map(({ kind }) => kind), ['permanent'])
+})
+
+test('Project deletion wins a manual offer decision race inside the store transaction', async () => {
+  const cloud = new FakeWorkerCloud()
+  let deleteOnNextClock = false
+  let deletion: Promise<void> | undefined
+  let deleteProject = async (): Promise<void> => undefined
+  const created = await createRunner(
+    cloud,
+    neverAgent(),
+    emptyState(),
+    noContentCapabilities(),
+    new MemoryBackend(emptyState()),
+    undefined,
+    () => {
+      if (deleteOnNextClock) {
+        deleteOnNextClock = false
+        deletion = deleteProject()
+      }
+      return new Date(TEST_TIMESTAMP)
+    }
+  )
+  deleteProject = () => created.adapter.handleProjectUnavailable(
+    TEST_IDS.projectId,
+    DELETED_PROJECT_FENCE
+  )
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  assert.equal(created.store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
+
+  deleteOnNextClock = true
+  await assert.rejects(
+    created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }),
+    /Only an offer awaiting a manual decision/u
+  )
+  await deletion
+
+  assert.equal(created.store.snapshot().pendingTaskOffers[0]?.state, 'closed')
+  assert.deepEqual(created.store.snapshot().projectUnavailableFences.map(({ kind }) => kind), ['permanent'])
+  assert.equal(cloud.commands.includes('task.offer.accept'), false)
+})
+
+test('Project deletion during offer preflight cannot resurrect or claim the closed offer', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const taskReadStarted = deferred<void>()
+  const releaseTaskRead = deferred<void>()
+  cloud.delayNextTaskRead(() => taskReadStarted.resolve(), releaseTaskRead.promise)
+  const created = await createRunner(cloud, neverAgent(), initial)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await taskReadStarted.promise
+  await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
+  releaseTaskRead.resolve()
+  await created.adapter.waitForIdle()
+
+  const offer = created.store.snapshot().pendingTaskOffers[0]
+  assert.equal(offer?.state, 'closed')
+  assert.match(offer?.error ?? '', /Cloud deleted this Project/u)
+  assert.equal(cloud.commands.includes('task.offer.accept'), false)
+  assert.equal(created.store.snapshot().taskRuns.length, 0)
+})
+
+test('Project deletion while HumanNeeded is in flight cannot restore a fenced run', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const humanNeededStarted = deferred<void>()
+  const releaseHumanNeeded = deferred<void>()
+  const baseOutbox = cloud.outbox()
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'worker-delete-human-thread',
+      turnId: 'worker-delete-human-turn',
+      state: 'completed',
+      text: JSON.stringify({
+        schemaVersion: 1,
+        outcome: 'needs_human',
+        question: 'Should this deleted Project continue?',
+        requiredAssurance: 'verified'
+      })
+    })
+  }, initial, noContentCapabilities(), new MemoryBackend(initial), () => ({
+    enqueue: baseOutbox.enqueue.bind(baseOutbox),
+    enqueueAndWait: async (
+      kind: Parameters<DurableCloudOutbox['enqueueAndWait']>[0],
+      request: RestRequest
+    ) => {
+      if (request.type === 'human.needed.create') {
+        humanNeededStarted.resolve()
+        await releaseHumanNeeded.promise
+      }
+      return baseOutbox.enqueueAndWait(kind, request)
+    }
+  }) as unknown as DurableCloudOutbox)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await humanNeededStarted.promise
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'needs-human')
+  await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
+  releaseHumanNeeded.resolve()
+  await created.adapter.waitForIdle()
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(run?.state, 'fenced')
+  assert.equal(run?.humanRequestId, null)
+  assert.match(run?.error ?? '', /Cloud deleted this Project/u)
+})
+
+test('Project deletion while result submission is in flight cannot complete a fenced run', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  const submissionStarted = deferred<void>()
+  const releaseSubmission = deferred<void>()
+  const baseOutbox = cloud.outbox()
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'worker-delete-submit-thread',
+      turnId: 'worker-delete-submit-turn',
+      state: 'completed',
+      text: JSON.stringify({
+        schemaVersion: 1,
+        outcome: 'completed',
+        summary: 'This result raced with Project deletion.'
+      })
+    })
+  }, initial, noContentCapabilities(), new MemoryBackend(initial), () => ({
+    enqueue: baseOutbox.enqueue.bind(baseOutbox),
+    enqueueAndWait: async (
+      kind: Parameters<DurableCloudOutbox['enqueueAndWait']>[0],
+      request: RestRequest
+    ) => {
+      if (request.type === 'task.result.submit') {
+        submissionStarted.resolve()
+        await releaseSubmission.promise
+      }
+      return baseOutbox.enqueueAndWait(kind, request)
+    }
+  }) as unknown as DurableCloudOutbox)
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await submissionStarted.promise
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'submitting')
+  await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
+  releaseSubmission.resolve()
+  await created.adapter.waitForIdle()
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(run?.state, 'fenced')
+  assert.match(run?.error ?? '', /Cloud deleted this Project/u)
+  assert.equal(cloud.commands.filter((type) => type === 'task.result.submit').length, 1)
+})
+
 test('membership removal fences the matching recovered execution before Runtime resumes', async () => {
   const cloud = new FakeWorkerCloud('running')
   const initial = emptyState()
@@ -2067,7 +2420,8 @@ async function createRunner(
   initial: CollaborationLocalState = emptyState(),
   capabilities: DomainMainSystemCapabilityInvoker = noContentCapabilities(),
   backend: CollaborationStateBackend = new MemoryBackend(initial),
-  outboxFactory?: (store: CollaborationLocalStore) => DurableCloudOutbox
+  outboxFactory?: (store: CollaborationLocalStore) => DurableCloudOutbox,
+  now: () => Date = () => new Date(TEST_TIMESTAMP)
 ) {
   const store = new CollaborationLocalStore(backend)
   await store.open()
@@ -2087,7 +2441,7 @@ async function createRunner(
     capabilities,
     localAgentId: () => TEST_IDS.agentId,
     workspaceRootForExecution: (executionId) => `/tmp/sciforge-worker-${executionId}`,
-    now: () => new Date(TEST_TIMESTAMP)
+    now
   })
   return { adapter, store, outbox }
 }
@@ -2362,6 +2716,10 @@ class FakeWorkerCloud {
     release: Promise<void>
   }> | null = null
   private readonly recoveryResources = new Map<string, ReturnType<typeof cloudResourceRefSchema.parse>>()
+  private taskReadGate: Readonly<{
+    started: () => void
+    release: Promise<void>
+  }> | null = null
 
   constructor(
     state: 'offered' | 'accepted' | 'running' = 'offered',
@@ -2486,6 +2844,10 @@ class FakeWorkerCloud {
     })
   }
 
+  delayNextTaskRead(started: () => void, release: Promise<void>): void {
+    this.taskReadGate = { started, release }
+  }
+
   connection(): CollaborationConnection {
     return {
       executeAsAgent: async (request: RestRequest) => {
@@ -2522,6 +2884,12 @@ class FakeWorkerCloud {
           return entityResponse(request, fileContentBinding())
         }
         assert.equal(request.type, 'task.get')
+        const gate = this.taskReadGate
+        if (gate) {
+          this.taskReadGate = null
+          gate.started()
+          await gate.release
+        }
         return {
           protocolVersion: '1.0',
           type: 'rest.entity',
@@ -3277,6 +3645,7 @@ function emptyState(): CollaborationLocalState {
     agents: [agentNodeFixture],
     projections: [],
     projects: [],
+    projectUnavailableFences: [],
     tasks: [],
     taskRuns: [],
     pendingTaskOffers: [],

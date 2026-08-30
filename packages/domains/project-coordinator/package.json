@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-coordinator",
-  "version": "4.0.4",
+  "version": "4.1.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -23,12 +23,13 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "5.1.0",
-    "@sciforge/domain-collaboration": "^6.0.0",
+    "@sciforge/domain-collaboration": "^6.1.0",
     "@sciforge/domain-content-space": "^5.0.0",
-    "@sciforge/domain-identity-access": "^4.0.0",
+    "@sciforge/domain-identity-access": "^4.0.1",
     "@sciforge/domain-sdk": "^0.2.11",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "react-i18next": "^15.7.4",
     "zod": "^4.4.3"
   },
@@ -37,7 +38,6 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.0",
     "happy-dom": "^20.11.2",
-    "react-dom": "^19.0.0",
     "tsx": "^4.22.4",
     "typescript": "^5.8.2"
   }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   agentInboxMessageSchema,
+  createCollaborationError,
   projectFinalSummarySchema,
   projectRecordSchema,
   taskExecutionSchema,
@@ -20,6 +21,7 @@ import {
   agentInboxMessageFixture,
   humanAnswerFixture,
   humanNeededFixture,
+  operationReceiptFixture,
   projectFixture,
   taskFixture
 } from '@sciforge/collaboration-contracts/testing'
@@ -36,6 +38,501 @@ import {
   defineProjectCoordinatorWorkspacePort
 } from './ports.js'
 import { ProjectCoordinatorStateStore } from './state.js'
+
+test('Owner delete derives Cloud CAS once and replays the same durable command after an absent Project', async () => {
+  const current = workspaceFixture()
+  const absent = projectCoordinatorWorkspaceSchema.parse({
+    connection: current.connection,
+    observedAt: TEST_LATER_TIMESTAMP,
+    availableWorkerUsers: [],
+    providerPrincipalFacts: [],
+    projects: []
+  })
+  const workspaceReads: unknown[] = []
+  const commands: RestRequest[] = []
+  let cloudAttempt = 0
+  let authorizationCalls = 0
+  const initialIdempotencyKey = 'idem_ProjectDeleteReplay01'
+  const retryIdempotencyKey = 'idem_ProjectDeleteRetry002'
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async (input) => {
+        workspaceReads.push(input)
+        return workspaceReads.length === 1 ? current : absent
+      }
+    }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: projectFixture.ownerUserId,
+        deviceId: TEST_IDS.deviceId,
+        deviceRevision: 1
+      }),
+      execute: async ({ payload }) => {
+        const command = payload as RestRequest
+        commands.push(command)
+        cloudAttempt += 1
+        if (cloudAttempt === 1) throw new Error('Delete response was lost after Cloud commit.')
+        return {
+          contractVersion: 1,
+          status: 200,
+          body: {
+            protocolVersion: '1.0',
+            type: 'rest.receipt',
+            requestId: command.requestId,
+            receipt: {
+              ...operationReceiptFixture,
+              actor: {
+                actorType: 'user',
+                userId: projectFixture.ownerUserId,
+                assurance: 'strong'
+              },
+              idempotencyKey: initialIdempotencyKey,
+              status: 'succeeded'
+            }
+          }
+        }
+      }
+    },
+    state: coordinatorState(),
+    continuation: { reconcileProject: async () => absent },
+    requestId: (() => {
+      let ordinal = 0
+      return () => `req_ProjectDelete${String(++ordinal).padStart(4, '0')}`
+    })()
+  })
+
+  await assert.rejects(
+    port.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      initialIdempotencyKey,
+      async () => { authorizationCalls += 1 }
+    ),
+    /response was lost/u
+  )
+  assert.deepEqual(await port.deleteProject(
+    { projectId: TEST_IDS.projectId },
+    retryIdempotencyKey,
+    async () => { authorizationCalls += 1 }
+  ), {
+    projectId: TEST_IDS.projectId,
+    deleted: true
+  })
+
+  assert.equal(commands.length, 2)
+  assert.deepEqual(commands.map((command) => command.type === 'project.delete' ? {
+    type: command.type,
+    idempotencyKey: command.idempotencyKey,
+    projectId: command.projectId,
+    expectedRevision: command.expectedRevision,
+    expectedCoordinatorAuthorityEpoch: command.expectedCoordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: command.expectedExecutionAuthorityEpoch
+  } : null), [{
+    type: 'project.delete',
+    idempotencyKey: initialIdempotencyKey,
+    projectId: projectFixture.projectId,
+    expectedRevision: projectFixture.revision,
+    expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: projectFixture.executionAuthorityEpoch
+  }, {
+    type: 'project.delete',
+    idempotencyKey: initialIdempotencyKey,
+    projectId: projectFixture.projectId,
+    expectedRevision: projectFixture.revision,
+    expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: projectFixture.executionAuthorityEpoch
+  }])
+  assert.equal(authorizationCalls, 1)
+  assert.deepEqual(workspaceReads, [{ projectId: TEST_IDS.projectId }])
+})
+
+test('Project delete completes a matching durable replay after Cloud reports the Project absent', async () => {
+  const initialIdempotencyKey = 'idem_ProjectDeleteAbsent01'
+  const retryIdempotencyKey = 'idem_ProjectDeleteAbsent02'
+  const state = coordinatorState()
+  let cloudAttempts = 0
+  let authorizationCalls = 0
+  let workspaceReads = 0
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => {
+        workspaceReads += 1
+        return workspaceFixture()
+      }
+    }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: projectFixture.ownerUserId,
+        deviceId: TEST_IDS.deviceId,
+        deviceRevision: 1
+      }),
+      execute: async ({ payload }) => {
+        cloudAttempts += 1
+        if (cloudAttempts === 1) {
+          throw new Error('Delete response was lost after Cloud commit.')
+        }
+        return {
+          contractVersion: 1,
+          status: 404,
+          body: {
+            protocolVersion: '1.0',
+            type: 'rest.error',
+            requestId: payload.requestId,
+            error: createCollaborationError(
+              'not_found',
+              'The Project no longer exists.',
+              { requestId: payload.requestId }
+            )
+          }
+        }
+      }
+    },
+    state,
+    continuation: { reconcileProject: async () => workspaceFixture() }
+  })
+
+  await assert.rejects(
+    port.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      initialIdempotencyKey,
+      async () => { authorizationCalls += 1 }
+    ),
+    /response was lost/u
+  )
+  assert.deepEqual(await port.deleteProject(
+    { projectId: TEST_IDS.projectId },
+    retryIdempotencyKey,
+    async () => { authorizationCalls += 1 }
+  ), {
+    projectId: TEST_IDS.projectId,
+    deleted: true
+  })
+
+  assert.equal(cloudAttempts, 2)
+  assert.equal(authorizationCalls, 1)
+  assert.equal(workspaceReads, 1)
+  assert.deepEqual(await state.readProjectDeleteIntent(
+    projectFixture.ownerUserId,
+    TEST_IDS.projectId,
+    retryIdempotencyKey
+  ), {
+    projectId: TEST_IDS.projectId,
+    principalUserId: projectFixture.ownerUserId,
+    idempotencyKey: initialIdempotencyKey,
+    expectedRevision: projectFixture.revision,
+    expectedCoordinatorAuthorityEpoch: projectFixture.coordinatorAuthorityEpoch,
+    expectedExecutionAuthorityEpoch: projectFixture.executionAuthorityEpoch,
+    state: 'succeeded'
+  })
+  await assert.rejects(
+    state.writeDraft({ projectId: TEST_IDS.projectId } as never, null),
+    /being deleted or was already deleted/u
+  )
+})
+
+test('Project delete does not infer Owner success from not_found on its first attempt', async () => {
+  const idempotencyKey = 'idem_ProjectDeleteFirst404'
+  const state = coordinatorState()
+  let authorizationCalls = 0
+  let cloudCalls = 0
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspaceFixture()
+    }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: projectFixture.ownerUserId,
+        deviceId: TEST_IDS.deviceId,
+        deviceRevision: 1
+      }),
+      execute: async ({ payload }) => {
+        cloudCalls += 1
+        return {
+          contractVersion: 1,
+          status: 404,
+          body: {
+            protocolVersion: '1.0',
+            type: 'rest.error',
+            requestId: payload.requestId,
+            error: createCollaborationError(
+              'not_found',
+              'The Project does not exist.',
+              { requestId: payload.requestId }
+            )
+          }
+        }
+      }
+    },
+    state,
+    continuation: { reconcileProject: async () => workspaceFixture() }
+  })
+
+  await assert.rejects(
+    port.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      idempotencyKey,
+      async () => { authorizationCalls += 1 }
+    ),
+    /not_found/u
+  )
+
+  assert.equal(cloudCalls, 1)
+  assert.equal(authorizationCalls, 1)
+  assert.equal(await state.readProjectDeleteIntent(
+    projectFixture.ownerUserId,
+    TEST_IDS.projectId,
+    idempotencyKey
+  ), null)
+})
+
+test('Project delete converges with a new invocation after its local completion write fails', async () => {
+  const initialIdempotencyKey = 'idem_ProjectDeleteCommit01'
+  const retryIdempotencyKey = 'idem_ProjectDeleteCommit02'
+  const commands: RestRequest[] = []
+  let authorizationCalls = 0
+  let workspaceReads = 0
+  const state = coordinatorStateWithWriteFailures(new Set([2, 3, 4]))
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => {
+        workspaceReads += 1
+        return workspaceFixture()
+      }
+    }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: projectFixture.ownerUserId,
+        deviceId: TEST_IDS.deviceId,
+        deviceRevision: 1
+      }),
+      execute: async ({ payload }) => {
+        const command = payload as RestRequest
+        commands.push(command)
+        return {
+          contractVersion: 1,
+          status: 200,
+          body: {
+            protocolVersion: '1.0',
+            type: 'rest.receipt',
+            requestId: command.requestId,
+            receipt: {
+              ...operationReceiptFixture,
+              actor: {
+                actorType: 'user',
+                userId: projectFixture.ownerUserId,
+                assurance: 'strong'
+              },
+              idempotencyKey: initialIdempotencyKey,
+              status: 'succeeded'
+            }
+          }
+        }
+      }
+    },
+    state,
+    continuation: { reconcileProject: async () => workspaceFixture() }
+  })
+
+  await assert.rejects(
+    port.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      initialIdempotencyKey,
+      async () => { authorizationCalls += 1 }
+    ),
+    /Injected Project delete completion write failure/u
+  )
+  assert.deepEqual(await port.deleteProject(
+    { projectId: TEST_IDS.projectId },
+    retryIdempotencyKey,
+    async () => { authorizationCalls += 1 }
+  ), {
+    projectId: TEST_IDS.projectId,
+    deleted: true
+  })
+
+  assert.equal(workspaceReads, 1)
+  assert.equal(authorizationCalls, 1)
+  assert.deepEqual(commands.map((command) => (
+    command.type === 'project.delete' ? command.idempotencyKey : null
+  )), [initialIdempotencyKey, initialIdempotencyKey])
+})
+
+test('Project delete rejects a non-Owner and a mismatched receipt before local success', async () => {
+  const ownerWorkspace = workspaceFixture()
+  const memberWorkspace = projectCoordinatorWorkspaceSchema.parse({
+    ...ownerWorkspace,
+    connection: {
+      state: 'ready',
+      userId: TEST_IDS.secondUserId,
+      deviceId: 'dev_ProjectMember01'
+    }
+  })
+  let nonOwnerCloudCalls = 0
+  const nonOwner = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => memberWorkspace }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: TEST_IDS.secondUserId,
+        deviceId: 'dev_ProjectMember01',
+        deviceRevision: 1
+      }),
+      execute: async () => {
+        nonOwnerCloudCalls += 1
+        throw new Error('must not execute')
+      }
+    },
+    state: coordinatorState(),
+    continuation: { reconcileProject: async () => memberWorkspace }
+  })
+  await assert.rejects(
+    nonOwner.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      'idem_ProjectDeleteMember01',
+      async () => undefined
+    ),
+    /Only the current Project Owner may delete/u
+  )
+  assert.equal(nonOwnerCloudCalls, 0)
+
+  const wrongReceipt = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => ownerWorkspace }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: projectFixture.ownerUserId,
+        deviceId: TEST_IDS.deviceId,
+        deviceRevision: 1
+      }),
+      execute: async ({ payload }) => ({
+        contractVersion: 1,
+        status: 200,
+        body: {
+          protocolVersion: '1.0',
+          type: 'rest.receipt',
+          requestId: payload.requestId,
+          receipt: {
+            ...operationReceiptFixture,
+            idempotencyKey: 'idem_DifferentDeleteReceipt01',
+            status: 'succeeded'
+          }
+        }
+      })
+    },
+    state: coordinatorState(),
+    continuation: { reconcileProject: async () => ownerWorkspace }
+  })
+  await assert.rejects(
+    wrongReceipt.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      'idem_ProjectDeleteExpected01',
+      async () => undefined
+    ),
+    /Project delete/u
+  )
+})
+
+test('Project delete abandons its pending intent after a definitive 4xx rejection', async () => {
+  const state = coordinatorState()
+  const idempotencyKey = 'idem_ProjectDeleteRejected01'
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => workspaceFixture()
+    }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: {
+      status: () => ({
+        state: 'ready',
+        baseUrl: 'https://cloud.run0.invalid/',
+        userId: projectFixture.ownerUserId,
+        deviceId: TEST_IDS.deviceId,
+        deviceRevision: 1
+      }),
+      execute: async ({ payload }) => ({
+        contractVersion: 1,
+        status: 400,
+        body: {
+          protocolVersion: '1.0',
+          type: 'rest.error',
+          requestId: payload.requestId,
+          error: createCollaborationError(
+            'validation_error',
+            'The delete command was rejected definitively.',
+            { requestId: payload.requestId }
+          )
+        }
+      })
+    },
+    state,
+    continuation: { reconcileProject: async () => workspaceFixture() }
+  })
+
+  await assert.rejects(
+    port.deleteProject(
+      { projectId: TEST_IDS.projectId },
+      idempotencyKey,
+      async () => undefined
+    ),
+    /validation_error/u
+  )
+  assert.equal(await state.readProjectDeleteIntent(
+    projectFixture.ownerUserId,
+    TEST_IDS.projectId,
+    idempotencyKey
+  ), null)
+})
+
+test('project.deleted Inbox cleanup is local, idempotent, and never rereads deleted Cloud facts', async () => {
+  let workspaceReads = 0
+  let continuationCalls = 0
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({
+      readWorkspace: async () => {
+        workspaceReads += 1
+        throw new Error('Deleted Project facts must not be reread.')
+      }
+    }),
+    coordinatorCloudCommands: unusedCoordinatorCloudCommands(),
+    transport: unusedTransport(),
+    state: coordinatorState(),
+    continuation: {
+      reconcileProject: async () => {
+        continuationCalls += 1
+        throw new Error('Deleted Project continuation must not run.')
+      }
+    }
+  })
+  const message = agentInboxMessageSchema.parse({
+    ...agentInboxMessageFixture,
+    payload: {
+      protocolVersion: '1.0',
+      type: 'project.deleted',
+      projectId: TEST_IDS.projectId,
+      deletedAt: TEST_LATER_TIMESTAMP
+    }
+  })
+
+  await port.handleInbox(message)
+  await port.handleInbox(message)
+
+  assert.equal(workspaceReads, 0)
+  assert.equal(continuationCalls, 0)
+})
 
 test('Coordinator consumes the canonical project.started Inbox notification from fresh Cloud facts', async () => {
   const workspace = workspaceFixture()
@@ -931,6 +1428,14 @@ function entityResponse(requestId: string, entity: unknown): RestResponse {
   } as RestResponse
 }
 
+function unusedCoordinatorCloudCommands(): CoordinatorCloudCommandService {
+  return {
+    execute: async () => { throw new Error('Coordinator Cloud commands are unused.') },
+    resume: async () => null,
+    subscribe: () => () => undefined
+  }
+}
+
 function unusedTransport(): AuthenticatedCloudTransport {
   return {
     status: () => ({ state: 'unavailable', reason: 'OIDC transport is unused.' }),
@@ -945,6 +1450,33 @@ function coordinatorState(): ProjectCoordinatorStateStore {
     read: async () => ({ revision, value }),
     write: async (next, expectedRevision) => {
       assert.equal(expectedRevision, revision)
+      value = next
+      revision += 1
+      return { revision, value }
+    },
+    clear: async (expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      value = null
+      revision += 1
+      return { revision, value }
+    }
+  })
+}
+
+function coordinatorStateWithWriteFailures(
+  failedWriteAttempts: ReadonlySet<number>
+): ProjectCoordinatorStateStore {
+  let revision = 0
+  let value: Awaited<ReturnType<DomainMainPackageSettingsHost['read']>>['value'] = null
+  let writeAttempt = 0
+  return new ProjectCoordinatorStateStore({
+    read: async () => ({ revision, value }),
+    write: async (next, expectedRevision) => {
+      assert.equal(expectedRevision, revision)
+      writeAttempt += 1
+      if (failedWriteAttempts.has(writeAttempt)) {
+        throw new Error('Injected Project delete completion write failure.')
+      }
       value = next
       revision += 1
       return { revision, value }

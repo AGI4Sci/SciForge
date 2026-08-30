@@ -13,6 +13,7 @@ import {
   projectCoordinatorMembershipRemoveInputSchema,
   projectCoordinatorPlanDraftGenerateResultSchema,
   projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorProjectDeleteInputSchema,
   projectCoordinatorTaskOfferReassignInputSchema,
   projectCoordinatorWorkflowContinueInputSchema,
   projectCoordinatorTransferInputSchema,
@@ -283,6 +284,26 @@ test('Project create result binds one fresh ordinary Session and explicit UI act
       projectId: 'prj_OtherProject001'
     }
   }), /bind the exact new Project/u)
+})
+
+test('Project delete HCI selects only one Project identity and cannot claim Cloud authority facts', () => {
+  const input = { projectId: 'prj_Project000001' }
+  assert.deepEqual(projectCoordinatorProjectDeleteInputSchema.parse(input), input)
+  for (const callerClaim of [
+    { ownerUserId: 'usr_Owner0000001' },
+    { expectedRevision: 3 },
+    { expectedCoordinatorAuthorityEpoch: 2 },
+    { expectedExecutionAuthorityEpoch: 2 }
+  ]) {
+    assert.throws(() => projectCoordinatorProjectDeleteInputSchema.parse({
+      ...input,
+      ...callerClaim
+    }))
+  }
+  assert.equal(
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+    'project-coordinator.project.delete'
+  )
 })
 
 test('Coordinator transfer HCI selects only a successor identity and cannot claim Cloud authority facts', () => {

@@ -179,6 +179,7 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
   assert.deepEqual(PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS, [
     'project-coordinator.workspace.read',
     'project-coordinator.project.create',
+    'project-coordinator.project.delete',
     'project-coordinator.plan-draft.read',
     'project-coordinator.plan-draft.generate',
     'project-coordinator.plan-draft.edit',

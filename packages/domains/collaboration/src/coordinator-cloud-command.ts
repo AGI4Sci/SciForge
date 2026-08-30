@@ -18,7 +18,7 @@ import {
 
 export const COORDINATOR_CLOUD_COMMAND_SERVICE_ID =
   'sciforge.collaboration.coordinator-cloud-command' as const
-export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '6.0.0' as const
+export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '6.1.0' as const
 
 /**
  * Agent-authored Project creation and Coordinator writes only. The current
