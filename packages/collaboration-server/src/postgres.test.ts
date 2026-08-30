@@ -4,6 +4,31 @@ import { PostgresCollaborationRepository, type SqlConnection, type SqlPool } fro
 import { CollaborationService } from './service.js'
 
 describe('PostgreSQL production transaction path', () => {
+  it('deletes one exact Project through the revision-guarded canonical row', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = []
+    const connection: SqlConnection = {
+      query: async (text, values = []) => {
+        queries.push({ text, values })
+        return { rows: [], rowCount: 1 }
+      },
+      release: () => undefined
+    }
+    const repository = new PostgresCollaborationRepository({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => connection,
+      end: async () => undefined
+    })
+
+    await expect(repository.transaction((tx) => tx.deleteProject('prj_DeleteProject01', 7)))
+      .resolves.toBeUndefined()
+
+    const deletion = queries.find(({ text }) => text.includes('DELETE FROM sciforge_collaboration.projects'))
+    expect(deletion?.text).toContain('WHERE project_id=$1 AND revision=$2')
+    expect(deletion?.text).toContain('RETURNING project_id')
+    expect(deletion?.values).toEqual(['prj_DeleteProject01', 7])
+    expect(queries.at(-1)?.text).toBe('COMMIT')
+  })
+
   it('fences stale managed-container completions by claim attempt inside one transaction', async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = []
     const connection: SqlConnection = {

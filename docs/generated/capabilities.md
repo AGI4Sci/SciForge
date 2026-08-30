@@ -216,6 +216,7 @@ Registered actions: **294**
 | `project-coordinator.project-activation.acknowledge` | 1.0.0 | ui | workspace-write | none | global |
 | `project-coordinator.project.complete` | 2.0.0 | ui, agent | external-write | confirmation | global |
 | `project-coordinator.project.create` | 2.0.0 | ui, agent | external-write | confirmation | global |
+| `project-coordinator.project.delete` | 1.0.0 | ui, agent | destructive | confirmation | global |
 | `project-coordinator.result.review` | 2.0.0 | ui, agent | external-write | confirmation | global |
 | `project-coordinator.session-projection.read` | 2.0.0 | ui, agent | read | none | global |
 | `project-coordinator.task-offer.reassign` | 1.0.0 | ui, agent | external-write | confirmation | global |
@@ -147821,6 +147822,70 @@ Creates one Cloud-authoritative Project and a fresh reviewable Coordinator Sessi
     "owner"
   ],
   "title": "Create Project"
+}
+```
+
+## `project-coordinator.project.delete`
+
+Deletes one Cloud-authoritative Project owned by the current OIDC User and fences its local coordination state.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `destructive`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "projectId": {
+        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "projectId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "deleted": {
+        "const": true,
+        "type": "boolean"
+      },
+      "projectId": {
+        "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+        "type": "string"
+      }
+    },
+    "readOnly": true,
+    "required": [
+      "projectId",
+      "deleted"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project",
+    "delete",
+    "owner"
+  ],
+  "title": "Delete Project"
 }
 ```
 

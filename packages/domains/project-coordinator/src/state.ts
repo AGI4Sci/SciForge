@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
+  idempotencyKeySchema,
   projectIdSchema,
+  revisionSchema,
   userIdSchema,
   type ProjectPlan
 } from '@sciforge/collaboration-contracts'
@@ -38,6 +40,16 @@ const projectCreateIntentRecordSchema = z.object({
   activationRequestId: projectCoordinatorActivationRequestIdSchema.nullable().default(null)
 }).strict().readonly()
 
+const projectDeleteIntentRecordSchema = z.object({
+  projectId: projectIdSchema,
+  principalUserId: userIdSchema,
+  idempotencyKey: idempotencyKeySchema,
+  expectedRevision: revisionSchema,
+  expectedCoordinatorAuthorityEpoch: revisionSchema,
+  expectedExecutionAuthorityEpoch: revisionSchema,
+  state: z.enum(['pending', 'succeeded'])
+}).strict().readonly()
+
 const projectCoordinatorStateSchema = z.object({
   schemaVersion: z.literal(3),
   planDrafts: z.array(projectCoordinatorPlanDraftSchema).max(1_000),
@@ -52,8 +64,30 @@ const projectCoordinatorStateSchema = z.object({
     .default([]),
   pendingProjectActivations: z.array(projectCoordinatorPendingActivationSchema)
     .max(10_000)
+    .default([]),
+  projectDeleteIntents: z.array(projectDeleteIntentRecordSchema)
+    .max(10_000)
+    .default([]),
+  deletedProjectIds: z.array(projectIdSchema)
+    .max(10_000)
     .default([])
-}).strict().readonly()
+}).strict().superRefine((state, context) => {
+  const intentProjectIds = state.projectDeleteIntents.map(({ projectId }) => projectId)
+  if (new Set(intentProjectIds).size !== intentProjectIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['projectDeleteIntents'],
+      message: 'Each Project has at most one durable delete intent.'
+    })
+  }
+  if (new Set(state.deletedProjectIds).size !== state.deletedProjectIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['deletedProjectIds'],
+      message: 'Deleted Project tombstones must be unique.'
+    })
+  }
+}).readonly()
 
 type ProjectCoordinatorState = z.infer<typeof projectCoordinatorStateSchema>
 
@@ -63,8 +97,14 @@ const EMPTY_STATE: ProjectCoordinatorState = {
   coordinatorSessionBindings: [],
   coordinatorTransferFeedback: [],
   projectCreateIntents: [],
-  pendingProjectActivations: []
+  pendingProjectActivations: [],
+  projectDeleteIntents: [],
+  deletedProjectIds: []
 }
+
+export type ProjectCoordinatorProjectDeleteIntent = z.infer<
+  typeof projectDeleteIntentRecordSchema
+>
 
 export type ProjectCoordinatorProjectCreationCommit = Readonly<{
   projectId: string
@@ -92,6 +132,186 @@ export class ProjectCoordinatorStateStore {
     return state.pendingProjectActivations
   }
 
+  async readProjectDeleteIntent(
+    rawPrincipalUserId: string,
+    rawProjectId: string,
+    rawIdempotencyKey: string
+  ): Promise<ProjectCoordinatorProjectDeleteIntent | null> {
+    const principalUserId = userIdSchema.parse(rawPrincipalUserId)
+    const projectId = projectIdSchema.parse(rawProjectId)
+    idempotencyKeySchema.parse(rawIdempotencyKey)
+    const { state } = await this.read()
+    const intent = state.projectDeleteIntents.find((candidate) => (
+      candidate.projectId === projectId
+    ))
+    if (!intent) return null
+    if (intent.principalUserId !== principalUserId) {
+      throw new Error('The Project delete intent belongs to a different Principal.')
+    }
+    // A later UI invocation resumes the original business command. Its fresh
+    // Host invocation key must never replace the persisted Cloud idempotency
+    // key or CAS facts after an ambiguous response.
+    return intent
+  }
+
+  async beginProjectDelete(
+    rawIntent: Omit<ProjectCoordinatorProjectDeleteIntent, 'state'>
+  ): Promise<ProjectCoordinatorProjectDeleteIntent> {
+    const intent = projectDeleteIntentRecordSchema.parse({
+      ...rawIntent,
+      state: 'pending'
+    })
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const existing = state.projectDeleteIntents.find((candidate) => (
+        candidate.projectId === intent.projectId
+      ))
+      if (existing) {
+        if (
+          existing.principalUserId !== intent.principalUserId ||
+          existing.idempotencyKey !== intent.idempotencyKey ||
+          existing.expectedRevision !== intent.expectedRevision ||
+          existing.expectedCoordinatorAuthorityEpoch !== intent.expectedCoordinatorAuthorityEpoch ||
+          existing.expectedExecutionAuthorityEpoch !== intent.expectedExecutionAuthorityEpoch
+        ) {
+          throw new Error('The Project already has a different durable delete intent.')
+        }
+        return existing
+      }
+      if (state.deletedProjectIds.includes(intent.projectId)) {
+        throw new Error('The Project was already deleted.')
+      }
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        projectDeleteIntents: [...state.projectDeleteIntents, intent]
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return intent
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to persist the Project delete intent.')
+  }
+
+  async abandonProjectDelete(
+    rawPrincipalUserId: string,
+    rawProjectId: string,
+    rawIdempotencyKey: string
+  ): Promise<void> {
+    const principalUserId = userIdSchema.parse(rawPrincipalUserId)
+    const projectId = projectIdSchema.parse(rawProjectId)
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const intent = state.projectDeleteIntents.find((candidate) => (
+        candidate.projectId === projectId
+      ))
+      if (!intent || intent.state === 'succeeded') return
+      if (
+        intent.principalUserId !== principalUserId ||
+        intent.idempotencyKey !== idempotencyKey
+      ) {
+        throw new Error('The Project delete intent belongs to a different Principal or invocation.')
+      }
+      const value = projectCoordinatorStateSchema.parse({
+        ...state,
+        projectDeleteIntents: state.projectDeleteIntents.filter((candidate) => (
+          candidate.projectId !== projectId
+        ))
+      })
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to abandon the Project delete intent.')
+  }
+
+  async completeProjectDelete(
+    rawPrincipalUserId: string,
+    rawProjectId: string,
+    rawIdempotencyKey: string
+  ): Promise<void> {
+    const principalUserId = userIdSchema.parse(rawPrincipalUserId)
+    const projectId = projectIdSchema.parse(rawProjectId)
+    const idempotencyKey = idempotencyKeySchema.parse(rawIdempotencyKey)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const intent = state.projectDeleteIntents.find((candidate) => (
+        candidate.projectId === projectId
+      ))
+      if (!intent) throw new Error('The Project delete receipt has no durable intent.')
+      if (
+        intent.principalUserId !== principalUserId ||
+        intent.idempotencyKey !== idempotencyKey
+      ) {
+        throw new Error('The Project delete receipt belongs to a different Principal or invocation.')
+      }
+      const cleared = withoutProjectLocalState(state, projectId)
+      const value = projectCoordinatorStateSchema.parse({
+        ...cleared,
+        projectDeleteIntents: cleared.projectDeleteIntents.map((candidate) => (
+          candidate.projectId === projectId
+            ? { ...candidate, state: 'succeeded' }
+            : candidate
+        )),
+        deletedProjectIds: cleared.deletedProjectIds.includes(projectId)
+          ? cleared.deletedProjectIds
+          : [...cleared.deletedProjectIds, projectId]
+      })
+      if (
+        intent.state === 'succeeded' &&
+        JSON.stringify(value) === JSON.stringify(state)
+      ) return
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to commit the Project delete receipt.')
+  }
+
+  async clearProjectLocalState(rawProjectId: string): Promise<void> {
+    const projectId = projectIdSchema.parse(rawProjectId)
+    let snapshot = await this.settings.read()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = parseState(snapshot)
+      const cleared = withoutProjectLocalState(state, projectId)
+      const value = projectCoordinatorStateSchema.parse({
+        ...cleared,
+        projectDeleteIntents: cleared.projectDeleteIntents.map((intent) => (
+          intent.projectId === projectId
+            ? { ...intent, state: 'succeeded' }
+            : intent
+        )),
+        deletedProjectIds: cleared.deletedProjectIds.includes(projectId)
+          ? cleared.deletedProjectIds
+          : [...cleared.deletedProjectIds, projectId]
+      })
+      if (JSON.stringify(value) === JSON.stringify(state)) return
+      try {
+        await this.settings.write(value, snapshot.revision)
+        return
+      } catch (error) {
+        if (attempt >= 2) throw error
+        snapshot = await this.settings.read()
+      }
+    }
+    throw new Error('Unable to clear deleted Project local state.')
+  }
+
   async readProjectCreationCommit(
     principalUserId: string,
     rawInput: ProjectCoordinatorProjectCreateInput
@@ -113,6 +333,7 @@ export class ProjectCoordinatorStateStore {
       !intent.coordinatorSession ||
       !intent.activationRequestId
     ) return null
+    assertProjectWritable(state, intent.createdProjectId)
     const binding = state.coordinatorSessionBindings.find((candidate) => (
       candidate.projectId === intent.createdProjectId &&
       candidate.principalUserId === owner &&
@@ -148,6 +369,7 @@ export class ProjectCoordinatorStateStore {
         if (exact.principalUserId !== owner || exact.commandDigest !== commandDigest) {
           throw new Error('Project create intent was reused for a different Owner or business command.')
         }
+        if (exact.createdProjectId) assertProjectWritable(state, exact.createdProjectId)
         return exact.createIntentId
       }
       const pending = state.projectCreateIntents.find((candidate) => (
@@ -207,6 +429,7 @@ export class ProjectCoordinatorStateStore {
     let snapshot = await this.settings.read()
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const state = parseState(snapshot)
+      assertProjectWritable(state, binding.projectId)
       const intent = state.projectCreateIntents.find(({ createIntentId }) => (
         createIntentId === input.createIntentId
       ))
@@ -339,6 +562,7 @@ export class ProjectCoordinatorStateStore {
     let snapshot = await this.settings.read()
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const state = parseState(snapshot)
+      assertProjectWritable(state, next.projectId)
       const current = state.planDrafts.find((draft) => draft.projectId === next.projectId) ?? null
       if ((current?.draftRevision ?? null) !== expectedDraftRevision) {
         throw new Error('Plan draft revision conflict.')
@@ -414,6 +638,7 @@ export class ProjectCoordinatorStateStore {
     let snapshot = await this.settings.read()
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const state = parseState(snapshot)
+      assertProjectWritable(state, feedback.projectId)
       const existing = state.coordinatorTransferFeedback.find((candidate) => (
         candidate.projectId === feedback.projectId
       ))
@@ -470,6 +695,34 @@ function parseState(snapshot: DomainMainPackageSettingsSnapshot): ProjectCoordin
     )
   }
   return projectCoordinatorStateSchema.parse(snapshot.value)
+}
+
+function withoutProjectLocalState(
+  state: ProjectCoordinatorState,
+  projectId: string
+): ProjectCoordinatorState {
+  return projectCoordinatorStateSchema.parse({
+    ...state,
+    planDrafts: state.planDrafts.filter((draft) => draft.projectId !== projectId),
+    coordinatorSessionBindings: state.coordinatorSessionBindings.filter((binding) => (
+      binding.projectId !== projectId
+    )),
+    coordinatorTransferFeedback: state.coordinatorTransferFeedback.filter((feedback) => (
+      feedback.projectId !== projectId
+    )),
+    pendingProjectActivations: state.pendingProjectActivations.filter((activation) => (
+      activation.projectId !== projectId
+    ))
+  })
+}
+
+function assertProjectWritable(state: ProjectCoordinatorState, projectId: string): void {
+  if (
+    state.deletedProjectIds.includes(projectId) ||
+    state.projectDeleteIntents.some((intent) => intent.projectId === projectId)
+  ) {
+    throw new Error('The Project is being deleted or was already deleted.')
+  }
 }
 
 function projectCreateCommandDigest(input: ProjectCoordinatorProjectCreateInput): string {

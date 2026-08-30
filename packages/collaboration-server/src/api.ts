@@ -388,6 +388,11 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const project = await service.transitionProject(requiredUser(actor), command)
       return entityResponse(command, toProject(project))
     }
+    case 'project.delete': {
+      const user = requiredUser(actor)
+      await service.deleteProject(user, command)
+      return persistedOperationReceiptResponse(command, user, service)
+    }
     case 'project.transfer_coordinator': {
       const project = await service.transferCoordinator(requiredUser(actor), command)
       return entityResponse(command, toProject(project))

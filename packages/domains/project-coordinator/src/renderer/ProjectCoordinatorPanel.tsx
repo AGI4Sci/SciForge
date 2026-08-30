@@ -561,6 +561,8 @@ export function ProjectCoordinatorPanel({
     createIntentId: `pct_${string}`
   }> | undefined>(undefined)
   const createInFlightRef = useRef<Promise<void> | null>(null)
+  const busyActionCountRef = useRef(0)
+  const pendingWorkspaceInvalidationRef = useRef(false)
   const [initialContentMode, setInitialContentMode] = useState<'none' | 'required'>('none')
   const [initialProviderFactId, setInitialProviderFactId] = useState('')
   const [activeView, setActiveView] = useState<string>('overview')
@@ -578,6 +580,10 @@ export function ProjectCoordinatorPanel({
   const appliedActivationKeyRef = useRef<string | undefined>(undefined)
   const refreshRequestRef = useRef(0)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const selectProjectId = useCallback((projectId: string) => {
+    selectedProjectIdRef.current = projectId
+    setSelectedProjectId(projectId)
+  }, [])
 
   useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId
@@ -652,7 +658,8 @@ export function ProjectCoordinatorPanel({
   const refresh = useCallback(async (
     projectId?: string,
     signal?: AbortSignal,
-    mode: 'foreground' | 'background' = 'foreground'
+    mode: 'foreground' | 'background' = 'foreground',
+    retainedProjectId?: string
   ) => {
     const requestRevision = refreshRequestRef.current + 1
     refreshRequestRef.current = requestRevision
@@ -681,21 +688,21 @@ export function ProjectCoordinatorPanel({
       // A Session switch must not silently replace a Project the user chose
       // in this workbench with the Cloud provider's focused Project.  Only an
       // explicit activation/selection may change the target.
-      const preferred = projectId ?? selectedProjectIdRef.current ?? next.focusedProjectId
+      const preferred = retainedProjectId ?? projectId ?? selectedProjectIdRef.current ?? next.focusedProjectId
       if (preferred && next.projects.some(({ project }) => project.projectId === preferred)) {
-        setSelectedProjectId(preferred)
-        selectedProjectIdRef.current = preferred
+        selectProjectId(preferred)
         const nextDraft = await client.readPlanDraft({ projectId: preferred })
         if (!signal?.aborted && refreshRequestRef.current === requestRevision) setDraft(nextDraft)
+      } else if (retainedProjectId !== undefined) {
+        selectProjectId('')
+        setDraft(null)
       } else if (next.projects.length === 1) {
         const onlyProjectId = next.projects[0]!.project.projectId
-        setSelectedProjectId(onlyProjectId)
-        selectedProjectIdRef.current = onlyProjectId
+        selectProjectId(onlyProjectId)
         const nextDraft = await client.readPlanDraft({ projectId: onlyProjectId })
         if (!signal?.aborted && refreshRequestRef.current === requestRevision) setDraft(nextDraft)
       } else {
-        setSelectedProjectId('')
-        selectedProjectIdRef.current = ''
+        selectProjectId('')
         setDraft(null)
       }
     } catch (cause) {
@@ -707,13 +714,26 @@ export function ProjectCoordinatorPanel({
         else setBackgroundRefreshing(false)
       }
     }
-  }, [client, session.id, session.runtimeId, t])
+  }, [client, selectProjectId, session.id, session.runtimeId, t])
 
   useEffect(() => {
     const controller = new AbortController()
     void refresh(initialProjectId, controller.signal)
     return () => controller.abort()
   }, [initialProjectId, refresh, session.id])
+
+  useEffect(() => subscribeProjectCoordinatorWorkspaceInvalidation(() => {
+    if (busyActionCountRef.current > 0) {
+      pendingWorkspaceInvalidationRef.current = true
+      return
+    }
+    void refresh(
+      undefined,
+      undefined,
+      'background',
+      selectedProjectIdRef.current || undefined
+    )
+  }), [refresh])
 
   useEffect(() => {
     if (!initialView) return
@@ -742,8 +762,10 @@ export function ProjectCoordinatorPanel({
   }, [])
 
   const project = useMemo(
-    () => selectFocusedProject(workspace, selectedProjectId || initialProjectId),
-    [initialProjectId, selectedProjectId, workspace]
+    () => selectedProjectId
+      ? selectFocusedProject(workspace, selectedProjectId)
+      : undefined,
+    [selectedProjectId, workspace]
   )
 
   useEffect(() => {
@@ -768,7 +790,7 @@ export function ProjectCoordinatorPanel({
 
   useEffect(() => {
     if (workspace?.connection.state !== 'ready' || busyAction) return
-    const projectId = selectedProjectId || initialProjectId || undefined
+    const projectId = selectedProjectId || undefined
     const refreshVisibleWorkspace = () => {
       if (globalThis.document?.visibilityState === 'hidden') return
       void refresh(projectId, undefined, 'background')
@@ -785,18 +807,7 @@ export function ProjectCoordinatorPanel({
       clearInterval(timer)
       globalThis.document?.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [busyAction, initialProjectId, refresh, selectedProjectId, workspace?.connection.state])
-
-  // Mutations may be initiated by another surface (for example an Agent
-  // retry/reassignment) while this panel remains mounted.  The local client
-  // invalidation is the canonical cross-component signal; refresh the
-  // currently selected Project immediately instead of waiting for the polling
-  // interval or leaving the HCI on stale failure facts.
-  useEffect(() => subscribeProjectCoordinatorWorkspaceInvalidation(() => {
-    if (busyAction || globalThis.document?.visibilityState === 'hidden') return
-    const projectId = selectedProjectId || initialProjectId || undefined
-    void refresh(projectId, undefined, 'background')
-  }), [busyAction, initialProjectId, refresh, selectedProjectId])
+  }, [busyAction, refresh, selectedProjectId, workspace?.connection.state])
 
   const connectionMessage = workspace && workspace.connection.state !== 'ready'
     ? connectionMessageKey(workspace.connection.state)
@@ -807,10 +818,13 @@ export function ProjectCoordinatorPanel({
     operation: () => Promise<T>,
     apply: (value: T) => void | Promise<void>
   ) => {
+    busyActionCountRef.current += 1
     setBusyAction(action)
     setError(undefined)
     try {
-      await apply(await operation())
+      const value = await operation()
+      refreshRequestRef.current += 1
+      await apply(value)
     } catch (cause) {
       setError(cause instanceof ProjectCoordinatorPlanDraftGenerationClientError
         ? t(projectCoordinatorPlanGenerationFailureMessageKey(cause.reason))
@@ -818,9 +832,21 @@ export function ProjectCoordinatorPanel({
           ? cause.message
           : t('projectCoordinatorActionFailed'))
     } finally {
-      setBusyAction(undefined)
+      busyActionCountRef.current = Math.max(0, busyActionCountRef.current - 1)
+      if (busyActionCountRef.current === 0) {
+        if (pendingWorkspaceInvalidationRef.current) {
+          pendingWorkspaceInvalidationRef.current = false
+          await refresh(
+            undefined,
+            undefined,
+            'background',
+            selectedProjectIdRef.current || undefined
+          )
+        }
+        setBusyAction(undefined)
+      }
     }
-  }, [t])
+  }, [refresh, t])
 
   const createProject = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -849,7 +875,7 @@ export function ProjectCoordinatorPanel({
     }), async (result) => {
       const selected = projectCoordinatorCreatedSelection(result)
       setWorkspace(selected.workspace)
-      setSelectedProjectId(selected.selectedProjectId)
+      selectProjectId(selected.selectedProjectId)
       setDraft(await client.readPlanDraft({ projectId: selected.selectedProjectId }))
       createIntentRef.current = undefined
       setCreateDisplayName('')
@@ -864,6 +890,7 @@ export function ProjectCoordinatorPanel({
     createDisplayName,
     createGoal,
     runAction,
+    selectProjectId,
     workspace
   ])
 
@@ -898,10 +925,10 @@ export function ProjectCoordinatorPanel({
       expectedDraftRevision: draft.draftRevision
     }), (result) => {
       setWorkspace(result.workspace)
-      setSelectedProjectId(result.plan.projectId)
+      selectProjectId(result.plan.projectId)
       setDraft(null)
     })
-  }, [client, draft, runAction])
+  }, [client, draft, runAction, selectProjectId])
 
   const confirmPlan = useCallback(() => {
     if (
@@ -975,7 +1002,7 @@ export function ProjectCoordinatorPanel({
       initialTeam
     }), (next) => {
       setWorkspace(next)
-      setSelectedProjectId(project.project.projectId)
+      selectProjectId(project.project.projectId)
     })
   }, [
     client,
@@ -983,14 +1010,15 @@ export function ProjectCoordinatorPanel({
     initialProviderFactId,
     project,
     runAction,
+    selectProjectId,
     t,
     workspace
   ])
 
   const applyProjectWorkspace = useCallback((next: ProjectCoordinatorWorkspace) => {
     setWorkspace(next)
-    if (next.focusedProjectId) setSelectedProjectId(next.focusedProjectId)
-  }, [])
+    if (next.focusedProjectId) selectProjectId(next.focusedProjectId)
+  }, [selectProjectId])
 
   const createHumanNeeded = useCallback((input: ProjectCoordinatorHumanNeededCreateInput) => {
     void runAction('human-needed-create', () => client.createHumanNeeded(input), applyProjectWorkspace)

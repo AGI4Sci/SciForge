@@ -435,6 +435,14 @@ export const projectRecordSubmittedPayloadSchema = z.object({
   revision: revisionSchema
 }).strict()
 
+export const projectDeletedPayloadSchema = z.object({
+  ...agentInboxEnvelopeShape,
+  type: z.literal('project.deleted'),
+  projectId: projectIdSchema,
+  deletedAt: timestampSchema
+}).strict()
+export type ProjectDeletedPayload = z.infer<typeof projectDeletedPayloadSchema>
+
 export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     ...agentInboxEnvelopeShape,
@@ -467,6 +475,7 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   taskExecutionFailedPayloadSchema,
   projectionUpdatedPayloadSchema,
   projectEndpointUpdatedPayloadSchema,
+  projectDeletedPayloadSchema,
   z.object({
     ...agentInboxEnvelopeShape,
     type: z.literal('collaboration.state.changed'),
@@ -695,6 +704,16 @@ const writeCommandShape = {
   idempotencyKey: idempotencyKeySchema
 } as const
 
+export const projectDeleteCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('project.delete'),
+  projectId: projectIdSchema,
+  expectedRevision: revisionSchema,
+  expectedCoordinatorAuthorityEpoch: revisionSchema,
+  expectedExecutionAuthorityEpoch: revisionSchema
+}).strict()
+export type ProjectDeleteCommand = z.infer<typeof projectDeleteCommandSchema>
+
 export const humanNeededCreateContextSchema = z.discriminatedUnion('scope', [
   z.object({
     scope: z.literal('worker_execution'),
@@ -802,6 +821,7 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('projection.message.publish'), projectionId: projectionIdSchema, projectionRevision: revisionSchema, localItemId: localItemIdSchema, localTurnId: runtimeTurnIdSchema.optional(), kind: z.enum(['user_message', 'assistant_progress', 'assistant_final', 'system_status']), text: nonEmptyTextSchema, occurredAt: timestampSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.get'), projectId: projectIdSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.transition'), projectId: projectIdSchema, expectedRevision: revisionSchema, expectedCoordinatorAuthorityEpoch: revisionSchema, expectedExecutionAuthorityEpoch: revisionSchema, status: z.enum(['active', 'paused', 'cancelled']) }).strict(),
+  projectDeleteCommandSchema,
   projectTransferCoordinatorCommandSchema,
   z.object({ ...writeCommandShape, type: z.literal('project.input.create'), projectId: projectIdSchema, senderUserId: userIdSchema, sourceHumanEndpointId: humanEndpointIdSchema, providerMessageId: providerMessageIdSchema, text: nonEmptyTextSchema, occurredAt: timestampSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.bind'), projectId: projectIdSchema, locator: providerLocatorSchema }).strict(),

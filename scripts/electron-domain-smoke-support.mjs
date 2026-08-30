@@ -72,6 +72,7 @@ export const COLLABORATION_SMOKE_CAPABILITY_IDS = Object.freeze([
 export const PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS = Object.freeze([
   'project-coordinator.workspace.read',
   'project-coordinator.project.create',
+  'project-coordinator.project.delete',
   'project-coordinator.plan-draft.read',
   'project-coordinator.plan-draft.generate',
   'project-coordinator.plan-draft.edit',

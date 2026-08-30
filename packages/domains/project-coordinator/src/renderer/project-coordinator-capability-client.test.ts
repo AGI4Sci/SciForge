@@ -36,6 +36,7 @@ test('renderer invocation approvals stay aligned with the main capability defini
 
   await client.readWorkspace(undefined)
   await client.createProject(undefined as never)
+  await client.deleteProject(undefined as never)
   await client.acknowledgeProjectActivation(undefined as never)
   await client.readSessionProjection()
   await client.readPlanDraft(undefined as never)
@@ -99,6 +100,57 @@ test('Task reassignment success invalidates mounted coordination-center readers'
   dispose()
 
   assert.equal(invalidations, 1)
+})
+
+test('canonical delete invalidates only after a successful destructive invocation', async () => {
+  const projectId = 'prj_CurrentProject1'
+  let invalidations = 0
+  const invoked: Array<Readonly<{
+    actionId: string
+    effect: string
+    input: unknown
+    approval: string | undefined
+  }>> = []
+  const dispose = subscribeProjectCoordinatorWorkspaceInvalidation(() => {
+    invalidations += 1
+  })
+  const successful = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async (contract, input, options) => {
+      invoked.push({
+        actionId: contract.actionId,
+        effect: contract.effect,
+        input,
+        approval: options?.approval?.mode
+      })
+      return { projectId, deleted: true } as never
+    }
+  })
+  const failing = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async () => { throw new Error('canonical delete failed') }
+  })
+
+  try {
+    assert.deepEqual(await successful.deleteProject({ projectId }), {
+      projectId,
+      deleted: true
+    })
+    await assert.rejects(
+      () => failing.deleteProject({ projectId }),
+      /canonical delete failed/u
+    )
+  } finally {
+    dispose()
+  }
+
+  assert.equal(invalidations, 1)
+  assert.deepEqual(invoked[0], {
+    actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete,
+    effect: 'destructive',
+    input: { projectId },
+    approval: 'confirmation'
+  })
 })
 
 test('renderer maps bounded Plan generation failures without exposing Runtime details', async () => {

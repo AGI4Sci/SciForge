@@ -44,7 +44,7 @@ AgentRuntime/Capability Broker 路径负责。普通手机身份不会生成桌�
 自动接单、本地 journal、execution fence 与重启恢复继续由本包拥有，不形成第二条 Cloud
 认证或 Task 执行路径。
 
-本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@6.0.0`
+本包还发布唯一的 main-only `sciforge.collaboration.coordinator-cloud-command@6.1.0`
 internal service，仅授权 `sciforge.project-coordinator` 消费。其闭集包含 Plan/Offer、统一
 HumanNeeded、TaskResult review、Project decision 与 final summary 命令；不包含 target User
 `human.answer`，调用者也不能传入 Agent、route、header 或 credential。服务把命令绑定到当前

@@ -2181,6 +2181,16 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     expectRevision(result.rowCount)
   }
 
+  async deleteProject(projectId: string, expectedRevision: number): Promise<void> {
+    const result = await this.sql.query(
+      `DELETE FROM sciforge_collaboration.projects
+       WHERE project_id=$1 AND revision=$2
+       RETURNING project_id`,
+      [projectId, expectedRevision]
+    )
+    expectRevision(result.rowCount)
+  }
+
   async insertProjectMember(member: StoredProjectMember): Promise<void> {
     await this.sql.query(
       `INSERT INTO sciforge_collaboration.project_members
