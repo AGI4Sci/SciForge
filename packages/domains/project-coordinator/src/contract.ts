@@ -1,5 +1,8 @@
 import { z } from 'zod'
-import { domainMainFiniteCapabilityBatchPlanDigestSchema } from '@sciforge/domain-sdk/host'
+import {
+  DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD,
+  domainMainFiniteCapabilityBatchPlanDigestSchema
+} from '@sciforge/domain-sdk/host'
 import {
   ARTIFACT_RESOURCE_KIND,
   CONTENT_FILE_RESOURCE_KIND
@@ -382,6 +385,8 @@ export const projectCoordinatorWorkflowPlanSchema = z.object({
   planDigest: projectPlanSchema.shape.planDigest,
   purpose: z.enum(['launch', 'team_reconcile']),
   provisioning: projectCoordinatorProvisioningPlanSchema.nullable(),
+  [DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD]:
+    domainMainFiniteCapabilityBatchPlanDigestSchema.optional(),
   workflowDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
 }).strict().superRefine((plan, context) => {
   if (plan.purpose === 'team_reconcile' && plan.provisioning === null) {
@@ -399,6 +404,17 @@ export const projectCoordinatorWorkflowPlanSchema = z.object({
       code: 'custom',
       path: ['provisioning'],
       message: 'The finite provisioning plan must target the exact workflow Project revision.'
+    })
+  }
+  if (
+    plan.provisioning === null
+      ? plan.confirmedPlanDigest !== undefined
+      : plan.confirmedPlanDigest !== plan.provisioning.confirmedPlanDigest
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['confirmedPlanDigest'],
+      message: 'The workflow confirmation digest must identify its exact finite provisioning plan.'
     })
   }
 }).readonly()

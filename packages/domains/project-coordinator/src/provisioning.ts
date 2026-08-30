@@ -261,7 +261,10 @@ export function createProjectCoordinatorProvisioningPort(
       expectedPlanRevision: plan.revision,
       planDigest: plan.planDigest,
       purpose,
-      provisioning
+      provisioning,
+      ...(provisioning === null
+        ? {}
+        : { confirmedPlanDigest: provisioning.confirmedPlanDigest })
     }
     return projectCoordinatorWorkflowPlanSchema.parse({
       ...facts,
