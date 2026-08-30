@@ -128,12 +128,6 @@ export class CollaborationTaskAdapter {
     for (const run of this.options.store.snapshot().taskRuns) {
       if (run.externalJournal.some((entry) => entry.state === 'effect_dispatched')) {
         this.schedule(run.offer.executionId)
-      } else if (run.state === 'needs-human') {
-        await this.refreshPreflight(run, true, new AbortController().signal).catch(async (error) => {
-          await this.updateRun(run.offer.executionId, {
-            error: safeError(error, this.options.sanitizeText)
-          })
-        })
       } else if (!TERMINAL_RUN_STATES.has(run.state)) {
         this.schedule(run.offer.executionId)
       }
@@ -768,6 +762,11 @@ export class CollaborationTaskAdapter {
       const uncertain = run.externalJournal.find((entry) => entry.state === 'effect_dispatched')
       if (uncertain) {
         await this.observeUnknownOutcome(run, uncertain, 'desktop_restarted_after_provider_dispatch')
+        return
+      }
+      if (run.state === 'needs-human') {
+        await this.refreshPreflight(run, true, controller.signal)
+        throwIfSignalAborted(controller.signal)
         return
       }
       const preflight = await this.refreshPreflight(run, true, controller.signal)
