@@ -139,15 +139,6 @@ test('Cloud Project delete affordances are rendered only for the current Owner',
 test('Owner context menu supports secondary click, keyboard access, and focus restoration', async () => {
   const harness = createDomHarness()
   const deleted: string[] = []
-  const confirmations: string[] = []
-  let shouldConfirm = false
-  Object.defineProperty(harness.window, 'confirm', {
-    configurable: true,
-    value: (message: string) => {
-      confirmations.push(message)
-      return shouldConfirm
-    }
-  })
 
   try {
     await harness.render(createElement(ProjectCoordinatorSidebarView, {
@@ -176,10 +167,15 @@ test('Owner context menu supports secondary click, keyboard access, and focus re
     assert.ok(menuItem)
     assert.equal(harness.document.activeElement, menuItem)
     await act(async () => menuItem.click())
+    const cancelButton = harness.document.querySelector<HTMLButtonElement>(
+      '[role="dialog"] button'
+    )
+    assert.ok(cancelButton)
     assert.deepEqual(deleted, [])
-    assert.equal(confirmations.length, 1)
-    assert.equal(harness.document.activeElement, trigger)
+    assert.equal(harness.document.activeElement, cancelButton)
     assert.equal(harness.container.querySelector('[role="menu"]'), null)
+    await act(async () => cancelButton.click())
+    assert.equal(harness.document.activeElement, trigger)
 
     const shortcut = harness.container.querySelector<HTMLButtonElement>(
       'button[aria-label="projectCoordinatorSidebarDeleteProjectLabel"]'
@@ -187,7 +183,12 @@ test('Owner context menu supports secondary click, keyboard access, and focus re
     assert.ok(shortcut)
     await act(async () => shortcut.click())
     assert.deepEqual(deleted, [])
-    assert.deepEqual(confirmations, [confirmations[0], confirmations[0]])
+    const shortcutCancel = harness.document.querySelector<HTMLButtonElement>(
+      '[role="dialog"] button'
+    )
+    assert.ok(shortcutCancel)
+    await act(async () => shortcutCancel.click())
+    assert.equal(harness.document.activeElement, shortcut)
 
     for (const event of [
       new KeyboardEvent('keydown', {
@@ -215,7 +216,6 @@ test('Owner context menu supports secondary click, keyboard access, and focus re
       assert.equal(harness.document.activeElement, trigger)
     }
 
-    shouldConfirm = true
     await act(async () => {
       trigger.dispatchEvent(new MouseEvent('contextmenu', {
         bubbles: true,
@@ -231,6 +231,14 @@ test('Owner context menu supports secondary click, keyboard access, and focus re
     assert.ok(sectionControl)
     await act(async () => {
       confirmedMenuItem.click()
+      await Promise.resolve()
+    })
+    const confirmationButtons = harness.document.querySelectorAll<HTMLButtonElement>(
+      '[role="dialog"] button'
+    )
+    assert.equal(confirmationButtons.length, 2)
+    await act(async () => {
+      confirmationButtons[1]?.click()
       await Promise.resolve()
     })
     assert.deepEqual(deleted, ['prj_CurrentProject1'])
@@ -342,11 +350,6 @@ test('Cloud Project delete is deduplicated while pending and exposes failure sta
       return pendingDelete
     }
   } as unknown as ProjectCoordinatorRendererClient
-  Object.defineProperty(harness.window, 'confirm', {
-    configurable: true,
-    value: () => true
-  })
-
   try {
     await harness.render(createElement(ProjectCoordinatorSidebarSection, {
       client,
@@ -366,7 +369,14 @@ test('Cloud Project delete is deduplicated while pending and exposes failure sta
 
     await act(async () => {
       deleteButton.click()
-      deleteButton.click()
+    })
+    const confirmationButton = harness.document.querySelectorAll<HTMLButtonElement>(
+      '[role="dialog"] button'
+    )[1]
+    assert.ok(confirmationButton)
+    await act(async () => {
+      confirmationButton.click()
+      confirmationButton.click()
     })
     assert.equal(deleteCalls, 1)
     assert.equal(
@@ -374,6 +384,10 @@ test('Cloud Project delete is deduplicated while pending and exposes failure sta
       'true'
     )
     assert.equal(deleteButton.disabled, true)
+    const busyDialog = harness.document.querySelector<HTMLElement>('[role="dialog"]')
+    assert.ok(busyDialog)
+    assert.equal(busyDialog.getAttribute('aria-busy'), 'true')
+    assert.equal(harness.document.activeElement, busyDialog)
 
     await act(async () => {
       rejectDelete?.(new Error('Cloud delete failed.'))
@@ -404,11 +418,6 @@ test('keyboard delete failure restores focus and a later poll clears a lost-resp
       throw new Error('Cloud response was lost.')
     }
   } as unknown as ProjectCoordinatorRendererClient
-  Object.defineProperty(harness.window, 'confirm', {
-    configurable: true,
-    value: () => true
-  })
-
   try {
     await harness.render(sidebarSection(client))
     const trigger = harness.container.querySelector<HTMLButtonElement>(
@@ -429,6 +438,13 @@ test('keyboard delete failure restores focus and a later poll clears a lost-resp
     assert.ok(menuItem)
     await act(async () => {
       menuItem.click()
+    })
+    const confirmationButton = harness.document.querySelectorAll<HTMLButtonElement>(
+      '[role="dialog"] button'
+    )[1]
+    assert.ok(confirmationButton)
+    await act(async () => {
+      confirmationButton.click()
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -470,11 +486,6 @@ test('an authoritative identity change clears the prior Principal delete error',
       throw new Error('Delete failed for the former identity.')
     }
   } as unknown as ProjectCoordinatorRendererClient
-  Object.defineProperty(harness.window, 'confirm', {
-    configurable: true,
-    value: () => true
-  })
-
   try {
     await harness.render(sidebarSection(client))
     const deleteButton = harness.container.querySelector<HTMLButtonElement>(
@@ -483,6 +494,13 @@ test('an authoritative identity change clears the prior Principal delete error',
     assert.ok(deleteButton)
     await act(async () => {
       deleteButton.click()
+    })
+    const confirmationButton = harness.document.querySelectorAll<HTMLButtonElement>(
+      '[role="dialog"] button'
+    )[1]
+    assert.ok(confirmationButton)
+    await act(async () => {
+      confirmationButton.click()
       await Promise.resolve()
       await Promise.resolve()
     })

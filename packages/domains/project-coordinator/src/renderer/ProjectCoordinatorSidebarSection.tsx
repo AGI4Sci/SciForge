@@ -1,7 +1,9 @@
 import React, { type ReactElement } from 'react'
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useReducer, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Cloud,
@@ -63,6 +65,12 @@ type ProjectDeleteError = Readonly<{
 
 type ProjectDeleteFocusRequest = Readonly<{
   outcome: 'succeeded' | 'failed'
+  trigger: HTMLButtonElement
+}>
+
+type ProjectDeleteConfirmationState = Readonly<{
+  projectId: string
+  displayName: string
   trigger: HTMLButtonElement
 }>
 
@@ -344,7 +352,10 @@ export function ProjectCoordinatorSidebarView({
 }: ProjectCoordinatorSidebarViewProps): ReactElement {
   const { t } = useTranslation('common')
   const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null)
+  const [projectDeleteConfirmation, setProjectDeleteConfirmation] =
+    useState<ProjectDeleteConfirmationState | null>(null)
   const [deleteFocusRequest, setDeleteFocusRequest] = useState<ProjectDeleteFocusRequest | null>(null)
+  const deleteConfirmationSubmittingRef = useRef(false)
   const sectionControlRef = useRef<HTMLButtonElement>(null)
   const workspace = state.workspace
   const connection = workspace?.connection
@@ -354,6 +365,13 @@ export function ProjectCoordinatorSidebarView({
     connection?.state === 'ready' &&
     projects.some(({ project }) => (
       project.projectId === projectContextMenu.projectId &&
+      project.ownerUserId === connection.userId
+    ))
+
+  const deleteConfirmationOwnerIsCurrent = projectDeleteConfirmation !== null &&
+    connection?.state === 'ready' &&
+    projects.some(({ project }) => (
+      project.projectId === projectDeleteConfirmation.projectId &&
       project.ownerUserId === connection.userId
     ))
 
@@ -400,6 +418,16 @@ export function ProjectCoordinatorSidebarView({
   ])
 
   useEffect(() => {
+    if (!projectDeleteConfirmation || deleteConfirmationOwnerIsCurrent) return
+    setProjectDeleteConfirmation(null)
+    const target = projectDeleteConfirmation.trigger.isConnected &&
+      !projectDeleteConfirmation.trigger.disabled
+      ? projectDeleteConfirmation.trigger
+      : sectionControlRef.current
+    target?.focus()
+  }, [deleteConfirmationOwnerIsCurrent, projectDeleteConfirmation])
+
+  useEffect(() => {
     if (!deleteFocusRequest || deletingProjectId) return
     const target = deleteFocusRequest.outcome === 'failed' &&
       deleteFocusRequest.trigger.isConnected &&
@@ -434,11 +462,11 @@ export function ProjectCoordinatorSidebarView({
     })
   }
 
-  const confirmAndDeleteProject = async (
+  const requestProjectDeletion = (
     projectId: string,
     displayName: string,
-    returnFocus?: HTMLButtonElement
-  ): Promise<void> => {
+    trigger: HTMLButtonElement
+  ): void => {
     closeProjectContextMenu(false)
     if (!onDeleteProject || deletingProjectId) return
     const projectView = projects.find(({ project }) => project.projectId === projectId)
@@ -447,22 +475,36 @@ export function ProjectCoordinatorSidebarView({
       !projectView ||
       projectView.project.ownerUserId !== connection.userId
     ) return
-    if (!globalThis.window?.confirm(t(
-      'projectCoordinatorSidebarDeleteConfirm',
-      { name: displayName }
-    ))) {
-      returnFocus?.focus()
-      return
-    }
+    setProjectDeleteConfirmation({ projectId, displayName, trigger })
+  }
+
+  const cancelProjectDeletion = (): void => {
+    const confirmation = projectDeleteConfirmation
+    if (!confirmation || deletingProjectId) return
+    setProjectDeleteConfirmation(null)
+    const target = confirmation.trigger.isConnected && !confirmation.trigger.disabled
+      ? confirmation.trigger
+      : sectionControlRef.current
+    target?.focus()
+  }
+
+  const deleteConfirmedProject = async (): Promise<void> => {
+    const confirmation = projectDeleteConfirmation
+    if (
+      !confirmation ||
+      !onDeleteProject ||
+      deletingProjectId ||
+      deleteConfirmationSubmittingRef.current
+    ) return
+    deleteConfirmationSubmittingRef.current = true
     try {
-      await onDeleteProject(projectId)
-      if (returnFocus) {
-        setDeleteFocusRequest({ outcome: 'succeeded', trigger: returnFocus })
-      }
+      await onDeleteProject(confirmation.projectId)
+      setDeleteFocusRequest({ outcome: 'succeeded', trigger: confirmation.trigger })
     } catch {
-      if (returnFocus) {
-        setDeleteFocusRequest({ outcome: 'failed', trigger: returnFocus })
-      }
+      setDeleteFocusRequest({ outcome: 'failed', trigger: confirmation.trigger })
+    } finally {
+      deleteConfirmationSubmittingRef.current = false
+      setProjectDeleteConfirmation(null)
     }
   }
 
@@ -616,7 +658,7 @@ export function ProjectCoordinatorSidebarView({
                       aria-busy={deleting}
                       disabled={Boolean(deletingProjectId)}
                       onClick={(event) => {
-                        void confirmAndDeleteProject(
+                        requestProjectDeletion(
                           project.projectId,
                           project.displayName,
                           event.currentTarget
@@ -677,7 +719,7 @@ export function ProjectCoordinatorSidebarView({
           label={t('projectCoordinatorSidebarDeleteProject')}
           onClose={() => closeProjectContextMenu(false)}
           onDelete={() => {
-            void confirmAndDeleteProject(
+            requestProjectDeletion(
               projectContextMenu.projectId,
               projectContextMenu.displayName,
               projectContextMenu.trigger
@@ -685,7 +727,136 @@ export function ProjectCoordinatorSidebarView({
           }}
         />
       ) : null}
+      {projectDeleteConfirmation && deleteConfirmationOwnerIsCurrent ? (
+        <ProjectDeleteConfirmationDialog
+          state={projectDeleteConfirmation}
+          busy={deletingProjectId === projectDeleteConfirmation.projectId}
+          onCancel={cancelProjectDeletion}
+          onConfirm={() => {
+            void deleteConfirmedProject()
+          }}
+        />
+      ) : null}
     </section>
+  )
+}
+
+function ProjectDeleteConfirmationDialog({
+  state,
+  busy,
+  onCancel,
+  onConfirm
+}: Readonly<{
+  state: ProjectDeleteConfirmationState
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const titleId = useId()
+  const descriptionId = useId()
+  const dialogRef = useRef<HTMLElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const deleteRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (busy) {
+      dialogRef.current?.focus()
+      return
+    }
+    cancelRef.current?.focus()
+  }, [busy])
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape' && !busy) {
+      event.preventDefault()
+      onCancel()
+      return
+    }
+    if (event.key !== 'Tab') return
+    if (busy) {
+      event.preventDefault()
+      return
+    }
+    const controls = [cancelRef.current, deleteRef.current].filter(
+      (control): control is HTMLButtonElement => Boolean(control)
+    )
+    if (controls.length === 0) return
+    const currentIndex = controls.indexOf(document.activeElement as HTMLButtonElement)
+    const nextIndex = event.shiftKey
+      ? (currentIndex <= 0 ? controls.length - 1 : currentIndex - 1)
+      : (currentIndex === controls.length - 1 ? 0 : currentIndex + 1)
+    event.preventDefault()
+    controls[nextIndex]?.focus()
+  }
+
+  return createPortal(
+    <div
+      className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/30 px-4 backdrop-blur-[2px] dark:bg-black/45"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !busy) onCancel()
+      }}
+      onKeyDown={handleKeyDown}
+    >
+      <section
+        ref={dialogRef}
+        tabIndex={-1}
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-ds-border bg-ds-card text-ds-ink shadow-[0_24px_72px_rgba(15,23,42,0.28)]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        aria-busy={busy}
+        data-project-id={state.projectId}
+      >
+        <div className="flex min-h-0 items-start gap-3 overflow-y-auto px-5 pb-4 pt-5">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-red-500/12 text-red-600 dark:text-red-300">
+            <AlertTriangle className="h-4.5 w-4.5" strokeWidth={1.9} aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="text-[16px] font-semibold tracking-[-0.02em]">
+              {t('projectCoordinatorSidebarDeleteDialogTitle')}
+            </h2>
+            <p
+              id={descriptionId}
+              className="mt-2 break-words whitespace-pre-line text-[12.5px] leading-5 text-ds-muted"
+            >
+              {t('projectCoordinatorSidebarDeleteConfirm', { name: state.displayName })}
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-ds-border bg-ds-main/35 px-5 py-3.5">
+          <button
+            ref={cancelRef}
+            type="button"
+            disabled={busy}
+            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:cursor-wait disabled:opacity-60"
+            onClick={onCancel}
+          >
+            {t('cancel')}
+          </button>
+          <button
+            ref={deleteRef}
+            type="button"
+            disabled={busy}
+            className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-ds-card disabled:cursor-wait disabled:opacity-65"
+            onClick={onConfirm}
+          >
+            {busy ? (
+              <Loader2
+                className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              />
+            ) : null}
+            {busy
+              ? t('projectCoordinatorSidebarDeletingProject')
+              : t('projectCoordinatorSidebarDeleteProject')}
+          </button>
+        </div>
+      </section>
+    </div>,
+    globalThis.document.body
   )
 }
 
