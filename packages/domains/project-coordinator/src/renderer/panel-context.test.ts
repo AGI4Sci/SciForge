@@ -47,4 +47,3 @@ test('inactive panel targets are ignored and can be cleared independently', () =
   assert.equal(currentProjectCoordinatorPanelContext(), null)
   clearProjectCoordinatorPanelContexts()
 })
-
