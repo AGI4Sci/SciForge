@@ -896,8 +896,8 @@ test('file execution journals Cloud and local dispatch before one real generic d
   assert.deepEqual(submission.runtimeProvenance, {
     runtimeId: 'codex',
     modelId: null,
-    startedAt: TEST_TIMESTAMP,
-    completedAt: TEST_TIMESTAMP
+    startedAt: TEST_LATER_TIMESTAMP,
+    completedAt: TEST_LATER_TIMESTAMP
   })
   assert.deepEqual(submission.outputs, [{
     executionId: TEST_IDS.executionId,
@@ -1603,7 +1603,7 @@ test('restart after the delivered execution start restores its Cloud timestamp b
 
   const interruptedRun = interrupted.store.snapshot().taskRuns[0]
   assert.equal(interruptedRun?.state, 'accepting')
-  assert.equal(interruptedRun?.startedAt, null)
+  assert.equal(interruptedRun?.startedAt, TEST_LATER_TIMESTAMP)
   assert.equal(startBusinessCommits, 1)
   assert.equal(interrupted.store.snapshot().outbox.find(({ kind }) => kind === 'task.progress')?.state, 'delivered')
   interrupted.adapter.stop()
@@ -1712,7 +1712,7 @@ test('a lost execution-start response replays one receipt and resumes with the o
 
   const failedStart = interrupted.store.snapshot().outbox.find(({ kind }) => kind === 'task.progress')
   assert.equal(failedStart?.state, 'failed')
-  assert.equal(interrupted.store.snapshot().taskRuns[0]?.startedAt, null)
+  assert.equal(interrupted.store.snapshot().taskRuns[0]?.startedAt, TEST_LATER_TIMESTAMP)
   assert.equal(startBusinessCommits, 1)
   assert.ok(failedStart)
   await interrupted.outbox.retry(failedStart.idempotencyKey)

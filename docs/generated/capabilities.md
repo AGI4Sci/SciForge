@@ -159966,6 +159966,10 @@ Executes the exact confirmed workflow, including finite Team operations when req
       }
     },
     "properties": {
+      "confirmedPlanDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
       "expectedCoordinatorAuthorityEpoch": {
         "maximum": 9007199254740991,
         "minimum": 1,
@@ -165985,6 +165989,10 @@ Prepares the only production workflow from confirmed Plan and accepted invitatio
       }
     },
     "properties": {
+      "confirmedPlanDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
       "expectedCoordinatorAuthorityEpoch": {
         "maximum": 9007199254740991,
         "minimum": 1,

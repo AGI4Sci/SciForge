@@ -204,6 +204,8 @@ export type PortableResourceObservation = Readonly<{
 }>
 
 export type PortableResourceUseContext = Readonly<{
+  /** Host-authenticated audience when use is initiated by an exact Broker caller. */
+  audience?: PortableResourceAudience
   /** Host-current Principal; never accepted from renderer, Agent, or domain input. */
   principal: PrincipalSnapshot
   /** Revalidates the Host-owned Principal lease at an async trust boundary. */
@@ -274,6 +276,8 @@ export type PortableResourceAuthorityResolver<AuthorityContext = unknown> = Read
     identity: unknown
     resourceKind: string
     authority: TrustedPortableResourceAuthority<AuthorityContext>
+    /** Host-authenticated audience when materialization has an exact Broker caller. */
+    audience?: PortableResourceAudience
     principal: PrincipalSnapshot
     /** Host-owned lease assertion; domain code may invoke but never supply it. */
     assertPrincipalCurrent: () => void | Promise<void>
