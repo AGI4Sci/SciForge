@@ -140,8 +140,9 @@ export type AgentRuntimeToolRecovery = Readonly<{
 /**
  * Produces the canonical model-visible failure payload for every in-process
  * runtime tool transport. Keep this deliberately limited to the stable error
- * contract: provider response bodies and other untrusted diagnostics must not
- * be reflected back into the model context.
+ * contract; only bounded, allowlisted argument/discovery details are reflected
+ * back into model context. Provider response bodies and other untrusted
+ * diagnostics must not be reflected.
  */
 export function modelVisibleAgentRuntimeToolFailure(
   toolName: string,
@@ -153,7 +154,9 @@ export function modelVisibleAgentRuntimeToolFailure(
   const recoveryRecord = record.recovery && typeof record.recovery === 'object'
     ? record.recovery as Record<string, unknown>
     : {}
-  const message = error instanceof Error ? error.message : String(error)
+  const message = error instanceof Error
+    ? error.message
+    : optionalString(record.message) ?? String(error)
   const code = optionalString(record.code) ?? 'runtime_tool_error'
   const failureClass = optionalString(record.failureClass)
   const providerStage = optionalString(record.providerStage)
@@ -161,6 +164,15 @@ export function modelVisibleAgentRuntimeToolFailure(
   const recoveryAction = optionalString(recoveryRecord.action)
   const recoveryInstruction = optionalString(recoveryRecord.instruction)
     ?? optionalString(record.recoveryGuidance)
+  const details = code === 'capability_discovery_empty' ||
+    code === 'invalid_arguments' ||
+    code === 'invalid_input'
+    ? boundedRuntimeToolDetails(record.details)
+    : undefined
+  const effectiveRecoveryAction = recoveryAction ?? (code === 'invalid_input' ? 'correct_arguments' : undefined)
+  const effectiveRecoveryInstruction = recoveryInstruction ?? (code === 'invalid_input'
+    ? 'Use the discovered operation inputShape and correct every reported field-level issue before retrying; do not repeat the same payload.'
+    : undefined)
 
   return JSON.stringify({
     tool: toolName,
@@ -172,14 +184,15 @@ export function modelVisibleAgentRuntimeToolFailure(
       ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {}),
       ...(providerStage ? { providerStage } : {}),
       ...(resourceIdentity ? { resourceIdentity } : {}),
-      ...(recoveryAction || recoveryInstruction
+      ...(effectiveRecoveryAction || effectiveRecoveryInstruction
         ? {
             recovery: {
-              ...(recoveryAction ? { action: recoveryAction } : {}),
-              ...(recoveryInstruction ? { instruction: recoveryInstruction } : {})
+              ...(effectiveRecoveryAction ? { action: effectiveRecoveryAction } : {}),
+              ...(effectiveRecoveryInstruction ? { instruction: effectiveRecoveryInstruction } : {})
             }
           }
-        : {})
+        : {}),
+      ...(details !== undefined ? { details } : {})
     }
   }, null, 2)
 }
@@ -645,6 +658,26 @@ function toolRecovery(value: unknown): AgentRuntimeToolRecovery | undefined {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+/**
+ * Keeps structured argument/discovery diagnostics useful without reflecting
+ * unbounded provider payloads into model context. These details are evidence,
+ * never instructions; the stable recovery field remains the action contract.
+ */
+function boundedRuntimeToolDetails(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
+  if (typeof value === 'string') return value.slice(0, 600)
+  if (depth >= 4) return '[details omitted at depth limit]'
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((entry) => boundedRuntimeToolDetails(entry, depth + 1))
+  }
+  if (!value || typeof value !== 'object') return undefined
+  const bounded: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value).slice(0, 12)) {
+    bounded[key.slice(0, 120)] = boundedRuntimeToolDetails(entry, depth + 1)
+  }
+  return bounded
 }
 
 function normalizeVisualResourceIdentity(value: string | undefined): string | undefined {

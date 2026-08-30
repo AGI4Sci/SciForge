@@ -39,6 +39,33 @@ afterEach(async () => {
 })
 
 describe('production HTTP OIDC-only boundary', () => {
+  it('returns a JSON error envelope when the command schema is invalid', async () => {
+    const repository = new FakeCollaborationRepository()
+    const service = new CollaborationService({ repository, now })
+    const server = createCollaborationHttpServer({ service, readiness: async () => true })
+    servers.push(server)
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const response = await fetch(`${baseUrl}/v1/commands`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        protocolVersion: '1.0',
+        requestId: 'req_InvalidCommand001',
+        type: 'not-a-real-command'
+      })
+    })
+    expect(response.headers.get('content-type')).toMatch(/application\/json/u)
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'rest.error',
+      requestId: 'req_InvalidCommand001',
+      error: { code: 'validation_error' }
+    })
+  })
+
   it('returns Cloud-global online Workers with safe User and exact Agent labels', async () => {
     const repository = new FakeCollaborationRepository()
     const service = new CollaborationService({ repository, now })

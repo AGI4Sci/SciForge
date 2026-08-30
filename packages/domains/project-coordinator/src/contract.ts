@@ -313,6 +313,12 @@ export const projectCoordinatorPlanDraftEditInputSchema = z.object({
   projectId: projectIdSchema,
   draftId: projectCoordinatorDraftIdSchema,
   expectedDraftRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  // These fields are part of the read projection and are commonly echoed by
+  // agents when issuing a CAS edit. Accept them as optional request guards so
+  // an otherwise valid edit is not rejected merely because the projection was
+  // round-tripped. The handler still verifies them against current state.
+  expectedProjectRevision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  expectedCoordinatorAuthorityEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   tasks: projectPlanTaskDeclarationsSchema,
   rationale: safeReasonSchema,
   assignments: z.array(projectCoordinatorPlanAssignmentSchema).min(1).max(1_000)

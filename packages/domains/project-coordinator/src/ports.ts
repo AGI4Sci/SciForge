@@ -480,6 +480,13 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   const now = options.now ?? (() => new Date())
   const draftId = options.draftId ?? (() => `draft_${randomUUID().replaceAll('-', '')}`)
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
+  // Generation requests may outlive one another when a caller retries from a
+  // different surface. Keep the ordering in the port so an older completion
+  // cannot replace a newer valid draft. Invalid attempts do not advance this
+  // committed watermark and therefore never erase an existing valid draft.
+  const generationSequenceByProject = new Map<string, number>()
+  const committedGenerationSequenceByProject = new Map<string, number>()
+  const generationCommitQueueByProject = new Map<string, Promise<void>>()
   const readProject = async (projectId: string) => {
     const workspace = await options.workspace.readWorkspace({ projectId })
     if (workspace.connection.state !== 'ready') {
@@ -493,6 +500,8 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   return Object.freeze({
     generateDraft: async (rawInput) => {
       const input = projectCoordinatorPlanDraftGenerateInputSchema.parse(rawInput)
+      const generationSequence = (generationSequenceByProject.get(input.projectId) ?? 0) + 1
+      generationSequenceByProject.set(input.projectId, generationSequence)
       const { project, observedAt } = await readProject(input.projectId)
       const candidates = project.workerGroups
         .map((group) => {
@@ -544,8 +553,10 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
             `Exact file input choices: ${JSON.stringify(fileSourceInputs)}`,
             `Worker User candidates: ${JSON.stringify(candidates)}`,
             'Each Task must match one runtimeProfiles entry: fileIntent null requires text_tasks in eligibleTaskScopes, a fileIntent requires file_tasks in eligibleTaskScopes, and requiredCapabilityTags must be a subset of that same entry capabilityTags. Never combine fields across Runtime profiles.',
-            'The final response is constrained by the supplied JSON Schema. Return exactly one object with tasks and rationale.',
+            'Capability tags are executable requirements, not topical labels. Copy them character-for-character from the selected runtimeProfiles capabilityTags list; never invent tags such as protein-engineering, product-scoping, agent-architecture, or evaluation. If a task needs no additional capability beyond the listed runtime profile, use an empty requiredCapabilityTags array.',
+            'The final response is constrained by the supplied JSON Schema. Return exactly one object with tasks and rationale, with no Markdown or code fences.',
             'Every task must contain only planItemId, title, objective, completionCriteria, dependencyPlanItemIds, requiredCapabilityTags, and fileIntent.',
+            'completionCriteria must always be a non-empty JSON array of one or more strings, never a single string.',
             'Use a unique stable item_* planItemId. Dependencies must reference another item in this same response. Capability tags must describe actual requirements and use the lowercase tag format.',
             'Do not emit id, description, assignee, dependencies, status, or any other convenience fields. Worker User assignment is a later Human decision.',
             'A fileIntent is a logical Plan declaration selection containing only inputs, dependencyInputs, and output; the host materializes schemaVersion 2. Never include a schemaVersion or bindingRevision; Cloud binds the created Task to the current active Project Content root when its Offer is committed.',
@@ -627,32 +638,62 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
           { cause }
         )
       }
-      const timestamp = now().toISOString()
-      const next = projectCoordinatorPlanDraftSchema.parse({
-        draftId: draftId(),
-        draftRevision: 1,
-        projectId: project.project.projectId,
-        expectedProjectRevision: project.project.revision,
-        expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
-        supersedesProjectPlanId: project.plan?.plan.projectPlanId ?? null,
-        sourceInputLocators: input.sourceInputLocators,
-        tasks: content.tasks,
-        rationale: content.rationale,
-        runtimeProvenance: {
-          runtimeId: generated.runtimeId,
-          modelId: input.modelId,
-          generatedByCoordinatorAgentId: project.project.coordinatorAgentId,
-          generatedAt: timestamp
-        },
-        assignments: content.tasks.map(({ planItemId }) => ({
-          planItemId,
-          workerUserId: null,
-          recommendationReason: null
-        })),
-        createdAt: timestamp,
-        updatedAt: timestamp
-      })
-      return state.writeDraft(next, null)
+      // Serialize only the durable commit. This closes the race where two
+      // successful generations both read the same draft revision before the
+      // CAS write; the queue guarantees that the newest successful sequence
+      // either supersedes the older result or observes it as stale.
+      const previousCommit = generationCommitQueueByProject.get(input.projectId) ?? Promise.resolve()
+      const commit = previousCommit
+        .catch(() => undefined)
+        .then(async () => {
+          const committedGenerationSequence = committedGenerationSequenceByProject.get(input.projectId) ?? 0
+          if (committedGenerationSequence > generationSequence) {
+            const current = await state.readDraft(input.projectId)
+            if (current) return current
+            throw new ProjectCoordinatorPlanGenerationError(
+              'runtime_execution_failed',
+              'A newer Plan generation already completed; the older result was discarded.'
+            )
+          }
+          const currentDraft = await state.readDraft(input.projectId)
+          const timestamp = now().toISOString()
+          const next = projectCoordinatorPlanDraftSchema.parse({
+            draftId: draftId(),
+            draftRevision: (currentDraft?.draftRevision ?? 0) + 1,
+            projectId: project.project.projectId,
+            expectedProjectRevision: project.project.revision,
+            expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
+            supersedesProjectPlanId: project.plan?.plan.projectPlanId ?? null,
+            sourceInputLocators: input.sourceInputLocators,
+            tasks: content.tasks,
+            rationale: content.rationale,
+            runtimeProvenance: {
+              runtimeId: generated.runtimeId,
+              modelId: input.modelId,
+              generatedByCoordinatorAgentId: project.project.coordinatorAgentId,
+              generatedAt: timestamp
+            },
+            assignments: content.tasks.map(({ planItemId }) => ({
+              planItemId,
+              workerUserId: null,
+              recommendationReason: null
+            })),
+            createdAt: timestamp,
+            updatedAt: timestamp
+          })
+          const written = await state.writeDraft(next, currentDraft?.draftRevision ?? null)
+          committedGenerationSequenceByProject.set(input.projectId, generationSequence)
+          return written
+        })
+      const queueTail = commit.then(() => undefined, () => undefined)
+      generationCommitQueueByProject.set(input.projectId, queueTail)
+      try {
+        return await commit
+      } finally {
+        if (generationCommitQueueByProject.get(input.projectId) === queueTail) {
+          generationCommitQueueByProject.delete(input.projectId)
+        }
+      }
     },
     readDraft: async (rawInput) => {
       const input = projectCoordinatorPlanDraftReadInputSchema.parse(rawInput)
@@ -666,6 +707,18 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
         throw new Error('Plan draft revision conflict.')
       }
       const { project, observedAt } = await readProject(input.projectId)
+      if (
+        input.expectedProjectRevision !== undefined &&
+        input.expectedProjectRevision !== project.project.revision
+      ) {
+        throw new Error('Plan draft Project revision conflict.')
+      }
+      if (
+        input.expectedCoordinatorAuthorityEpoch !== undefined &&
+        input.expectedCoordinatorAuthorityEpoch !== project.project.coordinatorAuthorityEpoch
+      ) {
+        throw new Error('Plan draft Coordinator authority epoch conflict.')
+      }
       assertAssignmentsHavePlanningRuntime(
         project,
         input.tasks,

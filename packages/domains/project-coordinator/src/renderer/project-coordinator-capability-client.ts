@@ -280,16 +280,20 @@ export type ProjectCoordinatorRendererClient = Readonly<{
 export function createProjectCoordinatorRendererClient(
   invoker: DomainRendererCapabilityInvoker
 ): ProjectCoordinatorRendererClient {
+  const invokeMutation = async <T>(
+    operation: () => Promise<T>
+  ): Promise<T> => {
+    const result = await operation()
+    publishProjectCoordinatorWorkspaceInvalidation()
+    return result
+  }
   return Object.freeze({
     readWorkspace: (input = {}) => invoker.invoke(workspaceReadContract, input),
     createProject: async (input) => {
-      const result = await invoker.invoke(projectCreateContract, input, confirmationApproval)
-      publishProjectCoordinatorWorkspaceInvalidation()
-      return result
+      return invokeMutation(() => invoker.invoke(projectCreateContract, input, confirmationApproval))
     },
     acknowledgeProjectActivation: async (input) => {
-      await invoker.invoke(projectActivationAcknowledgeContract, input)
-      publishProjectCoordinatorWorkspaceInvalidation()
+      await invokeMutation(() => invoker.invoke(projectActivationAcknowledgeContract, input))
     },
     readSessionProjection: () => invoker.invoke(sessionProjectionReadContract, {}),
     readPlanDraft: (input) => invoker.invoke(planDraftReadContract, input),
@@ -313,21 +317,21 @@ export function createProjectCoordinatorRendererClient(
       input,
       confirmationApproval
     ),
-    reassignTaskOffer: (input) => invoker.invoke(
+    reassignTaskOffer: (input) => invokeMutation(() => invoker.invoke(
       taskOfferReassignContract,
       input,
       confirmationApproval
-    ),
-    observeAndLinkRecovery: (input) => invoker.invoke(
+    )),
+    observeAndLinkRecovery: (input) => invokeMutation(() => invoker.invoke(
       contentRecoveryObserveLinkContract,
       input,
       confirmationApproval
-    ),
-    abandonRecovery: (input) => invoker.invoke(
+    )),
+    abandonRecovery: (input) => invokeMutation(() => invoker.invoke(
       contentRecoveryAbandonContract,
       input,
       confirmationApproval
-    ),
+    )),
     addMember: (input) => invoker.invoke(
       membershipAddContract,
       input,

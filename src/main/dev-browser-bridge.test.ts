@@ -934,6 +934,103 @@ describe('dev browser bridge server', () => {
     sse.close()
   })
 
+  it('waits for a browser pixel-capture channel that is still connecting', async () => {
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn(async () => ({ ok: true })) },
+      port: 0,
+      surfaceCaptureTimeoutMs: 1_000
+    })
+    // An invoke creates the browser client before its EventSource is ready,
+    // which mirrors renderer startup/reload ordering in the dev app.
+    const invokeResponse = await postJson('/invoke', {
+      channel: 'settings:get',
+      payload: null
+    }, 'browser-connecting')
+    expect(invokeResponse.status).toBe(200)
+
+    const capturePromise = server.captureSurface(1, { revision: 11 })
+    const sse = await openSse('/events?clientId=browser-connecting')
+    await vi.waitFor(() => {
+      expect(sse.chunks.join('')).toContain(
+        '"channel":"devBrowserBridge:surface-capture-requested"'
+      )
+    })
+    const captureMessage = sse.chunks.join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as {
+        channel?: string
+        payload?: { requestId?: string; revision?: number }
+      })
+      .find((message) => message.channel === 'devBrowserBridge:surface-capture-requested')
+    const canvas = createCanvas(64, 48)
+    const response = await postJson('/surface-capture', {
+      requestId: captureMessage?.payload?.requestId,
+      revision: captureMessage?.payload?.revision,
+      ok: true,
+      viewportWidth: 64,
+      viewportHeight: 48,
+      pngBase64: canvas.toBuffer('image/png').toString('base64')
+    }, 'browser-connecting')
+
+    expect(response.status).toBe(200)
+    await expect(capturePromise).resolves.toMatchObject({
+      png: expect.any(Uint8Array),
+      width: 64,
+      height: 48,
+      scaleFactor: 1
+    })
+    sse.close()
+  })
+
+  it('keeps the browser surface identity stable when EventSource reconnects', async () => {
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn(async () => ({ ok: true })) },
+      port: 0,
+      surfaceCaptureTimeoutMs: 2_000
+    })
+    const first = await openSse('/events?clientId=browser-reconnect')
+    expect(server.hasClient(1)).toBe(true)
+    first.close()
+    // The bridge retires an unconnected client after a short grace period.
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+
+    const capturePromise = server.captureSurface(1, { revision: 12 })
+    const second = await openSse('/events?clientId=browser-reconnect')
+    await vi.waitFor(() => {
+      expect(second.chunks.join('')).toContain(
+        '"channel":"devBrowserBridge:surface-capture-requested"'
+      )
+    })
+    expect(server.hasClient(1)).toBe(true)
+    const captureMessage = second.chunks.join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as {
+        channel?: string
+        payload?: { requestId?: string; revision?: number }
+      })
+      .find((message) => message.channel === 'devBrowserBridge:surface-capture-requested')
+    const canvas = createCanvas(40, 30)
+    const response = await postJson('/surface-capture', {
+      requestId: captureMessage?.payload?.requestId,
+      revision: captureMessage?.payload?.revision,
+      ok: true,
+      viewportWidth: 40,
+      viewportHeight: 30,
+      pngBase64: canvas.toBuffer('image/png').toString('base64')
+    }, 'browser-reconnect')
+
+    expect(response.status).toBe(200)
+    await expect(capturePromise).resolves.toMatchObject({
+      png: expect.any(Uint8Array),
+      width: 40,
+      height: 30,
+      scaleFactor: 1
+    })
+    second.close()
+  })
+
   it('broadcasts server-level messages to connected browser clients', async () => {
     const dispatcher: DevBrowserBridgeDispatcher = {
       invoke: vi.fn(async () => ({ ok: true }))

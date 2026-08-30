@@ -450,10 +450,10 @@ async function captureVisibleContextSurface(request: SurfaceCaptureRequest): Pro
 
   if (surface?.kind === 'browser') {
     const bridge = devBrowserBridgeServer
-    if (!bridge?.hasClient(surface.numericId)) {
+    if (!bridge) {
       return surfaceCaptureUnavailable(
         'capture_surface_unavailable',
-        `Browser surface ${request.windowId} is no longer connected.`,
+        `Browser surface ${request.windowId} is no longer available.`,
         true
       )
     }

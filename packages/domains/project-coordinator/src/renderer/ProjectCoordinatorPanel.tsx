@@ -42,7 +42,10 @@ import {
   DEFAULT_TASK_OFFER_TTL_MS,
   taskFileDestinationNameSchema
 } from '@sciforge/collaboration-contracts'
-import type { DomainWorkbenchRightPanelSession } from '@sciforge/domain-sdk/host'
+import type {
+  DomainRendererVisibleContextHost,
+  DomainWorkbenchRightPanelSession
+} from '@sciforge/domain-sdk/host'
 
 import type {
   ProjectCoordinatorCompleteInput,
@@ -77,6 +80,12 @@ import {
 } from './project-coordinator-capability-client.js'
 import type { ProjectCoordinatorWorkspaceSection } from './workspace-sections.js'
 import { projectCoordinatorSessionBindingForOrdinarySession } from './session-binding.js'
+import {
+  clearProjectCoordinatorPanelContext,
+  currentProjectCoordinatorPanelContext,
+  setProjectCoordinatorPanelContext
+} from './panel-context.js'
+import { subscribeProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
   'coordinator',
@@ -448,6 +457,11 @@ export function projectCoordinatorWorkspaceNavigationItems(
 export type ProjectCoordinatorPanelProps = Readonly<{
   client: ProjectCoordinatorRendererClient
   session: DomainWorkbenchRightPanelSession
+  visibleContext?: DomainRendererVisibleContextHost
+  /** Host foreground/focus semantics; selection itself remains Project-owned. */
+  active?: boolean
+  focused?: boolean
+  surfaceId?: string
   initialProjectId?: string
   initialView?: ProjectCoordinatorActivationView
   activationRevision?: number
@@ -514,6 +528,10 @@ export function projectCoordinatorCreatedSelection(
 export function ProjectCoordinatorPanel({
   client,
   session,
+  visibleContext,
+  active = true,
+  focused = true,
+  surfaceId,
   initialProjectId,
   initialView,
   activationRevision = 0,
@@ -525,7 +543,10 @@ export function ProjectCoordinatorPanel({
   const { t } = useTranslation('common')
   const [workspace, setWorkspace] = useState<ProjectCoordinatorWorkspace>()
   const [sessionBinding, setSessionBinding] = useState<ProjectCoordinatorSessionBinding | null>(null)
-  const [selectedProjectId, setSelectedProjectId] = useState(initialProjectId ?? '')
+  const [selectedProjectId, setSelectedProjectId] = useState(
+    initialProjectId ?? currentProjectCoordinatorPanelContext()?.projectId ?? ''
+  )
+  const selectedProjectIdRef = useRef(selectedProjectId)
   const [loading, setLoading] = useState(true)
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false)
   const [nowMilliseconds, setNowMilliseconds] = useState(() => Date.now())
@@ -549,8 +570,65 @@ export function ProjectCoordinatorPanel({
     revision: number
     sectionId: (typeof PROJECT_COORDINATOR_PANEL_SECTION_IDS)[number]
   }>>()
+  // Activation props are retained by the host while a pane is open.  The
+  // panel can re-render for unrelated workspace updates (including Worker
+  // assignment refreshes), so applying the retained initial view on every
+  // render would undo a user's in-panel navigation.  A revisioned activation
+  // is a one-shot intent; only a new activation tuple may change the view.
+  const appliedActivationKeyRef = useRef<string | undefined>(undefined)
   const refreshRequestRef = useRef(0)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    selectedProjectIdRef.current = selectedProjectId
+  }, [selectedProjectId])
+
+  // Publish only the explicit Project selection.  This is a renderer context
+  // hint for the composer; it carries no permission and is never used to
+  // bypass the capability handlers' Principal and membership checks.
+  useEffect(() => {
+    if (!surfaceId || !active || !selectedProjectId) {
+      if (surfaceId) clearProjectCoordinatorPanelContext(surfaceId)
+      return
+    }
+    setProjectCoordinatorPanelContext({
+      surfaceId,
+      projectId: selectedProjectId,
+      active,
+      focused
+    })
+    const disposeVisibleContext = visibleContext?.registerComponent({
+      id: `right-sidebar:project-coordinator:${encodeURIComponent(surfaceId)}`,
+      region: 'right-sidebar',
+      component: 'project-coordinator-panel',
+      title: 'Project Coordinator',
+      visible: true,
+      priority: 20,
+      updatedAt: new Date().toISOString(),
+      summary: 'Project workbench target selected by the user.',
+      state: {
+        panelTarget: true,
+        selectedProjectId,
+        projectId: selectedProjectId,
+        surfaceId,
+        active,
+        focused
+      },
+      resources: [{
+        kind: 'project-coordinator-panel',
+        metadata: {
+          panelTarget: true,
+          selectedProjectId,
+          projectId: selectedProjectId,
+          surfaceId
+        }
+      }]
+    })
+    return () => {
+      clearProjectCoordinatorPanelContext(surfaceId)
+      disposeVisibleContext?.()
+    }
+  }, [active, focused, selectedProjectId, surfaceId, visibleContext])
 
   const navigationItems = useMemo(
     () => projectCoordinatorWorkspaceNavigationItems(workspaceSections),
@@ -600,18 +678,24 @@ export function ProjectCoordinatorPanel({
           })
         : null)
       setNowMilliseconds(Date.now())
-      const preferred = projectId ?? next.focusedProjectId
+      // A Session switch must not silently replace a Project the user chose
+      // in this workbench with the Cloud provider's focused Project.  Only an
+      // explicit activation/selection may change the target.
+      const preferred = projectId ?? selectedProjectIdRef.current ?? next.focusedProjectId
       if (preferred && next.projects.some(({ project }) => project.projectId === preferred)) {
         setSelectedProjectId(preferred)
+        selectedProjectIdRef.current = preferred
         const nextDraft = await client.readPlanDraft({ projectId: preferred })
         if (!signal?.aborted && refreshRequestRef.current === requestRevision) setDraft(nextDraft)
       } else if (next.projects.length === 1) {
         const onlyProjectId = next.projects[0]!.project.projectId
         setSelectedProjectId(onlyProjectId)
+        selectedProjectIdRef.current = onlyProjectId
         const nextDraft = await client.readPlanDraft({ projectId: onlyProjectId })
         if (!signal?.aborted && refreshRequestRef.current === requestRevision) setDraft(nextDraft)
       } else {
         setSelectedProjectId('')
+        selectedProjectIdRef.current = ''
         setDraft(null)
       }
     } catch (cause) {
@@ -633,6 +717,9 @@ export function ProjectCoordinatorPanel({
 
   useEffect(() => {
     if (!initialView) return
+    const activationKey = `${activationRevision}\u0000${initialProjectId ?? ''}\u0000${initialView}`
+    if (appliedActivationKeyRef.current === activationKey) return
+    appliedActivationKeyRef.current = activationKey
     const target = projectCoordinatorActivationTarget(
       initialView,
       availableWorkspaceViews
@@ -647,7 +734,7 @@ export function ProjectCoordinatorPanel({
     setActivationSectionRequest(target.sectionId && target.sectionId !== 'create'
       ? { revision: activationRevision, sectionId: target.sectionId }
       : undefined)
-  }, [activationRevision, availableWorkspaceViews, initialView])
+  }, [activationRevision, availableWorkspaceViews, initialProjectId, initialView])
 
   useEffect(() => {
     const timer = setInterval(() => setNowMilliseconds(Date.now()), 10_000)
@@ -660,7 +747,9 @@ export function ProjectCoordinatorPanel({
   )
 
   useEffect(() => {
-    if (!navigationItems.some(({ id }) => id === activeView)) setActiveView('overview')
+    if (!navigationItems.some(({ id }) => id === activeView)) {
+      setActiveView('overview')
+    }
   }, [activeView, navigationItems])
 
   useEffect(() => {
@@ -697,6 +786,17 @@ export function ProjectCoordinatorPanel({
       globalThis.document?.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [busyAction, initialProjectId, refresh, selectedProjectId, workspace?.connection.state])
+
+  // Mutations may be initiated by another surface (for example an Agent
+  // retry/reassignment) while this panel remains mounted.  The local client
+  // invalidation is the canonical cross-component signal; refresh the
+  // currently selected Project immediately instead of waiting for the polling
+  // interval or leaving the HCI on stale failure facts.
+  useEffect(() => subscribeProjectCoordinatorWorkspaceInvalidation(() => {
+    if (busyAction || globalThis.document?.visibilityState === 'hidden') return
+    const projectId = selectedProjectId || initialProjectId || undefined
+    void refresh(projectId, undefined, 'background')
+  }), [busyAction, initialProjectId, refresh, selectedProjectId])
 
   const connectionMessage = workspace && workspace.connection.state !== 'ready'
     ? connectionMessageKey(workspace.connection.state)
@@ -1015,6 +1115,9 @@ export function ProjectCoordinatorPanel({
       className={`project-coordinator-panel ds-no-drag ${className ?? ''}`}
       data-domain="project-coordinator"
       data-session-id={session.id}
+      data-surface-id={surfaceId}
+      data-project-id={selectedProjectId || undefined}
+      data-selected-project-id={selectedProjectId || undefined}
       data-active-workspace-view={activeView}
     >
       <header className="project-coordinator-header">
@@ -2341,7 +2444,7 @@ export function ProjectCoordinatorPlanSection({
                 <textarea required name={`plan-item-objective-${item.planItemId}`} defaultValue={item.objective} aria-label={t('projectCoordinatorTaskObjective')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <textarea required name={`plan-item-criteria-${item.planItemId}`} defaultValue={item.completionCriteria.join('\n')} aria-label={t('projectCoordinatorCompletionCriteria')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 <input name={`plan-item-dependencies-${item.planItemId}`} defaultValue={item.dependencyPlanItemIds.join(', ')} aria-label={t('projectCoordinatorTaskDependencies')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
-                <input required name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+                <input name={`plan-item-capabilities-${item.planItemId}`} defaultValue={item.requiredCapabilityTags.join(', ')} aria-label={t('projectCoordinatorCapabilityTags')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
                 {item.fileIntent !== null ? (
                   <label className="flex items-center gap-2 text-xs text-ds-muted">
                     <input

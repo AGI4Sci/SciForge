@@ -15,6 +15,10 @@ import {
   PROJECT_COORDINATOR_COMPOSER_CONTEXT_MAX_CHARS,
   renderProjectSessionContext
 } from './composer-context-provider.js'
+import {
+  clearProjectCoordinatorPanelContexts,
+  setProjectCoordinatorPanelContext
+} from './panel-context.js'
 import type {
   ProjectCoordinatorRendererClient
 } from './project-coordinator-capability-client.js'
@@ -25,6 +29,7 @@ const runtimeId = 'runtime-composer'
 const threadId = 'thread-composer'
 
 test('composer context uses only an exact current ordinary Session projection', async () => {
+  clearProjectCoordinatorPanelContexts()
   let workspaceReads = 0
   const client = {
     readSessionProjection: async () => projectionFixture(),
@@ -32,7 +37,7 @@ test('composer context uses only an exact current ordinary Session projection', 
       workspaceReads += 1
       return workspaceFixture()
     }
-  } as ProjectCoordinatorRendererClient
+  } as unknown as ProjectCoordinatorRendererClient
   const provider = createProjectCoordinatorComposerContextProvider(client)
 
   assert.deepEqual(await provider.provide(requestFixture({
@@ -55,9 +60,56 @@ test('composer context uses only an exact current ordinary Session projection', 
   assert.match(result.items[0]?.content ?? '', /"tasks": \[\]/u)
   assert.match(result.items[0]?.content ?? '', /"evidenceAndReview": \[\]/u)
   assert.match(result.items[0]?.content ?? '', /"acceptedDecisionsAndRecords": \[\]/u)
+  assert.match(result.items[0]?.content ?? '', /do not merely return a JSON decomposition/u)
+  assert.match(result.items[0]?.content ?? '', /Discovery returns an opaque operationRef/u)
+  assert.match(result.items[0]?.content ?? '', /Never pass an op_\.\.\. or schema_\.\.\. reference as capabilityId/u)
+  assert.match(result.items[0]?.content ?? '', /at most one error\.details\.suggestedQueries recovery hint/u)
+})
+
+test('composer context follows an active panel Project independently of Session binding', async () => {
+  clearProjectCoordinatorPanelContexts()
+  setProjectCoordinatorPanelContext({
+    surfaceId: 'surface-selected-project',
+    projectId,
+    active: true,
+    focused: true
+  })
+  let projectionReads = 0
+  let workspaceReadInput: unknown
+  const client = {
+    readSessionProjection: async () => {
+      projectionReads += 1
+      throw new Error('Session has no durable Project binding')
+    },
+    readWorkspace: async (input: unknown) => {
+      workspaceReadInput = input
+      return workspaceFixture()
+    }
+  } as unknown as ProjectCoordinatorRendererClient
+  const provider = createProjectCoordinatorComposerContextProvider(client)
+
+  const result = await provider.provide(requestFixture({
+    runtimeId: 'runtime-unbound',
+    sessionId: 'thread-unbound',
+    draftText: 'inspect selected project'
+  }))
+  assert.equal(projectionReads, 0)
+  assert.deepEqual(workspaceReadInput, { projectId })
+  assert.equal(result.items.length, 1)
+  assert.deepEqual(result.items[0]?.metadata, {
+    schemaVersion: 1,
+    projectId,
+    selectedProjectId: projectId,
+    panelTarget: true,
+    selectedBy: 'project-coordinator-panel',
+    surfaceId: 'surface-selected-project'
+  })
+  assert.match(result.items[0]?.content ?? '', /selected-project-panel/u)
+  clearProjectCoordinatorPanelContexts()
 })
 
 test('composer context stays empty without trusted runtime and thread identity', async () => {
+  clearProjectCoordinatorPanelContexts()
   let projectionReads = 0
   const provider = createProjectCoordinatorComposerContextProvider({
     readSessionProjection: async () => {

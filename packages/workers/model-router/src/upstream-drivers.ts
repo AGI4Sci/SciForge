@@ -714,10 +714,24 @@ function bearerHeaders(apiKey: string): Record<string, string> {
 
 function responsesRequestBody(request: ResponsesRequest, model: string): JsonObject {
   const body = { ...request, model } as Record<string, unknown>;
+  const outputSchema = body.outputSchema;
+  delete body.outputSchema;
   const maxOutputTokens = request.max_output_tokens ?? request.max_tokens;
   delete body.max_tokens;
   if (isDisabledAnthropicThinking(request.thinking)) delete body.thinking;
   if (maxOutputTokens !== undefined) body.max_output_tokens = maxOutputTokens;
+  if (outputSchema !== undefined && isRecord(outputSchema)) {
+    const currentText = isRecord(body.text) ? body.text : {};
+    body.text = {
+      ...currentText,
+      format: {
+        type: 'json_schema',
+        name: 'sciforge_output',
+        strict: true,
+        schema: outputSchema,
+      },
+    };
+  }
   return compactObject(body);
 }
 
