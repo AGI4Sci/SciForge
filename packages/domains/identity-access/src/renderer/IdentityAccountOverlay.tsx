@@ -8,6 +8,7 @@ export function IdentityAccountOverlay(props: Readonly<{
   projection: IdentityRendererProjection
   firstRun: boolean
   onClose: () => void
+  openAccount: (url: string) => void | Promise<void>
 }>): React.JSX.Element {
   const { t } = useTranslation('identity')
   const snapshot = useSyncExternalStore(props.projection.subscribe, props.projection.getSnapshot)
@@ -196,6 +197,7 @@ export function IdentityAccountOverlay(props: Readonly<{
         <CloudIdentitySection
           projection={props.projection}
           localAccountSelected={Boolean(availableState?.currentAccount)}
+          openAccount={props.openAccount}
         />
 
         {snapshot.loading ? <p className="mt-3 text-xs text-muted-foreground">{t('loading')}</p> : null}

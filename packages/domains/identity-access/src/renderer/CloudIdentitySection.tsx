@@ -1,16 +1,20 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import {
   CircleAlert,
+  ExternalLink,
   Loader2,
   LogIn,
   LogOut,
   MonitorCheck,
   MonitorX,
   RefreshCw,
+  Trash2,
   UserRound
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { IdentityRendererProjection } from './projection.js'
+
+type AccountDeletionStep = 'idle' | 'confirm'
 
 const DEVICE_STATUS_MESSAGE = Object.freeze({
   'signed-out': 'cloudDeviceNotEnrolled',
@@ -24,8 +28,12 @@ const DEVICE_STATUS_MESSAGE = Object.freeze({
 export function CloudIdentitySection(props: Readonly<{
   projection: IdentityRendererProjection
   localAccountSelected: boolean
+  openAccount: (url: string) => void | Promise<void>
 }>): React.JSX.Element {
   const { t } = useTranslation('identity')
+  const [accountDeletionStep, setAccountDeletionStep] = useState<AccountDeletionStep>('idle')
+  const [accountDeletionBusy, setAccountDeletionBusy] = useState(false)
+  const [accountDeletionError, setAccountDeletionError] = useState<string | null>(null)
   const snapshot = useSyncExternalStore(
     props.projection.subscribe,
     props.projection.getSnapshot
@@ -37,6 +45,27 @@ export function CloudIdentitySection(props: Readonly<{
     : null
   const run = (operation: () => Promise<void>): void => {
     void operation().catch(() => undefined)
+  }
+  const beginAccountDeletion = (): void => {
+    setAccountDeletionError(null)
+    setAccountDeletionStep('confirm')
+  }
+  const openAccountConsole = (): void => {
+    if (!cloud || cloud.identity.state !== 'signed-in') return
+    const accountUrl = buildAccountConsoleUrl(cloud.identity.user.issuer)
+    if (!accountUrl) {
+      setAccountDeletionError(t('cloudDeleteUnavailable'))
+      return
+    }
+    setAccountDeletionBusy(true)
+    setAccountDeletionError(null)
+    void Promise.resolve()
+      .then(() => props.openAccount(accountUrl))
+      .then(() => setAccountDeletionStep('idle'))
+      .catch((error: unknown) => {
+        setAccountDeletionError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => setAccountDeletionBusy(false))
   }
 
   return (
@@ -148,9 +177,62 @@ export function CloudIdentitySection(props: Readonly<{
               <span>{t('cloudSignOut')}</span>
             </button>
           </div>
+
+          {accountDeletionStep === 'idle' ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded-md border border-destructive/40 px-3 py-2 text-sm text-destructive disabled:opacity-50"
+              disabled={busy || accountDeletionBusy}
+              onClick={beginAccountDeletion}
+            >
+              <Trash2 className="h-4 w-4" />
+              <span>{t('cloudDeleteAccount')}</span>
+            </button>
+          ) : accountDeletionStep === 'confirm' ? (
+            <div
+              className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+              role="alertdialog"
+              aria-labelledby="cloud-delete-account-warning"
+            >
+              <div className="flex items-start gap-2">
+                <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" strokeWidth={1.8} />
+                <p id="cloud-delete-account-warning" className="text-sm text-destructive">
+                  {t('cloudDeleteWarning')}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
+                  disabled={accountDeletionBusy}
+                  onClick={() => setAccountDeletionStep('idle')}
+                >
+                  {t('cloudDeleteCancel')}
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-md bg-destructive px-3 py-2 text-sm text-destructive-foreground disabled:opacity-50"
+                  disabled={accountDeletionBusy}
+                  onClick={openAccountConsole}
+                >
+                  {accountDeletionBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ExternalLink className="h-4 w-4" />
+                  )}
+                  <span>{t('cloudDeleteContinue')}</span>
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
 
+      {accountDeletionError ? (
+        <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-xs text-destructive">
+          {accountDeletionError}
+        </p>
+      ) : null}
       {cloud?.error ? (
         <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-xs text-destructive">
           {cloud.error.message}
@@ -158,4 +240,20 @@ export function CloudIdentitySection(props: Readonly<{
       ) : null}
     </section>
   )
+}
+
+function buildAccountConsoleUrl(issuer: string): string | null {
+  try {
+    const url = new URL(issuer)
+    const isLoopbackHttp = url.protocol === 'http:' &&
+      ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(url.hostname)
+    if (url.username || url.password || url.search || url.hash) return null
+    if (url.protocol !== 'https:' && !isLoopbackHttp) return null
+    const issuerPath = url.pathname.replace(/\/+$/u, '')
+    if (!issuerPath || issuerPath === '/') return null
+    url.pathname = `${issuerPath}/account/`
+    return url.toString()
+  } catch {
+    return null
+  }
 }

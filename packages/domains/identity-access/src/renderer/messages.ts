@@ -40,7 +40,12 @@ export const identityI18nResourceContribution = Object.freeze({
       cloudDeviceRevoked: 'This Desktop is revoked',
       cloudDeviceEnrolling: 'Registering this Desktop',
       cloudDeviceNotEnrolled: 'This Desktop is not connected',
-      cloudDeviceError: 'Desktop registration needs attention'
+      cloudDeviceError: 'Desktop registration needs attention',
+      cloudDeleteAccount: 'Permanently close cloud account',
+      cloudDeleteWarning: 'This permanently deletes the SciForge Cloud identity in the account portal. SciForge Cloud projects and files are not deleted by this action.',
+      cloudDeleteCancel: 'Cancel',
+      cloudDeleteContinue: 'Open account deletion',
+      cloudDeleteUnavailable: 'The account portal is unavailable for this identity.'
     }),
     zh: Object.freeze({
       accountTitle: '本地账户',
@@ -81,7 +86,12 @@ export const identityI18nResourceContribution = Object.freeze({
       cloudDeviceRevoked: '此 Desktop 已撤销',
       cloudDeviceEnrolling: '正在注册此 Desktop',
       cloudDeviceNotEnrolled: '此 Desktop 尚未连接',
-      cloudDeviceError: 'Desktop 注册需要处理'
+      cloudDeviceError: 'Desktop 注册需要处理',
+      cloudDeleteAccount: '永久注销云端账号',
+      cloudDeleteWarning: '此操作会在账户门户中永久删除 SciForge 云端身份。此操作不会删除 SciForge Cloud 中的项目和文件。',
+      cloudDeleteCancel: '取消',
+      cloudDeleteContinue: '打开账号注销页面',
+      cloudDeleteUnavailable: '当前身份没有可用的账户门户。'
     })
   })
 })

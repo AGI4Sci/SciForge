@@ -40,7 +40,8 @@ describe('CloudIdentitySection', () => {
       root = createRoot(container!)
       root.render(createElement(CloudIdentitySection, {
         projection,
-        localAccountSelected: false
+        localAccountSelected: false,
+        openAccount: vi.fn()
       }))
     })
 
@@ -61,7 +62,8 @@ describe('CloudIdentitySection', () => {
       root = createRoot(container!)
       root.render(createElement(CloudIdentitySection, {
         projection,
-        localAccountSelected: true
+        localAccountSelected: true,
+        openAccount: vi.fn()
       }))
     })
     const revoke = Array.from(container!.querySelectorAll('button'))
@@ -87,7 +89,8 @@ describe('CloudIdentitySection', () => {
       root.render(createElement(IdentityAccountOverlay, {
         projection,
         firstRun: false,
-        onClose: vi.fn()
+        onClose: vi.fn(),
+        openAccount: vi.fn()
       }))
     })
 
@@ -107,7 +110,8 @@ describe('CloudIdentitySection', () => {
       root.render(createElement(IdentityAccountOverlay, {
         projection: transportProjection,
         firstRun: false,
-        onClose: vi.fn()
+        onClose: vi.fn(),
+        openAccount: vi.fn()
       }))
     })
 
@@ -115,6 +119,76 @@ describe('CloudIdentitySection', () => {
     expect(alerts).toHaveLength(1)
     expect(alerts[0]?.textContent).toBe(transportError)
   })
+
+  it('opens the trusted account portal only after confirmation without invoking cloud logout', async () => {
+    const logoutCloud = vi.fn(async () => undefined)
+    const openAccount = vi.fn(async (_url: string) => undefined)
+    const projection = projectionFixture(snapshotWith(activeCloud()), { logoutCloud })
+
+    await act(async () => {
+      root = createRoot(container!)
+      root.render(createElement(CloudIdentitySection, {
+        projection,
+        localAccountSelected: true,
+        openAccount
+      }))
+    })
+
+    const deleteButton = findButton('cloudDeleteAccount')
+    expect(deleteButton).toBeDefined()
+    await act(async () => deleteButton?.click())
+    expect(findButton('cloudDeleteContinue')).toBeDefined()
+    expect(openAccount).not.toHaveBeenCalled()
+
+    await act(async () => findButton('cloudDeleteContinue')?.click())
+    expect(openAccount).toHaveBeenCalledWith(
+      'https://login-test.sciforge.cn/realms/SciForge/account/'
+    )
+    expect(logoutCloud).not.toHaveBeenCalled()
+    expect(String(openAccount.mock.calls[0]?.[0])).not.toContain('usr_')
+  })
+
+  it('does not expose account deletion while signed out', async () => {
+    const projection = projectionFixture(snapshotWith(signedOutCloud()))
+
+    await act(async () => {
+      root = createRoot(container!)
+      root.render(createElement(CloudIdentitySection, {
+        projection,
+        localAccountSelected: true,
+        openAccount: vi.fn()
+      }))
+    })
+
+    expect(findButton('cloudDeleteAccount')).toBeUndefined()
+  })
+
+  it('fails closed when the identity issuer cannot produce a trusted account URL', async () => {
+    const openAccount = vi.fn()
+    const projection = projectionFixture(
+      snapshotWith(activeCloud('http://untrusted.example/realms/SciForge'))
+    )
+
+    await act(async () => {
+      root = createRoot(container!)
+      root.render(createElement(CloudIdentitySection, {
+        projection,
+        localAccountSelected: true,
+        openAccount
+      }))
+    })
+
+    await act(async () => findButton('cloudDeleteAccount')?.click())
+    await act(async () => findButton('cloudDeleteContinue')?.click())
+
+    expect(openAccount).not.toHaveBeenCalled()
+    expect(container!.querySelector('[role="alert"]')?.textContent).toBe('cloudDeleteUnavailable')
+  })
+
+  function findButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(container!.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes(label)) as HTMLButtonElement | undefined
+  }
 })
 
 function snapshotWith(cloud: CloudIdentitySnapshot): IdentityProjectionSnapshot {
@@ -166,7 +240,7 @@ function signedOutCloud(): CloudIdentitySnapshot {
   }
 }
 
-function activeCloud(): CloudIdentitySnapshot {
+function activeCloud(issuer = 'https://login-test.sciforge.cn/realms/SciForge'): CloudIdentitySnapshot {
   const device = {
     deviceId: 'dev_CloudDevice0001',
     displayName: 'Lab Desktop',
@@ -180,7 +254,7 @@ function activeCloud(): CloudIdentitySnapshot {
       user: {
         userId: 'usr_CloudUser000001',
         oidcIdentityId: 'oid_CloudIdent0001',
-        issuer: 'https://login-test.sciforge.cn/realms/SciForge',
+        issuer,
         subject: 'keycloak-subject-a',
         displayName: 'Cloud Person'
       },
