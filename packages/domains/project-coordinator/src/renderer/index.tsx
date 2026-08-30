@@ -176,7 +176,7 @@ export function createProjectCoordinatorNavigationSectionContribution(
             // (for example after assigning a Worker) must return to the
             // Project workflow surface rather than replacing the user's
             // task-dispatch context with the overview dashboard.
-            payload: { projectId, view: 'projects' }
+            payload: { projectId, view: 'tasks' }
           })
         }}
       />
