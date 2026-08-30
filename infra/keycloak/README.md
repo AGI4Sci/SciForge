@@ -34,6 +34,14 @@ The command starts the Desktop loopback callback, opens the system browser, and 
 
 The Keycloak account console is also available at `http://127.0.0.1:8080/realms/SciForge/account/` after login.
 
+## SciForge login theme
+
+The Realm imports the `sciforge` login theme from [`themes/sciforge/`](./themes/sciforge/). It keeps Keycloak's upstream v2 templates and adds the SciForge brand mark, research-focused copy, responsive layout, accessible focus states, localized English and Simplified Chinese labels, and a small identity-protection footer. The theme does not add scripts, change OIDC parameters, or collect credentials outside Keycloak.
+
+The local Compose service mounts only `themes/sciforge/` read-only at `/opt/keycloak/themes/sciforge`, leaving Keycloak's built-in themes and common resources untouched. On a fresh local database, `loginTheme` in the Realm import selects it automatically. If the database already exists, Realm import does not overwrite the existing Realm settings: choose `sciforge` under **Realm settings > Themes > Login theme** in the Keycloak Admin Console, then reload the login page.
+
+The shared HTTPS test deployment uses a separate optimized image and an existing PostgreSQL-backed Realm. Its login theme must be packaged into the approved image and selected through the authorized deployment procedure before the public test page changes; a repository restart alone must not be treated as a live configuration update.
+
 The HTTP issuer is deliberately limited to loopback development. The shared SciForge identity contract permits loopback HTTP for local integration and requires HTTPS for every non-loopback issuer.
 
 ## Imported clients
