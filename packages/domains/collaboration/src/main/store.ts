@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
@@ -546,6 +547,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
 export interface CollaborationStateBackend {
   read(): Promise<unknown | undefined>
   write(value: CollaborationLocalState): Promise<void>
+  quarantineUnsupportedState?(): Promise<void>
 }
 
 export class FileCollaborationStateBackend implements CollaborationStateBackend {
@@ -575,17 +577,18 @@ export class FileCollaborationStateBackend implements CollaborationStateBackend 
       }
       await rename(temporaryPath, this.path)
       await chmod(this.path, 0o600)
-      const directory = await open(directoryPath, 'r')
-      try {
-        await directory.sync().catch((error: unknown) => {
-          if (!isUnsupportedDirectorySync(error)) throw error
-        })
-      } finally {
-        await directory.close()
-      }
+      await syncDirectory(directoryPath)
     } finally {
       await rm(temporaryPath, { force: true }).catch(() => undefined)
     }
+  }
+
+  async quarantineUnsupportedState(): Promise<void> {
+    const directoryPath = dirname(this.path)
+    const preservedPath = `${this.path}.unsupported-${Date.now()}-${randomUUID()}`
+    await rename(this.path, preservedPath)
+    await chmod(preservedPath, 0o600)
+    await syncDirectory(directoryPath)
   }
 }
 
@@ -603,9 +606,15 @@ export class CollaborationLocalStore {
       (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
         (stored as { schemaVersion?: number }).schemaVersion !== 3)
     ) {
-      throw new Error(
-        'Collaboration local state is not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud.'
-      )
+      if (!this.backend.quarantineUnsupportedState) {
+        throw new Error(
+          'Collaboration local state is not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud.'
+        )
+      }
+      await this.backend.quarantineUnsupportedState()
+      this.state = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
+      await this.backend.write(this.state)
+      return this.snapshot()
     }
     this.state = stored === undefined
       ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
@@ -802,6 +811,17 @@ function dropUnscopedManagedContainerCache(stored: unknown): unknown {
   ))
   if (managedContainers.length === record.managedContainers.length) return stored
   return { ...record, managedContainers }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const directory = await open(path, 'r')
+  try {
+    await directory.sync().catch((error: unknown) => {
+      if (!isUnsupportedDirectorySync(error)) throw error
+    })
+  } finally {
+    await directory.close()
+  }
 }
 
 function isUnsupportedDirectorySync(error: unknown): boolean {

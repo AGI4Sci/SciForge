@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   agentNodeFixture,
@@ -13,6 +16,7 @@ import {
 import {
   CollaborationLocalStore,
   EMPTY_COLLABORATION_LOCAL_STATE,
+  FileCollaborationStateBackend,
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
@@ -134,6 +138,27 @@ test('schema v2 local Collaboration state fails closed without being rewritten',
     /not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud/u
   )
   assert.equal(backend.writes, 0)
+})
+
+test('file-backed obsolete Collaboration state is preserved and replaced with current empty state', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-collaboration-state-'))
+  context.after(async () => rm(directory, { recursive: true, force: true }))
+  const statePath = join(directory, 'state.json')
+  const obsoleteState = '{"schemaVersion":2,"sentinel":"preserve-this-state"}\n'
+  await writeFile(statePath, obsoleteState, { encoding: 'utf8', mode: 0o600 })
+
+  const store = new CollaborationLocalStore(new FileCollaborationStateBackend(statePath))
+  const recovered = await store.open()
+
+  assert.equal(recovered.schemaVersion, 3)
+  assert.equal(recovered.revision, 0)
+  assert.deepEqual(recovered.outbox, [])
+  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).schemaVersion, 3)
+  const preserved = (await readdir(directory)).filter((name) =>
+    name.startsWith('state.json.unsupported-')
+  )
+  assert.equal(preserved.length, 1)
+  assert.equal(await readFile(join(directory, preserved[0]!), 'utf8'), obsoleteState)
 })
 
 class MemoryBackend implements CollaborationStateBackend {

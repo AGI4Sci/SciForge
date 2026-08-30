@@ -14,6 +14,9 @@ right-panel surface 与同一 capability client 继续服务命令调用和精�
 domain ID。
 
 本地高频状态写入 `<userData>/domains/collaboration/state.json`，使用 0600 原子替换。
+文件存储遇到不受当前版本支持的 schema 时，会先把原始字节原子移动到同目录的
+`state.json.unsupported-*` 恢复副本，再写入当前空状态并要求重新连接 Cloud；它不会迁移、
+重放或静默丢弃旧 outbox。没有显式隔离能力的自定义存储仍然 fail closed。
 非敏感 Cloud URL 保存到 package-scoped settings。User 请求只通过 identity-access
 提供的 token-free authenticated Cloud transport，OIDC Token 始终留在 Identity 私有边界。
 每台 ACTIVE Device 由 Identity 自动确保一个以 Device 名称显示的 active Agent；ensure、轮换、撤销、Agent-authenticated HTTP/WSS
