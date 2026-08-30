@@ -219,6 +219,40 @@ test('schema normalization preserves cross-schema required constraints through R
   assert.deepEqual(schema.required, ['path']);
 });
 
+test('structured output constraints survive Responses-to-Chat and Responses-to-Anthropic conversion', () => {
+  const outputSchema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+    additionalProperties: false,
+  };
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return the answer',
+    outputSchema,
+  };
+
+  const chat = responsesToChatCompletions(request);
+  assert.deepEqual(chat.response_format, {
+    type: 'json_schema',
+    json_schema: {
+      name: 'sciforge_output',
+      strict: true,
+      schema: outputSchema,
+    },
+  });
+  assert.equal(chat.outputSchema, undefined);
+
+  const anthropic = responsesToAnthropicMessages(request);
+  assert.deepEqual(anthropic.output_config, {
+    format: {
+      type: 'json_schema',
+      schema: outputSchema,
+    },
+  });
+  assert.equal(anthropic.outputSchema, undefined);
+});
+
 test('schema normalization preserves prototype-shaped names without polluting prototypes', () => {
   const schema = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string"},"constructor":{"type":"string"},"prototype":{"type":"string"}},"required":["__proto__","constructor","prototype"]}') as JsonObject;
   const normalized = normalizeProviderJsonSchema(schema) as JsonObject;

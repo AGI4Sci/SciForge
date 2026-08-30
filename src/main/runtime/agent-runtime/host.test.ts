@@ -1882,10 +1882,19 @@ describe('AgentRuntimeHost', () => {
       'This includes authorization operations that establish the initial Broker resource.'
     )
     expect(dispatched?.text).toContain(
-      'When an exact capability ID is already supplied, pass it unchanged as `capabilityId` with `includeSchema=true` and `limit=1`.'
+      'when one is explicitly supplied, pass that value unchanged as `capabilityId` with `includeSchema=true` and `limit=1`.'
     )
     expect(dispatched?.text).toContain(
-      'Do not replace that exact lookup with text, scope, effect, resource-kind, or provider-family filters.'
+      'A discovery result\'s opaque `operationRef` (the `op_...` value) is not a capability ID'
+    )
+    expect(dispatched?.text).toContain(
+      'Never put an `op_...` or `schema_...` reference in `capabilityId`'
+    )
+    expect(dispatched?.text).toContain(
+      'If `sciforge_discover` returns `capability_discovery_empty`, inspect its bounded `error.details.suggestedQueries` recovery hints and try at most one suggested query.'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not replace an exact capability-ID lookup with text, scope, effect, resource-kind, or provider-family filters.'
     )
     expect(dispatched?.text).toContain(
       'A missing component resourceRef blocks only observation or operations that depend on that current UI resource; it does not block discovery of global native operations that are independent of the current UI resource.'
@@ -1907,6 +1916,73 @@ describe('AgentRuntimeHost', () => {
     )
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
+  })
+
+  it('exposes an independent Project panel target without treating it as Session authority', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const snapshot = {
+      schemaVersion: 3 as const,
+      windowId: 'electron:1',
+      revision: 27,
+      publishedAt: '2026-08-20T06:28:16.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+      activeThreadId: 'codex-thread',
+      route: 'chat',
+      components: [{
+        id: 'right-sidebar:project-coordinator',
+        region: 'right-sidebar',
+        component: 'project-coordinator-panel',
+        title: 'Project Coordinator',
+        visible: true,
+        updatedAt: '2026-08-20T06:28:16.000Z',
+        summary: 'Project panel selected by the user.',
+        state: {
+          projectId: 'prj_panel_target_01',
+          sessionId: 'another-session',
+          mode: 'projects'
+        },
+        resources: [{
+          kind: 'project-coordinator-panel',
+          metadata: { projectId: 'prj_panel_target_01', panelTarget: true }
+        }]
+      }]
+    }
+    const visibleContext = {
+      bindSurface: vi.fn(async () => snapshot)
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      visibleContextSurfaceId: 'electron:1',
+      text: 'Read the selected Project plan.',
+      displayText: 'Read the selected Project plan.'
+    })
+
+    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(dispatched?.text).toContain('"selectedProjectId": "prj_panel_target_01"')
+    expect(dispatched?.text).toContain(
+      'The right-side Project panel is an independent target selector, not a binding to this conversation Session.'
+    )
+    expect(dispatched?.text).toContain(
+      'A panel-selected Project ID is routing context only, not permission'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not use `sciforge_look`, `sciforge_capture`, DOM/private stores, or screenshots to read or edit business state'
+    )
+    expect(dispatched?.text).toContain(
+      '`snapshotRef` identifies a visual snapshot and is not a broker resource.'
+    )
   })
 
   it('claims the prepared question-time surface instead of rebinding the later UI surface', async () => {

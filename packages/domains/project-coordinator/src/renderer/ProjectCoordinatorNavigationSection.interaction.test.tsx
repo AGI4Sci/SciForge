@@ -13,6 +13,10 @@ import {
   ProjectCoordinatorNavigationSection,
   type ProjectCoordinatorNavigationSectionProps
 } from './ProjectCoordinatorNavigationSection.js'
+import {
+  ProjectCoordinatorPanel,
+  type ProjectCoordinatorPanelProps
+} from './ProjectCoordinatorPanel.js'
 import type {
   ProjectCoordinatorRendererClient
 } from './project-coordinator-capability-client.js'
@@ -174,6 +178,55 @@ test('a failed Project activation ack remains retryable after an immediate catal
   }
 })
 
+test('a retained activation does not reset a manually selected Project view on parent rerender', async () => {
+  const client = clientFixture({
+    readSessionProjection: async () => projection(false),
+    acknowledgeProjectActivation: async () => undefined
+  })
+  const mounted = await mountPanel({
+    client,
+    session: { id: 'source-session' },
+    initialView: 'overview',
+    activationRevision: 1,
+    workspaceSections: []
+  })
+
+  try {
+    const projectTab = mounted.container.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-controls="project-coordinator-view-projects"]'
+    )
+    assert.ok(projectTab)
+    await act(async () => {
+      projectTab.click()
+      await tick()
+      await tick()
+    })
+    assert.equal(
+      mounted.container.querySelector('[data-domain="project-coordinator"]')
+        ?.getAttribute('data-active-workspace-view'),
+      'projects'
+    )
+
+    // Workbench renders provide a fresh workspace-section array. The retained
+    // activation must remain a one-shot intent instead of overriding this
+    // explicit user navigation.
+    await mounted.rerender({
+      client,
+      session: { id: 'source-session' },
+      initialView: 'overview',
+      activationRevision: 1,
+      workspaceSections: []
+    })
+    assert.equal(
+      mounted.container.querySelector('[data-domain="project-coordinator"]')
+        ?.getAttribute('data-active-workspace-view'),
+      'projects'
+    )
+  } finally {
+    await mounted.unmount()
+  }
+})
+
 function navigationContext(
   sessions: ProjectCoordinatorNavigationSectionProps['context']['sessions']
 ): ProjectCoordinatorNavigationSectionProps['context'] {
@@ -270,6 +323,36 @@ async function mountNavigation(
   await render(props)
   return {
     root,
+    rerender: render,
+    unmount: async () => {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  }
+}
+
+async function mountPanel(
+  props: ProjectCoordinatorPanelProps
+): Promise<Readonly<{
+  container: HTMLElement
+  rerender: (nextProps: ProjectCoordinatorPanelProps) => Promise<void>
+  unmount: () => Promise<void>
+}>> {
+  const { createRoot } = await import('react-dom/client')
+  const container = browserWindow.document.createElement('div') as unknown as HTMLElement
+  browserWindow.document.body.append(container as never)
+  const root = createRoot(container)
+  const render = async (nextProps: ProjectCoordinatorPanelProps) => {
+    await act(async () => {
+      root.render(<ProjectCoordinatorPanel {...nextProps} />)
+      await tick()
+      await tick()
+    })
+    await settleReact()
+  }
+  await render(props)
+  return {
+    container,
     rerender: render,
     unmount: async () => {
       await act(async () => root.unmount())

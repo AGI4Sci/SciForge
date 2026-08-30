@@ -122057,7 +122057,7 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
 
 ## `project-coordinator.plan-draft.edit`
 
-CAS-updates Plan items and exact visible Worker Agent choices.
+Updates (CAS) Plan items and exact visible Worker Agent choices. Use expectedDraftRevision (not draftRevision) from the latest draft read; optional expectedProjectRevision and expectedCoordinatorAuthorityEpoch are additional guards.
 
 - Version: `2.0.0`
 - Audiences: ui, agent
@@ -122159,7 +122159,17 @@ CAS-updates Plan items and exact visible Worker Agent choices.
         "pattern": "^draft_[A-Za-z0-9](?:[A-Za-z0-9_-]{10,95}[A-Za-z0-9])$",
         "type": "string"
       },
+      "expectedCoordinatorAuthorityEpoch": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
       "expectedDraftRevision": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "expectedProjectRevision": {
         "maximum": 9007199254740991,
         "minimum": 1,
         "type": "integer"
@@ -122909,6 +122919,9 @@ CAS-updates Plan items and exact visible Worker Agent choices.
   "tags": [
     "project",
     "plan",
+    "update",
+    "task",
+    "tasks",
     "worker-selection"
   ],
   "title": "Edit local Project Plan draft"
@@ -153821,7 +153834,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
 
 ## `project-coordinator.session-projection.read`
 
-Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals.
+Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals. This operation takes an empty input object; it is scoped to the calling Session and never accepts projectId.
 
 - Version: `2.0.0`
 - Audiences: ui, agent
@@ -166248,7 +166261,7 @@ Prepares the only production workflow from confirmed Plan and accepted invitatio
 
 ## `project-coordinator.workspace.read`
 
-Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, reviews, and content provisioning state.
+Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, and coordination-center（协同中心）state including reviews and content provisioning. Pass projectId when targeting one Project; omit it only to read the current scoped workspace.
 
 - Version: `2.0.0`
 - Audiences: ui, agent
@@ -171957,10 +171970,24 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, review
   "tags": [
     "project",
     "coordinator",
+    "coordination",
+    "coordination-center",
+    "overview",
+    "cloud",
+    "runtime",
+    "agent",
     "plan",
+    "task",
+    "tasks",
+    "my-tasks",
     "worker-selection",
     "review",
-    "provisioning"
+    "reviews",
+    "decisions",
+    "files",
+    "shared-files",
+    "provisioning",
+    "recovery"
   ],
   "title": "Read Project coordination workspace"
 }

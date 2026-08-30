@@ -1335,7 +1335,17 @@ export class CapabilityBroker {
       const parsedInput = definition.inputSchema.safeParse(request.input)
       if (!parsedInput.success) {
         throw new CapabilityBrokerError('invalid_input', `Input for ${request.actionId} failed validation.`, {
-          details: { issues: parsedInput.error.issues.map((issue) => issue.message) }
+          // Keep validation diagnostics bounded and field-addressable so an
+          // agent can repair a request from the canonical schema instead of
+          // blindly retrying the same payload. Never include the rejected
+          // input itself (it may contain user content or provider data).
+          details: {
+            issues: parsedInput.error.issues.slice(0, 8).map((issue) => ({
+              path: issue.path.map(String).slice(0, 16),
+              code: issue.code,
+              message: issue.message.slice(0, 256)
+            }))
+          }
         })
       }
 

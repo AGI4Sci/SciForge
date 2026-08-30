@@ -1551,6 +1551,10 @@ test('a local Plan draft exposes full content editing before immutable submit', 
   assert.match(markup, /name="plan-item-criteria-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-dependencies-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-capabilities-item_meeting_summary"/u)
+  // Capability tags are optional: an empty array is valid for text-only
+  // tasks, so the browser must not block saving with native required-field
+  // validation.
+  assert.doesNotMatch(markup, /<input[^>]*required=""[^>]*name="plan-item-capabilities-item_meeting_summary"/u)
   assert.match(markup, /name="plan-item-user-item_meeting_summary"/u)
   assert.match(markup, /data-planning-eligible="true"/u)
   assert.match(markup, /projectCoordinatorSavePlanEdits/u)
