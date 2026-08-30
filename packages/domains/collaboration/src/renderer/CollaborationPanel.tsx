@@ -79,7 +79,7 @@ export function reconcileProjectionLocatorSelection(
   if (currentKey && locators.some((item) => projectionLocatorKey(item) === currentKey)) {
     return currentKey
   }
-  return locators.length === 1 ? projectionLocatorKey(locators[0]) : ''
+  return locators.length === 1 ? projectionLocatorKey(locators[0]!) : ''
 }
 
 export function resolveProjectionLocatorSelection(

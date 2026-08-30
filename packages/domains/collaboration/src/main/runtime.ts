@@ -62,10 +62,17 @@ import {
   type CollaborationPendingTaskOffer,
   type CollaborationLocalProjection,
   type CollaborationTaskRun,
+  type CollaborationTaskCheckpoint,
+  type CollaborationTaskInteraction,
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
 import { parseWorkerRuntimeResult } from './worker-runtime-result.js'
+import type {
+  LocalTaskInteractionView,
+  TaskInteractionSubmit
+} from './task-interaction-controller.js'
+import type { TaskCheckpointCreate } from './task-interaction-journal.js'
 
 export type CollaborationRuntimeOptions = Readonly<{
   statePath: string
@@ -732,6 +739,41 @@ export class CollaborationRuntime {
         ))
     ]
       .filter((task) => states.size === 0 || states.has(task.state))
+  }
+
+  /**
+   * Persist and, when the exact Worker Runtime Session is available, dispatch
+   * one local human intervention. Cloud Task/Execution facts remain owned by
+   * their existing canonical capabilities.
+   */
+  submitTaskInteraction(input: TaskInteractionSubmit): Promise<CollaborationTaskInteraction> {
+    return this.requireTasks().submitTaskInteraction(input)
+  }
+
+  appendTaskCheckpoint(input: TaskCheckpointCreate): Promise<CollaborationTaskCheckpoint> {
+    return this.requireTasks().appendTaskCheckpoint(input)
+  }
+
+  taskInteractionView(
+    projectId: string,
+    taskId: string,
+    executionId?: string
+  ): LocalTaskInteractionView {
+    return this.requireTasks().taskInteractionView(projectId, taskId, executionId)
+  }
+
+  listTaskInteractions(
+    projectId: string,
+    taskId?: string
+  ): readonly CollaborationTaskInteraction[] {
+    return this.requireTasks().listTaskInteractions(projectId, taskId)
+  }
+
+  listTaskCheckpoints(
+    projectId: string,
+    taskId?: string
+  ): readonly CollaborationTaskCheckpoint[] {
+    return this.requireTasks().listTaskCheckpoints(projectId, taskId)
   }
 
   listWorkerSessionBindings(): readonly WorkerSessionExecutionBinding[] {

@@ -753,6 +753,37 @@ test('Task assignment renders unpublished, pending User offer, and claimed Agent
   assert.match(markup, /Member Desktop/u)
 })
 
+test('active Task exposes human guidance controls without changing Cloud status', () => {
+  const project = planningProjectFixture('paused')
+  const source = decisionProjectFixture('review').tasks[0]!
+  const task = {
+    ...source.task,
+    taskId: 'tsk_Interactive001',
+    currentExecutionId: 'exe_Interactive001',
+    currentExecutionState: 'running' as const,
+    status: 'in_progress' as const
+  }
+  const execution = {
+    ...source.executions[0]!,
+    taskId: task.taskId,
+    executionId: task.currentExecutionId,
+    state: 'running' as const
+  }
+  const snapshot = {
+    ...project,
+    tasks: [{ task, executions: [execution] }]
+  } as unknown as ProjectCoordinatorProject
+  const sent: unknown[] = []
+  const markup = renderToStaticMarkup(createElement(TasksSection, {
+    project: snapshot,
+    onSendInteraction: (input) => { sent.push(input) }
+  }))
+  assert.match(markup, /data-task-interaction="true"/u)
+  assert.match(markup, /data-task-interaction-available="true"/u)
+  assert.match(markup, /projectCoordinatorHumanInteractionPlaceholder/u)
+  assert.equal(sent.length, 0)
+})
+
 test('generic Task HCI exposes reassignment for an accepted fenced file execution', () => {
   const project = planningProjectFixture('paused')
   const source = decisionProjectFixture('review').tasks[0]!
@@ -832,7 +863,8 @@ test('generic Task HCI exposes reassignment for an accepted fenced file executio
   const markup = renderToStaticMarkup(createElement(TasksSection, {
     project: snapshot,
     canReassign: true,
-    onReassign: () => undefined
+    onReassign: () => undefined,
+    onSendInteraction: () => undefined
   }))
 
   assert.match(markup, new RegExp(`data-task-offer-reassignment="${MEETING_PLAN_TASK_ID}"`, 'u'))
@@ -840,6 +872,7 @@ test('generic Task HCI exposes reassignment for an accepted fenced file executio
   assert.match(markup, /name="reassign-output-file-name"/u)
   assert.match(markup, /name="reassign-offer-expires-at"/u)
   assert.match(markup, /projectCoordinatorReassignTask/u)
+  assert.match(markup, /data-task-interaction-available="false"/u)
 })
 
 test('completed Project meeting package includes only accepted records and artifact refs', () => {

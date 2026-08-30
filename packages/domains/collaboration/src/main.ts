@@ -45,6 +45,12 @@ import {
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskInteractionSubmitInputSchema,
+  collaborationTaskInteractionSubmitResultSchema,
+  collaborationTaskInteractionReadInputSchema,
+  collaborationTaskInteractionReadResultSchema,
+  collaborationTaskCheckpointAppendInputSchema,
+  collaborationTaskCheckpointAppendResultSchema,
   collaborationTaskOfferDecisionInputSchema,
   collaborationTaskOfferDecisionResultSchema,
   collaborationWorkerAcceptanceUpdateInputSchema,
@@ -60,6 +66,9 @@ import {
   type CollaborationProjectionUpdateInput,
   type CollaborationSynchronizationRetryInput,
   type CollaborationTaskListInput,
+  type CollaborationTaskInteractionSubmitInput,
+  type CollaborationTaskInteractionReadInput,
+  type CollaborationTaskCheckpointAppendInput,
   type CollaborationTaskOfferDecisionInput,
   type CollaborationWorkerAcceptanceUpdateInput
 } from './contract.js'
@@ -99,9 +108,45 @@ export {
   CollaborationLocalStore,
   FileCollaborationStateBackend
 } from './main/store.js'
-export type { CollaborationStateBackend } from './main/store.js'
+export type {
+  CollaborationStateBackend
+} from './main/store.js'
+export {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema
+} from './task-interaction.js'
+export type {
+  CollaborationTaskCheckpoint,
+  CollaborationTaskInteraction
+} from './task-interaction.js'
+export {
+  TaskInteractionJournal
+} from './main/task-interaction-journal.js'
+export type {
+  TaskCheckpointCreate,
+  TaskInteractionCreate,
+  TaskInteractionTransition
+} from './main/task-interaction-journal.js'
+export {
+  TaskInteractionController
+} from './main/task-interaction-controller.js'
+export type {
+  LocalTaskInteractionView,
+  TaskInteractionDispatchRequest,
+  TaskInteractionDispatchResult,
+  TaskInteractionSubmit
+} from './main/task-interaction-controller.js'
+export {
+  localTaskInteractionEventSchema,
+  localTaskInteractionStateSchema,
+  transitionLocalTaskInteractionState
+} from './main/task-interaction-contract.js'
+export type {
+  LocalTaskInteractionEvent,
+  LocalTaskInteractionState
+} from './main/task-interaction-contract.js'
 
-type CapabilityEffect = 'read' | 'external-write' | 'destructive'
+type CapabilityEffect = 'read' | 'workspace-write' | 'external-write' | 'destructive'
 
 export type CollaborationCapabilityOptions = Readonly<{
   id: string
@@ -306,10 +351,10 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
   const define = (input: Omit<
     CollaborationCapabilityOptions,
     'version' | 'audiences' | 'scope' | 'tags'
-  >, version = '1.0.0'): CapabilityDefinition => options.defineCapability({
+  >, version = '1.0.0', audiences: readonly ('ui' | 'agent' | 'system')[] = ['ui']): CapabilityDefinition => options.defineCapability({
     ...input,
     version,
-    audiences: ['ui'],
+    audiences,
     scope: 'global',
     tags: ['collaboration', 'user', 'device', 'session', 'project']
   })
@@ -321,7 +366,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     inputSchema: z.ZodType,
     outputSchema: z.ZodType,
     handler: CollaborationCapabilityOptions['handler'],
-    version = '1.0.0'
+    version = '1.0.0',
+    audiences: readonly ('ui' | 'agent' | 'system')[] = ['ui']
   ): CapabilityDefinition => define({
     id,
     title,
@@ -335,7 +381,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     inputSchema,
     outputSchema,
     handler
-  }, version)
+  }, version, audiences)
 
   return Object.freeze({
     moduleId: COLLABORATION_DOMAIN_MODULE_ID,
@@ -492,6 +538,78 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
           }
         }),
         '1.2.0'
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskInteractionRead,
+        'Read local Task interactions',
+        'Reads durable local human interventions and checkpoints together with the observed Cloud execution state.',
+        'read',
+        collaborationTaskInteractionReadInputSchema,
+        collaborationTaskInteractionReadResultSchema,
+        async (raw) => {
+          const input = collaborationTaskInteractionReadInputSchema.parse(raw) as CollaborationTaskInteractionReadInput
+          return {
+            output: {
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId
+              )
+            }
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit,
+        'Queue a local Task interaction',
+        'Queues a durable local intervention for the exact Worker Runtime Session without changing Cloud Task facts.',
+        'workspace-write',
+        collaborationTaskInteractionSubmitInputSchema,
+        collaborationTaskInteractionSubmitResultSchema,
+        async (raw) => {
+          const input = collaborationTaskInteractionSubmitInputSchema.parse(raw) as CollaborationTaskInteractionSubmitInput
+          const interaction = await options.getRuntime().submitTaskInteraction(input)
+          return {
+            output: {
+              interaction,
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId
+              )
+            },
+            changed: true
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend,
+        'Append a local Task checkpoint',
+        'Appends a durable local progress checkpoint without changing Cloud Task or Execution state.',
+        'workspace-write',
+        collaborationTaskCheckpointAppendInputSchema,
+        collaborationTaskCheckpointAppendResultSchema,
+        async (raw) => {
+          const input = collaborationTaskCheckpointAppendInputSchema.parse(raw) as CollaborationTaskCheckpointAppendInput
+          const checkpoint = await options.getRuntime().appendTaskCheckpoint(input)
+          return {
+            output: {
+              checkpoint,
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId ?? undefined
+              )
+            },
+            changed: true
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,

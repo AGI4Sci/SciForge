@@ -97,7 +97,9 @@ test('package sources keep Host-private implementations and sibling domain inter
   ))
   assert.deepEqual([...new Set(collaborationImports)], [
     '@sciforge/domain-collaboration/coordinator-cloud-command',
-    '@sciforge/domain-collaboration/worker-session-projection'
+    '@sciforge/domain-collaboration/worker-session-projection',
+    '@sciforge/domain-collaboration/renderer',
+    '@sciforge/domain-collaboration/task-interaction'
   ])
 })
 

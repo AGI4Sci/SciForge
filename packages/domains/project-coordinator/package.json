@@ -9,6 +9,7 @@
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
+    "./task-recovery": "./src/task-recovery.ts",
     "./renderer": "./src/renderer/index.tsx"
   },
   "files": [

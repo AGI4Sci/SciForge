@@ -99,6 +99,44 @@ export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
 
 export const PROJECT_COORDINATOR_LIVE_REFRESH_INTERVAL_MS = 15_000
 
+/** Renderer projection of the canonical local Collaboration journal. */
+export type ProjectCoordinatorTaskInteractionKind =
+  | 'guidance'
+  | 'pause'
+  | 'resume'
+  | 'cancel'
+  | 'retry'
+
+export type ProjectCoordinatorTaskInteractionState =
+  | 'queued'
+  | 'dispatching'
+  | 'awaiting_cloud'
+  | 'applied'
+  | 'rejected'
+  | 'failed'
+  | 'superseded'
+
+export type ProjectCoordinatorTaskInteraction = Readonly<{
+  interactionId: string
+  projectId: string
+  taskId: string
+  executionId: string | null
+  kind: ProjectCoordinatorTaskInteractionKind
+  text: string | null
+  state: ProjectCoordinatorTaskInteractionState
+  createdAt?: string
+  updatedAt?: string
+  error?: string | null
+}>
+
+export type ProjectCoordinatorTaskInteractionRequest = Readonly<{
+  projectId: string
+  taskId: string
+  executionId: string | null
+  kind: ProjectCoordinatorTaskInteractionKind
+  text: string
+}>
+
 function projectCoordinatorPlanGenerationFailureMessageKey(
   reason: ProjectCoordinatorPlanDraftGenerationClientError['reason']
 ): string {
@@ -498,6 +536,18 @@ export type ProjectCoordinatorPanelProps = Readonly<{
   className?: string
   onCollapse?: () => void
   onOpenArtifact?: (input: ProjectCoordinatorArtifactReviewPrepareInput) => Promise<void>
+  /** Optional projection supplied by the canonical local Collaboration journal. */
+  taskInteractions?: readonly ProjectCoordinatorTaskInteraction[]
+  /** Optional host bridge to enqueue a durable local interaction. */
+  onQueueTaskInteraction?: (
+    input: ProjectCoordinatorTaskInteractionRequest
+  ) => Promise<ProjectCoordinatorTaskInteraction>
+  /** Reads the durable local interaction projection for an exact Task. */
+  onReadTaskInteractions?: (input: Readonly<{
+    projectId: string
+    taskId: string
+    executionId?: string
+  }>) => Promise<readonly ProjectCoordinatorTaskInteraction[]>
   workspaceSections?: readonly ProjectCoordinatorWorkspaceSection[]
 }>
 
@@ -568,6 +618,9 @@ export function ProjectCoordinatorPanel({
   className,
   onCollapse,
   onOpenArtifact,
+  taskInteractions = [],
+  onQueueTaskInteraction,
+  onReadTaskInteractions,
   workspaceSections = []
 }: ProjectCoordinatorPanelProps): ReactElement {
   const { t } = useTranslation('common')
@@ -616,10 +669,23 @@ export function ProjectCoordinatorPanel({
     selectedProjectIdRef.current = projectId
     setSelectedProjectId(projectId)
   }, [])
+  const [localTaskInteractions, setLocalTaskInteractions] = useState<
+    readonly ProjectCoordinatorTaskInteraction[]
+  >([])
 
   useEffect(() => {
     selectedProjectIdRef.current = selectedProjectId
   }, [selectedProjectId])
+
+  const visibleTaskInteractions = useMemo(() => {
+    const byId = new Map<string, ProjectCoordinatorTaskInteraction>()
+    for (const interaction of [...taskInteractions, ...localTaskInteractions]) {
+      byId.set(interaction.interactionId, interaction)
+    }
+    return Object.freeze([...byId.values()].filter((interaction) => (
+      !selectedProjectId || interaction.projectId === selectedProjectId
+    )).slice(-200))
+  }, [localTaskInteractions, selectedProjectId, taskInteractions])
 
   // Publish only the explicit Project selection.  This is a renderer context
   // hint for the composer; it carries no permission and is never used to
@@ -813,6 +879,32 @@ export function ProjectCoordinatorPanel({
       )
     : 'read_only'
   const canCoordinate = effectiveSessionAccess === 'coordinator'
+
+  // Hydrate the panel from the canonical local Collaboration journal. This is
+  // intentionally a read projection: it never replaces Cloud Task facts and
+  // it does not depend on whichever chat Session currently has focus.
+  useEffect(() => {
+    if (!project || !onReadTaskInteractions) return
+    let cancelled = false
+    const projectId = project.project.projectId
+    void Promise.all(project.tasks.map(async ({ task }) => {
+      const currentExecutionId = task.currentExecutionId
+      return onReadTaskInteractions({
+        projectId,
+        taskId: task.taskId,
+        ...(currentExecutionId ? { executionId: currentExecutionId } : {})
+      })
+    })).then((groups) => {
+      if (cancelled) return
+      const merged = groups.flat()
+      setLocalTaskInteractions((current) => {
+        const byId = new Map(current.map((interaction) => [interaction.interactionId, interaction]))
+        for (const interaction of merged) byId.set(interaction.interactionId, interaction)
+        return [...byId.values()].slice(-200)
+      })
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [onReadTaskInteractions, project])
 
   useEffect(() => {
     if (!navigationItems.some(({ id }) => id === activeView)) {
@@ -1129,6 +1221,53 @@ export function ProjectCoordinatorPanel({
     ), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
+  const sendTaskInteraction = useCallback(async (input: Readonly<{
+    taskId: string
+    executionId: string | null
+    kind: ProjectCoordinatorTaskInteractionKind
+    text: string
+  }>) => {
+    if (!project || !onQueueTaskInteraction) return
+    const interactionId = `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+    const createdAt = new Date().toISOString()
+    const interaction: ProjectCoordinatorTaskInteraction = Object.freeze({
+      interactionId,
+      projectId: project.project.projectId,
+      taskId: input.taskId,
+      executionId: input.executionId,
+      kind: input.kind,
+      text: input.text,
+      state: 'dispatching',
+      createdAt,
+      updatedAt: createdAt
+    })
+    setLocalTaskInteractions((current) => [...current, interaction].slice(-200))
+    try {
+      const queued = await onQueueTaskInteraction({
+        projectId: project.project.projectId,
+        taskId: input.taskId,
+        executionId: input.executionId,
+        kind: input.kind,
+        text: input.text
+      })
+      setLocalTaskInteractions((current) => [
+        ...current.filter((candidate) => candidate.interactionId !== interactionId),
+        queued
+      ].slice(-200))
+    } catch (cause) {
+      setLocalTaskInteractions((current) => current.map((candidate) => (
+        candidate.interactionId === interactionId
+          ? {
+              ...candidate,
+              state: 'failed',
+              error: cause instanceof Error ? cause.message : String(cause),
+              updatedAt: new Date().toISOString()
+            }
+          : candidate
+      )))
+    }
+  }, [onQueueTaskInteraction, project])
+
   const addMember = useCallback((input: ProjectCoordinatorMembershipAddInput) => {
     void runAction('membership-add', () => client.addMember(input), (next) => {
       applyProjectWorkspace(next)
@@ -1381,7 +1520,11 @@ export function ProjectCoordinatorPanel({
                 <TasksSection
                   project={project}
                   observedAt={workspace?.observedAt}
+                  localInteractions={visibleTaskInteractions}
+                  onSendInteraction={onQueueTaskInteraction ? sendTaskInteraction : undefined}
                   canReassign={canCoordinate &&
+                    workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId &&
                     project?.project.status === 'active'}
                   busy={busyAction === 'task-offer-reassign'}
                   onReassign={reassignTaskOffer}
@@ -2835,12 +2978,21 @@ export function WorkersSection({
 export function TasksSection({
   project,
   observedAt,
+  localInteractions = [],
+  onSendInteraction,
   canReassign = false,
   busy = false,
   onReassign
 }: Readonly<{
   project?: ProjectCoordinatorProject
   observedAt?: string
+  localInteractions?: readonly ProjectCoordinatorTaskInteraction[]
+  onSendInteraction?(input: Readonly<{
+    taskId: string
+    executionId: string | null
+    kind: ProjectCoordinatorTaskInteractionKind
+    text: string
+  }>): Promise<void> | void
   canReassign?: boolean
   busy?: boolean
   onReassign?(input: ProjectCoordinatorTaskOfferReassignInput): void
@@ -2945,6 +3097,9 @@ export function TasksSection({
                       t('projectCoordinatorAwaitingDeviceClaim')
                     }`
                   : t('projectCoordinatorNotPublished')
+              const taskInteractions = localInteractions.filter((interaction) => (
+                interaction.taskId === task.taskId
+              )).slice(-3)
               return (
                 <article
                   key={task.taskId}
@@ -3079,6 +3234,16 @@ export function TasksSection({
                       </button>
                     </form>
                   ) : null}
+                  {onSendInteraction ? (
+                    <TaskInteractionComposer
+                      taskId={task.taskId}
+                      executionId={execution?.executionId ?? null}
+                      executionState={execution?.state ?? null}
+                      taskStatus={task.status}
+                      interactions={taskInteractions}
+                      onSend={onSendInteraction}
+                    />
+                  ) : null}
                 </article>
               )
             })}
@@ -3086,6 +3251,116 @@ export function TasksSection({
         </div>
       )}
     </Section>
+  )
+}
+
+function TaskInteractionComposer({
+  taskId,
+  executionId,
+  executionState,
+  taskStatus,
+  interactions,
+  onSend
+}: Readonly<{
+  taskId: string
+  executionId: string | null
+  executionState: string | null
+  taskStatus: string
+  interactions: readonly ProjectCoordinatorTaskInteraction[]
+  onSend(input: Readonly<{
+    taskId: string
+    executionId: string | null
+    kind: ProjectCoordinatorTaskInteractionKind
+    text: string
+  }>): Promise<void> | void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const canGuide = executionId !== null && executionState !== null && [
+    'accepted',
+    'running'
+  ].includes(executionState) && taskStatus !== 'failed'
+  const submit = useCallback(async (kind: ProjectCoordinatorTaskInteractionKind, body: string) => {
+    const trimmed = body.trim()
+    if (!trimmed || sending || !canGuide) return
+    setSending(true)
+    try {
+      await onSend({ taskId, executionId, kind, text: trimmed })
+      setText('')
+    } finally {
+      setSending(false)
+    }
+  }, [canGuide, executionId, onSend, sending, taskId])
+  const sendGuidance = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    void submit('guidance', text)
+  }
+  return (
+    <div
+      className="project-coordinator-task-interaction"
+      data-task-interaction="true"
+      data-task-interaction-available={canGuide ? 'true' : 'false'}
+    >
+      <div className="project-coordinator-task-interaction-heading">
+        <span>{t('projectCoordinatorHumanInteraction')}</span>
+        <small>{canGuide
+          ? t('projectCoordinatorHumanInteractionHint')
+          : t('projectCoordinatorHumanInteractionUnavailable')}</small>
+      </div>
+      <form onSubmit={sendGuidance} className="project-coordinator-task-interaction-form">
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          disabled={!canGuide || sending}
+          rows={2}
+          maxLength={8_000}
+          placeholder={t('projectCoordinatorHumanInteractionPlaceholder')}
+          aria-label={t('projectCoordinatorHumanInteraction')}
+        />
+        <button
+          type="submit"
+          disabled={!canGuide || sending || !text.trim()}
+          className="project-coordinator-task-interaction-submit"
+        >
+          {sending ? t('projectCoordinatorHumanInteractionSending') : t('projectCoordinatorSendGuidance')}
+        </button>
+      </form>
+      <div className="project-coordinator-task-interaction-actions">
+        <button
+          type="button"
+          disabled={!canGuide || sending}
+          onClick={() => void submit('pause', t('projectCoordinatorPauseInstruction'))}
+        >
+          {t('projectCoordinatorPauseLocally')}
+        </button>
+        <button
+          type="button"
+          disabled={!canGuide || sending}
+          onClick={() => void submit('resume', t('projectCoordinatorResumeInstruction'))}
+        >
+          {t('projectCoordinatorResumeLocally')}
+        </button>
+        <button
+          type="button"
+          disabled={!canGuide || sending}
+          onClick={() => void submit('cancel', t('projectCoordinatorCancelInstruction'))}
+        >
+          {t('projectCoordinatorCancelLocally')}
+        </button>
+      </div>
+      {interactions.length > 0 ? (
+        <ul className="project-coordinator-task-interaction-log" aria-label={t('projectCoordinatorInteractionLog')}>
+          {interactions.map((interaction) => (
+            <li key={interaction.interactionId} data-local-interaction-state={interaction.state}>
+              <span>{interaction.kind}</span>
+              <strong>{interaction.state.replaceAll('_', ' ')}</strong>
+              {interaction.error ? <small>{interaction.error}</small> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   )
 }
 

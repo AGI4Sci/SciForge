@@ -29,6 +29,12 @@ import {
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskInteractionSubmitInputSchema,
+  collaborationTaskInteractionSubmitResultSchema,
+  collaborationTaskInteractionReadInputSchema,
+  collaborationTaskInteractionReadResultSchema,
+  collaborationTaskCheckpointAppendInputSchema,
+  collaborationTaskCheckpointAppendResultSchema,
   collaborationTaskOfferDecisionInputSchema,
   collaborationTaskOfferDecisionResultSchema,
   collaborationWorkerAcceptanceUpdateInputSchema,
@@ -45,6 +51,9 @@ import {
   type CollaborationStatusSnapshot,
   type CollaborationSynchronizationRetryInput,
   type CollaborationTaskListInput,
+  type CollaborationTaskInteractionSubmitInput,
+  type CollaborationTaskInteractionReadInput,
+  type CollaborationTaskCheckpointAppendInput,
   type CollaborationTaskOfferDecisionInput,
   type CollaborationWorkerAcceptanceUpdateInput
 } from '../contract.js'
@@ -59,6 +68,9 @@ type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResult
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
+type TaskInteractionSubmitResult = z.infer<typeof collaborationTaskInteractionSubmitResultSchema>
+type TaskInteractionReadResult = z.infer<typeof collaborationTaskInteractionReadResultSchema>
+type TaskCheckpointAppendResult = z.infer<typeof collaborationTaskCheckpointAppendResultSchema>
 type TaskOfferDecisionResult = z.infer<typeof collaborationTaskOfferDecisionResultSchema>
 type WorkerAcceptanceUpdateResult = z.infer<typeof collaborationWorkerAcceptanceUpdateResultSchema>
 type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
@@ -130,6 +142,24 @@ const contracts = Object.freeze({
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
   }),
+  taskInteractionSubmit: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit,
+    effect: 'workspace-write' as const,
+    inputSchema: collaborationTaskInteractionSubmitInputSchema,
+    outputSchema: collaborationTaskInteractionSubmitResultSchema
+  }),
+  taskInteractionRead: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskInteractionRead,
+    effect: 'read' as const,
+    inputSchema: collaborationTaskInteractionReadInputSchema,
+    outputSchema: collaborationTaskInteractionReadResultSchema
+  }),
+  taskCheckpointAppend: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend,
+    effect: 'workspace-write' as const,
+    inputSchema: collaborationTaskCheckpointAppendInputSchema,
+    outputSchema: collaborationTaskCheckpointAppendResultSchema
+  }),
   workerAcceptanceUpdate: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
     effect: 'external-write' as const,
@@ -176,6 +206,9 @@ export type CollaborationRendererClient = Readonly<{
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
   discoverPrivateChannels(input: CollaborationPrivateChannelDiscoverInput): Promise<PrivateChannelDiscoverResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
+  submitTaskInteraction(input: CollaborationTaskInteractionSubmitInput): Promise<TaskInteractionSubmitResult>
+  readTaskInteraction(input: CollaborationTaskInteractionReadInput): Promise<TaskInteractionReadResult>
+  appendTaskCheckpoint(input: CollaborationTaskCheckpointAppendInput): Promise<TaskCheckpointAppendResult>
   updateWorkerAcceptancePolicy(
     input: CollaborationWorkerAcceptanceUpdateInput
   ): Promise<WorkerAcceptanceUpdateResult>
@@ -217,6 +250,17 @@ export function createCollaborationRendererClient(
     ),
     discoverPrivateChannels: (input) => invoker.invoke(contracts.privateChannelDiscover, input),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
+    submitTaskInteraction: (input) => invoker.invoke(
+      contracts.taskInteractionSubmit,
+      input,
+      CONFIRMED
+    ),
+    readTaskInteraction: (input) => invoker.invoke(contracts.taskInteractionRead, input),
+    appendTaskCheckpoint: (input) => invoker.invoke(
+      contracts.taskCheckpointAppend,
+      input,
+      CONFIRMED
+    ),
     updateWorkerAcceptancePolicy: (input) => invoker.invoke(
       contracts.workerAcceptanceUpdate,
       input,

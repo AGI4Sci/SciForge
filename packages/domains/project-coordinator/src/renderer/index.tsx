@@ -2,6 +2,10 @@ import React, { lazy, type ReactElement } from 'react'
 import { Workflow } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
+  createCollaborationRendererClient
+} from '@sciforge/domain-collaboration/renderer'
+import type { CollaborationTaskInteraction } from '@sciforge/domain-collaboration/task-interaction'
+import {
   defineTrustedRendererDomainPackageEntry,
   type DomainRendererCommandHandler,
   type DomainRendererComposerContextProvider,
@@ -43,6 +47,23 @@ const ProjectCoordinatorPanel = lazy(() =>
   import('./ProjectCoordinatorPanel.browser.js')
 )
 
+function projectCoordinatorTaskInteractionProjection(
+  interaction: CollaborationTaskInteraction
+) {
+  return {
+    interactionId: interaction.interactionId,
+    projectId: interaction.projectId,
+    taskId: interaction.taskId,
+    executionId: interaction.executionId,
+    kind: interaction.kind,
+    text: interaction.text,
+    state: interaction.state,
+    createdAt: interaction.createdAt,
+    updatedAt: interaction.updatedAt,
+    error: interaction.error
+  } as const
+}
+
 export type ProjectCoordinatorRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
 export type ProjectCoordinatorToolbarActionContribution =
@@ -61,6 +82,7 @@ export function createProjectCoordinatorRightPanelContribution(
   host: DomainRendererHost
 ): ProjectCoordinatorRightPanelContribution {
   const client = createProjectCoordinatorRendererClient(host.capabilityInvoker)
+  const collaborationClient = createCollaborationRendererClient(host.capabilityInvoker)
   return Object.freeze({
     render: ({ activation, active, className, focused, onCollapse, session, surfaceId }) => {
       const parsedActivation = activation
@@ -73,6 +95,26 @@ export function createProjectCoordinatorRightPanelContribution(
           className={className}
           onCollapse={onCollapse}
           session={session}
+          onQueueTaskInteraction={async (input) => {
+            const result = await collaborationClient.submitTaskInteraction({
+              projectId: input.projectId,
+              taskId: input.taskId,
+              kind: input.kind,
+              text: input.text,
+              ...(input.executionId ? { executionId: input.executionId } : {})
+            })
+            return projectCoordinatorTaskInteractionProjection(result.interaction)
+          }}
+          onReadTaskInteractions={async (input) => {
+            const result = await collaborationClient.readTaskInteraction({
+              projectId: input.projectId,
+              taskId: input.taskId,
+              ...(input.executionId ? { executionId: input.executionId } : {})
+            })
+            return result.view.interactions.map((interaction) => (
+              projectCoordinatorTaskInteractionProjection(interaction)
+            ))
+          }}
           visibleContext={host.visibleContext}
           active={active}
           focused={focused}

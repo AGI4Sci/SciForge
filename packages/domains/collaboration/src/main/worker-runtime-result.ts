@@ -148,3 +148,40 @@ export function workerHumanAnswerPrompt(answer: string): string {
     'Return exactly one strict JSON object using the previously specified completed or needs_human shape.'
   ].join('\n')
 }
+
+/**
+ * Follow-up prompt for an explicit human intervention while a Worker Task is
+ * still running.  It deliberately keeps the exact Session and result
+ * protocol, so guidance cannot accidentally become an unrelated chat turn or
+ * mutate a fenced Cloud execution.
+ */
+export function workerGuidancePrompt(guidance: string): string {
+  const bounded = guidance.trim().slice(0, 32_000)
+  if (!bounded) throw new Error('Worker guidance is empty.')
+  return [
+    'The authenticated human provided the following guidance for the current Project Task:',
+    '',
+    bounded,
+    '',
+    'Continue the same Project Task in this exact Agent Session and apply the guidance.',
+    'Return exactly one strict JSON object using the previously specified completed or needs_human shape.'
+  ].join('\n')
+}
+
+/**
+ * Follow-up prompt used when a Worker turn completes but its final message
+ * cannot be parsed as the protocol result.  The task execution remains open
+ * while this bounded repair turn runs, so a transient formatting mistake does
+ * not fence the Cloud execution before the Worker has one chance to correct
+ * its response in the same Session.
+ */
+export function workerResultRepairPrompt(): string {
+  return [
+    'Your previous Worker response did not match the required result protocol.',
+    'Continue the same Project Task; do not repeat the full explanation.',
+    'Return exactly one JSON object and no Markdown fence:',
+    '{"schemaVersion":1,"outcome":"completed","summary":"bounded result summary"}',
+    'or, if authenticated Worker User input is required:',
+    '{"schemaVersion":1,"outcome":"needs_human","question":"one bounded question","requiredAssurance":"verified"}'
+  ].join('\n')
+}

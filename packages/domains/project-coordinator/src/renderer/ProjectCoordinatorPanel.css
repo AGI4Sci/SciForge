@@ -1775,6 +1775,136 @@
   padding: 0;
 }
 
+.project-coordinator-task-interaction {
+  display: grid;
+  gap: 5px;
+  margin: 0 8px 8px 11px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--pc-relay) 22%, var(--pc-border-muted));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--pc-relay-soft) 45%, var(--pc-surface));
+}
+
+.project-coordinator-task-interaction[data-task-interaction-available="false"] {
+  border-color: var(--pc-border-muted);
+  background: var(--pc-bg);
+}
+
+.project-coordinator-task-interaction-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--pc-ink);
+  font-size: 8px;
+  font-weight: 680;
+}
+
+.project-coordinator-task-interaction-heading small {
+  overflow: hidden;
+  color: var(--pc-muted);
+  font-size: 7px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-coordinator-task-interaction-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 5px;
+}
+
+.project-coordinator-task-interaction-form textarea {
+  min-width: 0;
+  resize: vertical;
+  border: 1px solid var(--pc-border);
+  border-radius: 5px;
+  padding: 5px;
+  background: var(--pc-raised);
+  color: var(--pc-ink);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.project-coordinator-task-interaction-submit,
+.project-coordinator-task-interaction-actions button {
+  border: 1px solid color-mix(in srgb, var(--pc-relay) 28%, var(--pc-border));
+  border-radius: 5px;
+  padding: 4px 6px;
+  background: var(--pc-raised);
+  color: var(--pc-relay);
+  cursor: pointer;
+  font-size: 7px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.project-coordinator-task-interaction-submit {
+  min-height: 28px;
+  background: var(--pc-relay);
+  color: white;
+}
+
+.project-coordinator-task-interaction-submit:disabled,
+.project-coordinator-task-interaction-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.project-coordinator-task-interaction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.project-coordinator-task-interaction-actions button {
+  color: var(--pc-muted);
+}
+
+.project-coordinator-task-interaction-log {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.project-coordinator-task-interaction-log li {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--pc-muted);
+  font-size: 7px;
+}
+
+.project-coordinator-task-interaction-log li span {
+  color: var(--pc-faint);
+  text-transform: capitalize;
+}
+
+.project-coordinator-task-interaction-log li strong {
+  color: var(--pc-relay);
+  font-size: 7px;
+  font-weight: 680;
+  text-transform: lowercase;
+}
+
+.project-coordinator-task-interaction-log li[data-local-interaction-state="failed"] strong,
+.project-coordinator-task-interaction-log li[data-local-interaction-state="rejected"] strong {
+  color: var(--pc-recovery);
+}
+
+.project-coordinator-task-interaction-log li small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .project-coordinator-status {
   display: inline-flex;
   flex: none;
