@@ -436,6 +436,80 @@ test('explicit protocol profiles control negotiation and isolate cache entries',
   ]);
 });
 
+test('native Responses output schemas are transmitted on every supported upstream wire', async () => {
+  const outputSchema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+    additionalProperties: false,
+  };
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+
+  await negotiator.request({
+    request: { ...request, outputSchema },
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'responses',
+      allowedProtocols: ['responses'],
+    },
+    fetchImpl: captureFetch(calls, [responsesResult('responses')]),
+    preferredProtocol: 'responses',
+  });
+  await negotiator.request({
+    request: { ...request, outputSchema },
+    baseUrl: 'https://chat.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'chat-completions',
+      allowedProtocols: ['chat-completions'],
+    },
+    fetchImpl: captureFetch(calls, [chatResult('chat')]),
+    preferredProtocol: 'chat-completions',
+  });
+  await negotiator.request({
+    request: { ...request, outputSchema },
+    baseUrl: 'https://anthropic.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'anthropic-messages',
+      allowedProtocols: ['anthropic-messages'],
+    },
+    fetchImpl: captureFetch(calls, [anthropicResult('anthropic')]),
+    preferredProtocol: 'anthropic-messages',
+  });
+
+  assert.deepEqual(calls[0]?.body.text, {
+    format: {
+      type: 'json_schema',
+      name: 'sciforge_output',
+      strict: true,
+      schema: outputSchema,
+    },
+  });
+  assert.equal(calls[0]?.body.outputSchema, undefined);
+  assert.deepEqual(calls[1]?.body.response_format, {
+    type: 'json_schema',
+    json_schema: {
+      name: 'sciforge_output',
+      strict: true,
+      schema: outputSchema,
+    },
+  });
+  assert.equal(calls[1]?.body.outputSchema, undefined);
+  assert.deepEqual(calls[2]?.body.output_config, {
+    format: {
+      type: 'json_schema',
+      schema: outputSchema,
+    },
+  });
+  assert.equal(calls[2]?.body.outputSchema, undefined);
+});
+
 test('structured 2xx Responses errors fall back only before any output or ambiguous data', async () => {
   const cleanError = sse([['response.failed', {
     type: 'response.failed',

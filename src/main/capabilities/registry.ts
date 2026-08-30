@@ -357,11 +357,16 @@ function discoveryTextScore(
     description: normalizeDiscoveryText(descriptor.description),
     tags: descriptor.tags.map(normalizeDiscoveryText)
   }
+  // Keep the original token for exact/diagnostic matching, while also
+  // indexing conservative English inflections. Models commonly ask for
+  // "update" while a descriptor says "updates" (or "task" vs "tasks").
+  // Discovery is metadata-only, so this broadens recall without changing
+  // authorization or the explicit scope/resource/provider filters.
   const fieldTokens = {
-    id: new Set(normalizedTokens(descriptor.id)),
-    title: new Set(normalizedTokens(descriptor.title)),
-    description: new Set(normalizedTokens(descriptor.description)),
-    tags: new Set(descriptor.tags.flatMap(normalizedTokens))
+    id: new Set(descriptorDiscoveryTokens(descriptor.id)),
+    title: new Set(descriptorDiscoveryTokens(descriptor.title)),
+    description: new Set(descriptorDiscoveryTokens(descriptor.description)),
+    tags: new Set(descriptor.tags.flatMap(descriptorDiscoveryTokens))
   }
   const allTokens = new Set([
     ...fieldTokens.id,
@@ -369,7 +374,9 @@ function discoveryTextScore(
     ...fieldTokens.description,
     ...fieldTokens.tags
   ])
-  const matchedTokens = queryTokens.filter((token) => allTokens.has(token))
+  const matchedTokens = queryTokens.filter((token) => (
+    discoveryTokenVariants(token).some((variant) => allTokens.has(variant))
+  ))
   const minimumMatches = queryTokens.length <= 2
     ? queryTokens.length
     : Math.ceil(queryTokens.length / 2)
@@ -383,10 +390,11 @@ function discoveryTextScore(
   if (fields.tags.includes(normalizedText)) score += 600
   if (fields.description.includes(normalizedText)) score += 200
   for (const token of matchedTokens) {
-    if (fieldTokens.id.has(token)) score += 100
-    if (fieldTokens.title.has(token)) score += 80
-    if (fieldTokens.tags.has(token)) score += 60
-    if (fieldTokens.description.has(token)) score += 20
+    const variants = discoveryTokenVariants(token)
+    if (variants.some((variant) => fieldTokens.id.has(variant))) score += 100
+    if (variants.some((variant) => fieldTokens.title.has(variant))) score += 80
+    if (variants.some((variant) => fieldTokens.tags.has(variant))) score += 60
+    if (variants.some((variant) => fieldTokens.description.has(variant))) score += 20
   }
   score += Math.round((matchedTokens.length / queryTokens.length) * 100)
   score -= (queryTokens.length - matchedTokens.length) * 10
@@ -395,6 +403,24 @@ function discoveryTextScore(
 
 function normalizedTokens(value: string): string[] {
   return [...new Set(normalizeDiscoveryText(value).match(/[\p{L}\p{N}]+/gu) ?? [])]
+}
+
+function descriptorDiscoveryTokens(value: string): string[] {
+  return [...new Set(normalizedTokens(value).flatMap(discoveryTokenVariants))]
+}
+
+function discoveryTokenVariants(token: string): string[] {
+  const variants = [token]
+  // These intentionally conservative variants cover common English plural
+  // and verb forms without applying a general-purpose stemmer to Chinese or
+  // to short/ambiguous words.
+  if (token.length > 4 && token.endsWith('ies')) variants.push(`${token.slice(0, -3)}y`)
+  if (token.length > 4 && token.endsWith('s') && !/(?:ss|is|us)$/u.test(token)) {
+    variants.push(token.slice(0, -1))
+  }
+  if (token.length > 5 && token.endsWith('ing')) variants.push(token.slice(0, -3))
+  if (token.length > 4 && token.endsWith('ed')) variants.push(token.slice(0, -2))
+  return [...new Set(variants)]
 }
 
 function normalizeDiscoveryText(value: string): string {

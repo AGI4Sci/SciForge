@@ -162,25 +162,29 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
         version: '2.0.0',
         title: 'Read Project coordination workspace',
-        description: 'Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, reviews, and content provisioning state.',
+        description: 'Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, and coordination-center（协同中心）state including reviews and content provisioning. Pass projectId when targeting one Project; omit it only to read the current scoped workspace.',
         audiences: agentAudiences,
         scope: 'global',
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
-        tags: ['project', 'coordinator', 'plan', 'worker-selection', 'review', 'provisioning'],
+        tags: ['project', 'coordinator', 'coordination', 'coordination-center', 'overview', 'cloud', 'runtime', 'agent', 'plan', 'task', 'tasks', 'my-tasks', 'worker-selection', 'review', 'reviews', 'decisions', 'files', 'shared-files', 'provisioning', 'recovery'],
         inputSchema: projectCoordinatorWorkspaceReadInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => {
           let input = projectCoordinatorWorkspaceReadInputSchema.parse(raw) as
             ProjectCoordinatorWorkspaceReadInput
           if (context.caller.audience === 'agent') {
+            context.assertPrincipalCurrent()
             input = await options.sessions.scopeWorkspaceRead(
               input,
               requireOrdinaryAgentSession(context)
             )
+            context.assertPrincipalCurrent()
           }
-          return { output: await options.ports.workspace.readWorkspace(input) }
+          const output = await options.ports.workspace.readWorkspace(input)
+          if (context.caller.audience === 'agent') context.assertPrincipalCurrent()
+          return { output }
         }
       }),
       options.defineCapability({
@@ -235,7 +239,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
         version: '2.0.0',
         title: 'Read local Project Session projection',
-        description: 'Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals.',
+        description: 'Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals. This operation takes an empty input object; it is scoped to the calling Session and never accepts projectId.',
         audiences: agentAudiences,
         scope: 'global',
         effect: 'read',
@@ -315,13 +319,13 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
         version: '2.0.0',
         title: 'Edit local Project Plan draft',
-        description: 'CAS-updates Plan items and exact visible Worker Agent choices.',
+        description: 'Updates (CAS) Plan items and exact visible Worker Agent choices. Use expectedDraftRevision (not draftRevision) from the latest draft read; optional expectedProjectRevision and expectedCoordinatorAuthorityEpoch are additional guards.',
         audiences: agentAudiences,
         scope: 'global',
         effect: 'workspace-write',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
-        tags: ['project', 'plan', 'worker-selection'],
+        tags: ['project', 'plan', 'update', 'task', 'tasks', 'worker-selection'],
         inputSchema: projectCoordinatorPlanDraftEditInputSchema,
         outputSchema: projectCoordinatorPlanDraftSchema,
         handler: async (raw, context) => {

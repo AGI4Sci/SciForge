@@ -468,6 +468,45 @@ describe('Project Coordinator Host capability integration', () => {
     expect(visibleTitles).toContain('Review Task result')
     expect(visibleTitles).toContain('Complete Project with final summary')
     expect(visibleTitles).not.toContain('Bind Project Session')
+
+    const exact = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
+        includeSchema: true,
+        limit: 1
+      },
+      context: {
+        requestId: 'request-project-plan-edit-schema',
+        runtimeId: 'runtime-project-discovery',
+        threadId: 'thread-project-discovery'
+      }
+    })
+    if (exact.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected exact Plan edit discovery.')
+    const inputShape = exact.value[0]?.inputShape as {
+      properties?: Record<string, { required?: boolean }>
+    } | undefined
+    expect(inputShape).toMatchObject({ type: 'object' })
+    expect(inputShape?.properties).toEqual(expect.objectContaining({
+      projectId: expect.objectContaining({ required: true }),
+      draftId: expect.objectContaining({ required: true }),
+      expectedDraftRevision: expect.objectContaining({ required: true }),
+      tasks: expect.objectContaining({ required: true }),
+      rationale: expect.objectContaining({ required: true }),
+      assignments: expect.objectContaining({ required: true })
+    }))
+
+    const localized = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { text: '协同中心', limit: 5 },
+      context: {
+        requestId: 'request-project-coordination-center',
+        runtimeId: 'runtime-project-discovery',
+        threadId: 'thread-project-discovery'
+      }
+    })
+    if (localized.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected localized coordination discovery.')
+    expect(localized.value.map(({ title }) => title)).toContain('Read Project coordination workspace')
   })
 
   it('creates a fresh Coordinator Session through the ordinary Agent Runtime capability route', async () => {

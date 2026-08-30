@@ -431,7 +431,7 @@ test('project.create delegates fresh Session creation to the canonical orchestra
   )
 })
 
-test('Agent reads require exact ordinary Session scope and cannot enumerate sibling Sessions', async () => {
+test('Agent reads target an explicit Project independently of ordinary Session bindings', async () => {
   const seenProjectionSessions: unknown[] = []
   let workspaceReads = 0
   const sessions: ProjectCoordinatorSessionProjectionPort = {
@@ -445,9 +445,7 @@ test('Agent reads require exact ordinary Session scope and cannot enumerate sibl
         pendingActivations: []
       }
     },
-    scopeWorkspaceRead: async () => {
-      throw new Error('The ordinary Session is not bound to a Cloud Project.')
-    }
+    scopeWorkspaceRead: async (input) => input
   }
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
@@ -497,11 +495,12 @@ test('Agent reads require exact ordinary Session scope and cannot enumerate sibl
   const workspaceRead = definitions.find(({ id }) => (
     id === PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead
   ))!
-  await assert.rejects(
-    workspaceRead.handler({}, firstSession),
-    /not bound to a Cloud Project/u
-  )
-  assert.equal(workspaceReads, 0)
+  const workspaceResult = await workspaceRead.handler({
+    projectId: 'prj_ProjectCreated01'
+  }, firstSession)
+  assert.equal((workspaceResult.output as { focusedProjectId?: string }).focusedProjectId,
+    'prj_ProjectCreated01')
+  assert.equal(workspaceReads, 1)
 })
 
 test('membership-inactive Agent scope rejects external writes before the canonical port', async () => {

@@ -295,11 +295,38 @@ describe('CapabilityAgentToolSurface', () => {
       context
     })).rejects.toMatchObject({
       code: 'capability_discovery_empty',
+      failureClass: 'capability_not_found',
+      retryable: true,
+      recovery: {
+        action: 'use_suggested_query',
+        instruction: expect.stringContaining('suggestedQueries')
+      },
       details: {
         outcome: 'empty',
         registryReadiness: { status: 'ready' },
         appliedFilters: { limit: 8 },
         suggestedQueries: expect.any(Array)
+      }
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: `op_${'x'.repeat(24)}`,
+        includeSchema: true,
+        limit: 1
+      },
+      context
+    })).rejects.toMatchObject({
+      code: 'invalid_arguments',
+      failureClass: 'invalid_arguments',
+      retryable: false,
+      recovery: {
+        action: 'use_operation_ref',
+        instruction: expect.stringContaining('operationRef')
+      },
+      details: {
+        receivedReference: `op_${'x'.repeat(24)}`
       }
     })
     registry.register(readCapability('test.hot-discovered'))
@@ -361,6 +388,40 @@ describe('CapabilityAgentToolSurface', () => {
         }
       }
     })
+  })
+
+  it('matches conservative English inflections without relaxing explicit scope filters', () => {
+    const planEdit = defineCapability({
+      id: 'project-coordinator.plan-draft.edit',
+      version: '1',
+      title: 'Update local Project Plan draft',
+      description: 'Updates (CAS) Plan items and exact Worker choices.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['project', 'plan', 'tasks'],
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([planEdit])
+
+    expect(registry.discover(caller, {
+      text: 'update plan',
+      scope: 'global'
+    }).map(({ id }) => id)).toEqual(['project-coordinator.plan-draft.edit'])
+    expect(registry.discover(caller, {
+      text: 'tasks',
+      scope: 'global'
+    }).map(({ id }) => id)).toEqual(['project-coordinator.plan-draft.edit'])
+    // Scope remains an intentional security/query boundary: metadata recall
+    // must not turn a global operation into a workspace-scoped match.
+    expect(registry.discover(caller, {
+      text: 'update plan',
+      scope: 'workspace'
+    })).toEqual([])
   })
 
   it('projects current event resource liveness without treating retired refs as reusable', async () => {

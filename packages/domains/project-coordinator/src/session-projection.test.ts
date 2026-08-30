@@ -88,7 +88,7 @@ test('state commit permits only one Coordinator Session per Project authority an
   })
 })
 
-test('unbound workspace reads fail closed and Coordinator authority epoch fences every write', async () => {
+test('explicit Project reads are Principal-scoped and Coordinator authority epoch fences every write', async () => {
   const settings = memorySettings()
   const state = new ProjectCoordinatorStateStore(settings)
   let workspace = workspaceFixture({ principalUserId: ownerUserId })
@@ -100,12 +100,18 @@ test('unbound workspace reads fail closed and Coordinator authority epoch fences
   })
   const session = { runtimeId: 'runtime-owner', threadId: 'thread-owner' }
 
-  await assert.rejects(
-    port.scopeWorkspaceRead({}, session),
-    /not bound to a Cloud Project/u
+  // Session bindings are not the source of the selected Project.  An
+  // otherwise unbound Session may enumerate the current Principal's visible
+  // workspace, and may target an exact Project explicitly.
+  assert.deepEqual(await port.scopeWorkspaceRead({}, session), {})
+  assert.deepEqual(await port.scopeWorkspaceRead({ projectId }, session), { projectId })
+  assert.equal(
+    (await port.authorize(projectId, session, 'coordinator')).access,
+    'coordinator'
   )
   await commitCoordinatorSession(state, session.runtimeId, session.threadId)
-  assert.deepEqual(await port.scopeWorkspaceRead({}, session), { projectId })
+  assert.deepEqual(await port.scopeWorkspaceRead({}, session), {})
+  assert.deepEqual(await port.scopeWorkspaceRead({ projectId }, session), { projectId })
   assert.equal((await port.authorize(projectId, session, 'coordinator')).access, 'coordinator')
   const restarted = createProjectCoordinatorSessionProjectionPort({
     state: new ProjectCoordinatorStateStore(settings),
@@ -146,6 +152,20 @@ test('Worker projection requires the exact current execution fence', async () =>
   assert.equal(current.bindings[0]?.role, 'worker')
   assert.equal(current.bindings[0]?.access, 'worker')
   assert.equal((await port.authorize(projectId, session, 'member')).access, 'worker')
+
+  const unboundSession = { runtimeId: 'runtime-unbound-worker', threadId: 'thread-unbound-worker' }
+  assert.deepEqual(
+    await port.scopeWorkspaceRead({ projectId }, unboundSession),
+    { projectId }
+  )
+  assert.equal(
+    (await port.authorize(projectId, unboundSession, 'member')).access,
+    'member'
+  )
+  await assert.rejects(
+    port.authorize(projectId, unboundSession, 'coordinator'),
+    /does not hold current Coordinator authority/u
+  )
 
   workspace = workspaceFixture({
     principalUserId: workerUserId,

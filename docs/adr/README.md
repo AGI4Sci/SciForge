@@ -31,10 +31,12 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0037 | accepted | Content Space authorizes PoC operations from the current Principal, Broker authority and live Provider binding; static verification profiles are removed, and optional Agent skills never gate Provider use. |
 | 0038 | accepted | Identity automatically ensures one Device-named Agent for the exact ACTIVE Desktop Device; renderer registration and primary-Agent selection do not exist. |
 | 0039 | accepted | Coordinators select a Worker User; Cloud broadcasts one User-level Offer, and the first eligible Device Agent atomically claims it to create the exact Task Execution. |
+| 0040 | accepted | Non-Owner Project Members begin as invited Memberships and must accept the exact confirmed Plan before launch or Provider provisioning. |
+| 0041 | accepted | The Project Coordinator right panel is an independent Project Workbench target; its `projectId` is routing context only, while every canonical operation re-authorizes the current Principal and Project authority. |
 
 ## Current authority order
 
-The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0039, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
+The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0041, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
 
 When documents disagree, use this order:
 
