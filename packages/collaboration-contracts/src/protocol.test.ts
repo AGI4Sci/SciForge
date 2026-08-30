@@ -308,6 +308,7 @@ describe('canonical pairing and bidirectional Session commands', () => {
       type: 'managed_container.inspect',
       idempotencyKey: 'idem_managed_inspect_01',
       managedContainerId: 'mco_123456789012',
+      agentId: 'agt_123456789012',
       expectedRevision: 2
     }).type).toBe('managed_container.inspect')
     expect(providerManagedContainerResultSchema.parse({
@@ -490,6 +491,32 @@ describe('provider-neutral contract', () => {
       realmId: 'realm-1',
       providerUserId: ''
     }).success).toBe(false)
+  })
+
+  it('keeps remote approval message actions provider-neutral and exact-message scoped', () => {
+    const event = {
+      protocolVersion: '1.0',
+      provider: 'example-im',
+      type: 'provider.message.action',
+      eventId: 'provider-event-action-1',
+      eventCursor: 'cursor-action-1',
+      occurredAt: TEST_TIMESTAMP,
+      identity: providerIdentityFixture,
+      providerMessageId: 'provider-card-31415',
+      operation: 'add',
+      action: 'allow_once'
+    }
+    expect(providerEventSchema.parse(event)).toEqual(event)
+    expect(providerEventSchema.safeParse({ ...event, emojiCode: '1f44d' }).success).toBe(false)
+    expect(providerEventSchema.safeParse({ ...event, providerMessageId: '' }).success).toBe(false)
+    expect(providerSendRequestSchema.parse({
+      protocolVersion: '1.0',
+      type: 'provider.ensure.message_action',
+      locator: chineseProviderLocatorFixture,
+      providerMessageId: 'provider-card-31415',
+      clientMessageId: 'client-action-allow',
+      action: 'allow_once'
+    })).toEqual(expect.objectContaining({ action: 'allow_once' }))
   })
 
   it('round-trips the strict versioned SF1 bind code', () => {

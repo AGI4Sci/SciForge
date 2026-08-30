@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-coordinator",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -22,7 +22,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/collaboration-contracts": "5.0.0",
+    "@sciforge/collaboration-contracts": "5.1.0",
     "@sciforge/domain-collaboration": "^6.0.0",
     "@sciforge/domain-content-space": "^5.0.0",
     "@sciforge/domain-identity-access": "^4.0.0",
