@@ -85,6 +85,22 @@ test('canonical create success invalidates readers without publishing optimistic
   assert.equal(invalidations, 1)
 })
 
+test('Task reassignment success invalidates mounted coordination-center readers', async () => {
+  let invalidations = 0
+  const dispose = subscribeProjectCoordinatorWorkspaceInvalidation(() => {
+    invalidations += 1
+  })
+  const client = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async () => ({}) as never
+  })
+
+  await client.reassignTaskOffer(undefined as never)
+  dispose()
+
+  assert.equal(invalidations, 1)
+})
+
 test('renderer maps bounded Plan generation failures without exposing Runtime details', async () => {
   const client = createProjectCoordinatorRendererClient({
     observe: async () => { throw new Error('not observed') },
