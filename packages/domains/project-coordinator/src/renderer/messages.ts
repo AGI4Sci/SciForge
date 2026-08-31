@@ -80,7 +80,10 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorProjectName: 'Project name',
     projectCoordinatorProjectNamePlaceholder: 'e.g. Protein design evidence review',
     projectCoordinatorProjectGoal: 'Project goal',
-    projectCoordinatorProjectGoalPlaceholder: 'Describe the outcome that the Coordinator should deliver.',
+    projectCoordinatorProjectGoalPlaceholder:
+      'State the discussion topic, final question, constraints, and expected decision.',
+    projectCoordinatorTextCollaborationHint:
+      'No-Content design MVP: each Worker analyzes one sub-question only and returns an attributed Conclusion, Evidence/basis, and Recommendation; the Coordinator consolidates the design package and no experiment is executed.',
     projectCoordinatorContentMode: 'Project content workflow',
     projectCoordinatorContentModeNone: 'No shared Team root',
     projectCoordinatorContentModeTeam: 'Provision a shared Team root',
@@ -271,6 +274,10 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorCompletedBy: 'Completed by',
     projectCoordinatorCompletedAt: 'Completed at',
     projectCoordinatorFinalSummary: 'Final Project summary',
+    projectCoordinatorFinalSummaryPlaceholder:
+      'Design brief: first Agent landing task; expert conclusions with [expert]/[source]; overall design; proposed validation/iteration (not run); metrics (target + measurement); hard constraints; risks/confirmation; next actions (owner + due date).',
+    projectCoordinatorFinalSummaryHint:
+      'Use Markdown headings to publish the design package. If the brief asks for a future validation/iteration flow, label it proposed and unexecuted. Keep proposed metrics separate from measured results, and preserve each Worker/result/source attribution.',
     projectCoordinatorCompleteProject: 'Complete Project',
     projectCoordinatorProvisioningNext: 'Next action',
     projectCoordinatorContentRecovery: 'Content access recovery',
@@ -381,7 +388,9 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorProjectName: 'Project 名称',
     projectCoordinatorProjectNamePlaceholder: '例如：蛋白设计证据复核',
     projectCoordinatorProjectGoal: 'Project 目标',
-    projectCoordinatorProjectGoalPlaceholder: '描述希望 Coordinator 最终交付的结果。',
+    projectCoordinatorProjectGoalPlaceholder: '写明讨论主题、最终要回答的问题、约束条件和预期决策。',
+    projectCoordinatorTextCollaborationHint:
+      '无 Content 设计 MVP：每位 Worker 只分析一个子问题，返回带归属的结论、依据/证据和建议；Coordinator 汇总完整设计包，本轮不执行实验。',
     projectCoordinatorContentMode: 'Project 内容流程',
     projectCoordinatorContentModeNone: '不使用共享 Team root',
     projectCoordinatorContentModeTeam: '供应共享 Team root',
@@ -571,6 +580,10 @@ export const projectCoordinatorMessages = Object.freeze({
     projectCoordinatorCompletedBy: '完成人',
     projectCoordinatorCompletedAt: '完成时间',
     projectCoordinatorFinalSummary: 'Project 最终总结',
+    projectCoordinatorFinalSummaryPlaceholder:
+      '设计纪要：首个 Agent 落地任务；专家结论及 [expert]/[source]；整体方案；拟议验证/迭代流程（未运行）；量化指标（目标值 + 测量方法）；硬约束；风险/人工确认；下一步行动（负责人 + 截止时间）。',
+    projectCoordinatorFinalSummaryHint:
+      '使用 Markdown 标题发布设计包；如场景要求未来验证/迭代流程，标注“拟议、未运行”；区分“拟定指标”和“已测结果”，并保留每位 Worker、结果和资料的归属。',
     projectCoordinatorCompleteProject: '完成 Project',
     projectCoordinatorProvisioningNext: '下一步',
     projectCoordinatorContentRecovery: '内容访问恢复',

@@ -93,6 +93,7 @@ test('local Coordinator Runtime creates an editable durable draft with structure
   assert.equal(generated.runtimeProvenance.generatedByCoordinatorAgentId, 'agt_Coordinator01')
   assert.equal(generated.assignments[0]?.workerUserId, null)
   assert.match(prompts[0] ?? '', /Created meeting.*runtimeProfiles.*eligibleTaskScopes.*text_tasks.*capabilityTags.*meeting\.review.*document\.write/su)
+  assert.match(prompts[0] ?? '', /Budget values as hard Cloud upper bounds.*do not fill the budget/iu)
   assert.match(
     prompts[0] ?? '',
     /logical Plan declaration selection.*Never include a schemaVersion or bindingRevision/su
@@ -100,6 +101,15 @@ test('local Coordinator Runtime creates an editable durable draft with structure
   assert.doesNotMatch(prompts[0] ?? '', /declare bindingRevision 1/u)
   assert.doesNotMatch(prompts[0] ?? '', /runtimeCapabilityTags/u)
   assert.match(prompts[0] ?? '', /Do not emit id, description, assignee, dependencies, status/u)
+  assert.match(prompts[0] ?? '', /role|sub.?topic/iu)
+  assert.match(prompts[0] ?? '', /exactly one Task per explicitly listed Worker role/iu)
+  assert.match(prompts[0] ?? '', /total.*3.?5.*never exceed 5|never exceed 5.*total/isu)
+  assert.match(prompts[0] ?? '', /Never create separate Tasks for deliverables, metrics, risks, actions, phases, or report sections/iu)
+  assert.match(prompts[0] ?? '', /If a design-analysis-only request has no explicitly listed roles, emit exactly one bounded Task/iu)
+  assert.match(prompts[0] ?? '', /Conclusion.*Evidence.*Recommendation/isu)
+  assert.match(prompts[0] ?? '', /design-analysis-only|does not execute.*experiment/isu)
+  assert.match(prompts[0] ?? '', /Coordinator final summary.*overall design.*quantitative success metrics.*Hard constraints.*Risks.*Human confirmation/isu)
+  assert.match(prompts[0] ?? '', /proposed design sequence.*unexecuted|simulation.*experiment.*feedback.*completed/isu)
   const generatedRequest = requests[0] as DomainMainAgentExecutionRequest & {
     outputSchema?: Readonly<Record<string, unknown>>
   }
