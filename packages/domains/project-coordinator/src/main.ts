@@ -269,7 +269,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Read local Project Session projection',
         description: 'Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals. This operation takes an empty input object; it is scoped to the calling Session and never accepts projectId.',
         audiences: agentAudiences,
@@ -841,7 +841,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   const sessions = createProjectCoordinatorSessionProjectionPort({
     state,
     workspace,
-    workers: workerSessionProjection
+    workers: workerSessionProjection,
+    localAgentId: () => coordinatorCloudCommands.localAgentId()
   })
   let agentExecution: DomainMainAgentExecutionHost | undefined
   const projectCreation = new ProjectCreationOrchestrator({

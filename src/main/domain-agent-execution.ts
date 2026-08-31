@@ -79,6 +79,7 @@ export function createDomainAgentExecutionHost(input: Readonly<{
     const thread = await input.runtime.startThread({
       runtimeId,
       ...(request.workspaceRoot ? { workspace: request.workspaceRoot } : {}),
+      ...(request.title ? { title: request.title } : {}),
       mode: request.mode,
       ...(request.model ? { model: request.model } : {}),
       relation: 'side',
@@ -112,6 +113,7 @@ export function createDomainAgentExecutionHost(input: Readonly<{
         : await prepareRuntimeSession({
             ...(request.runtimeId ? { runtimeId: request.runtimeId } : {}),
             ...(request.workspaceRoot ? { workspaceRoot: request.workspaceRoot } : {}),
+            ...(request.title ? { title: request.title } : {}),
             ...(request.model ? { model: request.model } : {}),
             ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
             ...(request.allowedTools ? { allowedTools: request.allowedTools } : {}),

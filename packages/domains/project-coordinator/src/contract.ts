@@ -181,19 +181,39 @@ export const projectCoordinatorPendingActivationSchema = z.object({
 }).strict().readonly()
 
 export const projectCoordinatorSessionProjectionSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   observedAt: timestampSchema,
   bindings: z.array(projectCoordinatorSessionBindingSchema).max(100_000),
+  suppressedSessions: z.array(projectCoordinatorOrdinarySessionSchema).max(100_000),
   pendingActivations: z.array(projectCoordinatorPendingActivationSchema).max(10_000).default([])
 }).strict().superRefine((projection, context) => {
   const identities = projection.bindings.map(({ runtimeId, threadId }) => (
     `${runtimeId}\u0000${threadId}`
   ))
-  if (new Set(identities).size !== identities.length) {
+  const identitySet = new Set(identities)
+  if (identitySet.size !== identities.length) {
     context.addIssue({
       code: 'custom',
       path: ['bindings'],
       message: 'Each ordinary Session has at most one Project binding.'
+    })
+  }
+  const suppressedIdentities = projection.suppressedSessions.map((session) => (
+    `${session.runtimeId}\u0000${session.threadId}`
+  ))
+  const suppressedIdentitySet = new Set(suppressedIdentities)
+  if (suppressedIdentitySet.size !== suppressedIdentities.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['suppressedSessions'],
+      message: 'Each suppressed ordinary Session identity appears at most once.'
+    })
+  }
+  if (suppressedIdentities.some((identity) => identitySet.has(identity))) {
+    context.addIssue({
+      code: 'custom',
+      path: ['suppressedSessions'],
+      message: 'A Session cannot be both visible and suppressed.'
     })
   }
 }).readonly()
@@ -230,7 +250,9 @@ export const projectCoordinatorConnectionSchema = z.discriminatedUnion('state', 
   z.object({
     state: z.literal('ready'),
     userId: userIdSchema,
-    deviceId: deviceIdSchema
+    deviceId: deviceIdSchema,
+    /** Exact active Agent owned by this local Collaboration runtime. */
+    localAgentId: agentIdSchema.optional()
   }).strict().readonly(),
   z.object({ state: z.literal('identity_required') }).strict().readonly(),
   z.object({

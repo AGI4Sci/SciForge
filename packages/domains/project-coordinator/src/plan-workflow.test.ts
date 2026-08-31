@@ -521,6 +521,7 @@ test('Plan confirmation keeps the Project paused until the canonical workflow ac
   const coordinatorCommands: unknown[] = []
   const userCommands: unknown[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     resume: async () => null,
     execute: async (command) => {
       coordinatorCommands.push(command)

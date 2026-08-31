@@ -60,7 +60,7 @@ export function deriveReadyPlanItems(
 
 export function createProjectCoordinatorContinuationPort(options: Readonly<{
   workspace: ProjectCoordinatorWorkspacePort
-  coordinatorCloudCommands: CoordinatorCloudCommandService
+  coordinatorCloudCommands: Omit<CoordinatorCloudCommandService, 'localAgentId'>
   requestId?: () => `req_${string}`
   now?: () => Date
 }>): ProjectCoordinatorContinuationPort {

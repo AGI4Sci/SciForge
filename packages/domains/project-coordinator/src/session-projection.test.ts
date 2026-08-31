@@ -58,6 +58,7 @@ test('state commit permits only one Coordinator Session per Project authority an
     state,
     workspace: workspacePort(() => workspaceFixture({ principalUserId: ownerUserId })),
     workers: workerProjection([]),
+    localAgentId: () => coordinatorAgentId,
     now: () => new Date(now)
   })
 
@@ -65,6 +66,10 @@ test('state commit permits only one Coordinator Session per Project authority an
   assert.deepEqual(uiProjection.bindings.map(({ runtimeId, threadId }) => (
     `${runtimeId}/${threadId}`
   )), ['runtime-a/thread-a'])
+  assert.deepEqual(uiProjection.suppressedSessions, [{
+    runtimeId: 'runtime-old',
+    threadId: 'thread-old'
+  }])
   assert.deepEqual(uiProjection.pendingActivations.map(({ coordinatorSession }) => (
     `${coordinatorSession.runtimeId}/${coordinatorSession.threadId}`
   )), ['runtime-a/thread-a'])
@@ -81,11 +86,35 @@ test('state commit permits only one Coordinator Session per Project authority an
     runtimeId: 'runtime-unbound',
     threadId: 'thread-unbound'
   }), {
-    schemaVersion: 1,
+    schemaVersion: 2,
     observedAt: now,
     bindings: [],
+    suppressedSessions: [],
     pendingActivations: []
   })
+})
+
+test('identity projection read errors propagate instead of becoming a known-unbound Session', async () => {
+  const workspace = workspaceFixture({ principalUserId: ownerUserId })
+  const port = createProjectCoordinatorSessionProjectionPort({
+    state: new ProjectCoordinatorStateStore(memorySettings()),
+    workspace: {
+      readWorkspace: async (input) => {
+        if (!input.projectId) throw new Error('Identity workspace unavailable.')
+        return workspace
+      }
+    },
+    workers: workerProjection([]),
+    localAgentId: () => coordinatorAgentId,
+    now: () => new Date(now)
+  })
+
+  await assert.rejects(port.readProjection(), /Identity workspace unavailable/u)
+  assert.equal((await port.authorize(
+    projectId,
+    { runtimeId: 'runtime-unbound', threadId: 'thread-unbound' },
+    'coordinator'
+  )).access, 'coordinator')
 })
 
 test('explicit Project reads are Principal-scoped and Coordinator authority epoch fences every write', async () => {
@@ -96,6 +125,7 @@ test('explicit Project reads are Principal-scoped and Coordinator authority epoc
     state,
     workspace: workspacePort(() => workspace),
     workers: workerProjection([]),
+    localAgentId: () => coordinatorAgentId,
     now: () => new Date(now)
   })
   const session = { runtimeId: 'runtime-owner', threadId: 'thread-owner' }
@@ -109,14 +139,46 @@ test('explicit Project reads are Principal-scoped and Coordinator authority epoc
     (await port.authorize(projectId, session, 'coordinator')).access,
     'coordinator'
   )
+  for (const localAgentId of [workerAgentId, undefined]) {
+    const withoutCoordinatorAgent = createProjectCoordinatorSessionProjectionPort({
+      state,
+      workspace: workspacePort(() => workspace),
+      workers: workerProjection([]),
+      localAgentId: () => localAgentId,
+      now: () => new Date(now)
+    })
+    assert.equal(
+      (await withoutCoordinatorAgent.authorize(projectId, session, 'member')).access,
+      'member'
+    )
+    await assert.rejects(
+      withoutCoordinatorAgent.authorize(projectId, session, 'coordinator'),
+      /does not hold current Coordinator authority/u
+    )
+  }
   await commitCoordinatorSession(state, session.runtimeId, session.threadId)
   assert.deepEqual(await port.scopeWorkspaceRead({}, session), {})
   assert.deepEqual(await port.scopeWorkspaceRead({ projectId }, session), { projectId })
   assert.equal((await port.authorize(projectId, session, 'coordinator')).access, 'coordinator')
+  const reboundToAnotherLocalAgent = createProjectCoordinatorSessionProjectionPort({
+    state,
+    workspace: workspacePort(() => workspace),
+    workers: workerProjection([]),
+    localAgentId: () => workerAgentId,
+    now: () => new Date(now)
+  })
+  const reboundProjection = await reboundToAnotherLocalAgent.readProjection(session)
+  assert.equal(reboundProjection.bindings[0]?.access, 'read_only')
+  assert.equal(reboundProjection.bindings[0]?.fenceReason, 'authority_changed')
+  await assert.rejects(
+    reboundToAnotherLocalAgent.authorize(projectId, session, 'coordinator'),
+    /does not hold current Coordinator authority/u
+  )
   const restarted = createProjectCoordinatorSessionProjectionPort({
     state: new ProjectCoordinatorStateStore(settings),
     workspace: workspacePort(() => workspace),
     workers: workerProjection([]),
+    localAgentId: () => coordinatorAgentId,
     now: () => new Date(now)
   })
   assert.equal((await restarted.readProjection(session)).bindings[0]?.access, 'coordinator')
@@ -144,6 +206,7 @@ test('Worker projection requires the exact current execution fence', async () =>
     state: new ProjectCoordinatorStateStore(memorySettings()),
     workspace: workspacePort(() => workspace),
     workers: workerProjection([binding]),
+    localAgentId: () => workerAgentId,
     now: () => new Date(now)
   })
   const session = { runtimeId: binding.runtimeId, threadId: binding.threadId }
@@ -152,6 +215,21 @@ test('Worker projection requires the exact current execution fence', async () =>
   assert.equal(current.bindings[0]?.role, 'worker')
   assert.equal(current.bindings[0]?.access, 'worker')
   assert.equal((await port.authorize(projectId, session, 'member')).access, 'worker')
+
+  const reboundToAnotherLocalAgent = createProjectCoordinatorSessionProjectionPort({
+    state: new ProjectCoordinatorStateStore(memorySettings()),
+    workspace: workspacePort(() => workspace),
+    workers: workerProjection([binding]),
+    localAgentId: () => coordinatorAgentId,
+    now: () => new Date(now)
+  })
+  const reboundProjection = await reboundToAnotherLocalAgent.readProjection(session)
+  assert.equal(reboundProjection.bindings[0]?.access, 'read_only')
+  assert.equal(reboundProjection.bindings[0]?.fenceReason, 'authority_changed')
+  await assert.rejects(
+    reboundToAnotherLocalAgent.authorize(projectId, session, 'member'),
+    /ordinary Session is fenced: authority_changed/u
+  )
 
   const unboundSession = { runtimeId: 'runtime-unbound-worker', threadId: 'thread-unbound-worker' }
   assert.deepEqual(
@@ -198,10 +276,15 @@ test('membership removal clears Coordinator and Worker public scope and rejects 
       ownerMembershipState: 'membership_removal_pending'
     })),
     workers: workerProjection([]),
+    localAgentId: () => coordinatorAgentId,
     now: () => new Date(now)
   })
 
   assert.deepEqual((await coordinator.readProjection(coordinatorSession)).bindings, [])
+  assert.deepEqual(
+    (await coordinator.readProjection(coordinatorSession)).suppressedSessions,
+    [coordinatorSession]
+  )
   await assert.rejects(
     coordinator.authorize(projectId, coordinatorSession, 'coordinator'),
     /does not hold current Coordinator authority/u
@@ -220,10 +303,15 @@ test('membership removal clears Coordinator and Worker public scope and rejects 
       workerMembershipState: 'removed'
     })),
     workers: workerProjection([workerSessionBinding]),
+    localAgentId: () => workerAgentId,
     now: () => new Date(now)
   })
 
   assert.deepEqual((await worker.readProjection(workerSession)).bindings, [])
+  assert.deepEqual(
+    (await worker.readProjection(workerSession)).suppressedSessions,
+    [workerSession]
+  )
   await assert.rejects(
     worker.authorize(projectId, workerSession, 'member'),
     /ordinary Session is fenced: membership_inactive/u
@@ -244,14 +332,59 @@ test('duplicate historical Worker journals deterministically suppress the confli
       includeWorkerExecution: true
     })),
     workers: workerProjection([first, second]),
+    localAgentId: () => workerAgentId,
     now: () => new Date(now)
   })
   const session = { runtimeId: first.runtimeId, threadId: first.threadId }
 
   assert.deepEqual((await port.readProjection()).bindings, [])
   assert.deepEqual((await port.readProjection(session)).bindings, [])
+  assert.deepEqual((await port.readProjection(session)).suppressedSessions, [session])
   await assert.rejects(
     port.authorize(projectId, session, 'member'),
+    /conflicting Project bindings/u
+  )
+})
+
+test('cross-Project double bindings fail closed before explicit Project write authorization', async () => {
+  const targetBinding = workerBinding()
+  const otherProjectBinding = {
+    ...targetBinding,
+    projectId: 'prj_OtherProject001',
+    taskId: 'tsk_OtherProjectTask1',
+    executionId: 'exe_OtherProjectExec1'
+  }
+  const session = {
+    runtimeId: targetBinding.runtimeId,
+    threadId: targetBinding.threadId
+  }
+  const sharedOptions = {
+    state: new ProjectCoordinatorStateStore(memorySettings()),
+    workspace: workspacePort(() => workspaceFixture({
+      principalUserId: workerUserId,
+      includeWorkerExecution: true
+    })),
+    localAgentId: () => workerAgentId,
+    now: () => new Date(now)
+  }
+
+  const singlyBound = createProjectCoordinatorSessionProjectionPort({
+    ...sharedOptions,
+    workers: workerProjection([otherProjectBinding])
+  })
+  assert.equal(
+    (await singlyBound.authorize(projectId, session, 'member')).access,
+    'member'
+  )
+
+  const conflicted = createProjectCoordinatorSessionProjectionPort({
+    ...sharedOptions,
+    workers: workerProjection([targetBinding, otherProjectBinding])
+  })
+  assert.deepEqual((await conflicted.readProjection(session)).bindings, [])
+  assert.deepEqual((await conflicted.readProjection(session)).suppressedSessions, [session])
+  await assert.rejects(
+    conflicted.authorize(projectId, session, 'member'),
     /conflicting Project bindings/u
   )
 })

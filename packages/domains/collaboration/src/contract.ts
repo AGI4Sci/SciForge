@@ -139,6 +139,7 @@ export const collaborationTaskViewSchema = z.object({
   workerUserId: idSchema,
   executionId: idSchema.optional(),
   assigneeAgentId: idSchema.optional(),
+  hasDedicatedSession: z.boolean(),
   revision: z.number().int().positive(),
   title: displayTextSchema,
   state: z.enum([
@@ -161,6 +162,8 @@ export const collaborationTaskViewSchema = z.object({
   decisionRequired: z.boolean(),
   preflightReasons: z.array(z.string().trim().min(1).max(128)).max(16),
   localTurnId: idSchema.optional(),
+  resultSummary: z.string().trim().min(1).max(4_000).optional(),
+  needsHumanQuestion: z.string().trim().min(1).max(4_000).optional(),
   updatedAt: isoDateSchema,
   error: safeTextSchema.optional()
 }).strict()

@@ -59,7 +59,7 @@ type NormalizedTaskOfferReassignInput = Readonly<
 
 export function createProjectCoordinatorTaskOfferReassignmentPort(options: Readonly<{
   workspace: WorkspaceReader
-  coordinatorCloudCommands: CoordinatorCloudCommandService
+  coordinatorCloudCommands: Omit<CoordinatorCloudCommandService, 'localAgentId'>
   requestId?: () => `req_${string}`
 }>): ProjectCoordinatorTaskOfferReassignmentPort {
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)

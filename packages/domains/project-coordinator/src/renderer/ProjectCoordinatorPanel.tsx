@@ -60,6 +60,7 @@ import type {
   ProjectCoordinatorMembershipRemoveInput,
   ProjectCoordinatorPlanDraft,
   ProjectCoordinatorPlanDraftEditInput,
+  ProjectCoordinatorPlanDraftSubmitInput,
   ProjectCoordinatorProjectCreateResult,
   ProjectCoordinatorProject,
   ProjectCoordinatorSessionBinding,
@@ -163,7 +164,7 @@ export type ProjectCoordinatorAttentionSummary = Readonly<{
   total: number
 }>
 
-type ProjectCoordinatorEffectiveSessionAccess = 'coordinator' | 'worker' | 'read_only'
+type ProjectCoordinatorEffectiveSessionAccess = 'coordinator' | 'worker' | 'member' | 'read_only'
 
 export type ProjectCoordinatorAgentOperationalState = Readonly<{
   state: 'ready' | 'busy' | 'blocked' | 'offline'
@@ -233,7 +234,11 @@ export function projectCoordinatorAgentOperationalState(
 export function projectCoordinatorCurrentSessionBinding(
   projection: ProjectCoordinatorSessionProjection,
   session: DomainWorkbenchRightPanelSession
-): ProjectCoordinatorSessionBinding | null {
+): ProjectCoordinatorSessionBinding | null | undefined {
+  if (!session.runtimeId?.trim() || !session.id?.trim()) return undefined
+  if (projection.suppressedSessions.some((suppressed) => (
+    suppressed.runtimeId === session.runtimeId && suppressed.threadId === session.id
+  ))) return undefined
   return projectCoordinatorSessionBindingForOrdinarySession(
     projection,
     session.runtimeId,
@@ -244,23 +249,48 @@ export function projectCoordinatorCurrentSessionBinding(
 export function projectCoordinatorEffectiveSessionAccess(
   project: ProjectCoordinatorProject,
   currentUserId: string | null,
-  binding: ProjectCoordinatorSessionBinding | null
+  localAgentId: string | null | undefined,
+  binding: ProjectCoordinatorSessionBinding | null | undefined
 ): ProjectCoordinatorEffectiveSessionAccess {
+  if (currentUserId === null || binding === undefined) return 'read_only'
+  const membership = project.provisioning.memberships.find(({ userId }) => (
+    userId === currentUserId
+  ))
   if (
-    currentUserId === null ||
-    binding === null ||
-    binding.projectId !== project.project.projectId ||
-    binding.principalUserId !== currentUserId
+    membership?.state !== 'active' ||
+    project.project.status === 'completed' ||
+    project.project.status === 'cancelled'
   ) return 'read_only'
-  return binding.access
+  if (binding?.projectId === project.project.projectId) {
+    if (binding.principalUserId !== currentUserId) return 'read_only'
+    if (binding.role === 'coordinator') {
+      return project.project.ownerUserId === currentUserId &&
+        localAgentId === binding.coordinatorAgentId &&
+        binding.coordinatorAgentId === project.project.coordinatorAgentId &&
+        binding.coordinatorAuthorityEpoch === project.project.coordinatorAuthorityEpoch
+        ? binding.access
+        : 'read_only'
+    }
+    return localAgentId === binding.assigneeAgentId ? binding.access : 'read_only'
+  }
+  return project.project.ownerUserId === currentUserId &&
+    localAgentId === project.project.coordinatorAgentId
+    ? 'coordinator'
+    : 'member'
 }
 
 export function projectCoordinatorAttentionSummary(
   project: ProjectCoordinatorProject,
   currentUserId: string | null,
-  binding: ProjectCoordinatorSessionBinding | null
+  localAgentId: string | null | undefined,
+  binding: ProjectCoordinatorSessionBinding | null | undefined
 ): ProjectCoordinatorAttentionSummary {
-  const access = projectCoordinatorEffectiveSessionAccess(project, currentUserId, binding)
+  const access = projectCoordinatorEffectiveSessionAccess(
+    project,
+    currentUserId,
+    localAgentId,
+    binding
+  )
   const canCoordinate = access === 'coordinator'
   const planConfirmation = canCoordinate &&
     project.plan?.plan.state === 'awaiting_confirmation' ? 1 : 0
@@ -542,7 +572,9 @@ export function ProjectCoordinatorPanel({
 }: ProjectCoordinatorPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const [workspace, setWorkspace] = useState<ProjectCoordinatorWorkspace>()
-  const [sessionBinding, setSessionBinding] = useState<ProjectCoordinatorSessionBinding | null>(null)
+  const [sessionBinding, setSessionBinding] = useState<
+    ProjectCoordinatorSessionBinding | null | undefined
+  >(undefined)
   const [selectedProjectId, setSelectedProjectId] = useState(
     initialProjectId ?? currentProjectCoordinatorPanelContext()?.projectId ?? ''
   )
@@ -674,16 +706,14 @@ export function ProjectCoordinatorPanel({
     try {
       const [next, projection] = await Promise.all([
         client.readWorkspace(projectId ? { projectId } : {}),
-        client.readSessionProjection().catch(() => null)
+        client.readSessionProjection()
       ])
       if (signal?.aborted || refreshRequestRef.current !== requestRevision) return
       setWorkspace(next)
-      setSessionBinding(projection
-        ? projectCoordinatorCurrentSessionBinding(projection, {
-            id: session.id,
-            ...(session.runtimeId ? { runtimeId: session.runtimeId } : {})
-          })
-        : null)
+      setSessionBinding(projectCoordinatorCurrentSessionBinding(projection, {
+        id: session.id,
+        ...(session.runtimeId ? { runtimeId: session.runtimeId } : {})
+      }))
       setNowMilliseconds(Date.now())
       // A Session switch must not silently replace a Project the user chose
       // in this workbench with the Cloud provider's focused Project.  Only an
@@ -707,6 +737,7 @@ export function ProjectCoordinatorPanel({
       }
     } catch (cause) {
       if (signal?.aborted || refreshRequestRef.current !== requestRevision) return
+      setSessionBinding(undefined)
       setError(cause instanceof Error ? cause.message : t('projectCoordinatorReadFailed'))
     } finally {
       if (!signal?.aborted && refreshRequestRef.current === requestRevision) {
@@ -767,6 +798,21 @@ export function ProjectCoordinatorPanel({
       : undefined,
     [selectedProjectId, workspace]
   )
+  const currentUserId = workspace?.connection.state === 'ready'
+    ? workspace.connection.userId
+    : null
+  const localAgentId = workspace?.connection.state === 'ready'
+    ? workspace.connection.localAgentId
+    : undefined
+  const effectiveSessionAccess = project
+    ? projectCoordinatorEffectiveSessionAccess(
+        project,
+        currentUserId,
+        localAgentId,
+        sessionBinding
+      )
+    : 'read_only'
+  const canCoordinate = effectiveSessionAccess === 'coordinator'
 
   useEffect(() => {
     if (!navigationItems.some(({ id }) => id === activeView)) {
@@ -917,18 +963,13 @@ export function ProjectCoordinatorPanel({
     }), setDraft)
   }, [client, draft, runAction])
 
-  const submitDraft = useCallback(() => {
-    if (!draft) return
-    void runAction('plan-submit', () => client.submitPlanDraft({
-      projectId: draft.projectId,
-      draftId: draft.draftId,
-      expectedDraftRevision: draft.draftRevision
-    }), (result) => {
+  const submitDraft = useCallback((input: ProjectCoordinatorPlanDraftSubmitInput) => {
+    void runAction('plan-submit', () => client.submitPlanDraft(input), (result) => {
       setWorkspace(result.workspace)
       selectProjectId(result.plan.projectId)
       setDraft(null)
     })
-  }, [client, draft, runAction, selectProjectId])
+  }, [client, runAction, selectProjectId])
 
   const confirmPlan = useCallback(() => {
     if (
@@ -1276,9 +1317,8 @@ export function ProjectCoordinatorPanel({
                 <>
                   <ProjectOverview
                     project={project}
-                    currentUserId={workspace?.connection.state === 'ready'
-                      ? workspace.connection.userId
-                      : null}
+                    currentUserId={currentUserId}
+                    localAgentId={localAgentId}
                     sessionBinding={sessionBinding}
                     observedAt={workspace?.observedAt ?? project.project.updatedAt}
                     nowMilliseconds={nowMilliseconds}
@@ -1329,11 +1369,8 @@ export function ProjectCoordinatorPanel({
                   onGenerate={generateDraft}
                   onEditDraft={editDraft}
                   onSubmitDraft={submitDraft}
-                  canConfirm={workspace?.connection.state === 'ready' &&
-                    workspace.connection.userId === project?.project.ownerUserId}
-                  currentUserId={workspace?.connection.state === 'ready'
-                    ? workspace.connection.userId
-                    : null}
+                  canConfirm={canCoordinate}
+                  currentUserId={currentUserId}
                   providerPrincipalFacts={workspace?.providerPrincipalFacts ?? []}
                   initialContentMode={initialContentMode}
                   initialProviderFactId={initialProviderFactId}
@@ -1344,27 +1381,22 @@ export function ProjectCoordinatorPanel({
                 <TasksSection
                   project={project}
                   observedAt={workspace?.observedAt}
-                  canReassign={workspace?.connection.state === 'ready' &&
-                    workspace.connection.userId === project?.project.ownerUserId &&
+                  canReassign={canCoordinate &&
                     project?.project.status === 'active'}
                   busy={busyAction === 'task-offer-reassign'}
                   onReassign={reassignTaskOffer}
                 />
                 <ProjectCoordinatorTransferSection
                   project={project}
-                  canTransfer={workspace?.connection.state === 'ready' &&
-                    workspace.connection.userId === project?.project.ownerUserId}
+                  canTransfer={canCoordinate}
                   busy={busyAction === 'coordinator-transfer'}
                   onTransfer={transferCoordinator}
                 />
                 <ProjectCoordinatorProvisioningSection
                   project={project}
                   plan={workflowPlan ?? null}
-                  currentUserId={workspace?.connection.state === 'ready'
-                    ? workspace.connection.userId
-                    : null}
-                  canManage={workspace?.connection.state === 'ready' &&
-                    workspace.connection.userId === project?.project.ownerUserId}
+                  currentUserId={currentUserId}
+                  canManage={canCoordinate}
                   busy={Boolean(busyAction?.startsWith('workflow-') ||
                     busyAction?.startsWith('membership-') ||
                     busyAction?.startsWith('recovery-'))}
@@ -1382,9 +1414,8 @@ export function ProjectCoordinatorPanel({
             {activeView === 'reviews' ? (
               <ProjectCoordinatorDecisionSection
                 project={project}
-                currentUserId={workspace?.connection.state === 'ready'
-                  ? workspace.connection.userId
-                  : null}
+                currentUserId={currentUserId}
+                localAgentId={localAgentId}
                 sessionBinding={sessionBinding}
                 busy={Boolean(busyAction && !busyAction.startsWith('plan-'))}
                 onCreateHumanNeeded={createHumanNeeded}
@@ -1817,6 +1848,7 @@ function LiveSyncStatus({
 function ProjectOverview({
   project,
   currentUserId,
+  localAgentId,
   sessionBinding,
   observedAt,
   nowMilliseconds,
@@ -1824,7 +1856,8 @@ function ProjectOverview({
 }: Readonly<{
   project: ProjectCoordinatorProject
   currentUserId: string | null
-  sessionBinding: ProjectCoordinatorSessionBinding | null
+  localAgentId: string | null | undefined
+  sessionBinding: ProjectCoordinatorSessionBinding | null | undefined
   observedAt: string
   nowMilliseconds: number
   onNavigate(viewId: string): void
@@ -1840,6 +1873,7 @@ function ProjectOverview({
   const attention = projectCoordinatorAttentionSummary(
     project,
     currentUserId,
+    localAgentId,
     sessionBinding
   )
   const stages = projectCoordinatorFlowStages(project)
@@ -2287,6 +2321,56 @@ export function ProjectCoordinatorTransferSection({
   )
 }
 
+type ProjectCoordinatorPlanSubmissionReview = Readonly<{
+  draftKey: string
+  input: ProjectCoordinatorPlanDraftSubmitInput
+  draftRevision: number
+  rationale: string
+  tasks: readonly Readonly<{
+    planItemId: string
+    title: string
+    objective: string
+    workerUserAssigned: boolean
+    workerDisplayName: string | null
+  }>[]
+}>
+
+function projectCoordinatorPlanDraftKey(draft: ProjectCoordinatorPlanDraft): string {
+  return `${draft.projectId}\n${draft.draftId}\n${draft.draftRevision}`
+}
+
+function projectCoordinatorPlanSubmissionReview(
+  draft: ProjectCoordinatorPlanDraft,
+  project: ProjectCoordinatorProject
+): ProjectCoordinatorPlanSubmissionReview {
+  const input = Object.freeze({
+    projectId: draft.projectId,
+    draftId: draft.draftId,
+    expectedDraftRevision: draft.draftRevision
+  })
+  const tasks = Object.freeze(draft.tasks.map((task) => {
+    const workerUserId = draft.assignments.find(({ planItemId }) => (
+      planItemId === task.planItemId
+    ))?.workerUserId ?? null
+    return Object.freeze({
+      planItemId: task.planItemId,
+      title: task.title,
+      objective: task.objective,
+      workerUserAssigned: workerUserId !== null,
+      workerDisplayName: workerUserId === null
+        ? null
+        : projectWorkerUserDisplayName(project, workerUserId) ?? null
+    })
+  }))
+  return Object.freeze({
+    draftKey: projectCoordinatorPlanDraftKey(draft),
+    input,
+    draftRevision: draft.draftRevision,
+    rationale: draft.rationale,
+    tasks
+  })
+}
+
 export function ProjectCoordinatorPlanSection({
   project,
   draft,
@@ -2313,7 +2397,7 @@ export function ProjectCoordinatorPlanSection({
     ProjectCoordinatorPlanDraftEditInput,
     'tasks' | 'rationale' | 'assignments'
   >): void
-  onSubmitDraft(): void
+  onSubmitDraft(input: ProjectCoordinatorPlanDraftSubmitInput): void
   canConfirm: boolean
   currentUserId: string | null
   providerPrincipalFacts: ProjectCoordinatorWorkspace['providerPrincipalFacts']
@@ -2325,6 +2409,27 @@ export function ProjectCoordinatorPlanSection({
 }>): ReactElement {
   const { t } = useTranslation('common')
   const visibleWorkerGroups = project?.workerGroups ?? []
+  const [submissionReview, setSubmissionReview] =
+    useState<ProjectCoordinatorPlanSubmissionReview | null>(null)
+  const submissionInFlightRef = useRef(false)
+  const activeDraftKey = canConfirm && draft && project?.project.projectId === draft.projectId
+    ? projectCoordinatorPlanDraftKey(draft)
+    : null
+  const activeSubmissionReview = submissionReview?.draftKey === activeDraftKey
+    ? submissionReview
+    : null
+
+  useEffect(() => {
+    if (submissionReview && submissionReview.draftKey !== activeDraftKey) {
+      submissionInFlightRef.current = false
+      setSubmissionReview(null)
+    }
+  }, [activeDraftKey, submissionReview])
+
+  useEffect(() => {
+    if (!busy) submissionInFlightRef.current = false
+  }, [busy])
+
   const awaitingConfirmation = project?.plan?.plan.state === 'awaiting_confirmation'
   const initialMemberUserIds = [...new Set([
     ...(project ? [project.project.ownerUserId] : []),
@@ -2411,47 +2516,112 @@ export function ProjectCoordinatorPlanSection({
         </div>
       ) : draft ? (
         <div className="space-y-2" data-default-visible-card="plan-draft" key={draft.draftRevision}>
-          <Status value="draft" />
-          <form
-            className="space-y-2"
-            onSubmit={(event) => {
-              event.preventDefault()
-              const values = new FormData(event.currentTarget)
-              onEditDraft({
-                rationale: String(values.get('plan-rationale') ?? ''),
-                tasks: draft.tasks.map((item) => ({
-                  ...item,
-                  title: String(values.get(`plan-item-title-${item.planItemId}`) ?? ''),
-                  objective: String(values.get(`plan-item-objective-${item.planItemId}`) ?? ''),
-                  completionCriteria: splitLines(
-                    String(values.get(`plan-item-criteria-${item.planItemId}`) ?? '')
-                  ),
-                  requiredCapabilityTags: splitCommaSeparated(
-                    String(values.get(`plan-item-capabilities-${item.planItemId}`) ?? '')
-                  ),
-                  dependencyPlanItemIds: splitCommaSeparated(
-                    String(values.get(`plan-item-dependencies-${item.planItemId}`) ?? '')
-                  ),
-                  fileIntent: item.fileIntent !== null &&
-                    values.get(`plan-item-file-enabled-${item.planItemId}`) === 'on'
-                    ? item.fileIntent
-                    : null
-                })),
-                assignments: draft.assignments.map((assignment) => {
-                  const workerUserId = String(
-                    values.get(`plan-item-user-${assignment.planItemId}`) ?? ''
-                  )
-                  return {
-                    ...assignment,
-                    workerUserId: workerUserId || null,
-                    recommendationReason: workerUserId
-                      ? t('projectCoordinatorOwnerSelectedWorkerUser')
-                      : null
-                  }
-                })
-              })
-            }}
-          >
+          {activeSubmissionReview ? (
+            <section
+              className="space-y-2 rounded border border-amber-500/40 bg-amber-500/5 p-2"
+              data-default-visible-card="plan-submit-confirmation"
+              role="region"
+              aria-labelledby="project-coordinator-plan-submit-confirmation-title"
+            >
+              <div>
+                <h4
+                  id="project-coordinator-plan-submit-confirmation-title"
+                  className="text-xs font-semibold"
+                >
+                  {t('projectCoordinatorSubmitPlanReviewTitle')}
+                </h4>
+                <p className="mt-1 text-[11px] text-ds-muted">
+                  {t('projectCoordinatorSubmitPlanReviewDescription', {
+                    revision: activeSubmissionReview.draftRevision,
+                    count: activeSubmissionReview.tasks.length
+                  })}
+                </p>
+              </div>
+              <p className="rounded border border-ds-border p-2 text-[11px] text-ds-muted">
+                {activeSubmissionReview.rationale}
+              </p>
+              <ul className="space-y-1.5">
+                {activeSubmissionReview.tasks.map((task) => (
+                  <li key={task.planItemId} className="rounded border border-ds-border p-2 text-xs">
+                    <div className="font-medium">{task.title}</div>
+                    <p className="mt-1 text-[11px] text-ds-muted">{task.objective}</p>
+                    <div className="mt-1 text-[10px] text-ds-faint">
+                      {t('projectCoordinatorWorkerUser')}: {
+                        task.workerDisplayName ?? t(task.workerUserAssigned
+                          ? 'projectCoordinatorWorkerUserUnavailable'
+                          : 'projectCoordinatorChooseWorkerUser')
+                      }
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSubmissionReview(null)}
+                  className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50"
+                >
+                  {t('projectCoordinatorSubmitPlanReviewCancel')}
+                </button>
+                <button
+                  type="button"
+                  disabled={!canConfirm || busy || submissionInFlightRef.current}
+                  onClick={() => {
+                    if (!canConfirm || busy || submissionInFlightRef.current) return
+                    submissionInFlightRef.current = true
+                    onSubmitDraft(activeSubmissionReview.input)
+                  }}
+                  className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                >
+                  {t('projectCoordinatorSubmitPlanReviewConfirm')}
+                </button>
+              </div>
+            </section>
+          ) : (
+            <>
+              <Status value="draft" />
+              <form
+                className="space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (!canConfirm) return
+                  const values = new FormData(event.currentTarget)
+                  onEditDraft({
+                    rationale: String(values.get('plan-rationale') ?? ''),
+                    tasks: draft.tasks.map((item) => ({
+                      ...item,
+                      title: String(values.get(`plan-item-title-${item.planItemId}`) ?? ''),
+                      objective: String(values.get(`plan-item-objective-${item.planItemId}`) ?? ''),
+                      completionCriteria: splitLines(
+                        String(values.get(`plan-item-criteria-${item.planItemId}`) ?? '')
+                      ),
+                      requiredCapabilityTags: splitCommaSeparated(
+                        String(values.get(`plan-item-capabilities-${item.planItemId}`) ?? '')
+                      ),
+                      dependencyPlanItemIds: splitCommaSeparated(
+                        String(values.get(`plan-item-dependencies-${item.planItemId}`) ?? '')
+                      ),
+                      fileIntent: item.fileIntent !== null &&
+                        values.get(`plan-item-file-enabled-${item.planItemId}`) === 'on'
+                        ? item.fileIntent
+                        : null
+                    })),
+                    assignments: draft.assignments.map((assignment) => {
+                      const workerUserId = String(
+                        values.get(`plan-item-user-${assignment.planItemId}`) ?? ''
+                      )
+                      return {
+                        ...assignment,
+                        workerUserId: workerUserId || null,
+                        recommendationReason: workerUserId
+                          ? t('projectCoordinatorOwnerSelectedWorkerUser')
+                          : null
+                      }
+                    })
+                  })
+                }}
+              >
             <label className="block text-xs">
               <span className="text-ds-muted">{t('projectCoordinatorPlanRationale')}</span>
               <textarea
@@ -2487,7 +2657,7 @@ export function ProjectCoordinatorPlanSection({
                   name={`plan-item-user-${item.planItemId}`}
                   className="mt-1 w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
                   defaultValue={assignment?.workerUserId ?? ''}
-                  disabled={busy}
+                  disabled={!canConfirm || busy}
                 >
                   <option value="">{t('projectCoordinatorChooseWorkerUser')}</option>
                   {visibleWorkerGroups.map((group) => {
@@ -2514,23 +2684,32 @@ export function ProjectCoordinatorPlanSection({
               </fieldset>
               )
             })}
-            <button type="submit" disabled={busy} className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50">
+            <button type="submit" disabled={!canConfirm || busy} className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50">
               {t('projectCoordinatorSavePlanEdits')}
             </button>
-          </form>
-          <button
-            type="button"
-            disabled={busy || draft.assignments.some(({ workerUserId }) => workerUserId === null)}
-            onClick={onSubmitDraft}
-            className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          >
-            {t('projectCoordinatorSubmitPlan')}
-          </button>
+              </form>
+              <button
+                type="button"
+                disabled={!canConfirm || busy || activeDraftKey === null ||
+                  draft.assignments.some(({ workerUserId }) => workerUserId === null)}
+                onClick={() => {
+                  if (!canConfirm || !project || !activeDraftKey || busy) return
+                  submissionInFlightRef.current = false
+                  setSubmissionReview(projectCoordinatorPlanSubmissionReview(draft, project))
+                }}
+                className="rounded bg-ds-accent px-2 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+              >
+                {t('projectCoordinatorSubmitPlan')}
+              </button>
+            </>
+          )}
         </div>
       ) : !project.plan ? (
         <div className="space-y-2">
           <Empty message={t('projectCoordinatorPlanMissing')} />
-          <button type="button" disabled={busy} onClick={onGenerate} className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50">
+          <button type="button" disabled={!canConfirm || busy} onClick={() => {
+            if (canConfirm) onGenerate()
+          }} className="rounded border border-ds-border px-2 py-1.5 text-xs disabled:opacity-50">
             {t('projectCoordinatorGeneratePlan')}
           </button>
         </div>
@@ -2545,7 +2724,8 @@ export function ProjectCoordinatorPlanSection({
               <div className="mt-1 text-[10px] text-ds-faint">
                 {t('projectCoordinatorWorkerUser')}: {
                   visibleWorkerGroups.find(({ userId }) => userId === item.workerUserId)?.displayName ??
-                  item.workerUserId
+                  projectWorkerUserDisplayName(project, item.workerUserId) ??
+                  t('projectCoordinatorWorkerUserUnavailable')
                 }
               </div>
             </div>
@@ -2555,6 +2735,14 @@ export function ProjectCoordinatorPlanSection({
       )}
     </Section>
   )
+}
+
+function projectWorkerUserDisplayName(
+  project: ProjectCoordinatorProject,
+  userId: string
+): string | undefined {
+  return project.workerGroups.find((group) => group.userId === userId)?.displayName ??
+    project.memberUsers.find((user) => user.userId === userId)?.displayName
 }
 
 export function WorkersSection({
@@ -2963,6 +3151,7 @@ function projectCoordinatorUserRoleMessageKey(
 export function ProjectCoordinatorDecisionSection({
   project,
   currentUserId,
+  localAgentId = null,
   sessionBinding,
   busy,
   onCreateHumanNeeded,
@@ -2973,7 +3162,8 @@ export function ProjectCoordinatorDecisionSection({
 }: Readonly<{
   project?: ProjectCoordinatorProject
   currentUserId: string | null
-  sessionBinding: ProjectCoordinatorSessionBinding | null
+  localAgentId?: string | null
+  sessionBinding: ProjectCoordinatorSessionBinding | null | undefined
   busy: boolean
   onCreateHumanNeeded(input: ProjectCoordinatorHumanNeededCreateInput): void
   onAnswerHumanNeeded(input: ProjectCoordinatorHumanAnswerInput): void
@@ -2985,7 +3175,12 @@ export function ProjectCoordinatorDecisionSection({
   const pendingReviews = project?.reviews.filter(({ decision }) => decision === null) ?? []
   const decidedReviews = project?.reviews.filter(({ decision }) => decision !== null) ?? []
   const sessionAccess = project
-    ? projectCoordinatorEffectiveSessionAccess(project, currentUserId, sessionBinding)
+    ? projectCoordinatorEffectiveSessionAccess(
+        project,
+        currentUserId,
+        localAgentId,
+        sessionBinding
+      )
     : 'read_only'
   const canCoordinate = sessionAccess === 'coordinator'
   const canActAsMember = sessionAccess !== 'read_only'

@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import {
   discoverCollaborationProviders,
+  generateCollaborationProviderComposition,
   renderInstalledCollaborationProviders
 } from './collaboration-providers.mjs'
 
@@ -23,6 +24,28 @@ test('discovers providers by manifest and renders provider-neutral static compos
   assert.match(generated, /createInstalledHumanEndpointProviders/u)
   assert.match(generated, /contextFor\(entry\.definition\)/u)
   assert.doesNotMatch(generated, /switch\s*\(|if\s*\([^)]*===\s*['"](?:alpha|zeta)/u)
+})
+
+test('accepts a CRLF checkout of the generated provider composition', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-provider-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createProvider(root, 'alpha', '@fixture/provider-alpha', 'alpha')
+
+  const providers = await discoverCollaborationProviders(root)
+  const generated = renderInstalledCollaborationProviders(providers)
+  const target = path.join(
+    root,
+    'packages',
+    'collaboration-server',
+    'src',
+    'generated',
+    'installed-human-endpoint-providers.ts'
+  )
+  await mkdir(path.dirname(target), { recursive: true })
+  await writeFile(target, generated.replaceAll('\n', '\r\n'))
+
+  const checked = await generateCollaborationProviderComposition(root, { check: true })
+  assert.deepEqual(checked.map(({ manifest }) => manifest.provider), ['alpha'])
 })
 
 test('fails closed on duplicate provider identity and unknown manifest fields', async (context) => {

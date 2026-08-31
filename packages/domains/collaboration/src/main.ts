@@ -179,6 +179,9 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     return owned.runtime
   }
   const coordinatorCloudCommandService = defineCoordinatorCloudCommandService({
+    localAgentId: () => owned && !owned.disposed
+      ? owned.runtime.localAgentId()
+      : undefined,
     execute: (command) => requireRuntime().executeCoordinatorCloudCommand(command),
     resume: (idempotencyKey, validateCommand) => (
       requireRuntime().resumeCoordinatorCloudCommand(idempotencyKey, validateCommand)
@@ -351,7 +354,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         collaborationStatusReadInputSchema,
         collaborationStatusReadResultSchema,
         async () => ({ output: await options.getRuntime().status() }),
-        '1.1.0'
+        '1.2.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.connectionConfigure,
@@ -488,7 +491,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
             )
           }
         }),
-        '1.1.0'
+        '1.2.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,

@@ -6,11 +6,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
   collaborationProjectionViewSchema,
-  collaborationStatusSnapshotSchema
+  collaborationStatusSnapshotSchema,
+  collaborationTaskViewSchema
 } from '../contract.js'
 import {
   buildEndpointChallengeInput,
   buildProjectionLinkInput,
+  createCollaborationRefreshCoordinator,
   CurrentSessionBindingSummary,
   ExplicitError,
   filterProjectionLocatorsForManagedContainer,
@@ -79,6 +81,87 @@ test('pairing poll schedule honors server retry and stops locally at expiry afte
     expiresAt,
     fallbackMilliseconds: 4_000
   }), null)
+})
+
+test('coalesces full refreshes, applies only the latest response, and stops updates after disposal', async () => {
+  const first = deferred<Readonly<{
+    snapshot: ReturnType<typeof collaborationStatusSnapshotSchema.parse>
+    tasks: readonly []
+  }>>()
+  const second = deferred<Readonly<{
+    snapshot: ReturnType<typeof collaborationStatusSnapshotSchema.parse>
+    tasks: readonly []
+  }>>()
+  const snapshots = [
+    collaborationStatusSnapshotSchema.parse({ ...statusFixture(), revision: 1 }),
+    collaborationStatusSnapshotSchema.parse({ ...statusFixture(), revision: 2 })
+  ]
+  const applied: number[] = []
+  const rejected: unknown[] = []
+  const loading: boolean[] = []
+  let calls = 0
+  const coordinator = createCollaborationRefreshCoordinator({
+    load: () => {
+      calls += 1
+      return calls === 1 ? first.promise : second.promise
+    },
+    apply: ({ snapshot }) => applied.push(snapshot.revision),
+    reject: (error) => rejected.push(error),
+    setLoading: (value) => loading.push(value)
+  })
+
+  const initial = coordinator.request({ showLoading: false })
+  const trailing = coordinator.request()
+  assert.equal(calls, 1)
+  first.resolve({ snapshot: snapshots[0]!, tasks: [] })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(calls, 2)
+  assert.deepEqual(applied, [])
+  second.resolve({ snapshot: snapshots[1]!, tasks: [] })
+  await Promise.all([initial, trailing])
+  assert.deepEqual(applied, [2])
+  assert.deepEqual(rejected, [])
+  assert.deepEqual(loading, [true, false])
+
+  const afterDispose = deferred<Readonly<{
+    snapshot: ReturnType<typeof collaborationStatusSnapshotSchema.parse>
+    tasks: readonly []
+  }>>()
+  const disposedUpdates: number[] = []
+  const disposedRejected: unknown[] = []
+  const disposed = createCollaborationRefreshCoordinator({
+    load: () => afterDispose.promise,
+    apply: ({ snapshot }) => disposedUpdates.push(snapshot.revision),
+    reject: (error) => disposedRejected.push(error),
+    setLoading: () => disposedUpdates.push(-1)
+  })
+  const pending = disposed.request({ showLoading: false })
+  disposed.dispose()
+  afterDispose.resolve({ snapshot: snapshots[1]!, tasks: [] })
+  await pending
+  assert.deepEqual(disposedUpdates, [])
+  assert.deepEqual(disposedRejected, [])
+})
+
+test('Task presentation rejects oversized summaries before they enter the polling hot path', () => {
+  const task = statusFixture().projects[0]!.tasks[0]!
+  assert.throws(() => collaborationTaskViewSchema.parse({
+    ...task,
+    resultSummary: 'x'.repeat(4_001)
+  }))
+})
+
+test('Task presentation exposes only whether a dedicated Session exists', () => {
+  const task = statusFixture().projects[0]!.tasks[0]!
+  assert.equal(collaborationTaskViewSchema.parse(task).hasDedicatedSession, true)
+  assert.throws(() => collaborationTaskViewSchema.parse({
+    ...task,
+    runtimeId: 'codex'
+  }))
+  assert.throws(() => collaborationTaskViewSchema.parse({
+    ...task,
+    threadId: 'worker-private-thread'
+  }))
 })
 
 test('renders phone endpoint and owned Agents as one Participant card', () => {
@@ -657,6 +740,10 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(projects, /data-task-id="task-1"/u)
   assert.match(projects, /data-task-status="needs-human"/u)
   assert.match(projects, /Server A/u)
+  assert.match(projects, /data-task-independent-session="true"/u)
+  assert.match(projects, /data-task-human-question="true"/u)
+  assert.match(projects, /Which assay should be used\?/u)
+  assert.doesNotMatch(projects, /worker-private-thread/u)
 
   const recovery = renderToStaticMarkup(
     <RecoverySection
@@ -674,6 +761,54 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   const error = renderToStaticMarkup(<ExplicitError message="Typed permission error" />)
   assert.match(error, /role="alert"/u)
   assert.match(error, /Typed permission error/u)
+})
+
+test('renders a bounded local Worker result summary without exposing Runtime binding IDs', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const sourceTask = snapshot.projects[0]?.tasks[0]
+  assert.ok(sourceTask)
+  const completedTask = collaborationTaskViewSchema.parse({
+    ...sourceTask,
+    state: 'completed',
+    needsHumanQuestion: undefined,
+    resultSummary: 'The validation criteria are satisfied.'
+  })
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[completedTask]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /data-task-result-summary="true"/u)
+  assert.match(html, /The validation criteria are satisfied\./u)
+  assert.doesNotMatch(html, /worker-private-thread/u)
+})
+
+test('uses a readable Worker placeholder instead of exposing an unmatched User ID', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const sourceTask = snapshot.projects[0]?.tasks[0]
+  assert.ok(sourceTask)
+  const task = collaborationTaskViewSchema.parse({
+    ...sourceTask,
+    workerUserId: 'usr_PrivateWorker0001',
+    assigneeAgentId: 'agt_PrivateWorker0001'
+  })
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[task]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /collaborationUnknownWorkerUser/u)
+  assert.doesNotMatch(html, /usr_PrivateWorker0001|agt_PrivateWorker0001/u)
 })
 
 test('renders a Worker Task offer even before its local Project fact is hydrated', () => {
@@ -946,12 +1081,14 @@ function statusFixture() {
         workerUserId: 'user-a',
         executionId: 'execution-task-1',
         assigneeAgentId: 'agent-b',
+        hasDedicatedSession: true,
         revision: 2,
         title: 'Validate structure',
         state: 'needs-human' as const,
         acceptanceMode: 'manual' as const,
         decisionRequired: false,
         preflightReasons: [],
+        needsHumanQuestion: 'Which assay should be used?',
         updatedAt: '2026-08-15T04:01:00.000Z'
       }]
     }],
@@ -974,4 +1111,18 @@ function statusFixture() {
       recoverable: true
     }]
   }
+}
+
+function deferred<Value>(): Readonly<{
+  promise: Promise<Value>
+  resolve: (value: Value) => void
+  reject: (error: unknown) => void
+}> {
+  let resolve!: (value: Value) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<Value>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  agentIdSchema,
   agentInboxMessageSchema,
   humanNeededCreateCommandSchema,
   idempotencyKeySchema,
@@ -18,7 +19,7 @@ import {
 
 export const COORDINATOR_CLOUD_COMMAND_SERVICE_ID =
   'sciforge.collaboration.coordinator-cloud-command' as const
-export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '6.1.0' as const
+export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '6.2.0' as const
 
 /**
  * Agent-authored Project creation and Coordinator writes only. The current
@@ -48,6 +49,8 @@ export type CoordinatorCloudCommandReplayValidator = (
 ) => void
 
 export type CoordinatorCloudCommandService = Readonly<{
+  /** Exact active Agent owned by this local Collaboration runtime. */
+  localAgentId(): string | undefined
   execute(command: CoordinatorCloudCommand): Promise<RestResponse>
   resume(
     idempotencyKey: string,
@@ -60,11 +63,16 @@ export function defineCoordinatorCloudCommandService(
   input: CoordinatorCloudCommandService
 ): CoordinatorCloudCommandService {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      typeof input.localAgentId !== 'function' ||
       typeof input.execute !== 'function' || typeof input.resume !== 'function' ||
       typeof input.subscribe !== 'function') {
     throw new TypeError('Coordinator Cloud command service is invalid.')
   }
   return Object.freeze({
+    localAgentId: () => {
+      const localAgentId = input.localAgentId()
+      return localAgentId === undefined ? undefined : agentIdSchema.parse(localAgentId)
+    },
     execute: async (command) => restResponseSchema.parse(
       await input.execute(coordinatorCloudCommandSchema.parse(command))
     ),

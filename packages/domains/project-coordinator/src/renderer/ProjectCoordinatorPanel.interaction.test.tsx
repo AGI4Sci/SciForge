@@ -7,9 +7,14 @@ import { Window } from 'happy-dom'
 
 import type {
   ProjectCoordinatorPlanDraft,
+  ProjectCoordinatorPlanDraftSubmitInput,
+  ProjectCoordinatorPlanSubmitResult,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
-import { ProjectCoordinatorPanel } from './ProjectCoordinatorPanel.js'
+import {
+  ProjectCoordinatorPanel,
+  ProjectCoordinatorPlanSection
+} from './ProjectCoordinatorPanel.js'
 import type {
   ProjectCoordinatorRendererClient
 } from './project-coordinator-capability-client.js'
@@ -263,6 +268,232 @@ test('create invalidation cannot overwrite the Cloud-returned Project selection 
   }
 })
 
+test('immutable Plan submission requires a separate exact-draft review and confirms only once', async () => {
+  const projectId = 'prj_ProjectSubmitPlan1'
+  const project = projectFixture(projectId, 'Submit Plan Project')
+  const draft: ProjectCoordinatorPlanDraft = {
+    ...planDraftFixture(projectId, 'Submit only the reviewed saved draft.', 7),
+    assignments: [{
+      planItemId: 'item_interaction_test',
+      workerUserId: 'usr_ProjectWorker01',
+      recommendationReason: 'Owner selected this Worker User.'
+    }]
+  }
+  const initialWorkspace = workspaceFixture([project], projectId)
+  const submittedProject = awaitingConfirmationProjectFixture(projectId, 'Submit Plan Project')
+  const submittedWorkspace = workspaceFixture([submittedProject], projectId)
+  const inputs: ProjectCoordinatorPlanDraftSubmitInput[] = []
+  let resolveSubmission: ((result: ProjectCoordinatorPlanSubmitResult) => void) | undefined
+  const submission = new Promise<ProjectCoordinatorPlanSubmitResult>((resolve) => {
+    resolveSubmission = resolve
+  })
+  const client = {
+    readWorkspace: async () => initialWorkspace,
+    readSessionProjection: async () => sessionProjectionFixture(),
+    readPlanDraft: async () => draft,
+    submitPlanDraft: async (input: ProjectCoordinatorPlanDraftSubmitInput) => {
+      inputs.push(input)
+      return await submission
+    }
+  } as unknown as ProjectCoordinatorRendererClient
+  const mounted = await mountPanel(client, projectId, 'tasks')
+
+  try {
+    const submit = buttonWithText(mounted.container, 'projectCoordinatorSubmitPlan')
+    await act(async () => {
+      submit.click()
+      await tick()
+    })
+
+    assert.equal(inputs.length, 0)
+    const review = mounted.container.querySelector(
+      '[data-default-visible-card="plan-submit-confirmation"]'
+    )
+    assert.ok(review)
+    assert.match(review.textContent ?? '', /projectCoordinatorWorkerUserUnavailable/u)
+    assert.doesNotMatch(review.textContent ?? '', /usr_ProjectWorker01/u)
+
+    await act(async () => {
+      buttonWithText(
+        mounted.container,
+        'projectCoordinatorSubmitPlanReviewCancel'
+      ).click()
+      await tick()
+    })
+    assert.equal(inputs.length, 0)
+    assert.equal(mounted.container.querySelector(
+      '[data-default-visible-card="plan-submit-confirmation"]'
+    ), null)
+
+    await act(async () => {
+      buttonWithText(mounted.container, 'projectCoordinatorSubmitPlan').click()
+      await tick()
+    })
+    const confirm = buttonWithText(
+      mounted.container,
+      'projectCoordinatorSubmitPlanReviewConfirm'
+    )
+    await act(async () => {
+      confirm.click()
+      confirm.click()
+      await tick()
+    })
+
+    assert.deepEqual(inputs, [{
+      projectId,
+      draftId: draft.draftId,
+      expectedDraftRevision: 7
+    }])
+
+    await act(async () => {
+      resolveSubmission?.({
+        plan: submittedProject.plan!.plan,
+        workspace: submittedWorkspace
+      })
+      await tick()
+      await tick()
+    })
+  } finally {
+    resolveSubmission?.({
+      plan: submittedProject.plan!.plan,
+      workspace: submittedWorkspace
+    })
+    await mounted.unmount()
+  }
+})
+
+test('Plan submission review is abandoned when its Project, draft ID, or revision changes', async () => {
+  const baseProjectId = 'prj_ProjectDraftFence1'
+  const baseProject = projectFixture(baseProjectId, 'Draft Fence Project')
+  const baseDraft: ProjectCoordinatorPlanDraft = {
+    ...planDraftFixture(baseProjectId, 'Review the exact saved revision.', 11),
+    assignments: [{
+      planItemId: 'item_interaction_test',
+      workerUserId: 'usr_ProjectWorker02',
+      recommendationReason: 'Owner selected this Worker User.'
+    }]
+  }
+  const changedProjectId = 'prj_ProjectDraftFence2'
+  const changedProject = projectFixture(changedProjectId, 'Changed Draft Fence Project')
+  const changedProjectDraft: ProjectCoordinatorPlanDraft = {
+    ...baseDraft,
+    projectId: changedProjectId
+  }
+  const variants = [
+    {
+      project: changedProject,
+      draft: changedProjectDraft
+    },
+    {
+      project: baseProject,
+      draft: { ...baseDraft, draftId: 'draft_interaction_changed' }
+    },
+    {
+      project: baseProject,
+      draft: { ...baseDraft, draftRevision: 12 }
+    }
+  ] as const
+  const submissions: ProjectCoordinatorPlanDraftSubmitInput[] = []
+  const { createRoot } = await import('react-dom/client')
+  const container = browserWindow.document.createElement('div') as unknown as HTMLElement
+  browserWindow.document.body.append(container as never)
+  const root = createRoot(container)
+  const render = async (
+    project: ProjectCoordinatorWorkspace['projects'][number],
+    draft: ProjectCoordinatorPlanDraft
+  ): Promise<void> => {
+    await act(async () => {
+      root.render(
+        <ProjectCoordinatorPlanSection
+          project={project}
+          draft={draft}
+          observedAt={observedAt}
+          busy={false}
+          onGenerate={() => undefined}
+          onEditDraft={() => undefined}
+          onSubmitDraft={(input) => submissions.push(input)}
+          canConfirm={true}
+          currentUserId={project.project.ownerUserId}
+          providerPrincipalFacts={[]}
+          initialContentMode="none"
+          initialProviderFactId=""
+          onInitialContentMode={() => undefined}
+          onInitialProviderFactId={() => undefined}
+          onConfirm={() => undefined}
+        />
+      )
+      await tick()
+    })
+  }
+
+  try {
+    for (const variant of variants) {
+      await render(baseProject, baseDraft)
+      await act(async () => {
+        buttonWithText(container, 'projectCoordinatorSubmitPlan').click()
+        await tick()
+      })
+      assert.ok(container.querySelector(
+        '[data-default-visible-card="plan-submit-confirmation"]'
+      ))
+
+      await render(variant.project, variant.draft)
+      assert.equal(container.querySelector(
+        '[data-default-visible-card="plan-submit-confirmation"]'
+      ), null)
+      assert.equal(submissions.length, 0)
+    }
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})
+
+test('a Session projection read failure disables Coordinator writes instead of becoming unbound authority', async () => {
+  const projectId = 'prj_ProjectProjectionFail1'
+  const project = projectFixture(projectId, 'Projection Failure Project')
+  const draft: ProjectCoordinatorPlanDraft = {
+    ...planDraftFixture(projectId, 'Keep writes closed when Session authority is unavailable.'),
+    assignments: [{
+      planItemId: 'item_interaction_test',
+      workerUserId: 'usr_ProjectWorker01',
+      recommendationReason: 'Owner selected this Worker User.'
+    }]
+  }
+  const workspace = workspaceFixture([project], projectId)
+  let projectionReads = 0
+  const client = {
+    readWorkspace: async () => workspace,
+    readSessionProjection: async () => {
+      projectionReads += 1
+      if (projectionReads > 1) throw new Error('Session projection unavailable.')
+      return sessionProjectionFixture()
+    },
+    readPlanDraft: async () => draft
+  } as unknown as ProjectCoordinatorRendererClient
+  const mounted = await mountPanel(client, projectId, 'tasks')
+
+  try {
+    assert.equal(
+      buttonWithText(mounted.container, 'projectCoordinatorSubmitPlan').disabled,
+      false
+    )
+    await act(async () => {
+      publishProjectCoordinatorWorkspaceInvalidation()
+      await tick()
+      await tick()
+    })
+    await settleReact()
+    assert.equal(projectionReads, 2)
+    assert.equal(
+      buttonWithText(mounted.container, 'projectCoordinatorSubmitPlan').disabled,
+      true
+    )
+  } finally {
+    await mounted.unmount()
+  }
+})
+
 test('a Sidebar deletion broadcast during a local action is refreshed after the late action result', async () => {
   const deletedProjectId = 'prj_ProjectActionDelete1'
   const remainingProjectId = 'prj_ProjectActionRemain1'
@@ -340,7 +571,7 @@ async function mountPanel(
     root.render(
       <ProjectCoordinatorPanel
         client={client}
-        session={{ id: 'session-1' }}
+        session={{ id: 'session-1', runtimeId: 'runtime-interaction-session' }}
         initialProjectId={initialProjectId}
         initialView={initialView}
         workspaceSections={emptyWorkspaceSections}
@@ -362,9 +593,10 @@ async function mountPanel(
 
 function sessionProjectionFixture() {
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     observedAt,
     bindings: [],
+    suppressedSessions: [],
     pendingActivations: []
   }
 }
@@ -417,6 +649,12 @@ function planRationale(container: HTMLElement): HTMLTextAreaElement {
   return requiredElement(container.querySelector('textarea[name="plan-rationale"]'))
 }
 
+function buttonWithText(container: HTMLElement, text: string): HTMLButtonElement {
+  return requiredElement(
+    [...container.querySelectorAll('button')].find((button) => button.textContent === text) ?? null
+  )
+}
+
 function requiredElement<T extends Element>(value: Element | null): T {
   assert.ok(value)
   return value as T
@@ -445,7 +683,8 @@ function workspaceFixture(
     connection: {
       state: 'ready',
       userId: 'usr_ProjectOwner1',
-      deviceId: 'dev_ProjectOwner1'
+      deviceId: 'dev_ProjectOwner1',
+      localAgentId: 'agt_ProjectOwner1'
     },
     observedAt,
     ...(focusedProjectId ? { focusedProjectId } : {}),
@@ -496,7 +735,22 @@ function projectFixture(
       intent: null,
       attestation: null,
       binding: null,
-      memberships: [],
+      memberships: [{
+        schemaVersion: 1,
+        type: 'project_membership',
+        projectMembershipId: `pmb_${projectId.slice(4)}`,
+        projectId,
+        userId: 'usr_ProjectOwner1',
+        state: 'active',
+        authorityEpoch: 1,
+        activatedAt: observedAt,
+        removalRequestedAt: null,
+        removalRequestedByUserId: null,
+        removedAt: null,
+        revision: 1,
+        createdAt: observedAt,
+        updatedAt: observedAt
+      }],
       providerPrincipalFacts: [],
       contentReadiness: [],
       providerMembershipObservations: [],
