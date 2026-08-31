@@ -311,6 +311,17 @@ export class CollaborationTaskAdapter {
         existing.workerUserId !== payload.workerUserId
       ) throw new Error('Task offer identity was reused for another Worker User or Task.')
       if (existing.state === 'pending' || existing.state === 'claiming' || existing.state === 'rejecting') {
+        await this.options.store.transact((draft) => {
+          const current = draft.pendingTaskOffers.find((candidate) => (
+            candidate.taskOfferId === payload.taskOfferId
+          ))
+          if (!current) return
+          if (payload.currentTaskRevision < current.currentTaskRevision ||
+              payload.offerRevision < current.offerRevision) return
+          current.currentTaskRevision = payload.currentTaskRevision
+          current.offerRevision = payload.offerRevision
+          current.updatedAt = this.now().toISOString()
+        })
         this.schedule(payload.taskOfferId)
       }
       return

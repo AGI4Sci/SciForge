@@ -1599,7 +1599,7 @@ export class FakeCollaborationRepository {
   async updateTaskOffer(offer, expectedRevision) {
     assertImmutableFields(this.state.taskOffers.get(offer.taskOfferId), offer, [
       'taskOfferId', 'taskId', 'projectId', 'workerUserId', 'offeredByCoordinatorAgentId',
-      'offeredAt', 'expiresAt', 'createdAt'
+      'offeredAt', 'createdAt'
     ], 'Task offer')
     revisionUpdate(this.state.taskOffers, offer.taskOfferId, offer, expectedRevision)
   }

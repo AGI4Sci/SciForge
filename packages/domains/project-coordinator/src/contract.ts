@@ -71,6 +71,8 @@ export const PROJECT_COORDINATOR_CAPABILITY_IDS = Object.freeze({
   planConfirm: 'project-coordinator.plan.confirm',
   workflowPrepare: 'project-coordinator.workflow.prepare',
   workflowContinue: 'project-coordinator.workflow.continue',
+  taskOfferWithdraw: 'project-coordinator.task-offer.withdraw',
+  taskOfferExtend: 'project-coordinator.task-offer.extend',
   taskOfferReassign: 'project-coordinator.task-offer.reassign',
   contentRecoveryObserveLink: 'project-coordinator.content-recovery.observe-link',
   contentRecoveryAbandon: 'project-coordinator.content-recovery.abandon',
@@ -476,6 +478,20 @@ export const projectCoordinatorTaskOfferReassignInputSchema = z.object({
   workerUserId: userIdSchema,
   offerExpiresAt: timestampSchema,
   nextOutputFileName: taskFileDestinationNameSchema.nullable().optional()
+}).strict().readonly()
+
+export const projectCoordinatorTaskOfferWithdrawInputSchema = z.object({
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  taskOfferId: taskOfferSchema.shape.taskOfferId,
+  reason: z.string().trim().min(1).max(500).default('Coordinator withdrew the pending offer.')
+}).strict().readonly()
+
+export const projectCoordinatorTaskOfferExtendInputSchema = z.object({
+  projectId: projectIdSchema,
+  taskId: taskIdSchema,
+  taskOfferId: taskOfferSchema.shape.taskOfferId,
+  offerExpiresAt: timestampSchema
 }).strict().readonly()
 
 export const projectCoordinatorMembershipAcceptInputSchema = projectMembershipAcceptCommandSchema.omit({
@@ -1123,6 +1139,12 @@ export type ProjectCoordinatorWorkflowContinueInput = z.infer<
 >
 export type ProjectCoordinatorTaskOfferReassignInput = z.infer<
   typeof projectCoordinatorTaskOfferReassignInputSchema
+>
+export type ProjectCoordinatorTaskOfferWithdrawInput = z.infer<
+  typeof projectCoordinatorTaskOfferWithdrawInputSchema
+>
+export type ProjectCoordinatorTaskOfferExtendInput = z.infer<
+  typeof projectCoordinatorTaskOfferExtendInputSchema
 >
 export type ProjectCoordinatorMembershipAcceptInput = z.infer<
   typeof projectCoordinatorMembershipAcceptInputSchema

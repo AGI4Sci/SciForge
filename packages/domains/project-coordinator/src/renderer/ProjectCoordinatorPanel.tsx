@@ -67,7 +67,9 @@ import type {
   ProjectCoordinatorSessionProjection,
   ProjectCoordinatorWorkflowPlan,
   ProjectCoordinatorResultReviewInput,
+  ProjectCoordinatorTaskOfferExtendInput,
   ProjectCoordinatorTaskOfferReassignInput,
+  ProjectCoordinatorTaskOfferWithdrawInput,
   ProjectCoordinatorWorkspace
 } from '../contract.js'
 import {
@@ -86,6 +88,7 @@ import {
   currentProjectCoordinatorPanelContext,
   setProjectCoordinatorPanelContext
 } from './panel-context.js'
+import { projectCoordinatorTaskHistory } from '../task-history.js'
 import { subscribeProjectCoordinatorWorkspaceInvalidation } from './workspace-invalidation.js'
 
 export const PROJECT_COORDINATOR_PANEL_SECTION_IDS = Object.freeze([
@@ -1221,6 +1224,22 @@ export function ProjectCoordinatorPanel({
     ), applyProjectWorkspace)
   }, [applyProjectWorkspace, client, runAction])
 
+  const withdrawTaskOffer = useCallback((
+    input: ProjectCoordinatorTaskOfferWithdrawInput
+  ) => {
+    void runAction('task-offer-withdraw', () => (
+      client.withdrawTaskOffer(input)
+    ), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
+  const extendTaskOffer = useCallback((
+    input: ProjectCoordinatorTaskOfferExtendInput
+  ) => {
+    void runAction('task-offer-extend', () => (
+      client.extendTaskOffer(input)
+    ), applyProjectWorkspace)
+  }, [applyProjectWorkspace, client, runAction])
+
   const sendTaskInteraction = useCallback(async (input: Readonly<{
     taskId: string
     executionId: string | null
@@ -1528,6 +1547,13 @@ export function ProjectCoordinatorPanel({
                     project?.project.status === 'active'}
                   busy={busyAction === 'task-offer-reassign'}
                   onReassign={reassignTaskOffer}
+                  canControlOffers={workspace?.connection.state === 'ready' &&
+                    workspace.connection.userId === project?.project.ownerUserId &&
+                    project?.project.status === 'active'}
+                  busyOfferControl={busyAction === 'task-offer-withdraw' ||
+                    busyAction === 'task-offer-extend'}
+                  onWithdrawOffer={withdrawTaskOffer}
+                  onExtendOffer={extendTaskOffer}
                 />
                 <ProjectCoordinatorTransferSection
                   project={project}
@@ -2982,7 +3008,11 @@ export function TasksSection({
   onSendInteraction,
   canReassign = false,
   busy = false,
-  onReassign
+  onReassign,
+  canControlOffers = false,
+  busyOfferControl = false,
+  onWithdrawOffer,
+  onExtendOffer
 }: Readonly<{
   project?: ProjectCoordinatorProject
   observedAt?: string
@@ -2996,6 +3026,10 @@ export function TasksSection({
   canReassign?: boolean
   busy?: boolean
   onReassign?(input: ProjectCoordinatorTaskOfferReassignInput): void
+  canControlOffers?: boolean
+  busyOfferControl?: boolean
+  onWithdrawOffer?(input: ProjectCoordinatorTaskOfferWithdrawInput): void
+  onExtendOffer?(input: ProjectCoordinatorTaskOfferExtendInput): void
 }>): ReactElement {
   const { t } = useTranslation('common')
   const defaultOfferExpiresAt = new Date(
@@ -3043,6 +3077,7 @@ export function TasksSection({
           <div className="project-coordinator-task-list">
             {project.tasks.map((taskView) => {
               const task = taskView.task
+              const history = projectCoordinatorTaskHistory(project, taskView)
               const execution = task.currentExecutionId
                 ? taskView.executions.find(({ executionId }) => executionId === task.currentExecutionId)
                 : undefined
@@ -3135,7 +3170,68 @@ export function TasksSection({
                         ? 'projectCoordinatorFileTask'
                         : 'projectCoordinatorTextTask')}</dd>
                     </div>
+                    <div>
+                      <dt>{t('projectCoordinatorTaskHistory')}</dt>
+                      <dd data-task-retry-budget={task.taskId}>
+                        {t('projectCoordinatorAttempts', { count: history.attempts.length })} · {
+                          t('projectCoordinatorRetriesRemaining', { count: history.retriesRemaining })
+                        }
+                      </dd>
+                    </div>
                   </dl>
+                  {canControlOffers && pendingOffer && onWithdrawOffer && onExtendOffer ? (
+                    <div
+                      className="space-y-2 rounded border border-ds-border/60 p-2"
+                      data-task-offer-controls={task.taskId}
+                    >
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={busyOfferControl}
+                          className="rounded border border-ds-border px-2 py-1 text-xs disabled:opacity-50"
+                          onClick={() => onWithdrawOffer({
+                            projectId: project.project.projectId,
+                            taskId: task.taskId,
+                            taskOfferId: pendingOffer.taskOfferId,
+                            reason: 'Coordinator withdrew the pending offer.'
+                          })}
+                        >
+                          {t('projectCoordinatorWithdrawOffer')}
+                        </button>
+                      </div>
+                      <form
+                        className="flex flex-wrap gap-2"
+                        onSubmit={(event) => {
+                          event.preventDefault()
+                          const values = new FormData(event.currentTarget)
+                          const offerExpiresAt = String(
+                            values.get('extend-offer-expires-at') ?? ''
+                          ).trim() || defaultOfferExpiresAt
+                          onExtendOffer({
+                            projectId: project.project.projectId,
+                            taskId: task.taskId,
+                            taskOfferId: pendingOffer.taskOfferId,
+                            offerExpiresAt
+                          })
+                        }}
+                      >
+                        <input
+                          name="extend-offer-expires-at"
+                          defaultValue={pendingOffer.expiresAt}
+                          placeholder={defaultOfferExpiresAt}
+                          aria-label={t('projectCoordinatorOfferExpiresAt')}
+                          className="min-w-0 flex-1 rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+                        />
+                        <button
+                          type="submit"
+                          disabled={busyOfferControl}
+                          className="rounded border border-ds-border px-2 py-1 text-xs disabled:opacity-50"
+                        >
+                          {t('projectCoordinatorExtendOffer')}
+                        </button>
+                      </form>
+                    </div>
+                  ) : null}
                   <details className="project-coordinator-task-details">
                     <summary>{t('projectCoordinatorTaskDetails')}</summary>
                     <div>
@@ -3174,7 +3270,26 @@ export function TasksSection({
                     </div>
                   </details>
                   {canReassign && onReassign && reassignableOffer ? (
-                    <form
+                    <div className="space-y-2">
+                      {task.fileIntent === null && reassignableOffer.workerUserId ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="rounded border border-amber-500/50 px-2 py-1 text-xs disabled:opacity-50"
+                          data-task-same-worker-retry={task.taskId}
+                          onClick={() => onReassign({
+                            projectId: project.project.projectId,
+                            taskId: task.taskId,
+                            previousTaskOfferId: reassignableOffer.taskOfferId,
+                            workerUserId: reassignableOffer.workerUserId,
+                            offerExpiresAt: defaultOfferExpiresAt,
+                            nextOutputFileName: null
+                          })}
+                        >
+                          {t('projectCoordinatorRetrySameWorker')}
+                        </button>
+                      ) : null}
+                      <form
                       className="space-y-2 rounded border border-amber-500/40 p-2"
                       data-task-offer-reassignment={task.taskId}
                       onSubmit={(event) => {
@@ -3232,7 +3347,8 @@ export function TasksSection({
                       >
                         {t('projectCoordinatorReassignTask')}
                       </button>
-                    </form>
+                      </form>
+                    </div>
                   ) : null}
                   {onSendInteraction ? (
                     <TaskInteractionComposer
@@ -3307,6 +3423,7 @@ function TaskInteractionComposer({
         <small>{canGuide
           ? t('projectCoordinatorHumanInteractionHint')
           : t('projectCoordinatorHumanInteractionUnavailable')}</small>
+        <small>{t('projectCoordinatorLocalControlHint')}</small>
       </div>
       <form onSubmit={sendGuidance} className="project-coordinator-task-interaction-form">
         <textarea

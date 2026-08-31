@@ -294,6 +294,8 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
       confirmPlan: async () => { throw new Error('unused') },
       prepareWorkflow: async () => { throw new Error('unused') },
       continueWorkflow: async () => { throw new Error('unused') },
+      withdrawTaskOffer: async () => { throw new Error('unused') },
+      extendTaskOffer: async () => { throw new Error('unused') },
       reassignTaskOffer: async () => { throw new Error('unused') },
       addMember: async () => { throw new Error('unused') },
       acceptInvitation: async () => { throw new Error('unused') },

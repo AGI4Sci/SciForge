@@ -2637,10 +2637,10 @@ class PostgresTransaction extends PostgresReadRepository implements Collaboratio
     const result = await this.sql.query(
       `UPDATE sciforge_collaboration.task_offers
        SET execution_id=$2,state=$3,reassignment_task_revision=$4,
-           responded_at=$5,revision=$6,updated_at=$7
-       WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1`,
+           expires_at=$5,responded_at=$6,revision=$7,updated_at=$8
+       WHERE task_offer_id=$1 AND revision=$9 AND $7=$9+1`,
       [offer.taskOfferId, offer.executionId, offer.state, offer.reassignmentTaskRevision,
-        offer.respondedAt, offer.revision, offer.updatedAt, expectedRevision]
+        offer.expiresAt, offer.respondedAt, offer.revision, offer.updatedAt, expectedRevision]
     )
     expectRevision(result.rowCount)
   }

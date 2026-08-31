@@ -522,6 +522,10 @@ async function dispatch(command: RestRequest, actor: AuthContext | null, options
       const result = await service.withdrawTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
     }
+    case 'task.offer.extend': {
+      const result = await service.extendTaskOffer(requiredAgent(actor), command)
+      return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])
+    }
     case 'task.offer.reassign': {
       const result = await service.reassignTaskOffer(requiredAgent(actor), command)
       return collectionResponse(command, [toTask(result.task), toTaskOffer(result.offer)])

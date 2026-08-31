@@ -306,6 +306,22 @@ describe('Coordinator authority epoch', () => {
       type: 'task.offer.timeout'
     }).success).toBe(false)
 
+    const extend = {
+      protocolVersion: '1.0',
+      type: 'task.offer.extend',
+      requestId: TEST_IDS.requestId,
+      idempotencyKey: 'idem_offer_extend_001',
+      taskOfferId: TEST_IDS.taskOfferId,
+      taskId: TEST_IDS.taskId,
+      expectedTaskRevision: 2,
+      expectedOfferRevision: 1,
+      expectedCoordinatorAuthorityEpoch: 4,
+      offerExpiresAt: TEST_LATER_TIMESTAMP
+    }
+    expect(restRequestSchema.safeParse(extend).success).toBe(true)
+    const { offerExpiresAt: _offerExpiresAt, ...withoutExpiry } = extend
+    expect(restRequestSchema.safeParse(withoutExpiry).success).toBe(false)
+
     expect(restRequestSchema.safeParse({
       protocolVersion: '1.0',
       type: 'project.transfer_coordinator',

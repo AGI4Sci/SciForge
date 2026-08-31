@@ -31,7 +31,9 @@ import {
   projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorSessionProjectionReadInputSchema,
   projectCoordinatorSessionProjectionSchema,
+  projectCoordinatorTaskOfferExtendInputSchema,
   projectCoordinatorTaskOfferReassignInputSchema,
+  projectCoordinatorTaskOfferWithdrawInputSchema,
   projectCoordinatorResultReviewInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
@@ -63,7 +65,9 @@ import {
   type ProjectCoordinatorProjectDeleteInput,
   type ProjectCoordinatorProjectDeleteResult,
   type ProjectCoordinatorSessionProjection,
+  type ProjectCoordinatorTaskOfferExtendInput,
   type ProjectCoordinatorTaskOfferReassignInput,
+  type ProjectCoordinatorTaskOfferWithdrawInput,
   type ProjectCoordinatorResultReviewInput,
   type ProjectCoordinatorTransferInput,
   type ProjectCoordinatorWorkspace,
@@ -179,6 +183,20 @@ const taskOfferReassignContract = Object.freeze({
   outputSchema: projectCoordinatorWorkspaceSchema
 })
 
+const taskOfferWithdrawContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferWithdraw,
+  effect: 'destructive' as const,
+  inputSchema: projectCoordinatorTaskOfferWithdrawInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
+const taskOfferExtendContract = Object.freeze({
+  actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferExtend,
+  effect: 'external-write' as const,
+  inputSchema: projectCoordinatorTaskOfferExtendInputSchema,
+  outputSchema: projectCoordinatorWorkspaceSchema
+})
+
 const contentRecoveryAbandonContract = Object.freeze({
   actionId: PROJECT_COORDINATOR_CAPABILITY_IDS.contentRecoveryAbandon,
   effect: 'destructive' as const,
@@ -266,6 +284,8 @@ export type ProjectCoordinatorRendererClient = Readonly<{
   confirmPlan(input: ProjectCoordinatorPlanConfirmInput): Promise<ProjectCoordinatorWorkspace>
   prepareWorkflow(input: ProjectCoordinatorWorkflowPrepareInput): Promise<ProjectCoordinatorWorkflowPlan>
   continueWorkflow(input: ProjectCoordinatorWorkflowContinueInput): Promise<ProjectCoordinatorWorkspace>
+  withdrawTaskOffer(input: ProjectCoordinatorTaskOfferWithdrawInput): Promise<ProjectCoordinatorWorkspace>
+  extendTaskOffer(input: ProjectCoordinatorTaskOfferExtendInput): Promise<ProjectCoordinatorWorkspace>
   reassignTaskOffer(
     input: ProjectCoordinatorTaskOfferReassignInput
   ): Promise<ProjectCoordinatorWorkspace>
@@ -334,6 +354,16 @@ export function createProjectCoordinatorRendererClient(
       input,
       confirmationApproval
     ),
+    withdrawTaskOffer: (input) => invokeMutation(() => invoker.invoke(
+      taskOfferWithdrawContract,
+      input,
+      confirmationApproval
+    )),
+    extendTaskOffer: (input) => invokeMutation(() => invoker.invoke(
+      taskOfferExtendContract,
+      input,
+      confirmationApproval
+    )),
     reassignTaskOffer: (input) => invokeMutation(() => invoker.invoke(
       taskOfferReassignContract,
       input,

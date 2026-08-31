@@ -95,6 +95,17 @@ const commands = [
   },
   {
     ...envelope,
+    idempotencyKey: 'idem_task.offer.extend-01',
+    type: 'task.offer.extend' as const,
+    taskOfferId: TEST_IDS.taskOfferId,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1,
+    expectedCoordinatorAuthorityEpoch: 1,
+    offerExpiresAt: TEST_TIMESTAMP
+  },
+  {
+    ...envelope,
     idempotencyKey: 'idem_task.offer.reassign-01',
     type: 'task.offer.reassign' as const,
     taskId: TEST_IDS.taskId,
@@ -118,6 +129,7 @@ test('Coordinator Cloud command service exposes one closed Agent-command allowli
     'project.plan.submit',
     'task.offer.create',
     'task.offer.withdraw',
+    'task.offer.extend',
     'task.offer.reassign'
   ])
 

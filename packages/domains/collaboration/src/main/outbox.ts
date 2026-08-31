@@ -566,6 +566,15 @@ function isExpectedCoordinatorResponse(
         taskRevision: request.expectedTaskRevision + 1,
         offerRevision: request.expectedOfferRevision + 1
       })
+    case 'task.offer.extend':
+      return isUserTaskOfferCollection(response, {
+        outcome: 'extended',
+        taskId: request.taskId,
+        taskOfferId: request.taskOfferId,
+        offerExpiresAt: request.offerExpiresAt,
+        taskRevision: request.expectedTaskRevision,
+        offerRevision: request.expectedOfferRevision + 1
+      })
     case 'task.offer.reassign':
       return isTaskOfferReassignCollection(request, response, actor)
   }
@@ -779,7 +788,7 @@ function isTaskResultReviewCollection(
 function isUserTaskOfferCollection(
   response: Exclude<RestResponse, { type: 'rest.error' }>,
   expected: Readonly<{
-    outcome: 'created' | 'withdrawn' | 'reassigned'
+    outcome: 'created' | 'withdrawn' | 'reassigned' | 'extended'
     projectId?: string
     taskId?: string
     taskOfferId?: string
@@ -826,6 +835,9 @@ function isUserTaskOfferCollection(
       return task.status === 'revision_requested' &&
         offer.state === 'withdrawn'
     case 'reassigned':
+      return task.status === 'offered' &&
+        offer.state === 'pending'
+    case 'extended':
       return task.status === 'offered' &&
         offer.state === 'pending'
   }

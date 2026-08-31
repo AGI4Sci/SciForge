@@ -288,6 +288,8 @@ function clientFixture(overrides: Pick<
     confirmPlan: unused,
     prepareWorkflow: unused,
     continueWorkflow: unused,
+    withdrawTaskOffer: unused,
+    extendTaskOffer: unused,
     reassignTaskOffer: unused,
     observeAndLinkRecovery: unused,
     abandonRecovery: unused,

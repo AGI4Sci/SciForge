@@ -3940,6 +3940,38 @@ describe('vNext Cloud application service', () => {
     expect(plan.runtimeProvenance.generatedByCoordinatorAgentId).toBe(successor.agentId)
   })
 
+  it('extends only the current pending offer and preserves Task revision', async () => {
+    const fixture = await activeTextOfferFixture('offer-extend')
+    const extended = await fixture.service.extendTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.extend',
+      requestId: 'req_offer_extend',
+      idempotencyKey: 'idem_offer_extend',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      offerExpiresAt: new Date(at.getTime() + 120_000).toISOString()
+    })
+    expect(extended.task.revision).toBe(fixture.offered.task.revision)
+    expect(extended.task.status).toBe('offered')
+    expect(extended.offer.revision).toBe(fixture.offered.offer.revision + 1)
+    expect(extended.offer.expiresAt).toBe(new Date(at.getTime() + 120_000).toISOString())
+    await expect(fixture.service.extendTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.extend',
+      requestId: 'req_offer_extend_stale',
+      idempotencyKey: 'idem_offer_extend_stale',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      offerExpiresAt: new Date(at.getTime() + 180_000).toISOString()
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+  })
+
   it('reassigns only from the caller-observed Project and execution authority epochs after transfer', async () => {
     const fixture = await activeTextOfferFixture('reassign-fence')
     const withdrawn = await fixture.service.withdrawTaskOffer(fixture.coordinator, {

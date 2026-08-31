@@ -774,7 +774,7 @@ describe('PostgreSQL production transaction path', () => {
       .toContain('AND $9=$11+1 AND $3=$11+1')
     const offerUpdate = queries.find(({ text }) => text.includes('UPDATE sciforge_collaboration.task_offers'))
     expect(offerUpdate?.text)
-      .toContain('WHERE task_offer_id=$1 AND revision=$8 AND $6=$8+1')
+      .toContain('WHERE task_offer_id=$1 AND revision=$9 AND $7=$9+1')
     expect(offerUpdate?.text).toContain('reassignment_task_revision=$4')
     expect(offerUpdate?.values[3]).toBeNull()
     expect(queries.some(({ text }) => text.includes('task_execution_events'))).toBe(false)
