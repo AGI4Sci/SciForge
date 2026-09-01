@@ -562,6 +562,29 @@ describe('scientific plotting provenance and versions', () => {
       expect(firstCodeReceipt).toBeDefined()
       if (!firstFigureReceipt || !firstRecipeReceipt || !firstCodeReceipt || !first.codePath) return
       const immutableCode = await readFile(first.codePath)
+      const recipeCandidate = commitCalls[0]!.candidates.find((candidate) => (
+        candidate.candidateId === first.versionCommit!.candidateIds.recipe
+      ))!
+      if (recipeCandidate.content.mode !== 'snapshot') throw new Error('Expected recipe snapshot.')
+      const immutableRecipe = Buffer.from(recipeCandidate.content.dataBase64, 'base64')
+      const tamperedRecipe = Buffer.from(`${immutableRecipe.toString('utf8')}\n`, 'utf8')
+      artifactPorts.tamper(firstRecipeReceipt.ref, tamperedRecipe)
+      const tamperedRecipeRerun = await service.rerun({
+        operationId: 'test:provenance:rerun:tampered-recipe-v1',
+        workspaceRoot: workspace,
+        baselineFigureVersionRef: firstFigureReceipt.ref,
+        recipeVersionRef: firstRecipeReceipt.ref,
+        expectedCurrentVersionId: firstFigureReceipt.ref.versionId
+      })
+      expect(tamperedRecipeRerun).toMatchObject({
+        ok: false,
+        status: 'version_read_failed',
+        provenanceBreakpoints: [expect.objectContaining({
+          code: 'artifact-version-digest-mismatch',
+          stage: 'input'
+        })]
+      })
+      artifactPorts.tamper(firstRecipeReceipt.ref, immutableRecipe)
       const tamperedCode = Buffer.from(`${immutableCode.toString('utf8')}\n# tampered immutable snapshot\n`, 'utf8')
       artifactPorts.tamper(firstCodeReceipt.ref, tamperedCode)
       const tamperedRerun = await service.rerun({

@@ -1575,6 +1575,23 @@ async function readExactArtifactVersion(
   if (canonicalJson(result.value.ref) !== canonicalJson(expected)) {
     throw new Error(`ArtifactVersion ${expected.versionId} does not match its pinned reference.`)
   }
+  // The read port returns a snapshot payload alongside the version metadata.
+  // Treat the pinned reference as a content commitment, not merely an
+  // identifier: a compromised/misbehaving provider must not be able to return
+  // different bytes under the same versionId and digest.  Validate both the
+  // byte length and SHA-256 before callers parse or execute the payload.
+  const bytes = Buffer.from(result.value.dataBase64, 'base64')
+  if (bytes.byteLength !== expected.byteLength) {
+    throw new Error(
+      `ArtifactVersion ${expected.versionId} snapshot byte length does not match its pinned reference.`
+    )
+  }
+  const digest = createHash('sha256').update(bytes).digest('hex')
+  if (digest !== expected.contentDigest) {
+    throw new Error(
+      `ArtifactVersion ${expected.versionId} snapshot digest does not match its pinned reference.`
+    )
+  }
   return result.value
 }
 
@@ -6089,6 +6106,22 @@ async function commitScientificPlotVersion(input: {
   const codeBytes = await readFile(input.codePath)
   const figureBytes = await readFile(input.outputPath)
   const manifestBytes = Buffer.from(input.preCommitManifestBytes)
+  // Re-check every file-backed snapshot immediately before constructing the
+  // commit request. Rendering and commit are separate async phases, so a
+  // concurrent writer could otherwise replace the figure/code after the
+  // manifest was prepared and leave the receipt describing different bytes.
+  const figureDigest = createHash('sha256').update(figureBytes).digest('hex')
+  if (figureDigest !== input.outputHash) {
+    throw new Error('Scientific plot output changed before ArtifactVersion commit.')
+  }
+  const codeDigest = createHash('sha256').update(codeBytes).digest('hex')
+  if (codeDigest !== input.recipe.execution.rendererCodeSha256) {
+    throw new Error('Scientific plot renderer code changed before ArtifactVersion commit.')
+  }
+  const recipeDigest = createHash('sha256').update(recipeBytes).digest('hex')
+  if (recipeDigest !== hashStableJson(input.recipe)) {
+    throw new Error('Scientific plot recipe changed before ArtifactVersion commit.')
+  }
   const attemptLogBytes = scientificPlotAttemptLogBytes(
     input.plotVersionId,
     input.recipe.recipeId,
