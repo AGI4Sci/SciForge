@@ -558,6 +558,14 @@ describe('image generation engine', () => {
         modelOwnedElements: hybridVisualPlan.modelOwnedElements
       }
     })
+    expect(JSON.parse(readFileSync(result.artifactManifestPath, 'utf8'))).toMatchObject({
+      referencePath: sourcePath,
+      referenceHash: createHash('sha256').update(sourceBytes).digest('hex'),
+      modelExecution: {
+        provider: 'image-endpoint',
+        replay: { supported: true }
+      }
+    })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
