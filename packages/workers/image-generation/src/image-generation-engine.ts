@@ -359,6 +359,9 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
+      ...(recipe.referencePath ? {
+        referenceHash: await hashWorkspaceFileIfAvailable(workspaceRoot, recipe.referencePath)
+      } : {}),
       visualPlan: recipe.visualPlan
     })
     return {
@@ -1059,11 +1062,14 @@ export async function editFrameworkComponentsWithImage2(
       frameworkComponentManifestPath: componentManifestPath,
       componentBasePath: manifest.componentBasePath,
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
+      referencePath: sourceImagePath,
+      referenceHash: createHash('sha256').update(await readFile(sourceImagePath)).digest('hex'),
       title: request.instruction.slice(0, 90) || imageId,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
-      visualPlan: request.visualPlan
+      visualPlan: request.visualPlan,
+      ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {})
     })
     return {
       ok: true,
@@ -2313,10 +2319,15 @@ export async function editImageFromVisualReviewPacket(
         outputHash,
         manifestPath,
         sourcePath: intent.sourcePath,
+        ...(intent.sourcePath ? {
+          referencePath: intent.sourcePath,
+          referenceHash: await hashWorkspaceFileIfAvailable(workspaceRoot, intent.sourcePath)
+        } : {}),
         title: intent.instruction.slice(0, 90) || imageId,
         ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
-        visualPlan: request.visualPlan
+        visualPlan: request.visualPlan,
+        ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {})
       })
       outputs.push({ workspaceRoot, outputPath, manifestPath, artifactManifestPath, provider: providerResult.provider })
     }
@@ -3340,6 +3351,7 @@ async function writeImageArtifactManifest(input: {
   manifestPath: string
   sourcePath?: string
   referencePath?: string
+  referenceHash?: string
   visualDocumentId?: string
   threadId?: string
   stageForVisualReview?: boolean
@@ -3379,6 +3391,7 @@ async function writeImageArtifactManifest(input: {
     ...(input.stageForVisualReview !== undefined ? { stageForVisualReview: input.stageForVisualReview } : {}),
     ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
     ...(input.referencePath ? { referencePath: input.referencePath } : {}),
+    ...(input.referenceHash ? { referenceHash: input.referenceHash } : {}),
     ...(input.intent ? { intent: input.intent } : {}),
     ...(input.diagramSpecPath ? { diagramSpecPath: input.diagramSpecPath } : {}),
     ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
@@ -3403,6 +3416,17 @@ async function writeImageArtifactManifest(input: {
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, JSON.stringify(value, null, 2) + '\n', 'utf8')
+}
+
+async function hashWorkspaceFileIfAvailable(workspaceRoot: string, rawPath: string): Promise<string | undefined> {
+  try {
+    const path = await resolveWorkspacePath(workspaceRoot, rawPath)
+    return createHash('sha256').update(await readFile(path)).digest('hex')
+  } catch {
+    // A reference may be an externally-resolved locator that is not present in
+    // the local workspace. Preserve the locator but do not fabricate a digest.
+    return undefined
+  }
 }
 
 async function loadReviewPacket(request: ImageGenerationEditFromVisualReviewPacketRequest, workspaceRoot: string): Promise<unknown> {

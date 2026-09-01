@@ -1516,6 +1516,9 @@ async function readVersionedPlotBaseline(
   if (codeVersion.artifact.kind !== 'scientific-plot-code') {
     throw new Error(`Expected a scientific-plot-code ArtifactVersion, received ${codeVersion.artifact.kind}.`)
   }
+  if (codeVersion.ref.retention !== 'snapshot') {
+    throw new Error('A rerun baseline requires a snapshot-retained scientific-plot-code ArtifactVersion.')
+  }
   const codeBytes = Buffer.from(codeVersion.dataBase64, 'base64')
   const codeDigest = createHash('sha256').update(codeBytes).digest('hex')
   if (codeDigest !== codeVersion.ref.contentDigest) {
@@ -1677,6 +1680,9 @@ async function readVersionedScientificPlotManifest(
     const codeVersion = await readExactArtifactVersion(codeDependency.target, dependencies)
     if (codeVersion.artifact.kind !== 'scientific-plot-code') {
       throw new Error(`Expected a scientific-plot-code ArtifactVersion, received ${codeVersion.artifact.kind}.`)
+    }
+    if (codeVersion.ref.retention !== 'snapshot') {
+      throw new Error('Versioned scientific plot manifests must pin snapshot-retained renderer code.')
     }
     const codeBytes = Buffer.from(codeVersion.dataBase64, 'base64')
     const codeDigest = createHash('sha256').update(codeBytes).digest('hex')
