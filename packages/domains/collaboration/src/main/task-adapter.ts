@@ -310,7 +310,8 @@ export class CollaborationTaskAdapter {
         existing.projectId !== payload.projectId ||
         existing.workerUserId !== payload.workerUserId
       ) throw new Error('Task offer identity was reused for another Worker User or Task.')
-      if (existing.state === 'pending' || existing.state === 'claiming' || existing.state === 'rejecting') {
+      if (existing.state === 'pending' || existing.state === 'claiming' ||
+          existing.state === 'rejecting' || existing.state === 'awaiting-manual') {
         await this.options.store.transact((draft) => {
           const current = draft.pendingTaskOffers.find((candidate) => (
             candidate.taskOfferId === payload.taskOfferId
@@ -907,7 +908,20 @@ export class CollaborationTaskAdapter {
       }, preflight.task, offer.state)
       throwIfSignalAborted(controller.signal)
       if (offer.state !== 'claiming') return
-      await this.claimPendingOffer(offer)
+      try {
+        await this.claimPendingOffer(offer)
+      } catch (error) {
+        if (!(error instanceof OfferClaimRevisionRaceError)) throw error
+        // An extension may win the Cloud CAS after this Device has started a
+        // claim.  Keep the explicit claim intent durable and retry against the
+        // newer local revision instead of converting the offer to a terminal
+        // failure (which would strand a manual decision).
+        await this.updatePendingOffer(offer.taskOfferId, {
+          error: null,
+          completedAt: null
+        }, undefined, 'claiming')
+        this.scheduleAfterCurrent(offer.taskOfferId)
+      }
     } finally {
       if (this.controllers.get(offer.taskOfferId) === controller) {
         this.controllers.delete(offer.taskOfferId)
@@ -1040,15 +1054,28 @@ export class CollaborationTaskAdapter {
 
   private async claimPendingOffer(pending: CollaborationPendingTaskOffer): Promise<void> {
     const requestFacts = pendingOfferClaimRequestFacts(pending)
-    const response = await this.options.outbox.enqueueAndWait('task.offer-decision',
-      restRequestSchema.parse({
-        protocolVersion: '1.0',
-        requestId: collaborationRequestId(),
-        type: 'task.offer.accept',
-        idempotencyKey: idempotencyKey('task.offer.accept', requestFacts),
-        ...requestFacts
-      }))
-    await this.persistClaimedOffer(pending, response)
+    let response: RestResponse
+    try {
+      response = await this.options.outbox.enqueueAndWait('task.offer-decision',
+        restRequestSchema.parse({
+          protocolVersion: '1.0',
+          requestId: collaborationRequestId(),
+          type: 'task.offer.accept',
+          idempotencyKey: idempotencyKey('task.offer.accept', requestFacts),
+          ...requestFacts
+        }))
+      await this.persistClaimedOffer(pending, response)
+      return
+    } catch (error) {
+      const current = this.findPendingOffer(pending.taskOfferId)
+      if (!(error instanceof OfferClaimCheckpointError) && current && current.state === 'claiming' &&
+          (current.currentTaskRevision !== requestFacts.expectedTaskRevision ||
+           current.offerRevision !== requestFacts.expectedOfferRevision) &&
+          !this.hasUncertainDurableClaim(current)) {
+        throw new OfferClaimRevisionRaceError(error)
+      }
+      throw error
+    }
   }
 
   private async resumePendingOfferClaim(pending: CollaborationPendingTaskOffer): Promise<boolean> {
@@ -3083,6 +3110,13 @@ class OfferClaimCheckpointError extends Error {
   constructor(cause: unknown) {
     super(cause instanceof Error ? cause.message : 'The accepted TaskRun checkpoint failed.', { cause })
     this.name = 'OfferClaimCheckpointError'
+  }
+}
+
+class OfferClaimRevisionRaceError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'The Task offer revision changed while claiming.', { cause })
+    this.name = 'OfferClaimRevisionRaceError'
   }
 }
 

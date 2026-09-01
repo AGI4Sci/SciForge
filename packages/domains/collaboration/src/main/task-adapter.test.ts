@@ -121,6 +121,110 @@ test('duplicate User offers persist once and a Device dismissal remains local', 
   assert.equal(store.snapshot().taskRuns.length, 0)
 })
 
+test('an extended offer updates an awaiting-manual Device before it claims', async () => {
+  const cloud = new FakeWorkerCloud()
+  const { adapter, store } = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'offer-extension-thread',
+      turnId: 'offer-extension-turn',
+      state: 'completed',
+      text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Claimed.' })
+    })
+  })
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle()
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
+
+  cloud.offer = taskOfferSchema.parse({
+    ...cloud.offer,
+    expiresAt: new Date(Date.parse(TEST_LATER_TIMESTAMP) + 60_000).toISOString(),
+    revision: cloud.offer.revision + 1,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  await adapter.acceptOffer({ ...offerPayload(), offerRevision: cloud.offer.revision }, TEST_IDS.agentId)
+  assert.equal(store.snapshot().pendingTaskOffers[0]?.offerRevision, cloud.offer.revision)
+
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.waitForIdle()
+  assert.equal(store.snapshot().pendingTaskOffers.length, 0)
+  assert.equal(store.snapshot().taskRuns[0]?.offer.offerRevision, cloud.offer.revision)
+  assert.equal(cloud.commands.filter((type) => type === 'task.offer.accept').length, 1)
+})
+
+test('a claim that observes an offer extension before Cloud CAS uses the newer revision', async () => {
+  const cloud = new FakeWorkerCloud()
+  const { adapter, store } = await createRunner(cloud)
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle()
+
+  let releaseRead!: () => void
+  let readStarted!: () => void
+  const taskReadStarted = new Promise<void>((resolve) => { readStarted = resolve })
+  const taskReadRelease = new Promise<void>((resolve) => { releaseRead = resolve })
+  cloud.delayNextTaskRead(readStarted, taskReadRelease)
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await taskReadStarted
+
+  cloud.offer = taskOfferSchema.parse({
+    ...cloud.offer,
+    expiresAt: new Date(Date.parse(TEST_LATER_TIMESTAMP) + 60_000).toISOString(),
+    revision: cloud.offer.revision + 1,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  await adapter.acceptOffer({ ...offerPayload(), offerRevision: cloud.offer.revision }, TEST_IDS.agentId)
+  releaseRead()
+  await adapter.waitForIdle()
+
+  assert.equal(store.snapshot().pendingTaskOffers.length, 0)
+  assert.equal(store.snapshot().taskRuns[0]?.offer.offerRevision, cloud.offer.revision)
+  const claim = cloud.requests.find((request) => request.type === 'task.offer.accept')
+  assert.equal(claim && claim.expectedOfferRevision, cloud.offer.revision - 1)
+})
+
+test('a stale claim is retried when an offer extension wins the Cloud CAS', async () => {
+  const cloud = new FakeWorkerCloud()
+  const { adapter, store } = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'offer-extension-retry-thread',
+      turnId: 'offer-extension-retry-turn',
+      state: 'completed',
+      text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Claimed after retry.' })
+    })
+  })
+
+  await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await adapter.waitForIdle()
+  let releaseClaim!: () => void
+  let claimStarted!: () => void
+  const claimGateStarted = new Promise<void>((resolve) => { claimStarted = resolve })
+  const claimGateRelease = new Promise<void>((resolve) => { releaseClaim = resolve })
+  cloud.delayNextClaim(claimStarted, claimGateRelease)
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await claimGateStarted
+
+  cloud.offer = taskOfferSchema.parse({
+    ...cloud.offer,
+    expiresAt: new Date(Date.parse(TEST_LATER_TIMESTAMP) + 60_000).toISOString(),
+    revision: cloud.offer.revision + 1,
+    updatedAt: TEST_LATER_TIMESTAMP
+  })
+  await adapter.acceptOffer({ ...offerPayload(), offerRevision: cloud.offer.revision }, TEST_IDS.agentId)
+  releaseClaim()
+  await adapter.waitForIdle()
+  await adapter.waitForIdle()
+
+  assert.equal(store.snapshot().pendingTaskOffers.length, 0)
+  assert.equal(store.snapshot().taskRuns.length, 1)
+  assert.equal(store.snapshot().taskRuns[0]?.offer.offerRevision, cloud.offer.revision)
+  assert.equal(cloud.commands.filter((type) => type === 'task.offer.accept').length, 2)
+})
+
 test('manual rejection closes the User offer globally at the exact Task and Offer revisions', async () => {
   const cloud = new FakeWorkerCloud()
   const { adapter, store } = await createRunner(cloud)
@@ -2923,6 +3027,10 @@ class FakeWorkerCloud {
     started: () => void
     release: Promise<void>
   }> | null = null
+  private claimGate: Readonly<{
+    started: () => void
+    release: Promise<void>
+  }> | null = null
 
   constructor(
     state: 'offered' | 'accepted' | 'running' = 'offered',
@@ -3051,6 +3159,10 @@ class FakeWorkerCloud {
     this.taskReadGate = { started, release }
   }
 
+  delayNextClaim(started: () => void, release: Promise<void>): void {
+    this.claimGate = { started, release }
+  }
+
   connection(): CollaborationConnection {
     return {
       executeAsAgent: async (request: RestRequest) => {
@@ -3136,6 +3248,24 @@ class FakeWorkerCloud {
           return collectionResponse(request, [this.task, this.offer])
         }
         if (request.type === 'task.offer.accept') {
+          const claimGate = this.claimGate
+          if (claimGate) {
+            this.claimGate = null
+            claimGate.started()
+            await claimGate.release
+          }
+          if (request.expectedOfferRevision !== this.offer.revision ||
+              request.expectedTaskRevision !== this.task.revision) {
+            return {
+              protocolVersion: '1.0',
+              type: 'rest.error',
+              requestId: request.requestId,
+              error: createCollaborationError(
+                'revision_conflict',
+                'The Task offer revision changed while this Device was claiming it.'
+              )
+            }
+          }
           assert.equal(request.taskOfferId, this.offer.taskOfferId)
           assert.equal(request.expectedTaskRevision, this.task.revision)
           assert.equal(request.expectedOfferRevision, this.offer.revision)

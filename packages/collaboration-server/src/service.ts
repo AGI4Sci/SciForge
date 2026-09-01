@@ -4930,9 +4930,20 @@ export class CollaborationService {
       if (!Number.isFinite(nextExpiry) || nextExpiry <= Date.parse(at)) {
         fail('request_expired', 'The extended Task offer expiry must be in the future.')
       }
+      if (!Number.isFinite(currentExpiry) || currentExpiry <= Date.parse(at)) {
+        fail('request_expired', 'The current Task offer has already expired.')
+      }
       if (nextExpiry <= currentExpiry) {
         fail('validation_failed', 'The extended Task offer expiry must be later than its current deadline.')
       }
+      const eligibility = await requireEligibleWorkerUser({
+        tx,
+        project,
+        workerUserId: offer.workerUserId,
+        fileIntent: task.fileIntent,
+        requiredCapabilityTags: task.requiredCapabilityTags,
+        at
+      })
       const updatedOffer: StoredTaskOffer = {
         ...offer,
         expiresAt: input.offerExpiresAt,
@@ -4943,11 +4954,7 @@ export class CollaborationService {
       // Re-send the canonical offer notification so every eligible Worker
       // Agent observes the new deadline through its normal inbox path.
       const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
-      const agentIds = (await tx.listAgentsForUser(offer.workerUserId))
-        .filter(({ status }) => status === 'active')
-        .map(({ agentId }) => agentId)
-        .sort()
-      for (const agentId of agentIds) {
+      for (const agentId of eligibility.recipientAgentIds) {
         const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
           protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
           taskId: task.taskId, taskOfferId: offer.taskOfferId, workerUserId: offer.workerUserId,
