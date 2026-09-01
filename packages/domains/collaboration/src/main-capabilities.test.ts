@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { createCollaborationError } from '@sciforge/collaboration-contracts'
 import {
   TEST_IDS,
   chineseProviderLocatorFixture
 } from '@sciforge/collaboration-contracts/testing'
+import type { DomainMainInternalServiceRegistration } from '@sciforge/domain-sdk/host'
+import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  type AuthenticatedCloudTransport
+} from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import {
+  AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+  AGENT_CLOUD_RUNTIME_SERVICE_ID
+} from '@sciforge/domain-identity-access/agent-cloud-runtime'
+import type { DomainMainRuntimeLifecycleContribution } from '@sciforge/domain-sdk/host'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
 import {
   COLLABORATION_CAPABILITY_IDS,
   collaborationConnectionViewSchema,
@@ -12,10 +25,33 @@ import {
   type CollaborationStatusSnapshot
 } from './contract.js'
 import {
+  createDomainMainEntry,
   createCollaborationCapabilityFactory,
   type CollaborationCapabilityOptions
 } from './main.js'
-import type { CollaborationRuntime } from './main/runtime.js'
+import {
+  COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION,
+  COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION
+} from './definition.js'
+import {
+  COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
+  COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
+  type CoordinatorCloudCommand,
+  type CoordinatorCloudCommandReplayValidator,
+  type CoordinatorCloudCommandService
+} from './coordinator-cloud-command.js'
+import {
+  WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+  WORKER_SESSION_PROJECTION_SERVICE_ID,
+  type WorkerSessionProjectionService
+} from './worker-session-projection.js'
+import {
+  collaborationStatePath,
+  type CollaborationRuntime,
+  type CollaborationRuntimeOptions
+} from './main/runtime.js'
+import { createTestAgentCloudRuntime } from './main/test-agent-cloud-runtime.js'
 
 test('global collaboration mutations satisfy the production broker contract without claiming a resource change', async () => {
   const connection = collaborationConnectionViewSchema.parse({
@@ -51,8 +87,8 @@ test('global collaboration mutations satisfy the production broker contract with
   const status: CollaborationStatusSnapshot = {
     revision: 1,
     connection,
-        providerOptions: [],
-        managedContainers: [],
+    providerOptions: [],
+    managedContainers: [],
     participant,
     projections: [projection],
     projects: [],
@@ -68,20 +104,15 @@ test('global collaboration mutations satisfy the production broker contract with
       expiresAt: '2026-08-15T09:00:00.000Z',
       instruction: 'Send the command.'
     }),
-    registerAgent: async () => ({
-      agentId: TEST_IDS.agentId,
-      ownerUserId: TEST_IDS.userId,
-      displayName: 'Desktop',
-      nodeType: 'desktop',
-      status: 'offline',
-      capabilities: [],
-      primary: false
-    }),
-    selectPrimaryAgent: async () => participant,
     linkProjection: async () => projection,
     updateProjection: async () => projection,
     shareProjection: async () => projection,
     retrySynchronization: async () => undefined,
+    updateWorkerAcceptancePolicy: async () => ({
+      agentId: TEST_IDS.agentId,
+      mode: 'automatic' as const
+    }),
+    decideTaskOffer: async () => undefined,
     manageContainer: async () => ({ managedContainer: null }),
     status: async () => status
   } as unknown as CollaborationRuntime
@@ -96,17 +127,10 @@ test('global collaboration mutations satisfy the production broker contract with
     [COLLABORATION_CAPABILITY_IDS.connectionConnect]: { action: 'connect' },
     [COLLABORATION_CAPABILITY_IDS.endpointChallengeStart]: {
       providerKey: 'zulip',
-      requestedDisplayName: 'Researcher',
-      locator: { realmId: 'research-lab' }
-    },
-    [COLLABORATION_CAPABILITY_IDS.agentRegister]: {
-      displayName: 'Desktop',
-      nodeType: 'desktop',
-      capabilities: []
-    },
-    [COLLABORATION_CAPABILITY_IDS.primaryAgentSelect]: {
-      agentId: TEST_IDS.agentId,
-      expectedParticipantRevision: 1
+      locator: {
+        realmId: 'research-lab',
+        providerUserId: 'zulip-user-42'
+      }
     },
     [COLLABORATION_CAPABILITY_IDS.projectionLink]: {
       mode: 'existing',
@@ -128,6 +152,14 @@ test('global collaboration mutations satisfy the production broker contract with
       expectedRevision: 1
     },
     [COLLABORATION_CAPABILITY_IDS.synchronizationRetry]: { scope: 'connection' },
+    [COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate]: {
+      agentId: TEST_IDS.agentId,
+      mode: 'automatic'
+    },
+    [COLLABORATION_CAPABILITY_IDS.taskOfferDecide]: {
+      taskOfferId: TEST_IDS.taskOfferId,
+      decision: 'reject'
+    },
     [COLLABORATION_CAPABILITY_IDS.managedContainerInspect]: { action: 'refresh-status' },
     [COLLABORATION_CAPABILITY_IDS.managedContainerProvision]: {
       action: 'ensure', humanEndpointId: TEST_IDS.humanEndpointId
@@ -139,6 +171,19 @@ test('global collaboration mutations satisfy the production broker contract with
   const mutations = definitions.filter((definition) => definition.effect === 'external-write')
 
   assert.equal(mutations.length, 10)
+  assert.equal(definitions.some(({ id }) => id === 'collaboration.agent.register'), false)
+  assert.equal(definitions.some(({ id }) => (
+    id === 'collaboration.participant.primary-agent.select'
+  )), false)
+  assert.equal(definitions.find(({ id }) => (
+    id === COLLABORATION_CAPABILITY_IDS.taskOfferDecide
+  ))?.version, '1.1.0')
+  for (const id of [
+    COLLABORATION_CAPABILITY_IDS.statusRead,
+    COLLABORATION_CAPABILITY_IDS.taskList
+  ]) {
+    assert.equal(definitions.find((definition) => definition.id === id)?.version, '1.2.0')
+  }
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
     assert.equal(Object.hasOwn(inputs, definition.id), true, `missing input fixture for ${definition.id}`)
@@ -156,4 +201,338 @@ test('global collaboration mutations satisfy the production broker contract with
   assert.equal(definitions.find(({ id }) => (
     id === COLLABORATION_CAPABILITY_IDS.managedContainerArchive
   ))?.effect, 'destructive')
+})
+
+test('Agent Task interaction capabilities fail closed without a Principal, Session, or owned execution', async () => {
+  let authorizationCalls = 0
+  let rejectOwnership = true
+  let submittedInput: unknown
+  const runtime = {
+    authorizeTaskInteraction: () => {
+      authorizationCalls += 1
+      if (rejectOwnership) throw new Error('execution ownership mismatch')
+    },
+    submitTaskInteraction: async (input: unknown) => {
+      submittedInput = input
+      return {
+        interactionId: 'int_TaskInteract01',
+        idempotencyKey: 'idem_task-interaction_success',
+        projectId: TEST_IDS.projectId,
+        taskId: TEST_IDS.taskId,
+        executionId: TEST_IDS.executionId,
+        kind: 'pause',
+        origin: 'agent',
+        text: null,
+        clientDirectiveId: null,
+        state: 'queued',
+        attempts: 0,
+        createdAt: '2026-08-31T00:00:00.000Z',
+        updatedAt: '2026-08-31T00:00:00.000Z',
+        dispatchedAt: null,
+        completedAt: null,
+        error: null
+      }
+    },
+    taskInteractionView: () => ({
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      state: 'idle',
+      pending: [],
+      interactions: [],
+      checkpoints: []
+    })
+  } as unknown as CollaborationRuntime
+  const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({
+    defineCapability: (definition) => definition,
+    getRuntime: () => runtime
+  }).createDefinitions()
+  const submit = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit)!
+  const input = {
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    kind: 'pause' as const,
+    origin: 'agent' as const
+  }
+  const assertPrincipalCurrent = () => undefined
+  await assert.rejects(
+    submit.handler(input, {
+      caller: { audience: 'agent' },
+      assertPrincipalCurrent
+    }),
+    /current Host Principal/
+  )
+  await assert.rejects(
+    submit.handler(input, {
+      caller: {
+        audience: 'agent',
+        principal: {
+          authority: 'test',
+          subject: TEST_IDS.userId,
+          assurance: 'cloud-authenticated',
+          deviceId: 'device-test',
+          identityVersion: 1
+        }
+      },
+      assertPrincipalCurrent
+    }),
+    /ordinary Session/
+  )
+  await assert.rejects(
+    submit.handler(input, {
+      caller: {
+        audience: 'agent',
+        principal: {
+          authority: 'test',
+          subject: TEST_IDS.userId,
+          assurance: 'cloud-authenticated',
+          deviceId: 'device-test',
+          identityVersion: 1
+        }
+      },
+      ordinarySession: { runtimeId: 'runtime-test', threadId: 'thread-test' },
+      assertPrincipalCurrent
+    }),
+    /execution ownership mismatch/
+  )
+  assert.equal(authorizationCalls, 1)
+
+  rejectOwnership = false
+  const result = await submit.handler(input, {
+    caller: {
+      audience: 'agent',
+      principal: {
+        authority: 'test',
+        subject: TEST_IDS.userId,
+        assurance: 'cloud-authenticated',
+        deviceId: 'device-test',
+        identityVersion: 1
+      }
+    },
+    ordinarySession: { runtimeId: 'runtime-test', threadId: 'thread-test' },
+    assertPrincipalCurrent
+  })
+  assert.deepEqual(submittedInput, { ...input, origin: 'agent' })
+  assert.equal((result.output as { interaction: { origin: string } }).interaction.origin, 'agent')
+
+  const checkpoint = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend)!
+  await assert.rejects(
+    checkpoint.handler({
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      kind: 'progress',
+      source: 'human',
+      summary: 'forbidden source'
+    }, {
+      caller: {
+        audience: 'agent',
+        principal: {
+          authority: 'test',
+          subject: TEST_IDS.userId,
+          assurance: 'cloud-authenticated',
+          deviceId: 'device-test',
+          identityVersion: 1
+        }
+      },
+      ordinarySession: { runtimeId: 'runtime-test', threadId: 'thread-test' },
+      assertPrincipalCurrent
+    }),
+    /agent source/
+  )
+})
+
+test('the Collaboration entry publishes one Coordinator command service backed by its active runtime', async () => {
+  const transport: AuthenticatedCloudTransport = {
+    status: () => ({
+      state: 'ready',
+      baseUrl: 'https://collaboration.example.test',
+      userId: TEST_IDS.userId,
+      deviceId: TEST_IDS.deviceId,
+      deviceRevision: 1
+    }),
+    execute: async (request) => ({
+      contractVersion: 1,
+      status: 503,
+      body: {
+        protocolVersion: '1.0',
+        type: 'rest.error',
+        requestId: request.payload.requestId,
+        error: createCollaborationError(
+          'provider_unavailable',
+          'Synthetic transport response.',
+          { requestId: request.payload.requestId }
+        )
+      }
+    })
+  }
+  const acquisitions: Array<Readonly<{ serviceId: string; contractVersion: string }>> = []
+  const agentCloudRuntime = createTestAgentCloudRuntime({})
+  const packageSettings: DomainMainPackageSettingsHost = {
+    read: async () => ({ revision: 0, value: null }),
+    write: async (value) => ({ revision: 1, value }),
+    clear: async () => ({ revision: 1, value: null })
+  }
+  let runtimeOptions: CollaborationRuntimeOptions | undefined
+  let deactivationCount = 0
+  let coordinatorCommand: unknown
+  const fenceResponse = {
+    protocolVersion: '1.0' as const,
+    type: 'rest.error' as const,
+    requestId: TEST_IDS.requestId,
+    error: createCollaborationError('revision_conflict', 'Coordinator fence changed.', {
+      requestId: TEST_IDS.requestId,
+      expectedRevision: 1,
+      currentRevision: 2
+    })
+  }
+  const runtime = {
+    activate: async () => async () => { deactivationCount += 1 },
+    localAgentId: () => TEST_IDS.agentId,
+    executeCoordinatorCloudCommand: async (command: unknown) => {
+      coordinatorCommand = command
+      return fenceResponse
+    },
+    resumeCoordinatorCloudCommand: async (
+      _idempotencyKey: string,
+      validateCommand: CoordinatorCloudCommandReplayValidator
+    ) => {
+      if (!coordinatorCommand) return null
+      validateCommand(coordinatorCommand as CoordinatorCloudCommand)
+      return { command: coordinatorCommand, response: fenceResponse }
+    },
+    listWorkerSessionBindings: () => []
+  } as unknown as CollaborationRuntime
+  const registrations: DomainMainInternalServiceRegistration[] = []
+
+  const entry = createDomainMainEntry<CollaborationCapabilityOptions>({
+    getUserDataDir: () => '/unused',
+    defineCapability: (definition) => definition,
+    packageSettings,
+    internalServices: {
+      register: (value) => { registrations.push(value) },
+      acquire: ((serviceId: string, contractVersion: string) => {
+        acquisitions.push({ serviceId, contractVersion })
+        return serviceId === AGENT_CLOUD_RUNTIME_SERVICE_ID ? agentCloudRuntime : transport
+      }) as never
+    },
+    createCollaborationRuntime: (options) => {
+      runtimeOptions = options
+      return runtime
+    }
+  })
+
+  assert.deepEqual(acquisitions, [])
+  const coordinatorRegistration = registrations.find(({ serviceId }) => (
+    serviceId === COORDINATOR_CLOUD_COMMAND_SERVICE_ID
+  ))
+  assert.equal(coordinatorRegistration?.contractVersion, COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION)
+  assert.deepEqual(coordinatorRegistration?.allowedConsumerModuleIds, ['sciforge.project-coordinator'])
+  const coordinatorService = coordinatorRegistration?.service as CoordinatorCloudCommandService
+  assert.equal(coordinatorService.localAgentId(), undefined)
+  const workerRegistration = registrations.find(({ serviceId }) => (
+    serviceId === WORKER_SESSION_PROJECTION_SERVICE_ID
+  ))
+  assert.equal(workerRegistration?.contractVersion, WORKER_SESSION_PROJECTION_CONTRACT_VERSION)
+  assert.deepEqual(workerRegistration?.allowedConsumerModuleIds, ['sciforge.project-coordinator'])
+  const workerService = workerRegistration?.service as WorkerSessionProjectionService
+  assert.throws(() => workerService.listBindings(), /runtime is not active/u)
+  const command = {
+    protocolVersion: '1.0' as const,
+    requestId: TEST_IDS.requestId,
+    idempotencyKey: 'idem_task.offer.withdraw-main-service-01',
+    type: 'task.offer.withdraw' as const,
+    taskOfferId: TEST_IDS.taskOfferId,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1,
+    expectedCoordinatorAuthorityEpoch: 1,
+    reason: 'Coordinator changed the synthetic assignment.'
+  }
+  await assert.rejects(coordinatorService.execute(command), /runtime is not active/u)
+  await assert.rejects(
+    coordinatorService.resume(command.idempotencyKey, () => undefined),
+    /runtime is not active/u
+  )
+  const disposeCoordinatorInbox = coordinatorService.subscribe(async () => undefined)
+  assert.throws(
+    () => coordinatorService.subscribe(async () => undefined),
+    /already has its package owner/u
+  )
+
+  const descriptorContribution = entry.contributions.find(({ id }) => (
+    id === COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION.id
+  ))
+  assert.deepEqual(descriptorContribution?.value, {
+    location: 'main.internal-service-descriptor',
+    serviceId: COORDINATOR_CLOUD_COMMAND_SERVICE_ID,
+    contractVersion: COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION,
+    allowedConsumerModuleIds: ['sciforge.project-coordinator']
+  })
+  const workerDescriptorContribution = entry.contributions.find(({ id }) => (
+    id === COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION.id
+  ))
+  assert.deepEqual(workerDescriptorContribution?.value, {
+    location: 'main.internal-service-descriptor',
+    serviceId: WORKER_SESSION_PROJECTION_SERVICE_ID,
+    contractVersion: WORKER_SESSION_PROJECTION_CONTRACT_VERSION,
+    allowedConsumerModuleIds: ['sciforge.project-coordinator']
+  })
+
+  const lifecycleContribution = entry.contributions.find(({ id }) => (
+    id === COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+  )) as Readonly<{
+    value: DomainMainRuntimeLifecycleContribution
+    onDispose?: () => void | Promise<void>
+  }> | undefined
+  assert.ok(lifecycleContribution)
+  const userDataDir = '/profiles/meeting-owner'
+  const deactivate = await lifecycleContribution.value.activate({ userDataDir } as never)
+
+  assert.deepEqual(acquisitions, [
+    {
+      serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+      contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION
+    },
+    {
+      serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
+      contractVersion: AGENT_CLOUD_RUNTIME_CONTRACT_VERSION
+    }
+  ])
+
+  assert.equal(runtimeOptions?.authenticatedCloudTransport, transport)
+  assert.equal(runtimeOptions?.packageSettings, packageSettings)
+  assert.equal(runtimeOptions?.agentCloudRuntime, agentCloudRuntime)
+  assert.equal(runtimeOptions?.statePath, collaborationStatePath(userDataDir))
+  assert.equal(typeof runtimeOptions?.coordinatorInboxHandler?.(), 'function')
+  assert.equal(coordinatorService.localAgentId(), TEST_IDS.agentId)
+  assert.deepEqual(await coordinatorService.execute(command), fenceResponse)
+  assert.deepEqual(coordinatorCommand, command)
+  assert.deepEqual(await coordinatorService.resume(command.idempotencyKey, (replayed) => {
+    assert.deepEqual(replayed, command)
+  }), {
+    command,
+    response: fenceResponse
+  })
+  assert.deepEqual(workerService.listBindings(), [])
+  assert.equal(typeof deactivate, 'function')
+  await deactivate?.()
+  assert.equal(deactivationCount, 1)
+  assert.equal(coordinatorService.localAgentId(), undefined)
+  disposeCoordinatorInbox()
+  assert.equal(runtimeOptions?.coordinatorInboxHandler?.(), null)
+  await lifecycleContribution.onDispose?.()
+  assert.equal(deactivationCount, 1)
+})
+
+test('the Collaboration entry fails closed without Identity service mediation', () => {
+  assert.throws(() => createDomainMainEntry({
+    getUserDataDir: () => '/unused',
+    defineCapability: (definition) => definition,
+    packageSettings: {
+      read: async () => ({ revision: 0, value: null }),
+      write: async (value) => ({ revision: 1, value }),
+      clear: async () => ({ revision: 1, value: null })
+    }
+  }), /Identity Cloud service mediation/u)
 })

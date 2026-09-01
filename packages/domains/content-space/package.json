@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-content-space",
-  "version": "3.0.0",
+  "version": "5.0.2",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -13,8 +13,7 @@
     "./main": "./src/main/index.ts",
     "./native-document-contract": "./src/native-document-contract.ts",
     "./provider-features": "./src/provider-features.ts",
-    "./renderer": "./src/renderer/index.tsx",
-    "./verification-policy": "./src/verification-policy.ts"
+    "./renderer": "./src/renderer/index.tsx"
   },
   "files": [
     "src",
@@ -27,7 +26,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.3",
+    "@sciforge/domain-sdk": "^0.2.13",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

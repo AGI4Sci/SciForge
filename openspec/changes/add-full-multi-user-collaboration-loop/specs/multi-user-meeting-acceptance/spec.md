@@ -1,0 +1,108 @@
+## Purpose
+
+定义基于现有 A 测试环境蓝绿升级的 Run-0 验收，以真实 OIDC、Device/Agent、AgentRuntime、OpenContent 和多台设备上的源码应用证明“像开会一样”的端到端多用户协作闭环及其可审计完成门禁；DMG、安装包或发布 artifact 不属于本项目验收条件。
+
+## ADDED Requirements
+
+### Requirement: Run-0 通过既有 A 测试环境的蓝绿 candidate 可回滚升级
+
+Run-0 SHALL 沿用现有 A 测试环境的 `https://cloud-test.sciforge.cn`、`https://login-test.sciforge.cn/realms/SciForge`、TLS/443 edge 和服务器 `47.76.230.118`，不新建 Run-0 DNS/issuer。Cloud upgrade SHALL 使用从旧 Cloud DB 复制出的独立 candidate database/volume/container/network；运行中的旧 Cloud app/database SHALL 在 cutover 与 live 验收完成前保持可回滚。Keycloak/realm 与 edge 的任何必要变更 SHALL 先完成备份、restore rehearsal 和有界回滚设计。
+
+#### Scenario: Candidate migration 尚未验证
+
+- **WHEN** 旧栈备份/恢复、candidate DB migration、target image health 或旧 upstream 回滚任一项尚未验证
+- **THEN** live 验收状态 SHALL 为 `awaiting_candidate`
+- **AND** 系统 SHALL NOT 直接迁移旧数据库、覆盖旧容器或切换 Caddy upstream。
+
+### Requirement: PoC 身份真实但不混入全部生产化门禁
+
+Run-0 SHALL 使用现有 `login-test` Keycloak issuer 的真实 OIDC/PKCE、JIT User、真实 Device/Agent 和 Provider account。Realm MAY 开启自助注册且无需邮件验证；本次验收 SHALL NOT 把邮件验证、MFA、签名公证、生产公网切换或完整灾备作为完成条件，也不得把其缺失误报为已生产化。
+
+#### Scenario: 新参与者自助注册
+
+- **WHEN** Human 在冻结的 `login-test/realms/SciForge` issuer 完成注册和 OIDC 登录
+- **THEN** Cloud SHALL JIT 创建唯一 SciForge User 并进入 Device/Runtime/Agent 配置流程
+- **AND** SHALL NOT 要求 pairing 创建 User。
+
+### Requirement: 真机矩阵使用同一 commit 的五个独立源码应用 profile
+
+完整 live 验收 SHALL 使用至少三台物理机器或相互独立 VM 上的五个独立源码应用 profiles。所有实例 SHALL checkout 同一 exact commit、通过 canonical source build/start path 启动，并各自拥有唯一 user-data、native secret store、Device、Agent、Runtime configuration 和真实 OpenContent account；不得使用 acceptance harness、共享 profile、直接数据库操作、Mock provider 或孤立测试 renderer 代替。
+
+#### Scenario: 只有两台真实设备可用
+
+- **WHEN** source 自动测试通过但五个独立 profile/至少三台机器矩阵未满足
+- **THEN** 交付状态 SHALL 为 `awaiting_real_devices`
+- **AND** SHALL NOT 宣告完整多用户闭环完成。
+
+### Requirement: 固定验收角色不限制产品动态性
+
+Run-0 验收 SHALL 使用 U0 Project Owner、U0 当前 Device 自动绑定的 Project Coordinator Agent、U1 manual Worker、U2 automatic Worker、U3 local-dismiss Worker、U4 replacement Worker 的固定角色脚本。U0-U4 SHALL 是本次证据中的脱敏 fixture label；产品合同和实现 SHALL 支持动态 User、Device、Agent、Membership 和 Worker 选择，不得硬编码这些 label 或数量。固定 happy path SHALL 由 U0 Coordinator 在接受三个结果后通过 `coordinator_project` 发起一次 HumanNeeded；`worker_execution` scope SHALL 在 focused/recovery tests 中独立覆盖。
+
+#### Scenario: U3 本机忽略并由 U4 接替
+
+- **WHEN** U3 的一台 Device 对 User-level Task Offer 执行 local dismiss，随后 Coordinator 撤回共享 Offer 并选择 U4 User
+- **THEN** Cloud SHALL 不为 U3 创建或 fence 任何 execution，并向 U4 的合格 Device Runtime 广播新 Offer
+- **AND** 只有 U4 某台 Device 成功 claim 后才 SHALL 创建新 execution。
+
+### Requirement: 会议脚本产生三项真实协作产物
+
+验收 Project SHALL 命名为“多用户协作设计评审会”。U0 Coordinator Agent SHALL 读取真实合成 agenda/requirements 文件，通过真实 AgentRuntime 生成由 Human 确认或编辑的 plan，并并行派发生成 `architecture-review.md`、`meeting-minutes.md`、`risk-register.md` 的三个最终 Task。U1 SHALL 从其 Device 手动 claim，U2 SHALL 由其 Device 自动 claim，U3 的 Device SHALL 执行 local dismiss 且 Cloud Offer 仍保持 pending，随后 U0 SHALL withdraw 并改派给 U4 由其 Device claim；所有实际领取的 Worker SHALL 真实下载输入、调用本机 Runtime/模型、上传结果。
+
+#### Scenario: 三个输出完成初稿
+
+- **WHEN** 当前 execution 的三个 Worker 都提交真实 Provider output references
+- **THEN** Coordinator SHALL 在 HCI 中至少接受一个结果并对另一个要求一次修订
+- **AND** 只有通过复审的当前 revisions 才 SHALL 进入最终 Project Record。
+
+#### Scenario: Coordinator 汇总 observations 后请求 Owner 决策
+
+- **WHEN** 三个当前 TaskResult 均通过复审并形成三个 observations
+- **THEN** U0 Coordinator Agent SHALL 以 `coordinator_project` 发起一次 HumanNeeded，且请求不得包含伪造 Task/execution
+- **AND** U0 通过 OIDC HCI 或已绑定到同一 OIDC Owner 的 verified Human Endpoint/手机 IM 提交 HumanAnswer
+- **AND** Cloud SHALL 通知当前 Coordinator Agent，由该 Agent 写入 decision、summary、下一步 Task 或最小会议包并显式完成 Project。
+
+### Requirement: Project 完成保留 Provider 团队库和内容
+
+所有最终文件 SHALL 通过另一授权路径下载并完成完整性核验，Coordinator SHALL 生成 final summary/Project Record 并显式完成 Project。完成、archive 或 delete Cloud Project SHALL 关闭业务 binding/authority，但 Provider Team、Project Content Directory、成员变更证据与文件 SHALL 保留，不得自动删除。
+
+#### Scenario: Project 标记完成
+
+- **WHEN** 计划、Task、复审、Project Record 和完整性门禁全部满足
+- **THEN** Cloud SHALL 将 Project 进入完成态
+- **AND** OpenContent 中的团队库和三项最终产物 SHALL 继续存在。
+
+### Requirement: 恢复矩阵必须在真实路径上验证
+
+Run-0 SHALL 至少验证：Worker accept 后重启并恢复同一 execution、WebSocket 断开重连和 Inbox refill、重复 offer/ACK 幂等、改派后旧 execution fenced、Device revoke 停止 Agent/文件操作、Coordinator transfer fencing、Provider membership removal 阻止内容传输，以及一次 `outcome_unknown` 人工恢复。每项 SHALL 使用 canonical production path 并产生脱敏 receipt；未执行项 SHALL 标记 skipped/blocked reason，而不得视为通过。
+
+#### Scenario: WebSocket 断线期间产生 Task 事件
+
+- **WHEN** Worker socket 离线后 Cloud 提交新的 InboxMessage
+- **THEN** 重连 SHALL 只作为可用提示，Worker SHALL 按 sequence 补拉并幂等 ACK
+- **AND** Task SHALL 不因丢失 socket event 而丢失或重复执行。
+
+### Requirement: 验收回执可复核且不泄密
+
+最终 verification receipt SHALL 记录 exact source commit、server image/schema、脱敏 User/Device/Agent/Project/Task/execution timeline、provisioning/member receipts、runtime/model IDs、source/A-upgrade-live 结果、失败、跳过项和 Human manual operations。逐文件 bytes/SHA-256 与汇总 `integrityVerified` MAY 作为诊断记录，但不属于本 PoC 的完成门禁。会议输入 SHALL 为合成内容，实体 ID SHALL 脱敏，真实 credential SHALL 只由对应 Human 在自己的 Desktop 输入；回执 SHALL NOT 包含秘密、完整 prompt、真实敏感会议内容或可重放授权。
+
+#### Scenario: 某一 live recovery 未完成
+
+- **WHEN** 回执无法提供该 recovery 的 execution/receipt evidence
+- **THEN** 该门禁 SHALL 明确为 not_run、blocked 或 failed
+- **AND** 总体状态 SHALL 不得把它计算为通过。
+
+### Requirement: Repository architecture principles gate 是源码验收硬门禁
+
+本变更在 source 验收和 upstream PR 准备前 SHALL 对本变更新增或修改的生产路径通过独立的 `Repository architecture principles gate`。门禁必须按以下原文执行：**不得编辑 central feature map、Host 只能依赖通用 SDK、不得保留兼容 shim/双注册、不得写 showcase/provider/domain 硬编码、backend/UI 同包版本，并验证标准 source composition。** 任一 in-scope 项缺少非秘密自动化证据或发现违反时，整体门禁 SHALL fail，不得被 focused test 或人工说明覆盖。全仓扫描 MAY 报告历史发现，但除非该发现直接阻断 changed collaboration path，否则 SHALL 作为后续债务而不是本次重构授权或阻塞项。
+
+#### Scenario: 新增 Coordinator 包
+
+- **WHEN** 安装或删除 `domain-project-coordinator`
+- **THEN** standard manifest/generated composition SHALL 是唯一组合路径
+- **AND** Host central feature map、domain ID switch 和 Host-private import SHALL 保持无变更。
+
+#### Scenario: 单元测试通过但 source composition 未验证
+
+- **WHEN** focused tests 通过而同 commit 的 source production composition 无证据或仍可达 legacy/双注册路径
+- **THEN** Repository architecture principles gate SHALL fail
+- **AND** 变更 SHALL NOT 进入 upstream PR 准备状态。

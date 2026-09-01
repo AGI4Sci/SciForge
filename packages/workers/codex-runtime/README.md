@@ -15,6 +15,12 @@ input. Compact, fork, resume, relation updates, usage aggregation, remote MCP,
 skills, memories, and subagents are reported unavailable until their canonical
 backend contracts are implemented.
 
+A turn may carry the Domain SDK's bounded provider-neutral output schema. This
+package validates it at the Workspace Host boundary and forwards it through the
+single native Codex `turn/start.outputSchema` path. The same schema is retained
+for terminal reconciliation and retry recovery; there is no prompt-only or
+second structured-output implementation.
+
 Remote Codex starts only with valid workspace-scoped Model Router access. The
 Workspace Host supplies a loopback `/v1` endpoint, short-lived bearer token, and
 expiry through its trusted operation context. The runtime writes only the

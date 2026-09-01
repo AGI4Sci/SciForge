@@ -3,8 +3,6 @@ import type { z } from 'zod'
 
 import {
   COLLABORATION_CAPABILITY_IDS,
-  collaborationAgentRegisterInputSchema,
-  collaborationAgentRegisterResultSchema,
   collaborationConnectionConfigureInputSchema,
   collaborationConnectionConfigureResultSchema,
   collaborationConnectionConnectInputSchema,
@@ -17,8 +15,8 @@ import {
   collaborationManagedContainerInspectInputSchema,
   collaborationManagedContainerProvisionInputSchema,
   collaborationManagedContainerArchiveInputSchema,
-  collaborationPrimaryAgentSelectInputSchema,
-  collaborationPrimaryAgentSelectResultSchema,
+  collaborationPrivateChannelDiscoverInputSchema,
+  collaborationPrivateChannelDiscoverResultSchema,
   collaborationProjectionLinkInputSchema,
   collaborationProjectionLinkResultSchema,
   collaborationProjectionShareInputSchema,
@@ -31,32 +29,50 @@ import {
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
-  type CollaborationAgentRegisterInput,
+  collaborationTaskInteractionSubmitInputSchema,
+  collaborationTaskInteractionSubmitResultSchema,
+  collaborationTaskInteractionReadInputSchema,
+  collaborationTaskInteractionReadResultSchema,
+  collaborationTaskCheckpointAppendInputSchema,
+  collaborationTaskCheckpointAppendResultSchema,
+  collaborationTaskOfferDecisionInputSchema,
+  collaborationTaskOfferDecisionResultSchema,
+  collaborationWorkerAcceptanceUpdateInputSchema,
+  collaborationWorkerAcceptanceUpdateResultSchema,
   type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
   type CollaborationEndpointChallengeStartInput,
   type CollaborationManagedContainerManageInput,
-  type CollaborationPrimaryAgentSelectInput,
+  type CollaborationPrivateChannelDiscoverInput,
   type CollaborationProjectionLinkInput,
   type CollaborationProjectionShareInput,
   type CollaborationProjectionUpdateInput,
   type CollaborationStatusSnapshot,
   type CollaborationSynchronizationRetryInput,
-  type CollaborationTaskListInput
+  type CollaborationTaskListInput,
+  type CollaborationTaskInteractionSubmitInput,
+  type CollaborationTaskInteractionReadInput,
+  type CollaborationTaskCheckpointAppendInput,
+  type CollaborationTaskOfferDecisionInput,
+  type CollaborationWorkerAcceptanceUpdateInput
 } from '../contract.js'
 
-type AgentRegisterResult = z.infer<typeof collaborationAgentRegisterResultSchema>
 type ConnectionConfigureResult = z.infer<typeof collaborationConnectionConfigureResultSchema>
 type ConnectionConnectResult = z.infer<typeof collaborationConnectionConnectResultSchema>
 type EndpointChallengeStartResult = z.infer<typeof collaborationEndpointChallengeStartResultSchema>
 type EndpointChallengePollResult = z.infer<typeof collaborationEndpointChallengePollResultSchema>
-type PrimaryAgentSelectResult = z.infer<typeof collaborationPrimaryAgentSelectResultSchema>
+type PrivateChannelDiscoverResult = z.infer<typeof collaborationPrivateChannelDiscoverResultSchema>
 type ProjectionLinkResult = z.infer<typeof collaborationProjectionLinkResultSchema>
 type ProjectionUpdateResult = z.infer<typeof collaborationProjectionUpdateResultSchema>
 type ProjectionShareResult = z.infer<typeof collaborationProjectionShareResultSchema>
 type SynchronizationRetryResult = z.infer<typeof collaborationSynchronizationRetryResultSchema>
 type TaskListResult = z.infer<typeof collaborationTaskListResultSchema>
+type TaskInteractionSubmitResult = z.infer<typeof collaborationTaskInteractionSubmitResultSchema>
+type TaskInteractionReadResult = z.infer<typeof collaborationTaskInteractionReadResultSchema>
+type TaskCheckpointAppendResult = z.infer<typeof collaborationTaskCheckpointAppendResultSchema>
+type TaskOfferDecisionResult = z.infer<typeof collaborationTaskOfferDecisionResultSchema>
+type WorkerAcceptanceUpdateResult = z.infer<typeof collaborationWorkerAcceptanceUpdateResultSchema>
 type ManagedContainerManageResult = z.infer<typeof collaborationManagedContainerManageResultSchema>
 
 const contracts = Object.freeze({
@@ -90,18 +106,6 @@ const contracts = Object.freeze({
     inputSchema: collaborationEndpointChallengePollInputSchema,
     outputSchema: collaborationEndpointChallengePollResultSchema
   }),
-  agentRegister: Object.freeze({
-    actionId: COLLABORATION_CAPABILITY_IDS.agentRegister,
-    effect: 'external-write' as const,
-    inputSchema: collaborationAgentRegisterInputSchema,
-    outputSchema: collaborationAgentRegisterResultSchema
-  }),
-  primaryAgentSelect: Object.freeze({
-    actionId: COLLABORATION_CAPABILITY_IDS.primaryAgentSelect,
-    effect: 'external-write' as const,
-    inputSchema: collaborationPrimaryAgentSelectInputSchema,
-    outputSchema: collaborationPrimaryAgentSelectResultSchema
-  }),
   projectionLink: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.projectionLink,
     effect: 'external-write' as const,
@@ -126,11 +130,47 @@ const contracts = Object.freeze({
     inputSchema: collaborationSynchronizationRetryInputSchema,
     outputSchema: collaborationSynchronizationRetryResultSchema
   }),
+  privateChannelDiscover: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.privateChannelDiscover,
+    effect: 'read' as const,
+    inputSchema: collaborationPrivateChannelDiscoverInputSchema,
+    outputSchema: collaborationPrivateChannelDiscoverResultSchema
+  }),
   taskList: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.taskList,
     effect: 'read' as const,
     inputSchema: collaborationTaskListInputSchema,
     outputSchema: collaborationTaskListResultSchema
+  }),
+  taskInteractionSubmit: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit,
+    effect: 'workspace-write' as const,
+    inputSchema: collaborationTaskInteractionSubmitInputSchema,
+    outputSchema: collaborationTaskInteractionSubmitResultSchema
+  }),
+  taskInteractionRead: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskInteractionRead,
+    effect: 'read' as const,
+    inputSchema: collaborationTaskInteractionReadInputSchema,
+    outputSchema: collaborationTaskInteractionReadResultSchema
+  }),
+  taskCheckpointAppend: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend,
+    effect: 'workspace-write' as const,
+    inputSchema: collaborationTaskCheckpointAppendInputSchema,
+    outputSchema: collaborationTaskCheckpointAppendResultSchema
+  }),
+  workerAcceptanceUpdate: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
+    effect: 'external-write' as const,
+    inputSchema: collaborationWorkerAcceptanceUpdateInputSchema,
+    outputSchema: collaborationWorkerAcceptanceUpdateResultSchema
+  }),
+  taskOfferDecide: Object.freeze({
+    actionId: COLLABORATION_CAPABILITY_IDS.taskOfferDecide,
+    effect: 'external-write' as const,
+    inputSchema: collaborationTaskOfferDecisionInputSchema,
+    outputSchema: collaborationTaskOfferDecisionResultSchema
   }),
   managedContainerInspect: Object.freeze({
     actionId: COLLABORATION_CAPABILITY_IDS.managedContainerInspect,
@@ -160,13 +200,19 @@ export type CollaborationRendererClient = Readonly<{
   changeConnection(input: CollaborationConnectionConnectInput): Promise<ConnectionConnectResult>
   startEndpointChallenge(input: CollaborationEndpointChallengeStartInput): Promise<EndpointChallengeStartResult>
   pollEndpointChallenge(input: CollaborationEndpointChallengePollInput): Promise<EndpointChallengePollResult>
-  registerAgent(input: CollaborationAgentRegisterInput): Promise<AgentRegisterResult>
-  selectPrimaryAgent(input: CollaborationPrimaryAgentSelectInput): Promise<PrimaryAgentSelectResult>
   linkProjection(input: CollaborationProjectionLinkInput): Promise<ProjectionLinkResult>
   updateProjection(input: CollaborationProjectionUpdateInput): Promise<ProjectionUpdateResult>
   shareProjection(input: CollaborationProjectionShareInput): Promise<ProjectionShareResult>
   retrySynchronization(input: CollaborationSynchronizationRetryInput): Promise<SynchronizationRetryResult>
+  discoverPrivateChannels(input: CollaborationPrivateChannelDiscoverInput): Promise<PrivateChannelDiscoverResult>
   listTasks(input?: CollaborationTaskListInput): Promise<TaskListResult>
+  submitTaskInteraction(input: CollaborationTaskInteractionSubmitInput): Promise<TaskInteractionSubmitResult>
+  readTaskInteraction(input: CollaborationTaskInteractionReadInput): Promise<TaskInteractionReadResult>
+  appendTaskCheckpoint(input: CollaborationTaskCheckpointAppendInput): Promise<TaskCheckpointAppendResult>
+  updateWorkerAcceptancePolicy(
+    input: CollaborationWorkerAcceptanceUpdateInput
+  ): Promise<WorkerAcceptanceUpdateResult>
+  decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<TaskOfferDecisionResult>
   manageContainer(input: CollaborationManagedContainerManageInput): Promise<ManagedContainerManageResult>
 }>
 
@@ -194,12 +240,6 @@ export function createCollaborationRendererClient(
       contracts.endpointChallengePoll,
       input
     ),
-    registerAgent: (input) => invoker.invoke(contracts.agentRegister, input, CONFIRMED),
-    selectPrimaryAgent: (input) => invoker.invoke(
-      contracts.primaryAgentSelect,
-      input,
-      CONFIRMED
-    ),
     linkProjection: (input) => invoker.invoke(contracts.projectionLink, input, CONFIRMED),
     updateProjection: (input) => invoker.invoke(contracts.projectionUpdate, input, CONFIRMED),
     shareProjection: (input) => invoker.invoke(contracts.projectionShare, input, CONFIRMED),
@@ -208,7 +248,25 @@ export function createCollaborationRendererClient(
       input,
       CONFIRMED
     ),
+    discoverPrivateChannels: (input) => invoker.invoke(contracts.privateChannelDiscover, input),
     listTasks: (input = {}) => invoker.invoke(contracts.taskList, input),
+    submitTaskInteraction: (input) => invoker.invoke(
+      contracts.taskInteractionSubmit,
+      input,
+      CONFIRMED
+    ),
+    readTaskInteraction: (input) => invoker.invoke(contracts.taskInteractionRead, input),
+    appendTaskCheckpoint: (input) => invoker.invoke(
+      contracts.taskCheckpointAppend,
+      input,
+      CONFIRMED
+    ),
+    updateWorkerAcceptancePolicy: (input) => invoker.invoke(
+      contracts.workerAcceptanceUpdate,
+      input,
+      CONFIRMED
+    ),
+    decideTaskOffer: (input) => invoker.invoke(contracts.taskOfferDecide, input, CONFIRMED),
     manageContainer: (input) => {
       if (input.action === 'refresh-status' || input.action === 'refresh-locators') {
         return invoker.invoke(contracts.managedContainerInspect, input)

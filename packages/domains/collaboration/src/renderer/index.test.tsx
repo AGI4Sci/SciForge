@@ -8,8 +8,10 @@ import {
   COLLABORATION_OPEN_COMMAND_CONTRIBUTION,
   COLLABORATION_RIGHT_PANEL_CONTRACT,
   COLLABORATION_RIGHT_PANEL_CONTRIBUTION,
-  COLLABORATION_TOOLBAR_ACTION_CONTRACT,
-  COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION
+  COLLABORATION_WORKSPACE_MY_WORK_CONTRACT,
+  COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION,
+  COLLABORATION_WORKSPACE_SETTINGS_CONTRACT,
+  COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION
 } from '../definition.js'
 import {
   createCollaborationOpenCommand,
@@ -17,7 +19,7 @@ import {
   type CollaborationRightPanelContribution
 } from './index.js'
 
-test('renderer entry owns panel, command, toolbar, and translations', () => {
+test('renderer entry owns one advanced panel plus Collaboration Center sections', () => {
   const host = rendererHost([])
   const entry = createDomainRendererEntry(host)
   assert.equal(entry.process, 'renderer')
@@ -26,7 +28,8 @@ test('renderer entry owns panel, command, toolbar, and translations', () => {
     [
       COLLABORATION_RIGHT_PANEL_CONTRIBUTION,
       COLLABORATION_OPEN_COMMAND_CONTRIBUTION,
-      COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION,
+      COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION,
+      COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION,
       COLLABORATION_I18N_CONTRIBUTION
     ].map(({ kind, id }) => ({ kind, id }))
   )
@@ -48,11 +51,43 @@ test('renderer entry owns panel, command, toolbar, and translations', () => {
   assert.deepEqual(rendered.props.session, { id: 'thread-1', title: '项目 A', runtimeId: 'codex' })
   assert.equal(typeof rendered.props.client, 'object')
 
-  const toolbar = entry.contributions.find(({ id }) =>
-    id === COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION.id
+  const myWork = entry.contributions.find(({ id }) =>
+    id === COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION.id
   )!
-  assert.deepEqual(toolbar.contract, COLLABORATION_TOOLBAR_ACTION_CONTRACT)
-  assert.deepEqual(Object.keys(toolbar.value as object), ['icon'])
+  assert.deepEqual(myWork.contract, COLLABORATION_WORKSPACE_MY_WORK_CONTRACT)
+  assert.ok((myWork.value as Readonly<{ icon?: unknown }>).icon)
+  const myWorkRendered = (myWork.value as Readonly<{
+    render(input: {
+      active: boolean
+      className: string
+      session: { id: string }
+    }): ReactElement<Record<string, unknown>>
+  }>).render({
+    active: true,
+    className: 'embedded-work',
+    session: { id: 'thread-1' }
+  })
+  assert.equal(myWorkRendered.props.embedded, true)
+  assert.equal(myWorkRendered.props.view, 'work')
+
+  const settings = entry.contributions.find(({ id }) =>
+    id === COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION.id
+  )!
+  assert.deepEqual(settings.contract, COLLABORATION_WORKSPACE_SETTINGS_CONTRACT)
+  assert.ok((settings.value as Readonly<{ icon?: unknown }>).icon)
+  const settingsRendered = (settings.value as typeof myWork.value & Readonly<{
+    render(input: {
+      active: boolean
+      className: string
+      session: { id: string }
+    }): ReactElement<Record<string, unknown>>
+  }>).render({
+    active: true,
+    className: 'embedded-settings',
+    session: { id: 'thread-1' }
+  })
+  assert.equal(settingsRendered.props.embedded, true)
+  assert.equal(settingsRendered.props.view, 'settings')
 
   const translations = entry.contributions.find(({ id }) =>
     id === COLLABORATION_I18N_CONTRIBUTION.id

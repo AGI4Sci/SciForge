@@ -158,6 +158,8 @@ export type CodexAppServerTurnStartParams = {
   responsesapiClientMetadata?: Record<string, string> | null
   cwd?: string
   model?: string
+  /** JSON Schema constraining the final assistant message for this turn. */
+  outputSchema?: Record<string, unknown>
   approvalPolicy?: CodexAppServerApprovalPolicy
   sandboxPolicy?: CodexAppServerTurnSandboxPolicy
   [key: string]: unknown

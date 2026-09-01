@@ -108,42 +108,42 @@ Each operation SHALL require the Host-asserted current PrincipalSnapshot at the 
 
 ### Requirement: Readiness is explicit per operation
 
-Every ordinary, native-document, extended, and administration operation SHALL declare exactly one descriptive readiness state: `poc_only`, `blocked_by_contract`, or `production_ready`. Content Space SHALL evaluate the current invocation's admission separately from that declaration using the trusted Provider contribution, Provider Instance policy, Broker authority, resource capability, platform Gate, audience, current Principal, and any installed verification profile. An admitted `poc_only` invocation SHALL continue to be reported as `poc_only`; admission SHALL NOT rewrite it as `production_ready`. `blocked_by_contract` SHALL never be admitted.
+Every ordinary, native-document, extended, and administration operation SHALL declare exactly one descriptive readiness state: `poc_only`, `blocked_by_contract`, or `production_ready`. Content Space SHALL evaluate the current invocation's admission separately from that declaration using the trusted Provider contribution, Provider Instance policy, Broker authority, resource capability, platform Gate, trusted audience, current Principal, and current Provider binding. An admitted `poc_only` invocation SHALL continue to be reported as `poc_only`; admission SHALL NOT rewrite it as `production_ready`. `blocked_by_contract` SHALL never be admitted.
 
-`poc_only` SHALL remain non-executable unless Content Space composition installs a separately reviewed trusted verification profile that exactly matches the Provider Instance, complete Host Principal snapshot and assurance, authority, operation, audience, bounded validity period, and transfer limits. The matched transfer limits SHALL be enforced as the actual maximum bytes accepted or emitted by that invocation, not merely compared with a global constant. Provider-instance authority without a Provider binding attestation MAY admit only the zero-transfer read-only `list-containers` bootstrap; exact Broker-authoritative content-root authority without such attestation MAY admit only zero-transfer reads. Mutation, administration, Provider-scoped operations, and non-zero transfers SHALL additionally require a current Provider binding attestation for the exact Provider Instance, opaque external subject reference, and opaque binding revision. Content Space SHALL obtain and match the current attestation only through the pinned Provider before admission. A Connector-backed Provider SHALL pass that exact expected attestation through its canonical Connector boundary, which SHALL re-attest the actual session immediately before business dispatch; rebind, unbind, or revision change SHALL invalidate admission.
+A contract-complete `poc_only` operation with reason `runtime_authorization_required` MAY execute only for a trusted UI, Agent, or system audience after Content Space obtains a current Provider binding attestation through the pinned Provider. The attestation SHALL match the exact Provider Instance and complete current Principal snapshot. A Connector-backed Provider SHALL pass that exact expected attestation through its canonical Connector boundary, which SHALL re-attest the actual session immediately before every business dispatch. Rebind, unbind, sign-out, Principal change, credential replacement, stable external-subject change, or binding-revision change SHALL invalidate the invocation. The real Provider operation, including DownloadCheck and write authorization, SHALL remain the final resource ACL oracle. Upload and download SHALL retain the fixed Host bounds and no-overwrite transfer contracts.
 
-Caller input, renderer state, Agent request, filename, extension/MIME, Task, prompt text, ordinary environment/configuration, package presence, or a successful sibling operation SHALL NOT install, select, widen, or promote a verification profile or readiness state. Host assurance SHALL NOT be treated as an external Provider account class.
+Caller input, renderer state, Agent request, filename, extension/MIME, Task, prompt text, ordinary environment/configuration, optional skill/package presence, or a successful sibling operation SHALL NOT nominate an external account, synthesize a Provider binding, widen admission, or promote readiness. Host assurance SHALL NOT be treated as an external Provider account class.
 
 #### Scenario: Operation is unavailable
 
-- **WHEN** any effective Gate blocks it or no exact trusted verification profile matches a `poc_only` operation
+- **WHEN** any effective Gate blocks it, the trusted audience is absent, or the current Provider connection cannot attest the exact Principal and Provider Instance
 - **THEN** discovery SHALL preserve the declared readiness while current admission is unavailable, and execution SHALL fail before the requested Provider business operation and any remote mutation with a bounded unavailable result
 
-#### Scenario: Verification profile admits one exact operation
+#### Scenario: Current Provider connection admits a PoC operation
 
-- **WHEN** a reviewed static profile and all trusted invocation facts match one `poc_only` operation
-- **THEN** only that invocation MAY traverse the canonical path, its declared readiness SHALL remain `poc_only`, and every unmatched operation or caller SHALL remain blocked
+- **WHEN** a trusted invocation for one `poc_only / runtime_authorization_required` operation obtains an exact current Provider binding
+- **THEN** that invocation MAY traverse the canonical path, its declared readiness SHALL remain `poc_only`, and every disconnected, revoked, cross-Principal, or contract-blocked operation SHALL remain blocked
 
 #### Scenario: Connector binding changes after admission begins
 
-- **WHEN** the pinned Provider or its current Connector session reports an external subject or opaque binding revision that no longer matches the attested profile facts
+- **WHEN** the pinned Provider or its current Connector session reports an external subject or opaque binding revision that no longer matches the invocation's attested facts
 - **THEN** Content Space SHALL stop before Provider business dispatch and SHALL NOT reuse the prior account authority
 
-### Requirement: Verification profiles compose as exact static package contributions
+### Requirement: Runtime authorization has no static package gate
 
-Content Space SHALL discover verification profiles only through generic package-owned `main.extension` composition at `main.content-space-verification-profile`. Each contribution SHALL contain one strict static profile whose manifest contract and runtime value are identical, and its manifest declaration SHALL explicitly set the generic contribution policy `publicRelease: "forbidden"`. A profile that omits that policy or declares `allowed` SHALL fail Content Space composition. Zero profiles SHALL leave PoC admission disabled; invalid metadata, contract/value drift, duplicate profile identity, unsafe authority, or a mutation/administration profile lacking the required Provider binding attestation SHALL fail composition. The Host SHALL contain no domain-ID switch, default profile, or caller/configuration profile loader.
+Content Space SHALL expose no static verification-profile contract, contribution location, constructor injection, generator, renderer switch, environment loader, or acceptance-only execution path. Runtime admission SHALL derive only from Host/Broker invocation facts and live Provider attestation. Installing or omitting an optional Agent skill package SHALL NOT add, remove, or alter a ContentSpaceProvider Instance or its ordinary operations.
 
-Every official public release path SHALL use standard domain-package discovery to reject any active production contribution whose generic manifest policy forbids public release before build, signing, or upload and SHALL repeat that same check after packaging. Because every valid verification profile requires that policy, no release guard SHALL inspect a Content Space location, package name, domain ID, or profile contract value. Local internal acceptance MAY compose a reviewed disposable profile only outside public release mode.
+Every official public release path SHALL continue to use standard domain-package discovery to reject any active production contribution whose generic manifest policy forbids public release before build, signing, or upload and SHALL repeat that same check after packaging. That generic release policy SHALL NOT be repurposed as Content Space operation authority.
 
-#### Scenario: Verification contribution drifts
+#### Scenario: Provider is available without an optional skill package
 
-- **WHEN** a manifest profile differs from its runtime contribution, duplicates another profile identity, or lacks the required `publicRelease: "forbidden"` declaration
-- **THEN** Content Space activation SHALL fail instead of ignoring, merging, or selecting one value
+- **WHEN** a Provider package and deployment configuration are installed but no optional Agent skill ZIP is installed
+- **THEN** Provider discovery, enrollment, and contract-complete ordinary operations SHALL remain present and SHALL use the same live runtime authorization path
 
-#### Scenario: Public release contains an acceptance profile
+#### Scenario: Optional skill package is installed
 
-- **WHEN** standard discovery finds an active contribution, including a valid Content Space verification profile, whose generic policy forbids public release
-- **THEN** release SHALL fail closed before signing or upload without logging Principal, root, or external-binding profile values
+- **WHEN** a user explicitly installs a private Agent skill package into a standard local skill root
+- **THEN** skill discovery MAY expose its Agent instructions and tools, but Content Space Provider composition, connection authority, readiness, and ACL behavior SHALL remain unchanged
 
 ### Requirement: Navigation, progress, and cancellation are bounded
 

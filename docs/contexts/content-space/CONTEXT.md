@@ -73,12 +73,12 @@ A descriptive per-operation evidence state of `poc_only`, `blocked_by_contract`,
 _Avoid_: environment flag as production approval, partial means complete
 
 **Content Space Invocation Admission**:
-The decision whether one exact operation may execute now for the current Principal, authority, audience, platform, resource capability, transfer limits, and trusted verification evidence. Admission never rewrites readiness, and `blocked_by_contract` is never admissible.
+The decision whether one exact operation may execute now for the current Principal, authority, audience, platform, resource capability, transfer limits, and current Provider binding. Admission never rewrites readiness, and `blocked_by_contract` is never admissible.
 _Avoid_: readiness promotion, package presence, global feature enablement
 
-**Trusted Content Space Verification Policy**:
-A trusted set of static profiles that may admit one exact `poc_only` invocation by matching its Provider Instance, complete Host Principal and assurance, authority, operation, audience, bounded transfer maxima, validity window, and any required Provider Binding Attestation. It narrows authority for that invocation and can never admit `blocked_by_contract` or be selected or widened by the caller.
-_Avoid_: development mode bypass, caller-selected profile, Provider-specific Host switch, bulk promotion
+**Runtime Content Space Authorization**:
+The per-invocation match between a trusted Broker audience, the exact current Principal and authority, the pinned Provider Instance, and that Provider's live Binding Attestation. The Provider passes the exact opaque expectation to its Connector for immediate reauthentication before the external operation, and the real Provider read check or write remains the ACL oracle. It can never admit `blocked_by_contract` or promote readiness.
+_Avoid_: static verification package, development mode bypass, caller-selected binding, bulk promotion
 
 **Broker Resource**:
 A process-local executable resource bound to one caller, current Principal, audience, and exact Content Space authority. It is issued only after Human selection or portable-reference reauthorization and is never interchangeable with a raw Provider ID or portable reference.
@@ -89,8 +89,24 @@ A bounded, non-authorizing projection of one trusted Provider Instance, `persona
 _Avoid_: Content Container Reference, Provider Instance display label, folder ID/GUID, Team ID, authorization cache
 
 **Agent Content Space Scope**:
-The Content Space authority available to an Agent execution context. A Personal Session obtains an installed Provider Instance from native Broker discovery and supplies `personal | shared` scope. If the Human has not supplied an exact library label, the Agent may page through label-only Agent Root Candidates; zero or multiple distinct choices require Human clarification and are never guessed, while canonically duplicate labels remain unavailable until the Provider-side ambiguity is resolved. Root authorization remains separately confirmed and resolves exactly one live match from the complete current container listing while rejecting raw Provider folder identities. Host then issues only a bounded caller/Principal/Workspace-bound Broker resource, and descendants arise only by listing an authorized directory. That delegated resource is sufficient authority for an invocation-admitted non-destructive ordinary content write without confirmation of every invocation; it is neither standing root-administration authority nor destructive-operation approval. `updateSpace`, `pinSpace`, `unpinSpace`, `addMember`, `removeMember`, and every native-document or extended destructive operation each require fresh per-invocation confirmation. An ordinary child, feature-selection, or Provider-administration resource cannot substitute for that confirmation. The delegation never authorizes an implicit overwrite. If Cloud Collaboration gives a Project Task Content Space authority, that authority is limited to its Project Content Directory and descendants even when the executing owner's Provider access is broader.
+The Content Space authority available to an Agent execution context. A Personal Session obtains an installed Provider Instance from native Broker discovery and supplies `personal | shared` scope. If the Human has not supplied an exact library label, the Agent may page through label-only Agent Root Candidates; zero or multiple distinct choices require Human clarification and are never guessed, while canonically duplicate labels remain unavailable until the Provider-side ambiguity is resolved. Root authorization remains separately confirmed and resolves exactly one live match from the complete current container listing while rejecting raw Provider folder identities. Host then issues only a bounded caller/Principal/Workspace-bound Broker resource, and descendants arise only by listing an authorized directory. That delegated resource is sufficient authority for an invocation-admitted non-destructive ordinary content write without confirmation of every invocation; it is neither standing root-administration authority nor destructive-operation approval. `updateSpace`, `pinSpace`, `unpinSpace`, `addMember`, `removeMember`, and every native-document or extended destructive operation each require fresh per-invocation confirmation. An ordinary child, feature-selection, or Provider-administration resource cannot substitute for that confirmation. The delegation never authorizes an implicit overwrite. A Project Task's authority is limited to its Project Content Directory and descendants even when the executing owner's Provider access is broader.
 _Avoid_: all resources visible to the Token, task-supplied connection, Project-wide Provider account
+
+**Project System Content Transfer**:
+A system-only, execution-bound download or upload-new between one authorized Project content resource and the current Task Workspace through the canonical Content Space path. It is not an Agent-discovered global capability, Provider shortcut, sync, mount, or Project-owned credential.
+_Avoid_: mock file handoff, renderer IPC transfer, Workspace sync, Provider client call
+
+**Content Resource Containment Observation**:
+Provider metadata evidence that one resource identity is located under an exact authorized root. It proves locator and ancestry only and never proves that the current Provider account may read or write the resource.
+_Avoid_: ACL check, DownloadCheck, Project membership, access token
+
+**Operation-Time Provider Authorization**:
+The Provider's real read check or write operation evaluated under the executing node owner's current Provider Connection immediately before the protected effect. A prior binding, member observation or metadata result cannot replace it.
+_Avoid_: metadata visibility, cached ACL, Cloud permission, provisioning attestation
+
+**Content Transfer Receipt**:
+A non-secret result binding one transfer invocation to its Principal/execution context, exact Provider resource, byte count, digest, and observation outcome. It is evidence for integrity and recovery, not a reusable capability or credential.
+_Avoid_: transfer handle, download URL, Provider Token, Task authority
 
 **Delegated Resource Write Authority**:
 The authority carried by an exact caller/Principal/Workspace-bound Broker resource after its root or parent has been authorized. A declared non-destructive ordinary content write still requires separate invocation admission; root-administration mutations and every destructive content operation require fresh Human confirmation and do not inherit this delegation. The resource cannot change Provider, escape to a sibling or ancestor, synthesize a resource identity, or authorize a destructive target by itself.

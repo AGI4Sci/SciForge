@@ -7,6 +7,8 @@ import enCommon from '../../locales/en/common.json'
 import zhCommon from '../../locales/zh/common.json'
 
 const listWorkspaceReferences = vi.hoisted(() => vi.fn())
+const resolveWorkspaceFile = vi.hoisted(() => vi.fn())
+const writeClipboardText = vi.hoisted(() => vi.fn())
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
@@ -36,6 +38,21 @@ describe('ChatFileTreePanel file context menu', () => {
     listWorkspaceReferences.mockResolvedValue({
       ok: true,
       references: [workspaceReference]
+    })
+    resolveWorkspaceFile.mockReset()
+    resolveWorkspaceFile.mockResolvedValue({
+      ok: true,
+      path: '/workspace/project/papers/example.pdf',
+      kind: 'file'
+    })
+    writeClipboardText.mockReset()
+    Object.defineProperty(window, 'sciforge', {
+      configurable: true,
+      value: { resolveWorkspaceFile }
+    })
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeClipboardText }
     })
     container = document.createElement('div')
     document.body.append(container)
@@ -115,6 +132,41 @@ describe('ChatFileTreePanel file context menu', () => {
     })
 
     expect(container?.textContent).not.toContain('fileTreePreviewInNewRightSidebar')
+  })
+
+  it('resolves and copies the absolute path for a workspace entry', async () => {
+    root = createRoot(container as HTMLDivElement)
+
+    await act(async () => {
+      root?.render(createElement(ChatFileTreePanel, {
+        workspaceRoot: '/workspace/project',
+        onPreviewFile: vi.fn(),
+        onAddReference: vi.fn(),
+        onCollapse: vi.fn()
+      }))
+    })
+
+    const row = container?.querySelector<HTMLElement>('[data-file-tree-path="papers/example.pdf"]')
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20
+      }))
+    })
+
+    const copyPathAction = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []
+    ).find((button) => button.textContent?.includes('filePreviewCopyPath'))
+
+    await act(async () => copyPathAction?.click())
+
+    expect(resolveWorkspaceFile).toHaveBeenCalledWith({
+      path: 'papers/example.pdf',
+      workspaceRoot: '/workspace/project'
+    })
+    expect(writeClipboardText).toHaveBeenCalledWith('/workspace/project/papers/example.pdf')
   })
 
   it('adds directory and ordinary-file references with their workspace metadata intact', async () => {

@@ -18,6 +18,11 @@
   font-family: 'SF Pro Text', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif;
 }
 
+.content-space-panel.is-embedded {
+  height: 100%;
+  background: transparent;
+}
+
 .content-space-panel :is(button, select, input, summary) {
   font: inherit;
 }
@@ -164,8 +169,25 @@
 }
 
 .content-space-section-label > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: var(--content-space-muted);
   font-size: 10.5px;
+}
+
+.content-space-inline-cancel {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--content-space-border);
+  border-radius: 7px;
+  padding: 0 7px;
+  background: var(--content-space-surface);
+  color: var(--content-space-muted);
+  cursor: pointer;
+  font-size: 10px;
 }
 
 .content-space-select-wrap {
@@ -329,7 +351,7 @@
   white-space: nowrap;
 }
 
-.content-space-readiness-profile {
+.content-space-readiness-runtime-auth {
   flex: 0 0 auto;
   border-radius: 999px;
   padding: 2px 6px;
@@ -835,7 +857,7 @@
 @container (max-width: 360px) {
   .content-space-heading > span,
   .content-space-section-label > span,
-  .content-space-readiness-profile {
+  .content-space-readiness-runtime-auth {
     display: none;
   }
 

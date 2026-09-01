@@ -21,6 +21,7 @@ try {
   })
   const result = await runElectronDomainSmoke({
     executablePath,
+    expectedDeployment: options.expectedDeployment,
     label: 'packaged/unpacked',
     timeoutMs: options.timeoutMs
   })

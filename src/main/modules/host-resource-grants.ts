@@ -3,10 +3,15 @@ import {
   samePrincipalSnapshot,
   type PrincipalSnapshot
 } from '@sciforge/domain-sdk/principal'
-import type {
-  CapabilityApprovalMode,
-  CapabilityEffect,
-  CapabilityScope
+import {
+  domainSystemWorkspaceTransferAuthorizationSchema,
+  type DomainSystemWorkspaceTransferAuthorization
+} from '@sciforge/domain-sdk/file-transfer'
+import {
+  capabilityIdSchema,
+  type CapabilityApprovalMode,
+  type CapabilityEffect,
+  type CapabilityScope
 } from '../../shared/capability-broker'
 
 /** Host-private lease. Domain packages and renderer payloads never construct it. */
@@ -21,6 +26,10 @@ export type HostResourceGrantInvocation = Readonly<{
     principal?: PrincipalSnapshot
     audience?: 'ui' | 'agent' | 'system'
     workspaceId?: string
+    /** Host-projected manifest authority; never accepted from package input. */
+    capabilityGrants?: readonly string[]
+    principalSnapshotDigest?: string
+    executionContextDigest?: string
   }>
   actionId?: string
   invocationId?: string
@@ -42,6 +51,9 @@ type HostResourceGrantInvocationSnapshot = Readonly<{
   caller: HostResourceGrantCaller
   audience?: 'ui' | 'agent' | 'system'
   workspaceId?: string
+  capabilityGrants?: readonly string[]
+  principalSnapshotDigest?: string
+  executionContextDigest?: string
   actionId?: string
   invocationId?: string
   effect?: CapabilityEffect
@@ -64,6 +76,10 @@ export type HostResourceGrantInvocationLease = HostResourceGrantCaller & Readonl
 }>
 
 export type HostAgentWorkspaceResourceGrantCaller = HostResourceGrantInvocationLease & Readonly<{
+  workspaceId: string
+}>
+
+export type HostWorkspaceResourceGrantCaller = HostResourceGrantInvocationLease & Readonly<{
   workspaceId: string
 }>
 
@@ -155,6 +171,55 @@ export function requireActiveAgentWorkspaceResourceGrantCaller(
   })
 }
 
+/**
+ * Canonical Workspace-transfer authority. Omitting system authorization keeps
+ * the existing Agent/resource-scope branch. A system descriptor selects the
+ * Broker-owned system/workspace branch and contributes only the exact
+ * manifest grant that must already be projected on the current invocation.
+ */
+export function requireActiveWorkspaceResourceGrantCaller(
+  currentInvocation: HostResourceGrantInvocationProvider,
+  direction: 'upload-source' | 'download-destination',
+  systemAuthorization?: DomainSystemWorkspaceTransferAuthorization
+): HostWorkspaceResourceGrantCaller {
+  if (!systemAuthorization) {
+    return requireActiveAgentWorkspaceResourceGrantCaller(currentInvocation, direction)
+  }
+
+  const authorization = domainSystemWorkspaceTransferAuthorizationSchema.parse(
+    systemAuthorization
+  )
+  const lease = requireActiveHostResourceGrantInvocationLease(currentInvocation)
+  const invocation = lease.invocation
+  const workspaceId = invocation.caller.workspaceId
+  const invocationId = invocation.invocationId
+  const directionAuthorized = direction === 'upload-source'
+    ? invocation.effect === 'external-write'
+    : invocation.effect === 'workspace-write'
+  if (
+    invocation.caller.audience !== 'system' ||
+    !isCanonicalBoundedIdentifier(workspaceId, 1_024) ||
+    !isCanonicalBoundedIdentifier(invocationId, 256) ||
+    !isCanonicalCapabilityId(invocation.actionId) ||
+    invocation.approval !== 'none' || invocation.approved !== true ||
+    invocation.scope !== 'workspace' || !directionAuthorized ||
+    invocation.autonomousWrite !== undefined || invocation.authorizedResource !== undefined ||
+    !isCanonicalDigest(invocation.caller.principalSnapshotDigest) ||
+    !isCanonicalDigest(invocation.caller.executionContextDigest) ||
+    !invocation.caller.capabilityGrants?.includes(
+      authorization.requiredSystemCapabilityGrant
+    )
+  ) {
+    throw new Error(
+      'A Broker-authorized system Workspace transfer with the required Host grant is required.'
+    )
+  }
+  return Object.freeze({
+    ...lease,
+    workspaceId
+  })
+}
+
 export function boundedHostResourceGrantOwnerId(value: string): string {
   const normalized = value.trim()
   if (
@@ -183,10 +248,20 @@ function hostResourceGrantInvocationSnapshot(
         semanticRevision: invocation.authorizedResource.semanticRevision
       })
     : undefined
+  const capabilityGrants = invocation.caller.capabilityGrants
+    ? Object.freeze([...invocation.caller.capabilityGrants])
+    : undefined
   return Object.freeze({
     caller,
     ...(invocation.caller.audience ? { audience: invocation.caller.audience } : {}),
     ...(invocation.caller.workspaceId ? { workspaceId: invocation.caller.workspaceId } : {}),
+    ...(capabilityGrants ? { capabilityGrants } : {}),
+    ...(invocation.caller.principalSnapshotDigest
+      ? { principalSnapshotDigest: invocation.caller.principalSnapshotDigest }
+      : {}),
+    ...(invocation.caller.executionContextDigest
+      ? { executionContextDigest: invocation.caller.executionContextDigest }
+      : {}),
     ...(invocation.actionId ? { actionId: invocation.actionId } : {}),
     ...(invocation.invocationId ? { invocationId: invocation.invocationId } : {}),
     ...(invocation.effect ? { effect: invocation.effect } : {}),
@@ -208,6 +283,9 @@ function sameHostResourceGrantInvocationSnapshot(
     samePrincipalSnapshot(left.caller.principal, right.caller.principal) &&
     left.audience === right.audience &&
     left.workspaceId === right.workspaceId &&
+    sameOptionalStringArray(left.capabilityGrants, right.capabilityGrants) &&
+    left.principalSnapshotDigest === right.principalSnapshotDigest &&
+    left.executionContextDigest === right.executionContextDigest &&
     left.actionId === right.actionId &&
     left.invocationId === right.invocationId &&
     left.effect === right.effect &&
@@ -216,6 +294,31 @@ function sameHostResourceGrantInvocationSnapshot(
     left.scope === right.scope &&
     left.autonomousWrite === right.autonomousWrite &&
     sameAuthorizedResource(left.authorizedResource, right.authorizedResource)
+}
+
+function sameOptionalStringArray(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined
+): boolean {
+  if (!left || !right) return left === right
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function isCanonicalBoundedIdentifier(
+  value: string | undefined,
+  maximumLength: number
+): value is string {
+  return typeof value === 'string' && value.length > 0 &&
+    value.length <= maximumLength && value === value.trim()
+}
+
+function isCanonicalCapabilityId(value: string | undefined): value is string {
+  const result = capabilityIdSchema.safeParse(value)
+  return result.success && result.data === value
+}
+
+function isCanonicalDigest(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
 }
 
 function sameAuthorizedResource(

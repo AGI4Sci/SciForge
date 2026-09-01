@@ -9,9 +9,9 @@
   "module": {
     "id": "sciforge.opencontent-connector",
     "displayName": "OpenContent Connector",
-    "version": "2.0.3",
+    "version": "5.0.2",
     "hostApi": {
-      "minimum": "1.4.0",
+      "minimum": "1.9.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 280
@@ -27,7 +27,7 @@
     "opencontent-connector.content-space-service": {
       "location": "main.internal-service-descriptor",
       "serviceId": "opencontent.content-space",
-      "contractVersion": "3.0.0",
+      "contractVersion": "4.0.0",
       "allowedConsumerModuleIds": [
         "sciforge.opencontent-content-space-provider"
       ]
@@ -52,7 +52,7 @@
         {
           "id": "opencontent-connector.content-space-service",
           "kind": "main.extension",
-          "version": "3.0.0",
+          "version": "4.0.0",
           "priority": 280
         }
       ]

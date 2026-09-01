@@ -22,19 +22,22 @@ const ACCESS = {
 test('loads exact plot manifest, recipe, figure, data, and log refs from Artifact Versions', async () => {
   const derived = historyItem('scientific-plot-derived-data', 'derived', [])
   const recipe = historyItem('scientific-plot-recipe', 'recipe', [dependency('derived-data', derived.ref)])
-  const figure = historyItem('scientific-plot', 'figure-v1', [dependency('recipe', recipe.ref)], {
+  const code = historyItem('scientific-plot-code', 'code-v1', [dependency('recipe', recipe.ref)], {
+    metadata: { codePath: '.sciforge/plots/figure-v1.render.py' }
+  })
+  const figure = historyItem('scientific-plot', 'figure-v1', [dependency('recipe', recipe.ref), dependency('code', code.ref)], {
     currentVersionId: 'artifact-version:figure-v2'
   })
   const manifest = historyItem(
     'scientific-plot-render-manifest',
     'manifest',
-    [dependency('recipe', recipe.ref), dependency('figure', figure.ref)],
+    [dependency('recipe', recipe.ref), dependency('figure', figure.ref), dependency('code', code.ref)],
     { metadata: { manifestPath: '.sciforge/plots/figure-v1.manifest.json' } }
   )
   const log = historyItem('scientific-plot-render-log', 'log', [], {
     metadata: { plotVersionId: 'plot-v1' }
   })
-  const items = [manifest, recipe, figure, derived, log]
+  const items = [manifest, recipe, figure, code, derived, log]
   const encodedManifest = Buffer.from(JSON.stringify(plotManifest()), 'utf8').toString('base64')
   const client: ScientificPlottingCapabilityClient = {
     listArtifactVersions: async () => ({ ok: true, value: { items } }),
@@ -49,6 +52,7 @@ test('loads exact plot manifest, recipe, figure, data, and log refs from Artifac
           }
         }
       : { ok: false, issue: { code: 'version-not-found', message: 'not found' } },
+    materializeArtifactVersion: async () => ({ ok: false, issue: { code: 'io-failure', message: 'not used' } }),
     rerun: async () => ({
       ok: false,
       status: 'version_read_failed',
@@ -80,6 +84,7 @@ test('loads exact plot manifest, recipe, figure, data, and log refs from Artifac
     manifestItem: manifest,
     manifestRef: manifest.ref,
     recipeRef: recipe.ref,
+    codeRef: code.ref,
     figureRef: figure.ref,
     derivedDataRef: derived.ref,
     logRef: log.ref,
@@ -99,6 +104,18 @@ test('rejects malformed bytes instead of presenting incomplete provenance as rea
   })
 })
 
+test('rejects model-only receipts from the Scientific Plotting projection', () => {
+  const manifest = plotManifest() as Record<string, unknown>
+  const recipe = manifest.recipe as Record<string, unknown>
+  recipe.visualPlan = { route: 'model' }
+  const encoded = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64')
+
+  assert.deepEqual(parseScientificPlotManifest(encoded), {
+    ok: false,
+    message: 'snapshot is a model-only image receipt; inspect it through Image Generation and Visual Review.'
+  })
+})
+
 function historyItem(
   kind: string,
   stem: string,
@@ -115,7 +132,9 @@ function historyItem(
     versionId,
     contentDigest: DIGEST,
     byteLength: 42,
-    mediaType: kind === 'scientific-plot' ? 'image/png' : 'application/json',
+      mediaType: kind === 'scientific-plot'
+        ? 'image/png'
+        : kind === 'scientific-plot-code' ? 'text/x-python' : 'application/json',
     availability: 'available',
     retention: 'snapshot',
     accessPolicy: ACCESS
@@ -177,6 +196,7 @@ function plotManifest(): unknown {
     plotVersionId: 'plot-v1',
     requestHash: DIGEST,
     recipePath: '.sciforge/plots/figure.recipe.json',
+    codePath: '.sciforge/plots/figure-v1.render.py',
     outputPath: '.sciforge/plots/figure.png',
     outputHash: DIGEST,
     recipe: {
@@ -248,7 +268,7 @@ function plotManifest(): unknown {
         renderer: 'sciforge-scientific-plotting-mcp',
         rendererVersion: '1.0.0',
         rendererCodeSha256: DIGEST,
-        command: ['python3', '-c', '<renderer>'],
+        command: ['python3', '<sciforge-scientific-plot-code-artifact>'],
         cwd: '/workspace',
         timeoutMs: 30_000
       },

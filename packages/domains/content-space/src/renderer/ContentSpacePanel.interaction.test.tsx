@@ -224,7 +224,7 @@ describe('ContentSpacePanel', () => {
     )
   })
 
-  it('enters an exact-root profile after provider-scoped discovery admits only list-containers', async () => {
+  it('enters an exact root after provider-scoped discovery runtime-authorizes list-containers', async () => {
     const listContainers = vi.fn(async () => ok({
       providerInstanceRef: providerOne,
       items: [{
@@ -237,19 +237,19 @@ describe('ContentSpacePanel', () => {
       {
         operation: 'observe-entry',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required',
+        reasonCode: 'runtime_authorization_required',
         admission: {
           status: 'admitted',
-          reasonCode: 'verification_profile_admitted'
+          reasonCode: 'runtime_authorized'
         }
       },
       {
         operation: 'list-entries',
         readiness: 'poc_only',
-        reasonCode: 'verification_profile_required',
+        reasonCode: 'runtime_authorization_required',
         admission: {
           status: 'admitted',
-          reasonCode: 'verification_profile_admitted'
+          reasonCode: 'runtime_authorized'
         }
       }
     ]
@@ -271,19 +271,19 @@ describe('ContentSpacePanel', () => {
           {
             operation: 'list-containers',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'admitted',
-              reasonCode: 'verification_profile_admitted'
+              reasonCode: 'runtime_authorized'
             }
           },
           {
             operation: 'list-entries',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'blocked',
-              reasonCode: 'verification_profile_required'
+              reasonCode: 'runtime_authorization_required'
             }
           }
         ]
@@ -300,7 +300,7 @@ describe('ContentSpacePanel', () => {
       '[aria-label="Content Space Provider readiness"]'
     )
     expect(readiness?.textContent)
-      .toContain('list-containers: PoC (verification profile admitted)')
+      .toContain('list-containers: PoC (runtime authorized)')
     expect(readiness?.closest('details')?.open).toBe(false)
     expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
       .toContain('1 of 2 operations available')
@@ -326,7 +326,7 @@ describe('ContentSpacePanel', () => {
       ok: false as const,
       error: {
         code: 'blocked_by_contract' as const,
-        message: 'Exact root verification is required.',
+        message: 'Exact root authority is required.',
         retry: 'never' as const
       }
     })) satisfies ContentSpaceCapabilityClient['observeEntry']
@@ -337,19 +337,19 @@ describe('ContentSpacePanel', () => {
           {
             operation: 'list-containers',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'admitted',
-              reasonCode: 'verification_profile_admitted'
+              reasonCode: 'runtime_authorized'
             }
           },
           {
             operation: 'list-entries',
             readiness: 'poc_only',
-            reasonCode: 'verification_profile_required',
+            reasonCode: 'runtime_authorization_required',
             admission: {
               status: 'blocked',
-              reasonCode: 'verification_profile_required'
+              reasonCode: 'runtime_authorization_required'
             }
           }
         ]
@@ -374,7 +374,7 @@ describe('ContentSpacePanel', () => {
     })
     expect(listEntries).not.toHaveBeenCalled()
     expect(mounted.container.querySelector('[role="alert"]')?.textContent)
-      .toContain('Exact root verification is required.')
+      .toContain('Exact root authority is required.')
   })
 
   it('does not list containers when PoC evidence has no current admission', async () => {
@@ -384,10 +384,10 @@ describe('ContentSpacePanel', () => {
         items: [{
           operation: 'list-containers',
           readiness: 'poc_only',
-          reasonCode: 'verification_profile_required',
+          reasonCode: 'runtime_authorization_required',
           admission: {
             status: 'blocked',
-            reasonCode: 'verification_profile_required'
+            reasonCode: 'runtime_authorization_required'
           }
         }]
       }),
@@ -401,7 +401,7 @@ describe('ContentSpacePanel', () => {
       '[aria-label="Content Space Provider readiness"]'
     )
     expect(readiness?.textContent)
-      .toContain('list-containers: PoC unavailable (verification required)')
+      .toContain('list-containers: PoC unavailable (connect Provider)')
     expect(readiness?.closest('details')?.querySelector('summary')?.textContent)
       .toContain('0 of 1 operations available')
     expect(mounted.container.textContent)
@@ -501,6 +501,97 @@ describe('ContentSpacePanel', () => {
     expect(listContainers).not.toHaveBeenCalled()
     expect(providerSelect(mounted.container).value).toBe(providerOne)
     expect(mounted.container.textContent).toContain('paper.pdf')
+  })
+
+  it('downloads a governed deep-linked result through the canonical Content Space transfer', async () => {
+    const boundHandle = sessionResource(
+      CONTENT_FILE_RESOURCE_KIND,
+      'res_result-review-file-001',
+      'result-review-file'
+    ).resource
+    const bindResource = vi.fn(async () => boundHandle)
+    const download = vi.fn(async (input) => ok({
+      invocationId: 'renderer-result-review-download-0001',
+      reference: input.reference,
+      bytesWritten: 128
+    })) satisfies ContentSpaceCapabilityClient['download']
+    const transfers = fileTransfers()
+    const mounted = await mountPanel(panelClient({
+      listProviderInstances: async () => ok({
+        items: [{
+          providerInstanceRef: providerOne,
+          providerKind: 'mock-one',
+          label: 'Mock One'
+        }]
+      }),
+      bindResource,
+      observeResource: async () => ({
+        reference: fileReference,
+        entry: fileEntry,
+        capabilities: fileCapabilities
+      }),
+      download
+    }), {
+      fileTransfers: transfers,
+      workspaceId: '/workspace/review',
+      initialResource: {
+        kind: CONTENT_FILE_RESOURCE_KIND,
+        resourceRef: 'res_result-review-file-001'
+      }
+    })
+
+    expect(bindResource).toHaveBeenCalledWith('res_result-review-file-001', {
+      workspaceId: '/workspace/review',
+      signal: expect.any(AbortSignal)
+    })
+    await click(buttonByText(mounted.container, 'Download'))
+
+    expect(transfers.pickDownloadDestination).toHaveBeenCalledWith({
+      title: 'Download Content Space file',
+      suggestedName: 'paper.pdf'
+    }, { signal: expect.any(AbortSignal) })
+    expect(download).toHaveBeenCalledWith({
+      reference: fileReference,
+      destinationHandle: `xfer_${'d'.repeat(32)}`
+    }, {
+      approval: { mode: 'confirmation' },
+      signal: expect.any(AbortSignal)
+    })
+  })
+
+  it('fails closed before Provider observation when the Host cannot rebind the review reference', async () => {
+    const bindResource = vi.fn(async () => {
+      throw new Error('Resource reference is outside the caller workspace.')
+    })
+    const observeResource = vi.fn(panelClient().observeResource)
+    const download = vi.fn(panelClient().download)
+    const mounted = await mountPanel(panelClient({
+      listProviderInstances: async () => ok({
+        items: [{
+          providerInstanceRef: providerOne,
+          providerKind: 'mock-one',
+          label: 'Mock One'
+        }]
+      }),
+      bindResource,
+      observeResource,
+      download
+    }), {
+      workspaceId: '/workspace/review',
+      initialResource: {
+        kind: CONTENT_FILE_RESOURCE_KIND,
+        resourceRef: 'res_result-review-file-001'
+      }
+    })
+
+    expect(bindResource).toHaveBeenCalledOnce()
+    expect(observeResource).not.toHaveBeenCalled()
+    expect(download).not.toHaveBeenCalled()
+    expect(mounted.container.textContent)
+      .toContain('Content Space operation failed. (provider_unavailable)')
+    expect(mounted.container.textContent)
+      .not.toContain('Resource reference is outside the caller workspace.')
+    expect(() => buttonByText(mounted.container, 'Download')).toThrow()
   })
 
   it('requires a source choice for ambiguous deep links and aborts a stale access check', async () => {
@@ -838,7 +929,7 @@ describe('ContentSpacePanel', () => {
       input: Parameters<ContentSpaceCapabilityClient['observeResource']>[0],
       options?: Readonly<{ signal?: AbortSignal }>
     ) => {
-      if (input.resource.token === 'resource-a') {
+      if (input.resource.token === `cap_${'resource-a'.padEnd(20, 'x')}`) {
         portableSignal = options?.signal
         return firstObservation.promise
       }
@@ -963,6 +1054,7 @@ function panelClient(
   overrides: Partial<ContentSpaceCapabilityClient> = {}
 ): ContentSpaceCapabilityClient {
   return {
+    bindResource: async () => { throw new Error('resource bind not configured') },
     listProviderInstances: async () => ok({
       items: [
         { providerInstanceRef: providerOne, providerKind: 'mock-one', label: 'Mock One' },
@@ -1013,7 +1105,7 @@ function panelClient(
     openPortal: async () => ok({ opened: true as const }),
     observeImmutableVersion: async () => ok({
       proven: false as const,
-      reasonCode: 'verification_profile_required' as const
+      reasonCode: 'runtime_authorization_required' as const
     }),
     observeResource: async () => ({
       reference: rootReference,
@@ -1078,16 +1170,18 @@ function enrollmentView(
   })
 }
 
-function sessionResource(
-  kind: string,
+function sessionResource<Kind extends
+    | typeof CONTENT_CONTAINER_RESOURCE_KIND
+    | typeof CONTENT_FILE_RESOURCE_KIND>(
+  kind: Kind,
   resourceRef: string,
-  token: string
-): DomainRendererSessionResource {
+  handleSuffix: string
+): DomainRendererSessionResource & Readonly<{ kind: Kind }> {
   return Object.freeze({
     kind,
     resourceRef,
     resource: Object.freeze({
-      token,
+      token: `cap_${handleSuffix.padEnd(20, 'x')}`,
       semanticRevision: 'revision-1',
       expiresAt: '2026-08-16T12:00:00.000Z'
     })

@@ -20,6 +20,28 @@ export const COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main',
   'main.runtime-lifecycle'
 )
+export const COLLABORATION_RUNTIME_LIFECYCLE_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_RUNTIME_LIFECYCLE_CONTRIBUTION.id
+  ]!
+export const COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'collaboration.coordinator-cloud-command'
+)
+export const COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_COORDINATOR_CLOUD_COMMAND_CONTRIBUTION.id
+  ]!
+export const COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION = contributionFor(
+  'main',
+  'main.extension',
+  'collaboration.worker-session-projection'
+)
+export const COLLABORATION_WORKER_SESSION_PROJECTION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_WORKER_SESSION_PROJECTION_CONTRIBUTION.id
+  ]!
 export const COLLABORATION_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'
@@ -32,23 +54,33 @@ export const COLLABORATION_OPEN_COMMAND_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.command'
 )
-export const COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
+export const COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION = contributionFor(
   'renderer',
-  'renderer.workbench-toolbar-action'
+  'renderer.extension',
+  'collaboration.workspace-my-work'
 )
-export const COLLABORATION_TOOLBAR_ACTION_CONTRACT =
+export const COLLABORATION_WORKSPACE_MY_WORK_CONTRACT =
   domainPackageDefinition.contributionContracts[
-    COLLABORATION_TOOLBAR_ACTION_CONTRIBUTION.id
+    COLLABORATION_WORKSPACE_MY_WORK_CONTRIBUTION.id
+  ]!
+export const COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.extension',
+  'collaboration.workspace-settings'
+)
+export const COLLABORATION_WORKSPACE_SETTINGS_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    COLLABORATION_WORKSPACE_SETTINGS_CONTRIBUTION.id
   ]!
 export const COLLABORATION_I18N_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.i18n-resource'
 )
 
-function contributionFor(process: DomainPackageProcess, kind: string) {
+function contributionFor(process: DomainPackageProcess, kind: string, id?: string) {
   const contribution = domainPackageDefinition.entrypoints
     .find((entrypoint) => entrypoint.process === process)
-    ?.contributions.find((candidate) => candidate.kind === kind)
+    ?.contributions.find((candidate) => candidate.kind === kind && (!id || candidate.id === id))
   if (!contribution) {
     throw new Error(`Collaboration manifest is missing ${process}:${kind}.`)
   }

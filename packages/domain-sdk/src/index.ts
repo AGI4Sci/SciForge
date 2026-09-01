@@ -1,4 +1,5 @@
 export * from './agent-execution.js'
+export * from './agent-routing.js'
 export * from './contract.js'
 export * from './controlled-process.js'
 export * from './external-navigation.js'

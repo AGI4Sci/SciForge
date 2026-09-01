@@ -42,6 +42,10 @@ import {
   createApplicationDomainCatalog
 } from '../modules/application-composition'
 import { createNonSecretPackageStorageForTest } from '../modules/domain-package-storage.test-helper'
+import {
+  createIsolatedInternalServicesForTest,
+  createUnavailablePortableResourcesForTest
+} from '../modules/domain-main-host.test-helper'
 import { HostPrincipalContext } from '../principal-context'
 import type { z } from 'zod'
 
@@ -289,9 +293,13 @@ function identityApplicationIpcFixture(root: string) {
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => root,
     getDeviceId: () => 'device-integration-1',
+    portableResourcesFor: createUnavailablePortableResourcesForTest(),
     packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: () => Object.freeze({
       invoke: async () => {
+        throw new Error('Nested domain capabilities are unavailable in this test.')
+      },
+      createApprovedBatch: () => {
         throw new Error('Nested domain capabilities are unavailable in this test.')
       }
     })
@@ -359,6 +367,7 @@ function identityBrokerFixture(root: string) {
   const entry = createDomainMainEntry({
     getUserDataDir: () => root,
     getDeviceId: () => 'device-integration-1',
+    internalServices: createIsolatedInternalServicesForTest(),
     packageSecrets: memorySecrets(),
     defineCapability: (options) => defineCapability(
       options as DefineCapabilityOptions<z.ZodType, z.ZodType>

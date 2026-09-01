@@ -140,6 +140,9 @@ function lifecycleContext(userDataDir: string): DomainMainRuntimeLifecycleContex
     capabilities: {
       invoke: async () => {
         throw new Error('Unexpected cross-domain capability.')
+      },
+      createApprovedBatch: () => {
+        throw new Error('Unexpected cross-domain capability.')
       }
     },
     modelAccess: {

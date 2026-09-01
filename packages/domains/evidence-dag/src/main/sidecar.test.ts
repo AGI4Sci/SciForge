@@ -269,6 +269,9 @@ function lifecycleContext(
     capabilities: {
       invoke: async () => {
         throw new Error('Unexpected capability invocation.')
+      },
+      createApprovedBatch: () => {
+        throw new Error('Unexpected capability invocation.')
       }
     },
     modelAccess: {

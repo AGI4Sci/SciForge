@@ -13,7 +13,7 @@
 - [x] 2.1 实现 UserPrincipal 生命周期、登录主体和 suspended/revoked 行为，使 Project 成员、Agent owner 和 HumanNeeded 都引用稳定 userId。
 - [x] 2.2 实现 Human Endpoint 短期 challenge、provider sender 验证、唯一绑定、assurance、暂停、撤销和显式转移。
 - [x] 2.3 实现 SciForge device registration、稳定 agentId、ownerUserId、device credential secret、心跳、撤销和凭据轮换。
-- [x] 2.4 实现 ParticipantProfile，允许用户从自己拥有的端点和 Agent 中显式选择 primary，禁止最近在线或跨用户回退。
+- [x] 2.4 实现 ParticipantProfile，组合已验证端点与自动确保的 Device Agent，移除 primary Agent 选择并禁止最近在线或跨用户回退。
 - [x] 2.5 增加身份冲突、显示名修改、重复 challenge、端点被盗、Agent 被盗、owner 转移和撤销后的安全测试。
 - [x] 2.6 审计 settings、日志、诊断、二维码、测试 fixture、导出和 Git 文件，确保不存在长期 token、API key、challenge、密码或私钥。
 
@@ -37,10 +37,10 @@
 
 ## 5. SciForge 协作领域包
 
-- [x] 5.1 新建 `@sciforge/domain-collaboration`，由 main 入口拥有 Agent 注册、云端连接、durable inbox/outbox、Task 执行和 Session projection service，由 renderer 入口贡献统一协作 UI。
+- [x] 5.1 新建 `@sciforge/domain-collaboration`，由 main 入口消费 Identity canonical Device→Agent binding，并拥有云端连接、durable inbox/outbox、Task 执行和 Session projection service，由 renderer 入口贡献统一协作 UI。
 - [x] 5.2 只通过 domain SDK 的通用 AgentRuntime、Capability Broker、secret store、settings 和 UI contributions 接入 Host。
 - [x] 5.3 实现 Participant 状态页，组合显示同一 userId 下的手机端点与 Agent，同时分别显示验证、assurance、在线和撤销状态。
-- [x] 5.4 实现 Agent/primary Agent 选择、云端连接状态、Project/Task 列表、错误诊断和显式恢复操作。
+- [x] 5.4 实现自动 Device Agent 状态、云端连接状态、Project/Task 列表、错误诊断和显式恢复操作；renderer 不提供手工注册或 primary 选择。
 - [x] 5.5 确保个人消息和协作 Task 使用同一 canonical Agent execution host 与审批路径，不增加 provider IPC、MCP 或测试旁路。
 
 ## 6. 个人 Session 投影与同步
@@ -55,7 +55,7 @@
 ## 7. 多用户 Project 协作
 
 - [x] 7.1 实现 Project 创建、member user、Coordinator Agent、手动转交和 role/owner 校验。
-- [x] 7.2 实现结构化 Task offer/accept/reject/progress/result/failure/needs-human 状态，按 assigneeAgentId 投递并用 revision 防止过期结果。
+- [x] 7.2 实现结构化 User-level Task offer/claim/withdraw/timeout/progress/result/failure/needs-human 状态，向 workerUserId 的合格运行时广播，首个原子 claim 绑定 Agent/Device Execution，并用 revision 防止过期结果。
 - [x] 7.3 在本地记录 active taskId/revision/turn，Agent 断线重连后报告实际状态，不重复执行或覆盖已改派 Task。
 - [x] 7.4 实现 Coordinator 单写者和星形协作；Worker 只能更新自己 Task、提交 observation/result 或提出子任务建议。
 - [x] 7.5 实现每 Project Task/轮次/重试预算和明确终止；Coordinator 离线时暂停并允许有权用户显式转交，不自动选主。
@@ -73,7 +73,7 @@
 
 - [x] 9.1 删除旧 workspace-channel binding、topic-derived config ID、`/use project` 和 `/new` 静默 retarget 行为。
 - [x] 9.2 删除 Host-owned Zulip/remote-channel runtime、provider IPC、Connect Phone provider 分支、renderer duplicate mirror tracking、陈旧 settings、tests、exports 和 dependencies。
-- [x] 9.3 提供一次性升级流程：验证云端用户、绑定手机 endpoint、注册 Agent、选择 primary Agent、重新链接个人 Session；不得保留 runtime compatibility facade 或双 registration。
+- [x] 9.3 提供一次性升级流程：验证云端用户、绑定手机 endpoint、自动 ensure 当前 Device Agent、重新链接个人 Session；不得保留 runtime compatibility facade 或双 registration。
 - [x] 9.4 重新生成 composition，并验证 source 和 packaged application 中只有统一协作领域生产路径。
 
 ## 10. 验证与文档
@@ -81,6 +81,6 @@
 - [x] 10.1 合同测试覆盖稳定 ID、严格 schema、中文 locator、身份冲突、revision、幂等、redaction 和状态机。
 - [x] 10.2 Fake provider/server/runtime 集成测试覆盖双向 Session、ProjectInput、Task、离线恢复、重复事件、撤销和审批治理。
 - [ ] 10.3 Zulip 验收覆盖六个用户各自手机/Agent 绑定、两个个人 Session、一个 Project topic、两个并行 Worker、定向 HumanNeeded 和 Coordinator 转交。
-- [x] 10.4 Renderer 测试覆盖 Participant 组合展示、无 Project 完成绑定、primary Agent 切换、Session 分享、Project 状态和显式错误。
+- [x] 10.4 Renderer 测试覆盖 Participant 组合展示、无 Project 自动完成 Device Agent 绑定、Session 分享、Project 状态和显式错误，并证明没有 primary Agent 控件。
 - [x] 10.5 运行 package boundary、generated composition freshness、capability governance、typecheck、focused/full tests、changed-file lint 和 packaged smoke tests。
 - [x] 10.6 更新中文用户及运维文档，区分 User、手机端点、Agent、个人 Session、Project topic、Task、在线依赖、权限保证和故障恢复。

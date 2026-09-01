@@ -196,6 +196,12 @@ export type DevBrowserBridgeResourceContent = {
 
 type StartDevBrowserBridgeServerOptions = {
   dispatcher: DevBrowserBridgeDispatcher
+  /**
+   * Resolves authoritative registry tags for HTTP transport policy. When it is
+   * absent, capability invocations fail closed while non-capability channels
+   * remain available to focused transport tests and tooling.
+   */
+  resolveCapabilityTags?: (actionId: string) => readonly string[] | undefined
   resourceContent?: DevBrowserBridgeResourceContent
   host?: string
   port?: number
@@ -217,6 +223,9 @@ type PendingSurfaceCapture = {
   resolve: (capture: DevBrowserSurfaceCapture) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+  delivered?: boolean
+  onClientAvailable?: () => void
+  onChannelAvailable?: () => void
 }
 
 type SurfaceCaptureUpload = {
@@ -279,6 +288,11 @@ class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
       this.destroyTimer = null
     }
     this.responses.add(response)
+    // A renderer may reconnect its EventSource while a visual capture is in
+    // flight. Notify pending capture challenges so they can be delivered as
+    // soon as the pixel-capture channel is available instead of failing the
+    // operation on the transient disconnected window.
+    this.emit('channel-attached')
     response.on('close', () => {
       this.responses.delete(response)
       this.scheduleDestroy()
@@ -391,6 +405,14 @@ function parseInvokeBody(value: unknown): { channel: string; payload: unknown } 
     channel: body.channel.trim(),
     payload: body.payload
   }
+}
+
+function capabilityInvocationActionId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined
+  const request = (payload as { request?: unknown }).request
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return undefined
+  const actionId = (request as { actionId?: unknown }).actionId
+  return typeof actionId === 'string' && actionId.trim() ? actionId.trim() : undefined
 }
 
 function parseSurfaceCaptureUpload(value: unknown): SurfaceCaptureUpload {
@@ -546,13 +568,45 @@ export async function startDevBrowserBridgeServer(
   const instanceId = options.instanceId?.trim() || ''
   const clients = new Map<string, DevBrowserBridgeClient>()
   const clientsByNumericId = new Map<number, DevBrowserBridgeClient>()
+  // Keep a browser page's numeric surface identity stable across brief
+  // EventSource disconnects. Visible-context snapshots contain this ID, so
+  // allocating a new one on reconnect would leave captures pointed at a
+  // permanently stale `browser:<id>` surface until the next publish.
+  const numericIdsByClientId = new Map<string, number>()
+  const clientIdsByNumericId = new Map<number, string>()
+  const clientAvailabilityWaiters = new Map<number, Set<() => void>>()
   const pendingSurfaceCaptures = new Map<string, PendingSurfaceCapture>()
   let nextClientNumericId = 1
+
+  const notifyClientAvailable = (clientNumericId: number): void => {
+    for (const waiter of clientAvailabilityWaiters.get(clientNumericId) ?? []) waiter()
+  }
+
+  const removeClientAvailabilityWaiter = (clientNumericId: number, waiter: () => void): void => {
+    const waiters = clientAvailabilityWaiters.get(clientNumericId)
+    if (!waiters) return
+    waiters.delete(waiter)
+    if (waiters.size === 0) clientAvailabilityWaiters.delete(clientNumericId)
+  }
 
   const rejectPendingSurfaceCaptures = (clientNumericId: number, message: string): void => {
     for (const [requestId, pending] of pendingSurfaceCaptures) {
       if (pending.clientNumericId !== clientNumericId) continue
+      // If the challenge has not reached the renderer yet, keep it alive
+      // while the page's EventSource reconnects. Once delivered, a closed
+      // channel means the in-flight capture cannot be correlated safely.
+      if (!pending.delivered) {
+        pending.onChannelAvailable = undefined
+        continue
+      }
       clearTimeout(pending.timer)
+      if (pending.onChannelAvailable) {
+        const client = clientsByNumericId.get(clientNumericId)
+        client?.removeListener('channel-attached', pending.onChannelAvailable)
+      }
+      if (pending.onClientAvailable) {
+        removeClientAvailabilityWaiter(clientNumericId, pending.onClientAvailable)
+      }
       pendingSurfaceCaptures.delete(requestId)
       pending.reject(new Error(message))
     }
@@ -561,10 +615,14 @@ export async function startDevBrowserBridgeServer(
   const getClient = (clientId: string): DevBrowserBridgeClient => {
     const existing = clients.get(clientId)
     if (existing && !existing.isDestroyed()) return existing
-    const created = new DevBrowserBridgeClient(nextClientNumericId++, clientId)
+    const numericId = numericIdsByClientId.get(clientId) ?? nextClientNumericId++
+    numericIdsByClientId.set(clientId, numericId)
+    const created = new DevBrowserBridgeClient(numericId, clientId)
     created.once('destroyed', () => {
       if (clients.get(clientId) === created) clients.delete(clientId)
-      clientsByNumericId.delete(created.id)
+      if (clientsByNumericId.get(created.id) === created) {
+        clientsByNumericId.delete(created.id)
+      }
       rejectPendingSurfaceCaptures(
         created.id,
         `Browser surface browser:${created.id} disconnected during pixel capture.`
@@ -572,6 +630,8 @@ export async function startDevBrowserBridgeServer(
     })
     clients.set(clientId, created)
     clientsByNumericId.set(created.id, created)
+    clientIdsByNumericId.set(created.id, clientId)
+    notifyClientAvailable(created.id)
     return created
   }
 
@@ -719,12 +779,22 @@ export async function startDevBrowserBridgeServer(
           }
           const captured = await decodeSurfaceCapture(upload, pending)
           clearTimeout(pending.timer)
+          if (pending.onChannelAvailable) {
+            const client = clientsByNumericId.get(pending.clientNumericId)
+            client?.removeListener('channel-attached', pending.onChannelAvailable)
+            pending.onChannelAvailable = undefined
+          }
           pendingSurfaceCaptures.delete(upload.requestId)
           pending.resolve(captured)
           writeJson(response, 200, { ok: true })
         } catch (error) {
           if (upload && pending) {
             clearTimeout(pending.timer)
+            if (pending.onChannelAvailable) {
+              const client = clientsByNumericId.get(pending.clientNumericId)
+              client?.removeListener('channel-attached', pending.onChannelAvailable)
+              pending.onChannelAvailable = undefined
+            }
             pendingSurfaceCaptures.delete(upload.requestId)
             pending.reject(error instanceof Error ? error : new Error(String(error)))
           }
@@ -752,6 +822,24 @@ export async function startDevBrowserBridgeServer(
               message: `Dev browser bridge channel is not allowed: ${body.channel}`
             })
             return
+          }
+          if (body.channel === 'capability:invoke') {
+            const actionId = capabilityInvocationActionId(body.payload)
+            const tags = actionId ? options.resolveCapabilityTags?.(actionId) : undefined
+            if (!tags) {
+              writeJson(response, 403, {
+                ok: false,
+                message: 'Dev browser capability transport could not resolve the requested capability.'
+              })
+              return
+            }
+            if (tags.includes('sensitive-input')) {
+              writeJson(response, 403, {
+                ok: false,
+                message: 'Capabilities tagged sensitive-input require the Electron preload transport.'
+              })
+              return
+            }
           }
           const clientId = normalizeClientId(request.headers['x-sciforge-client'])
           const payload = await options.dispatcher.invoke(body.channel, body.payload, getClient(clientId))
@@ -803,14 +891,38 @@ export async function startDevBrowserBridgeServer(
       return Boolean(client && !client.isDestroyed())
     },
     captureSurface: (clientNumericId, request) => {
-      const client = clientsByNumericId.get(clientNumericId)
-      if (!client || client.isDestroyed()) {
-        return Promise.reject(new Error(
-          `Browser surface browser:${clientNumericId} is no longer connected.`
-        ))
-      }
       const requestId = randomUUID()
       return new Promise<DevBrowserSurfaceCapture>((resolve, reject) => {
+        let client: DevBrowserBridgeClient | undefined
+        const deliverCaptureRequest = (): void => {
+          const pendingCapture = pendingSurfaceCaptures.get(requestId)
+          if (!pendingCapture || pendingCapture.clientNumericId !== clientNumericId) return
+          const currentClient = clientsByNumericId.get(clientNumericId)
+          if (!currentClient || currentClient.isDestroyed()) return
+          client = currentClient
+          if (!currentClient.send('devBrowserBridge:surface-capture-requested', {
+            requestId,
+            revision: pendingCapture.revision,
+            ...(pendingCapture.bounds ? { bounds: pendingCapture.bounds } : {})
+          })) return
+          pendingCapture.delivered = true
+          if (pendingCapture.onChannelAvailable) {
+            currentClient.removeListener('channel-attached', pendingCapture.onChannelAvailable)
+            pendingCapture.onChannelAvailable = undefined
+          }
+          if (pendingCapture.onClientAvailable) {
+            removeClientAvailabilityWaiter(clientNumericId, pendingCapture.onClientAvailable)
+            pendingCapture.onClientAvailable = undefined
+          }
+        }
+        const onClientAvailable = (): void => {
+          const available = clientsByNumericId.get(clientNumericId)
+          if (!available || available.isDestroyed()) return
+          client = available
+          pending.onChannelAvailable = deliverCaptureRequest
+          available.on('channel-attached', deliverCaptureRequest)
+          deliverCaptureRequest()
+        }
         const pending: PendingSurfaceCapture = {
           clientNumericId,
           revision: positiveSafeInteger(request.revision, 'Surface capture revision'),
@@ -818,6 +930,14 @@ export async function startDevBrowserBridgeServer(
           resolve,
           reject,
           timer: setTimeout(() => {
+            if (pending.onChannelAvailable) {
+              client?.removeListener('channel-attached', pending.onChannelAvailable)
+              pending.onChannelAvailable = undefined
+            }
+            if (pending.onClientAvailable) {
+              removeClientAvailabilityWaiter(clientNumericId, pending.onClientAvailable)
+              pending.onClientAvailable = undefined
+            }
             pendingSurfaceCaptures.delete(requestId)
             reject(new Error(
               `Browser surface browser:${clientNumericId} did not return pixel capture before the timeout.`
@@ -826,22 +946,50 @@ export async function startDevBrowserBridgeServer(
         }
         pending.timer.unref?.()
         pendingSurfaceCaptures.set(requestId, pending)
-        const delivered = client.send('devBrowserBridge:surface-capture-requested', {
-          requestId,
-          revision: pending.revision,
-          ...(pending.bounds ? { bounds: pending.bounds } : {})
-        })
-        if (delivered) return
-        clearTimeout(pending.timer)
-        pendingSurfaceCaptures.delete(requestId)
-        reject(new Error(
-          `Browser surface browser:${clientNumericId} has no active pixel-capture channel.`
-        ))
+        // EventSource connections are asynchronous and may briefly be absent
+        // during renderer startup/reload. Queue the challenge until the same
+        // client reattaches its SSE channel; the existing timeout remains the
+        // bounded failure path when the renderer never reconnects.
+        client = clientsByNumericId.get(clientNumericId)
+        if (!client || client.isDestroyed()) {
+          if (!clientIdsByNumericId.has(clientNumericId)) {
+            clearTimeout(pending.timer)
+            pendingSurfaceCaptures.delete(requestId)
+            reject(new Error(
+              `Browser surface browser:${clientNumericId} is no longer connected.`
+            ))
+            return
+          }
+          pending.onClientAvailable = onClientAvailable
+          const waiters = clientAvailabilityWaiters.get(clientNumericId) ?? new Set<() => void>()
+          waiters.add(onClientAvailable)
+          clientAvailabilityWaiters.set(clientNumericId, waiters)
+          return
+        }
+        // Keep a reconnect waiter even while a client object is present. If
+        // it is retired before its SSE channel attaches, the pending capture
+        // can be handed to the replacement object with the same numeric ID.
+        pending.onClientAvailable = onClientAvailable
+        const waiters = clientAvailabilityWaiters.get(clientNumericId) ?? new Set<() => void>()
+        waiters.add(onClientAvailable)
+        clientAvailabilityWaiters.set(clientNumericId, waiters)
+        pending.onChannelAvailable = deliverCaptureRequest
+        client.on('channel-attached', deliverCaptureRequest)
+        deliverCaptureRequest()
       })
     },
     close: async () => {
       for (const [requestId, pending] of pendingSurfaceCaptures) {
         clearTimeout(pending.timer)
+        if (pending.onChannelAvailable) {
+          const client = clientsByNumericId.get(pending.clientNumericId)
+          client?.removeListener('channel-attached', pending.onChannelAvailable)
+          pending.onChannelAvailable = undefined
+        }
+        if (pending.onClientAvailable) {
+          removeClientAvailabilityWaiter(pending.clientNumericId, pending.onClientAvailable)
+          pending.onClientAvailable = undefined
+        }
         pendingSurfaceCaptures.delete(requestId)
         pending.reject(new Error('The development browser bridge closed during pixel capture.'))
       }
@@ -850,6 +998,9 @@ export async function startDevBrowserBridgeServer(
       }
       clients.clear()
       clientsByNumericId.clear()
+      numericIdsByClientId.clear()
+      clientIdsByNumericId.clear()
+      clientAvailabilityWaiters.clear()
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error)

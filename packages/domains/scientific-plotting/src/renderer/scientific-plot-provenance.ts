@@ -63,6 +63,7 @@ export const scientificPlotManifestProjectionSchema = z.object({
   plotVersionId: z.string().trim().min(1),
   requestHash: sha256Schema,
   recipePath: pathSchema,
+  codePath: pathSchema.optional(),
   recipe: scientificPlotRecipeProjectionSchema,
   outputPath: pathSchema,
   outputHash: sha256Schema,
@@ -97,6 +98,7 @@ export type ScientificPlotProvenanceRecord = Readonly<{
   manifestItem: HistoryItem
   manifestRef: ArtifactVersionRefV1
   recipeRef?: ArtifactVersionRefV1
+  codeRef?: ArtifactVersionRefV1
   figureRef?: ArtifactVersionRefV1
   derivedDataRef?: ArtifactVersionRefV1
   logRef?: ArtifactVersionRefV1
@@ -136,6 +138,7 @@ export async function loadScientificPlotProvenance(
     }
 
     const recipeRef = dependencyRef(manifestItem, 'recipe')
+    const codeRef = dependencyRef(manifestItem, 'code')
     const figureRef = dependencyRef(manifestItem, 'figure')
     const recipeItem = recipeRef ? itemByVersionId.get(recipeRef.versionId) : undefined
     const derivedDataRef = recipeItem ? dependencyRef(recipeItem, 'derived-data') : undefined
@@ -160,6 +163,7 @@ export async function loadScientificPlotProvenance(
         manifestItem,
         manifestRef: manifestItem.ref,
         ...(recipeRef ? { recipeRef } : {}),
+        ...(codeRef ? { codeRef } : {}),
         ...(figureRef ? { figureRef } : {}),
         ...(derivedDataRef ? { derivedDataRef } : {}),
         ...(logItem ? { logRef: logItem.ref } : {}),
@@ -192,6 +196,17 @@ export function parseScientificPlotManifest(dataBase64: string):
     if (!parsed.success) {
       return { ok: false, message: 'snapshot is not a valid Scientific Plot render manifest.' }
     }
+    // Model-owned images have a different owner and lifecycle: the Image
+    // Generation worker writes the replay receipt and Visual Review performs
+    // the human-gated Artifact Version acceptance.  Scientific Plotting owns
+    // only the formal code/hybrid manifest projection, so never present a
+    // model-only receipt as if it were a rerunnable plot version.
+    if (plotRoute(parsed.data.recipe.visualPlan) === 'model') {
+      return {
+        ok: false,
+        message: 'snapshot is a model-only image receipt; inspect it through Image Generation and Visual Review.'
+      }
+    }
     return { ok: true, value: parsed.data }
   } catch (error) {
     return {
@@ -212,4 +227,10 @@ function decodeBase64(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index)
   }
   return bytes
+}
+
+function plotRoute(value: unknown): 'code' | 'model' | 'hybrid' | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const route = (value as { route?: unknown }).route
+  return route === 'code' || route === 'model' || route === 'hybrid' ? route : undefined
 }

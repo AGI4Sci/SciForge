@@ -145,6 +145,7 @@ UI. It defines these generic contribution kinds:
 - `renderer.workbench-global-overlay`
 - `renderer.composer-context-provider`
 - `renderer.resource-navigation`
+- `renderer.extension`
 
 A command declaration ID is its stable command ID. Its runtime value has the exact shape
 `{ execute, isAvailable?, isActive? }`. Every invocation carries only bounded process-neutral data:
@@ -158,6 +159,13 @@ The three slots use contribution IDs rather than host-private modes. Composer co
 return bounded text items and metadata through a strict result schema. These pure contracts also
 describe future sandboxed renderer contributions; a sandbox host supplies the view transport
 without changing the manifest data model.
+
+A package-owned composed workspace may discover `renderer.extension` contributions at the
+generic `workbench.workspace-section` location. The strict manifest contract names the workspace,
+stable section slug, placement, translated label, description, and order; the renderer value owns
+only its optional icon and `{ render }` function. The workspace owner filters by `workspaceId` and
+rejects duplicate sections. Contributors therefore remain independently installable and never
+require a Host feature map, domain-ID switch, or renderer import between domain packages.
 
 Exact-resource navigation is contribution-neutral at the caller. A package asks the Workbench to
 open a bounded `{ resourceKind, resourceId, integrity? }` identity; exactly one installed
@@ -196,13 +204,32 @@ operation:
   limits; packages cannot submit DOM selectors or redaction bounds.
 - `@sciforge/domain-sdk/agent-execution` runs an agent thread through a host-owned runtime while
   exposing only stable request and terminal result data, an optional Host-enforced tool allowlist,
-  plus optional cancellation. A request either starts a thread (with or without a workspace) or
-  names an exact runtime/thread pair. Retryable callers reuse one `clientDirectiveId`, which enters
-  the same Host directive ledger as desktop messages instead of creating a second execution path.
+  an optional bounded provider-neutral JSON Schema for the exact final assistant message, plus
+  optional cancellation. A Runtime adapter must enforce a supplied output schema through its
+  native structured-output mechanism or fail closed; prompt-only JSON instructions do not satisfy
+  the contract. A request either starts a thread (with or without a workspace) or names an exact
+  runtime/thread pair. Retryable callers reuse one `clientDirectiveId`, which enters the same Host
+  directive ledger as desktop messages instead of creating a second execution path. The schema is
+  part of that directive's input digest, so a retry cannot silently change the required output.
+  The Host may also publish a strict token-free Runtime readiness observation containing only the
+  selected runtime ID and bounded capability tags. Consumers that require executable Agent work
+  fail closed when that observation is absent, unavailable, or not configured; endpoints, model
+  credentials, and provider responses never enter this contract.
 - `@sciforge/domain-sdk/package-storage` exposes package-owner-scoped non-secret settings with
   optimistic revisions and a main-process-only secret store. Generated composition binds both
   stores to the manifest owner; packages cannot choose another namespace. Renderer code changes
   settings only through the canonical capability invoker and never receives secret-store access.
+  Host API `1.9.0` requires every provider-credential operation to present the complete expected
+  Principal lease. The Host re-verifies that lease inside its encrypted-storage lock before use or
+  mutation, so a Principal transition cannot redirect another Principal's credential operation.
+- Host API `1.10.0` adds a generic, Host-authenticated ordinary Runtime Session identity to main
+  capability handler context. It contains only the exact runtime and thread IDs, is available only
+  on the Agent Runtime invocation route, and is part of the invocation fingerprint. It carries no
+  domain scope or authority; each package must join it to its own durable facts and reauthorize the
+  current Principal inside its canonical handler.
+- Host API `1.11.0` adds an optional bounded human-facing title for a newly created Domain execution
+  Session. The title is presentation only; continuing an existing runtime/thread pair ignores it,
+  and routing, authorization, recovery, and idempotency remain bound to canonical identifiers.
 - `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
   package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
   contracts instead of another domain's private artifact directories or receipt layout.
@@ -235,6 +262,23 @@ to request the provider-owned grant through its installed manifest; it is not a 
 consumer allowlist. Sandboxed or transport callers cannot request or carry these Host-issued grants.
 Packages that require lifecycle grants or resource navigation declare Host API `1.1.0` as their
 minimum; older Hosts reject those packages during catalog registration.
+
+Host API `1.7.0` adds one finite Human-confirmed batch primitive for trusted main packages. A
+package that holds the provider-owned system grant may call `createApprovedBatch` only while its
+exact outer capability invocation is actively covered by Human confirmation. The Host freezes at
+most 64 ordered operations, their inputs, logical invocation IDs, Workspace, revision string and
+fixed/earlier-output resource ancestry. It keeps each one-use operation proof in a process-local
+closure: packages receive no token, serializable authority or replayable handle. A standing system
+grant cannot invoke a batch-delegated capability by itself. Changed order, action/effect, input,
+resource revision/ancestry, Principal, Workspace, or outer invocation invalidates all remaining
+proofs; the same confirmation cannot create a corrected or replacement batch. `planDigest` is
+audit identity only and is never authority.
+
+Host API `1.8.0` additionally binds that complete canonical plan to the exact confirmation input.
+The outer confirmed capability input must carry the lowercase SHA-256 as `confirmedPlanDigest`;
+the Host recomputes it over the full parsed plan before minting any proof. A missing/mismatched
+digest consumes and rejects that confirmation, so a package cannot confirm plan A and capture
+plan B first, nor retry the originally confirmed plan after a replacement attempt.
 
 ## Execution provenance and reproducibility
 

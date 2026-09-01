@@ -147,6 +147,50 @@ describe('runtime MCP tool gateway', () => {
     ])
   })
 
+  it('preserves bounded nested MCP schema requirements for agent invocation', async () => {
+    const bridge = createRuntimeMcpToolGateway({
+      servers: [{ id: 'image-generation', command: '/bin/image-generation' }],
+      clientFactory: async () => fakeMcpClient({
+        tools: [{
+          name: 'visual_generate',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              requirements: {
+                type: 'object',
+                properties: {
+                  lockedElements: { type: 'array', items: { type: 'string' } },
+                  modelOwnedElements: { type: 'array', items: { type: 'string' } },
+                  reproducibleInputs: { type: 'array', items: { type: 'string' } }
+                },
+                required: ['lockedElements', 'modelOwnedElements', 'reproducibleInputs']
+              }
+            },
+            required: ['requirements']
+          }
+        }]
+      })
+    })
+
+    await expect(bridge.tools()).resolves.toEqual([expect.objectContaining({
+      inputSchema: {
+        type: 'object',
+        properties: {
+          requirements: {
+            type: 'object',
+            properties: {
+              lockedElements: { type: 'array', items: { type: 'string' } },
+              modelOwnedElements: { type: 'array', items: { type: 'string' } },
+              reproducibleInputs: { type: 'array', items: { type: 'string' } }
+            },
+            required: ['lockedElements', 'modelOwnedElements', 'reproducibleInputs']
+          }
+        },
+        required: ['requirements']
+      }
+    })])
+  })
+
   it('isolates an items tuple schema while keeping valid tools available', async () => {
     const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'healthy result' }] }))
     const bridge = createRuntimeMcpToolGateway({
@@ -758,7 +802,19 @@ describe('runtime MCP tool gateway', () => {
         providerToolName: 'deep_tool',
         inputSchema: {
           type: 'object',
-          properties: { recipe: { type: 'object' } }
+          properties: {
+            recipe: {
+              type: 'object',
+              properties: {
+                child: {
+                  type: 'object',
+                  properties: {
+                    child: { type: 'object' }
+                  }
+                }
+              }
+            }
+          }
         }
       })
     ])

@@ -9,9 +9,9 @@
   "module": {
     "id": "sciforge.content-space",
     "displayName": "Content Space",
-    "version": "3.0.0",
+    "version": "5.0.2",
     "hostApi": {
-      "minimum": "1.5.0",
+      "minimum": "1.8.0",
       "maximumExclusive": "2.0.0"
     },
     "priority": 300
@@ -52,10 +52,15 @@
       "location": "workbench.right-panel",
       "title": "Content Space"
     },
-    "content-space.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "content-space.open",
-      "label": "Content Space"
+    "content-space.workspace-files": {
+      "location": "workbench.workspace-section",
+      "contractVersion": "1.0.0",
+      "workspaceId": "sciforge.collaboration-center",
+      "sectionId": "files",
+      "label": "contentSpaceCollaborationCenterFiles",
+      "description": "contentSpaceCollaborationCenterFilesDescription",
+      "placement": "navigation",
+      "order": 50
     },
     "content-space.resource-navigation": {
       "resourceKinds": [
@@ -82,6 +87,21 @@
         {
           "id": "content-space.runtime-lifecycle",
           "kind": "main.runtime-lifecycle",
+          "priority": 300
+        },
+        {
+          "id": "content-space.system-transfer",
+          "kind": "main.system-capability-grant",
+          "priority": 300
+        },
+        {
+          "id": "content-space.provisioning-batch",
+          "kind": "main.system-capability-grant",
+          "priority": 300
+        },
+        {
+          "id": "content-space.recovery-observation",
+          "kind": "main.system-capability-grant",
           "priority": 300
         },
         {
@@ -125,8 +145,13 @@
           "priority": 300
         },
         {
-          "id": "content-space.workbench-toolbar-action",
-          "kind": "renderer.workbench-toolbar-action",
+          "id": "content-space.workspace-files",
+          "kind": "renderer.extension",
+          "priority": 50
+        },
+        {
+          "id": "content-space.translations",
+          "kind": "renderer.i18n-resource",
           "priority": 300
         },
         {

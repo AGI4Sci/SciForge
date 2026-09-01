@@ -667,6 +667,8 @@ export type ScientificPlotVersionCommitReceipt = {
   candidateIds: {
     derivedData: string
     recipe: string
+    /** Executable renderer source persisted for every new code render. */
+    code?: string
     figure: string
     renderManifest: string
     attemptLog: string
@@ -740,6 +742,7 @@ export type ScientificPlotEvidenceLineageV1 = {
 export type ScientificPlotEvidenceCommitRefsV1 = {
   derivedData: ArtifactVersionRefV1
   recipe: ArtifactVersionRefV1
+  code?: ArtifactVersionRefV1
   figure: ArtifactVersionRefV1
   renderManifest: ArtifactVersionRefV1
   attemptLog: ArtifactVersionRefV1
@@ -788,6 +791,7 @@ export type ScientificPlottingOperationReceiptV1 = {
   preparedDigests: {
     derivedData: string
     recipe: string
+    code?: string
     figure: string
     renderManifest: string
     attemptLog: string
@@ -1363,6 +1367,8 @@ export type ScientificPlottingManifest = {
   plotVersionId: string
   requestHash: string
   recipePath: string
+  /** Absolute workspace-confined path to the executable renderer source. */
+  codePath?: string
   recipe: ScientificPlotRecipeV1
   outputPath: string
   outputHash: string
@@ -1389,6 +1395,7 @@ export type ScientificPlottingRenderResult =
       outputPath: string
       manifestPath: string
       recipePath: string
+      codePath?: string
       operationId: string
       plotVersionId: string
       recipe: ScientificPlotRecipeV1

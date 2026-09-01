@@ -1,65 +1,84 @@
-# 干预与数据
+# 研究档案与证据
 
-## 把 GUI 当作干预面板
+_把一次任务的结论、版本、来源和产物整理成可以继续使用的研究记录。_
 
-SciForge 的 UI 价值不只是展示 Agent 输出，而是让研究者在机器行动前后表达约束：
+---
 
-| 时机 | 可以做什么 |
+## 什么时候使用
+
+当一次会话产生了需要保留的分析、图表、实验结果或重要结论时，打开科研档案。它比单独保存一段最终回答更适合后续复查和继续研究。
+
+| 入口 | 记录什么 |
 | --- | --- |
-| 规划前 | 补充目标、范围、证据标准和停止条件 |
-| 工具调用前 | 批准 / 拒绝命令、文件写入、网络和外部副作用 |
-| 执行中 | 提交 user input、暂停、取消、steer，或要求 Agent 重新规划 |
-| 文件变更后 | 查看 diff、回滚或要求修正；不要盲目接受整批改动 |
-| 产物审阅时 | 在 PDF、图表、Canvas、PPT 和 Evidence DAG 上批注 |
-| 结论提交前 | 对关键主张、证据边和不确定性做人工确认 |
+| 科研档案 | 当前研究产物、版本和复现信息 |
+| 证据 DAG | 主张、来源以及它们之间的支持关系 |
+| 产物版本 | 图表、文件等产物的历史版本 |
+| Git Checkpoints | 工作区代码与文件的阶段性状态 |
 
-面板可以随着模型能力增强而变薄，但审批、追问和“这是不是我想要的”不会消失，只会更聚焦在高影响节点。
+## 1. 打开科研档案
 
-## 默认会留下什么
+完成任务后，可以从两个位置进入：
 
-### 工作区内（可随项目版本化）
+- 最终回答下方的 **打开科研档案**
+- 会话顶部工具栏的 **科研档案**
 
-常见目录包括：
+![SciForge 科研档案面板](./assets/guides/research-dossier.jpg)
+*图 1：科研档案详情同时显示研究叙述、当前版本、可信度摘要和需要关注的限制*
 
-```text
-.sciforge/
-├── artifacts/          # 生成图像、scientific plot 等 manifest
-├── images/             # 图像产物（按 worker 约定）
-├── figures/            # scientific plotting 输出
-├── figure-references/  # 参考图与风格输入
-├── figure-reviews/     # 图表 review packet
-├── pdf-annotations/    # PDF 批注与锚点
-├── visual-documents/   # Canvas / VisualDocument 数据
-├── plan/               # 可交接的计划与 Todo
-└── sdd/                # 需求草稿与 trace
-```
+面板会显示最近的研究记录。点击一条记录后，可以查看当前内容、版本变化和复现信息。
 
-具体 worker 可能创建额外的 `.sciforge` 子目录；提交前请检查是否包含大文件或敏感数据。
+## 2. 让记录更完整
 
-### 应用用户数据（默认不在 workspace）
+发送任务时，直接说明需要保留的内容：
 
-- Settings：平台用户数据目录中的 `sciforge-settings.json`。
-- App logs：`<userData>/logs/`，默认保留约 2 天，可在设置中调整。
-- Full traces：`<userData>/full-traces/`，默认保留 30 天；写入前会脱敏已知凭据、Authorization header 和识别到的 secret。
-- Paper Radar：`<userData>/paper-radar/` 下的 SQLite 元数据和 profiles。
-- Codex / Claude Code 使用各自的 SciForge managed home 或 config dir；旧 `~/.sciforge/runtime` 数据不会被自动删除，可按需备份后手动清理。
+> 完成分析后，把研究问题、输入文件、使用的方法、关键参数、结果和局限整理到科研档案。
 
-平台 userData 根目录：macOS `~/Library/Application Support/SciForge`，Windows `%APPDATA%/SciForge`，Linux `~/.config/SciForge`。
+建议至少包含：
 
-## 数据边界与备份
+- 研究问题与范围
+- 使用的文件、论文或其他来源
+- 方法、命令和关键参数
+- 主要结果与尚未确认的内容
+- 生成的文件或图表位置
 
-- SciForge 会把请求、工具结果和必要的生命周期事件发送给你配置的 runtime / Model Router；不要把机密数据放入未审核的 workspace 或 provider。
-- trace 是诊断和复盘材料，不等同于原始实验数据；导出前再次检查 prompt、路径、样本名和 provider 返回内容。
-- 要迁移研究项目，至少备份 workspace 的 `.sciforge/`、论文/代码文件和必要的 Write workspace；需要恢复会话时再备份平台 userData 与 runtime data dir。
-- 卸载应用不会默认删除这些数据。彻底清理前先导出需要保留的 trace、批注和产物。
+后续在同一会话继续任务时，科研档案会在同一个研究产物身份上迭代版本。
 
-## Evidence DAG 的使用方式
+## 3. 查看证据关系
 
-把一个回答拆成 claim、source、observation、conclusion，并检查 `supports` / `contradicts` 边：
+当任务产生带来源的主张时，打开 **证据 DAG**，然后点击 **更新**：
 
-1. 在 Code 或 Write 中完成一个有来源的回合。
-2. 打开 Evidence DAG，检查哪些主张只有单一路径、哪些共享同一来源、哪些边较脆弱。
-3. 对缺失或冲突证据添加批注，要求 Agent 补充检索或降低结论强度。
-4. 只把通过人工审阅的 snapshot 用作报告、图表或下一个 workflow 的输入。
+1. 找到缺少来源的结论。
+2. 检查多个结论是否依赖同一份材料。
+3. 发现冲突时，回到会话要求补充来源或调整表述。
 
-Evidence DAG 是辅助审计，不是自动“证明真理”；研究者仍负责决定证据是否足够。
+证据 DAG 只在当前工作区和会话已经产生相应证据数据时显示内容。没有数据时，先让助手在任务中明确记录主张与来源。
+
+## 4. 保存阶段性产物
+
+不同内容使用不同入口：
+
+| 你要保留的内容 | 使用入口 |
+| --- | --- |
+| 一次研究过程的叙述与结论 | 科研档案 |
+| 结论与来源的对应关系 | 证据 DAG |
+| 图表或其他生成产物的迭代 | 产物版本 |
+| 代码和工作区文件的阶段状态 | Git Checkpoints |
+| 当前会话实际修改的文件 | 变更 |
+
+这些记录相互补充：会话说明“发生了什么”，档案说明“得到了什么”，证据和版本说明“依据与演变是什么”。
+
+## 完成标志
+
+一条可继续使用的研究记录应当能回答：
+
+- 当时要解决什么问题？
+- 使用了哪些输入和方法？
+- 得到了什么结果？
+- 结果对应哪些来源或文件？
+- 下一次从哪里继续？
+
+## 下一步
+
+- [科研工作流](./Scientific-Workflows.zh-CN.md)
+- [自动化](./Automation-and-Scheduled-Tasks.zh-CN.md)
+- [Cloud 协同](./Cloud-Collaboration.zh-CN.md)

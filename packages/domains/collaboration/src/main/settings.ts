@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type {
   DomainMainPackageSettingsHost,
@@ -6,9 +5,8 @@ import type {
 } from '@sciforge/domain-sdk/package-storage'
 
 const collaborationSettingsSchema = z.object({
-  schemaVersion: z.literal(1),
-  baseUrl: z.url().max(2_048).refine((value) => new URL(value).protocol === 'https:'),
-  installationId: z.string().regex(/^ins_[A-Za-z0-9]{12,64}$/)
+  schemaVersion: z.literal(2),
+  baseUrl: z.url().max(2_048).refine((value) => new URL(value).protocol === 'https:')
 }).strict()
 
 export type CollaborationSettings = z.infer<typeof collaborationSettingsSchema>
@@ -30,11 +28,10 @@ export class CollaborationSettingsService {
   }
 
   async configure(baseUrl: string): Promise<CollaborationSettings> {
-    const normalized = normalizeBaseUrl(baseUrl)
+    const normalized = normalizeCollaborationBaseUrl(baseUrl)
     return this.writeCurrent((current) => ({
-      schemaVersion: 1,
-      baseUrl: normalized,
-      installationId: current?.installationId ?? installationId()
+      schemaVersion: 2,
+      baseUrl: normalized
     }))
   }
 
@@ -65,11 +62,7 @@ export class CollaborationSettingsService {
   }
 }
 
-function installationId(): `ins_${string}` {
-  return `ins_${randomUUID().replaceAll('-', '')}`
-}
-
-function normalizeBaseUrl(value: string): string {
+export function normalizeCollaborationBaseUrl(value: string): string {
   const url = new URL(value)
   if (url.protocol !== 'https:') throw new Error('Collaboration service URL must use HTTPS.')
   if (url.username || url.password || url.search || url.hash) {

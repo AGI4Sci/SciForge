@@ -4,9 +4,8 @@ import {
 } from '@sciforge/domain-sdk/principal'
 
 export const OPENCONTENT_PROVIDER_KIND = 'opencontent' as const
-export const OPENCONTENT_PROVIDER_INSTANCE_REF = 'opencontent-edoc2-demo' as const
 export const OPENCONTENT_CONTENT_SPACE_SERVICE_ID = 'opencontent.content-space' as const
-export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '3.0.0' as const
+export const OPENCONTENT_CONTENT_SPACE_SERVICE_VERSION = '4.0.0' as const
 
 const openContentBindingDigestSchema = z.string().regex(/^[0-9a-f]{64}$/u)
 
@@ -31,11 +30,14 @@ export const openContentConnectionTargetInputSchema = z.object({
   providerInstanceRef: z.string().trim().min(3).max(256)
 }).strict().readonly()
 
+/** One-use Human enrollment input accepted only by the sensitive UI capability. */
 export const openContentBindInputSchema = z.object({
   providerInstanceRef: z.string().trim().min(3).max(256),
-  username: z.string().trim().min(1).max(256),
-  password: z.string().min(1).max(1024)
+  account: z.string().trim().min(1).max(256),
+  password: z.string().min(1).max(4096)
 }).strict().readonly()
+
+export type OpenContentBindInput = z.infer<typeof openContentBindInputSchema>
 
 const openContentUnbindSuccessOutputSchema = z.object({
   outcome: z.literal('success'),
@@ -43,19 +45,15 @@ const openContentUnbindSuccessOutputSchema = z.object({
   remoteRevocation: z.literal('unsupported')
 }).strict().readonly()
 
-const openContentExternalAccountSummarySchema = z.object({
-  id: z.string().trim().min(1).max(256),
-  identityId: z.number().int().nonnegative().safe(),
-  account: z.string().trim().min(1).max(256),
-  name: z.string().trim().min(1).max(256)
-}).strict().readonly()
-
 export const openContentConnectionStatusSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('disconnected') }).strict().readonly(),
   z.object({
-    state: z.enum(['connected', 'reauthentication_required']),
-    providerInstanceRef: z.string().trim().min(3).max(256),
-    externalAccount: openContentExternalAccountSummarySchema
+    state: z.literal('connected'),
+    providerInstanceRef: z.string().trim().min(3).max(256)
+  }).strict().readonly(),
+  z.object({
+    state: z.literal('reauthentication_required'),
+    providerInstanceRef: z.string().trim().min(3).max(256)
   }).strict().readonly()
 ])
 
@@ -90,6 +88,10 @@ export const openContentEnrollmentErrorSchema = z.discriminatedUnion('code', [
   z.object({
     code: z.literal('secure_storage_unavailable'),
     action: z.literal('repair_secure_storage')
+  }).strict().readonly(),
+  z.object({
+    code: z.literal('enrollment_in_progress'),
+    action: z.literal('retry')
   }).strict().readonly(),
   z.object({
     code: z.literal('cancelled'),

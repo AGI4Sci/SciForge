@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentNodeSchema,
+  humanAnswerSchema,
   humanEndpointBindingSchema,
+  humanNeededSchema,
   participantProfileSchema,
   projectRecordSchema,
   projectSchema,
@@ -17,6 +19,8 @@ import {
   chineseProviderLocatorFixture,
   collaborationFixtures,
   humanEndpointBindingFixture,
+  humanAnswerFixture,
+  humanNeededFixture,
   invalidTestOnlyValue,
   participantProfileFixture,
   projectFixture,
@@ -65,6 +69,55 @@ describe('strict collaboration entities', () => {
 })
 
 describe('identity and ownership invariants', () => {
+  it('requires one authenticated target User provenance for HumanAnswer and couples decisions to confirmations', () => {
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      answeredFrom: { type: 'oidc_user', oidcIdentityId: 'oid_TargetIdentity01' }
+    }).success).toBe(true)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      answeredFrom: { type: 'human_endpoint', humanEndpointId: TEST_IDS.humanEndpointId }
+    }).success).toBe(true)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      answeredFrom: null
+    }).success).toBe(false)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      decision: 'approve'
+    }).success).toBe(false)
+    expect(humanAnswerSchema.safeParse({
+      ...humanAnswerFixture,
+      decision: 'approve',
+      confirmationId: 'cfm_Approval000001'
+    }).success).toBe(true)
+  })
+
+  it('carries only a bounded digest-based confirmable action in HumanNeeded', () => {
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      confirmableAction: {
+        actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
+        effect: 'destructive', actionDigest: 'a'.repeat(64)
+      }
+    }).success).toBe(true)
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      confirmableAction: {
+        actionType: 'workspace.delete_file', safeSummary: 'Delete generated output.',
+        effect: 'destructive', actionDigest: 'a'.repeat(64), command: 'rm -rf /'
+      }
+    }).success).toBe(false)
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: 2 }
+    }).success).toBe(true)
+    expect(humanNeededSchema.safeParse({
+      ...humanNeededFixture,
+      context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: 2, taskId: TEST_IDS.taskId }
+    }).success).toBe(false)
+  })
+
   it('requires revoked endpoint and Agent timestamps and forces revoked Agents offline', () => {
     expect(humanEndpointBindingSchema.safeParse({
       ...humanEndpointBindingFixture,
@@ -142,9 +195,8 @@ describe('projection, Project, Task, and Record invariants', () => {
     }).success).toBe(false)
   })
 
-  it('requires unique Project members including the owner and a bounded budget', () => {
-    expect(projectSchema.safeParse({ ...projectFixture, memberUserIds: [TEST_IDS.secondUserId] }).success).toBe(false)
-    expect(projectSchema.safeParse({ ...projectFixture, memberUserIds: [TEST_IDS.userId, TEST_IDS.userId] }).success).toBe(false)
+  it('keeps Membership outside Project and requires a bounded budget', () => {
+    expect(projectSchema.safeParse({ ...projectFixture, memberUserIds: [TEST_IDS.userId] }).success).toBe(false)
     expect(projectSchema.safeParse({
       ...projectFixture,
       budget: { ...projectFixture.budget, maxTasksPerRound: 21 }
@@ -153,21 +205,52 @@ describe('projection, Project, Task, and Record invariants', () => {
 
   it('rejects self-dependencies, retry overflow, and missing terminal timestamps', () => {
     expect(taskSchema.safeParse({ ...taskFixture, dependencyTaskIds: [taskFixture.taskId] }).success).toBe(false)
-    expect(taskSchema.safeParse({ ...taskFixture, attempt: 4, maxRetries: 2 }).success).toBe(false)
-    expect(taskSchema.safeParse({ ...taskFixture, status: 'succeeded' }).success).toBe(false)
-    expect(taskSchema.safeParse({ ...taskFixture, status: 'succeeded', completedAt: TEST_LATER_TIMESTAMP }).success).toBe(true)
+    expect(taskSchema.safeParse({ ...taskFixture, executionCount: 4, maxRetries: 2 }).success).toBe(false)
+    expect(taskSchema.safeParse({ ...taskFixture, status: 'completed' }).success).toBe(false)
+    expect(taskSchema.safeParse({
+      ...taskFixture,
+      status: 'completed',
+      currentExecutionId: TEST_IDS.executionId,
+      currentExecutionState: 'completed',
+      executionCount: 1,
+      completedAt: TEST_LATER_TIMESTAMP
+    }).success).toBe(true)
   })
 
-  it('requires provenance acceptance fields only on accepted Project Records', () => {
+  it('admits only Coordinator-authored official ProjectRecord kinds with exact provenance', () => {
     expect(projectRecordSchema.safeParse({
       ...projectRecordFixture,
-      status: 'accepted'
+      kind: 'proposal'
     }).success).toBe(false)
     expect(projectRecordSchema.safeParse({
       ...projectRecordFixture,
-      status: 'accepted',
-      acceptedByAgentId: TEST_IDS.agentId,
-      acceptedAt: TEST_LATER_TIMESTAMP
+      kind: 'task_result'
+    }).success).toBe(false)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      status: 'proposed'
+    }).success).toBe(false)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      acceptedByAgentId: TEST_IDS.secondAgentId
+    }).success).toBe(false)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      sourceResultSubmissionId: null
+    }).success).toBe(false)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      kind: 'decision',
+      sourceTaskId: null,
+      sourceResultSubmissionId: null,
+      sourceHumanAnswerId: TEST_IDS.humanAnswerId
+    }).success).toBe(true)
+    expect(projectRecordSchema.safeParse({
+      ...projectRecordFixture,
+      kind: 'summary',
+      sourceTaskId: null,
+      sourceResultSubmissionId: null,
+      sourceHumanAnswerId: null
     }).success).toBe(true)
   })
 })

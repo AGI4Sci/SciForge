@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { z } from 'zod'
 import {
   encodePairingBindCode,
   restRequestSchema,
+  restResponseSchema,
   type AgentInboxMessage,
   type AgentNode,
   type HumanEndpointBinding,
@@ -12,29 +12,25 @@ import {
   type RestRequest,
   type UserPrincipal
 } from '@sciforge/collaboration-contracts'
-import type { DomainMainPackageSecretStoreHost } from '@sciforge/domain-sdk/package-storage'
+import {
+  AgentCloudRuntimeError,
+  type AgentCloudRuntime
+} from '@sciforge/domain-identity-access/agent-cloud-runtime'
+import {
+  AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+  authenticatedCloudJsonBody,
+  type AuthenticatedCloudTransport
+} from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import type {
-  CollaborationAgentRegisterInput,
   CollaborationConnectionConnectInput,
   CollaborationEndpointChallengePollInput,
   CollaborationEndpointChallengeStartInput,
   CollaborationProviderOption
 } from '../contract.js'
-import type { CollaborationCloudClient } from './cloud-client.js'
-import { CloudProtocolError, collaborationRequestId } from './cloud-client.js'
+import { collaborationRequestId } from './request-id.js'
 import { DurableCloudOutbox } from './outbox.js'
-import { CollaborationSettingsService } from './settings.js'
+import { CollaborationSettingsService, normalizeCollaborationBaseUrl } from './settings.js'
 import { CollaborationLocalStore } from './store.js'
-
-const USER_CREDENTIAL_KEY = 'user-credential' as const
-const DEVICE_CREDENTIAL_KEY = 'device-credential' as const
-const PAIRING_POLL_KEY = 'pairing-poll' as const
-
-const pairingPollSecretSchema = z.object({
-  challengeId: z.string().regex(/^chl_[A-Za-z0-9]{12,64}$/),
-  pollSecret: z.string().min(32).max(512),
-  expiresAt: z.iso.datetime({ offset: true })
-}).strict()
 
 export type CollaborationConnectionState = Readonly<{
   state: 'unconfigured' | 'disconnected' | 'connecting' | 'connected' | 'recovering' | 'error'
@@ -49,17 +45,18 @@ export type CollaborationInboxHandler = Readonly<{
 export type CollaborationConnectionOptions = Readonly<{
   store: CollaborationLocalStore
   settings: CollaborationSettingsService
-  packageSecrets: DomainMainPackageSecretStoreHost
   outbox: DurableCloudOutbox
-  createCloudClient: (baseUrl: string) => CollaborationCloudClient
+  authenticatedCloudTransport: AuthenticatedCloudTransport
+  agentCloudRuntime: AgentCloudRuntime
   inboxHandler: CollaborationInboxHandler
+  afterHeartbeat?: (connectionStatus: 'online' | 'offline') => void | Promise<void>
+  onAuthorityLost?: (agentId: string, reason: string) => void | Promise<void>
   sanitizeText?: (value: string) => string
   now?: () => Date
 }>
 
 export class CollaborationConnection {
   private readonly now: () => Date
-  private client: CollaborationCloudClient | null = null
   private connectionState: CollaborationConnectionState = { state: 'unconfigured' }
   private providerOptions: readonly CollaborationProviderOption[] = []
   private abortController: AbortController | null = null
@@ -78,24 +75,38 @@ export class CollaborationConnection {
     return this.providerOptions
   }
 
-  cloudClient(): CollaborationCloudClient | null {
-    return this.client
-  }
-
   async executeAsUser(request: RestRequest) {
-    return this.requireClient().execute(restRequestSchema.parse(request), await this.requireUserCredential())
+    const parsed = restRequestSchema.parse(request)
+    this.requireIdentityReady()
+    const response = await this.options.authenticatedCloudTransport.execute({
+      contractVersion: 1,
+      operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+      payload: authenticatedCloudJsonBody(parsed)
+    })
+    const body = restResponseSchema.parse(response.body)
+    if (body.requestId !== parsed.requestId) {
+      throw new Error('Authenticated Cloud response requestId does not match the command.')
+    }
+    return body
   }
 
-  async executeAsDevice(request: RestRequest) {
-    return this.requireClient().execute(restRequestSchema.parse(request), await this.requireDeviceCredential())
+  async executeAsAgent(request: RestRequest) {
+    const agentId = await this.requireLocalAgentId()
+    return this.options.agentCloudRuntime.execute({
+      agentId,
+      request: restRequestSchema.parse(request)
+    })
   }
 
   async localAgentId(): Promise<string | undefined> {
-    const configured = await this.options.settings.read()
-    if (!configured.settings) return undefined
-    return this.options.store.snapshot().agents.find((agent) => (
-      agent.installationId === configured.settings!.installationId
-    ))?.agentId
+    const agents = this.options.store.snapshot().agents.filter((agent) => (
+      agent.lifecycleStatus === 'active' && typeof agent.deviceId === 'string'
+    ))
+    const status = this.options.authenticatedCloudTransport.status()
+    if (status.state === 'ready') {
+      return agents.find((agent) => agent.deviceId === status.deviceId)?.agentId
+    }
+    return agents.length === 1 ? agents[0]!.agentId : undefined
   }
 
   async acceptAgentRevocation(agentId: string, occurredAt: string): Promise<void> {
@@ -103,7 +114,7 @@ export class CollaborationConnection {
     if (!localAgentId || localAgentId !== agentId) {
       throw new Error('Agent revocation does not target this installation.')
     }
-    await this.options.packageSecrets.remove(DEVICE_CREDENTIAL_KEY)
+    await this.options.agentCloudRuntime.fenceAgent(agentId)
     const controller = this.abortController
     this.abortController = null
     controller?.abort()
@@ -120,7 +131,7 @@ export class CollaborationConnection {
     this.connectionState = {
       state: 'error',
       lastConnectedAt: this.connectionState.lastConnectedAt,
-      lastError: 'This collaboration Agent registration was revoked.'
+      lastError: 'This Desktop Agent was revoked.'
     }
   }
 
@@ -130,12 +141,18 @@ export class CollaborationConnection {
       this.connectionState = { state: 'unconfigured' }
       return
     }
-    this.client = this.options.createCloudClient(configured.settings.baseUrl)
-    await this.refreshProviderCatalog().catch((error) => this.recordError(error, false))
-    const cachedUser = this.options.store.snapshot().user
-    if (cachedUser && await this.options.packageSecrets.has(USER_CREDENTIAL_KEY)) {
+    const identityStatus = this.options.authenticatedCloudTransport.status()
+    if ('baseUrl' in identityStatus &&
+        normalizeCollaborationBaseUrl(configured.settings.baseUrl) !==
+          normalizeCollaborationBaseUrl(identityStatus.baseUrl)) {
+      throw new Error('Collaboration Cloud settings do not match the active Identity Cloud endpoint.')
+    }
+    let activationFailed = false
+    if (identityStatus.state === 'ready') {
       try {
-        const snapshot = await this.refreshParticipant(cachedUser.userId)
+        await this.refreshProviderCatalog()
+        const agent = await this.ensureLocalAgent()
+        const snapshot = await this.refreshParticipant(agent.ownerUserId)
         for (const endpoint of snapshot.humanEndpoints) {
           if (endpoint.status === 'active') {
             await this.refreshEndpointLocators(endpoint.humanEndpointId)
@@ -148,14 +165,17 @@ export class CollaborationConnection {
         // Cached collaboration state remains usable while offline. A later
         // explicit recovery/restart repeats this canonical cloud refresh.
         this.recordError(error, true)
+        activationFailed = true
       }
     }
-    if (await this.options.packageSecrets.has(DEVICE_CREDENTIAL_KEY)) {
+    const localAgentId = await this.localAgentId()
+    if (localAgentId &&
+        (await this.options.agentCloudRuntime.authorityStatus(localAgentId)).state === 'ready') {
       // A configured desktop must still activate while the cloud is offline. The
       // durable inbox/outbox and projection recovery remain available, and the
       // explicit recover action retries the same canonical connection path.
       await this.connect().catch(() => undefined)
-    } else {
+    } else if (!activationFailed) {
       this.connectionState = { state: 'disconnected' }
     }
   }
@@ -165,18 +185,30 @@ export class CollaborationConnection {
   }
 
   async configure(baseUrl: string): Promise<void> {
+    const status = this.requireIdentityReady()
+    if (normalizeCollaborationBaseUrl(baseUrl) !== normalizeCollaborationBaseUrl(status.baseUrl)) {
+      throw new Error('Collaboration Cloud must use the active Identity Cloud endpoint.')
+    }
     await this.disconnect()
-    const settings = await this.options.settings.configure(baseUrl)
-    this.client = this.options.createCloudClient(settings.baseUrl)
+    await this.options.settings.configure(status.baseUrl)
     this.connectionState = { state: 'disconnected' }
-    await this.refreshProviderCatalog()
+    try {
+      await this.refreshProviderCatalog()
+      const agent = await this.ensureLocalAgent()
+      await this.refreshParticipant(agent.ownerUserId)
+      await this.connect()
+    } catch (error) {
+      this.recordError(error, true)
+      throw error
+    }
   }
 
   async applyConnectionAction(input: CollaborationConnectionConnectInput): Promise<void> {
     if (input.action === 'disconnect') {
-      const credential = await this.options.packageSecrets.read(DEVICE_CREDENTIAL_KEY)
-      if (credential && this.client) {
-        await this.heartbeat({ value: credential }, 'offline').catch((error) => {
+      const localAgentId = await this.localAgentId()
+      if (localAgentId &&
+          (await this.options.agentCloudRuntime.authorityStatus(localAgentId)).state === 'ready') {
+        await this.heartbeat('offline').catch((error) => {
           this.recordError(error, true)
         })
       }
@@ -186,6 +218,8 @@ export class CollaborationConnection {
     if (input.action === 'recover') {
       this.options.outbox.wake()
     }
+    const agent = await this.ensureLocalAgent()
+    await this.refreshParticipant(agent.ownerUserId)
     await this.connect()
   }
 
@@ -195,27 +229,26 @@ export class CollaborationConnection {
     expiresAt: string
     instruction: string
   }>> {
-    const client = this.requireClient()
     const realmId = input.locator.realmId?.trim()
     if (!realmId) throw new Error('The selected provider requires a realmId locator value.')
+    const providerUserId = input.locator.providerUserId?.trim()
+    if (!providerUserId) throw new Error('The selected provider requires an exact providerUserId locator value.')
     const request = restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
-      type: 'pairing.begin',
-      idempotencyKey: `idem_pairing.begin.${digest([
+      type: 'endpoint.challenge.create',
+      idempotencyKey: `idem_endpoint.challenge.create.${digest([
         input.providerKey,
         realmId,
-        input.requestedDisplayName,
+        providerUserId,
         String(this.now().getTime())
       ].join('\u0000')).slice(0, 48)}`,
-      provider: input.providerKey,
-      realmId,
-      requestedDisplayName: input.requestedDisplayName
+      expectedIdentity: { provider: input.providerKey, realmId, providerUserId }
     })
-    const response = await client.execute(request)
+    const response = await this.executeAsUser(request)
     if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'pairing.begun') {
-      throw new Error(`Pairing begin returned unexpected ${response.type}.`)
+    if (response.type !== 'endpoint.challenge.created') {
+      throw new Error(`Endpoint challenge create returned unexpected ${response.type}.`)
     }
     const pairingCommand = `/bind ${encodePairingBindCode({
       challengeId: response.challengeId,
@@ -224,11 +257,6 @@ export class CollaborationConnection {
     if (pairingCommand.length > 64) {
       throw new Error('Pairing service returned a command that exceeds the supported display length.')
     }
-    await this.options.packageSecrets.write(PAIRING_POLL_KEY, JSON.stringify({
-      challengeId: response.challengeId,
-      pollSecret: response.pollSecret,
-      expiresAt: response.expiresAt
-    }))
     const providerLabel = this.providerOptions.find((provider) => (
       provider.providerKey === input.providerKey
     ))?.label ?? input.providerKey
@@ -250,37 +278,27 @@ export class CollaborationConnection {
         assurance: 'low' | 'verified' | 'strong'
       }>
   > {
-    const rawSecret = await this.options.packageSecrets.read(PAIRING_POLL_KEY)
-    if (!rawSecret) return { status: 'expired' }
-    const poll = pairingPollSecretSchema.parse(JSON.parse(rawSecret) as unknown)
-    if (poll.challengeId !== input.challengeId || Date.parse(poll.expiresAt) <= this.now().getTime()) {
-      await this.options.packageSecrets.remove(PAIRING_POLL_KEY)
-      return { status: 'expired' }
-    }
-    const response = await this.requireClient().execute(restRequestSchema.parse({
+    const response = await this.executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
-      type: 'pairing.redeem',
-      idempotencyKey: `idem_pairing.redeem.${digest(poll.challengeId).slice(0, 48)}`,
-      pollSecret: poll.pollSecret
+      type: 'endpoint.challenge.get',
+      challengeId: input.challengeId
     }))
-    if (response.type === 'pairing.pending') {
+    if (response.type === 'endpoint.challenge.pending') {
       return {
         status: 'pending',
-        expiresAt: poll.expiresAt,
+        expiresAt: response.expiresAt,
         retryAfterSeconds: response.retryAfterSeconds
       }
     }
-    if (response.type === 'rest.error' && response.error.code === 'expired') {
-      await this.options.packageSecrets.remove(PAIRING_POLL_KEY)
+    if (response.type === 'endpoint.challenge.expired' ||
+        (response.type === 'rest.error' && response.error.code === 'expired')) {
       return { status: 'expired' }
     }
     if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'pairing.verified') {
-      throw new Error(`Pairing redeem returned unexpected ${response.type}.`)
+    if (response.type !== 'endpoint.challenge.verified') {
+      throw new Error(`Endpoint challenge query returned unexpected ${response.type}.`)
     }
-    await this.options.packageSecrets.write(USER_CREDENTIAL_KEY, response.userCredential)
-    await this.options.packageSecrets.remove(PAIRING_POLL_KEY)
     const snapshot = await this.refreshParticipant(response.userId)
     await this.refreshEndpointLocators(response.humanEndpointId)
     const endpoint = snapshot.humanEndpoints.find((item) => (
@@ -290,119 +308,25 @@ export class CollaborationConnection {
       status: 'verified',
       userId: response.userId,
       humanEndpointId: response.humanEndpointId,
-      assurance: mapAssurance(endpoint?.assurance ?? 'verified')
+      assurance: mapAssurance(endpoint?.assurance ?? response.assurance)
     }
   }
 
-  async registerAgent(input: CollaborationAgentRegisterInput): Promise<AgentNode> {
-    const settings = await this.options.settings.require()
-    const credential = await this.requireUserCredential()
+  async ensureLocalAgent(): Promise<AgentNode> {
+    const identity = this.requireIdentityReady()
+    await this.options.store.prepareForAuthenticatedUser(identity.userId)
     const state = this.options.store.snapshot()
-    if (!state.user) throw new Error('Verify a human endpoint before registering this Agent.')
-    const registrationIntent = {
-      installationId: settings.installationId,
-      ownerUserId: state.user.userId,
-      displayName: input.displayName.trim(),
-      nodeType: input.nodeType,
-      capabilities: [...input.capabilities].sort()
+    if (state.user && state.user.userId !== identity.userId) {
+      throw new Error('Cached collaboration state belongs to another OIDC User.')
     }
-    let response
-    let recoverExisting = false
-    try {
-      response = await this.requireClient().execute(restRequestSchema.parse({
-        protocolVersion: '1.0',
-        requestId: collaborationRequestId(),
-        type: 'agent.register',
-        idempotencyKey: `idem_agent.register.${digest(JSON.stringify(registrationIntent)).slice(0, 48)}`,
-        ...registrationIntent
-      }), credential)
-      recoverExisting = response.type === 'rest.error'
-        && response.error.code === 'idempotency_conflict'
-    } catch (error) {
-      if (!(error instanceof CloudProtocolError) || error.code !== 'idempotency_conflict') throw error
-      recoverExisting = true
+    const agent = await this.options.agentCloudRuntime.ensureAgent()
+    if (agent.deviceId !== identity.deviceId || agent.ownerUserId !== identity.userId) {
+      throw new Error('The ensured Agent does not match the current User and Device.')
     }
-    if (recoverExisting) {
-      const snapshot = await this.refreshParticipant(state.user.userId)
-      const existing = snapshot.agents.find((agent) => (
-        agent.installationId === settings.installationId
-        && agent.ownerUserId === state.user!.userId
-        && agent.lifecycleStatus === 'active'
-      ))
-      if (existing) {
-        // Credential rotation revokes the credential captured by the active
-        // polling loops. Stop them before rotating so connect() below starts a
-        // single replacement connection with the newly persisted credential.
-        await this.disconnect()
-        response = await this.requireClient().execute(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'agent.rotate_credential',
-          idempotencyKey: `idem_agent.rotate_credential.${digest([
-            existing.agentId,
-            String(existing.revision),
-            String(this.now().getTime())
-          ].join('\u0000')).slice(0, 48)}`,
-          agentId: existing.agentId,
-          expectedRevision: existing.revision
-        }), credential)
-      }
-    }
-    if (!response) throw new Error('Agent registration recovery could not find this installation.')
-    if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'agent.registered' && response.type !== 'agent.credential_rotated') {
-      throw new Error(`Agent registration returned unexpected ${response.type}.`)
-    }
-    await this.options.packageSecrets.write(DEVICE_CREDENTIAL_KEY, response.deviceCredential)
     await this.options.store.transact((draft) => {
-      draft.agents = replaceBy(draft.agents, response.agent, (item) => item.agentId)
+      draft.agents = replaceBy(draft.agents, agent, (item) => item.agentId)
     })
-    // Registration can atomically promote the first Agent to participant
-    // primary and advance the participant revision. Refresh with the existing
-    // user credential before connecting so renderer CAS inputs never expose the
-    // pre-registration snapshot. The one-time device credential remains opaque
-    // in the secret store until the device connection path reads it.
-    await this.refreshParticipant(state.user.userId)
-    await this.connect()
-    return response.agent
-  }
-
-  async selectPrimaryAgent(
-    agentId: string,
-    expectedParticipantRevision: number
-  ): Promise<ParticipantProfile> {
-    const state = this.options.store.snapshot()
-    const user = state.user
-    const participant = state.participant
-    if (!user || !participant) throw new Error('Participant binding is incomplete.')
-    const agent = state.agents.find((candidate) => candidate.agentId === agentId)
-    if (!agent || agent.ownerUserId !== user.userId || agent.lifecycleStatus !== 'active') {
-      throw new Error('Primary Agent must be an active Agent owned by the current user.')
-    }
-    if (participant.revision !== expectedParticipantRevision) {
-      throw new Error('Participant revision is stale.')
-    }
-    const response = await this.requireClient().execute(restRequestSchema.parse({
-      protocolVersion: '1.0',
-      requestId: collaborationRequestId(),
-      type: 'participant.update_primary',
-      idempotencyKey: `idem_participant.primary.${digest([
-        participant.participantId,
-        agentId,
-        String(expectedParticipantRevision)
-      ].join('\u0000')).slice(0, 48)}`,
-      userId: user.userId,
-      expectedRevision: expectedParticipantRevision,
-      primaryHumanEndpointId: participant.primaryHumanEndpointId,
-      primaryAgentId: agentId
-    }), await this.requireUserCredential())
-    if (response.type === 'rest.error') throw new Error(response.error.message)
-    if (response.type !== 'rest.entity' || response.entity.type !== 'participant_profile') {
-      throw new Error(`Primary Agent update returned unexpected ${response.type}.`)
-    }
-    const participantEntity = response.entity
-    await this.options.store.transact((draft) => { draft.participant = participantEntity })
-    return participantEntity
+    return agent
   }
 
   async refreshParticipant(userId?: string): Promise<Readonly<{
@@ -413,12 +337,12 @@ export class CollaborationConnection {
   }>> {
     const targetUserId = userId ?? this.options.store.snapshot().user?.userId
     if (!targetUserId) throw new Error('No collaboration user is bound.')
-    const response = await this.requireClient().execute(restRequestSchema.parse({
+    const response = await this.executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'participant.get',
       userId: targetUserId
-    }), await this.requireUserCredential())
+    }))
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'participant.snapshot') {
       throw new Error(`Participant query returned unexpected ${response.type}.`)
@@ -434,25 +358,29 @@ export class CollaborationConnection {
 
   async connect(): Promise<void> {
     if (this.abortController) return
-    const client = this.requireClient()
-    const credential = await this.requireDeviceCredential()
-    this.connectionState = { state: 'connecting' }
-    const controller = new AbortController()
-    this.abortController = controller
+    const agentId = await this.requireLocalAgentId()
+    let controller: AbortController | undefined
     try {
-      await this.heartbeat(credential, 'online')
-      await this.pullInbox(credential)
+      const authority = await this.options.agentCloudRuntime.authorityStatus(agentId)
+      if (authority.state !== 'ready') throw authorityStatusError(authority)
+      this.connectionState = { state: 'connecting' }
+      controller = new AbortController()
+      this.abortController = controller
+      await this.heartbeat('online')
+      await this.pullInbox()
       this.connectionState = {
         state: 'connected',
         lastConnectedAt: this.now().toISOString()
       }
       this.options.outbox.start()
       this.background = [
-        this.pollLoop(credential, controller.signal),
-        this.notificationLoop(client, credential, controller.signal)
+        this.pollLoop(agentId, controller.signal),
+        this.notificationLoop(agentId, controller.signal)
       ]
     } catch (error) {
+      if (await this.failClosedAuthority(agentId, error)) throw error
       this.abortController = null
+      controller?.abort(error)
       this.recordError(error, true)
       throw error
     }
@@ -465,11 +393,13 @@ export class CollaborationConnection {
     this.options.outbox.stop()
     await Promise.allSettled(this.background)
     this.background = []
-    if (this.client) this.connectionState = { state: 'disconnected' }
+    if ((await this.options.settings.read()).settings) {
+      this.connectionState = { state: 'disconnected' }
+    }
   }
 
   private async refreshProviderCatalog(): Promise<void> {
-    const response = await this.requireClient().execute(restRequestSchema.parse({
+    const response = await this.executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'endpoint.catalog.get'
@@ -485,29 +415,40 @@ export class CollaborationConnection {
       containerLabel: provider.onboarding.containerLabel,
       topicLabel: provider.onboarding.topicLabel,
       managedContainers: provider.capabilities.managedContainers === true,
-      locatorFields: [{
-        key: 'realmId',
-        label: 'Organization / realm ID',
-        required: true,
-        placeholder: 'Provider organization identity'
-      }]
+      locatorFields: [
+        {
+          key: 'realmId',
+          label: 'Organization / realm ID',
+          required: true,
+          placeholder: 'Provider organization identity'
+        },
+        {
+          key: 'providerUserId',
+          label: provider.onboarding.accountLabel,
+          required: true,
+          placeholder: provider.provider === 'zulip'
+            ? 'Numeric user ID of the Zulip account to pair'
+            : 'Exact provider account identity'
+        }
+      ]
     }))
   }
 
   async refreshEndpointLocators(humanEndpointId: string): Promise<number> {
-    const credential = await this.requireUserCredential()
+    const agentId = await this.requireLocalAgentId()
     const locators: Array<{ humanEndpointId: string; locator: ProviderLocator }> = []
     let cursor: string | undefined
     let pageCount = 0
     do {
-      const response = await this.requireClient().execute(restRequestSchema.parse({
+      const response = await this.executeAsUser(restRequestSchema.parse({
         protocolVersion: '1.0',
         requestId: collaborationRequestId(),
         type: 'endpoint.locator.list',
         humanEndpointId,
+        agentId,
         ...(cursor ? { cursor } : {}),
         limit: 500
-      }), credential)
+      }))
       if (response.type === 'rest.error') throw new Error(response.error.message)
       if (response.type !== 'endpoint.locator_page') {
         throw new Error(`Endpoint locator query returned unexpected ${response.type}.`)
@@ -527,10 +468,12 @@ export class CollaborationConnection {
   }
 
   async refreshManagedContainers(): Promise<readonly ManagedProviderContainer[]> {
+    const agentId = await this.requireLocalAgentId()
     const response = await this.executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
-      type: 'managed_container.list'
+      type: 'managed_container.list',
+      agentId
     }))
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (response.type !== 'rest.collection' || response.items.some((item) => item.type !== 'managed_provider_container')) {
@@ -543,49 +486,52 @@ export class CollaborationConnection {
     return managedContainers
   }
 
-  private async pollLoop(credential: Readonly<{ value: string }>, signal: AbortSignal): Promise<void> {
+  private async pollLoop(agentId: string, signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       await delay(15_000, signal).catch(() => undefined)
       if (signal.aborted) return
       try {
-        await this.heartbeat(credential, 'online')
-        await this.pullInbox(credential)
+        await this.heartbeat('online')
+        await this.pullInbox()
         this.connectionState = {
           state: 'connected',
           lastConnectedAt: this.now().toISOString()
         }
         this.options.outbox.start()
       } catch (error) {
+        if (await this.failClosedAuthority(agentId, error)) return
         this.recordError(error, true)
       }
     }
   }
 
-  private async heartbeat(
-    credential: Readonly<{ value: string }>,
-    connectionStatus: 'online' | 'offline'
-  ): Promise<void> {
-    const settings = await this.options.settings.require()
+  private async heartbeat(connectionStatus: 'online' | 'offline'): Promise<void> {
+    const localAgentId = await this.localAgentId()
     const agent = this.options.store.snapshot().agents.find((candidate) => (
-      candidate.installationId === settings.installationId
+      candidate.agentId === localAgentId
     ))
     if (!agent || agent.lifecycleStatus !== 'active') {
-      throw new Error('This installation has no active collaboration Agent registration.')
+      throw new Error('This installation has no active Desktop Agent.')
     }
-    const response = await this.requireClient().execute(restRequestSchema.parse({
-      protocolVersion: '1.0',
-      requestId: collaborationRequestId(),
-      type: 'agent.heartbeat',
-      idempotencyKey: `idem_agent.heartbeat.${digest([
-        agent.agentId,
-        String(agent.revision),
-        connectionStatus
-      ].join('\u0000')).slice(0, 48)}`,
+    const authority = await this.options.agentCloudRuntime.authorityStatus(agent.agentId)
+    if (authority.state !== 'ready') throw authorityStatusError(authority)
+    const response = await this.options.agentCloudRuntime.execute({
       agentId: agent.agentId,
-      expectedRevision: agent.revision,
-      connectionStatus,
-      capabilities: agent.capabilities
-    }), credential)
+      request: restRequestSchema.parse({
+        protocolVersion: '1.0',
+        requestId: collaborationRequestId(),
+        type: 'agent.heartbeat',
+        idempotencyKey: `idem_agent.heartbeat.${digest([
+          agent.agentId,
+          String(agent.revision),
+          connectionStatus
+        ].join('\u0000')).slice(0, 48)}`,
+        agentId: agent.agentId,
+        expectedRevision: agent.revision,
+        connectionStatus,
+        capabilities: authority.capabilityTags
+      })
+    })
     if (response.type === 'rest.error') throw new Error(response.error.message)
     if (
       response.type !== 'rest.entity' ||
@@ -599,23 +545,21 @@ export class CollaborationConnection {
     await this.options.store.transact((draft) => {
       draft.agents = replaceBy(draft.agents, updatedAgent, (item) => item.agentId)
     })
+    await this.options.afterHeartbeat?.(connectionStatus)
   }
 
-  private async notificationLoop(
-    client: CollaborationCloudClient,
-    credential: Readonly<{ value: string }>,
-    signal: AbortSignal
-  ): Promise<void> {
+  private async notificationLoop(agentId: string, signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       try {
-        for await (const event of client.observeAgentInbox(credential, signal)) {
+        for await (const event of this.options.agentCloudRuntime.observeAgentInbox(agentId, signal)) {
           if (event.type === 'inbox.available' && event.recipientType === 'agent') {
-            await this.pullInbox(credential)
+            await this.pullInbox()
           }
           if (event.type === 'connection.error') throw new Error(event.error.message)
         }
       } catch (error) {
         if (signal.aborted) return
+        if (await this.failClosedAuthority(agentId, error)) return
         this.connectionState = {
           state: 'recovering',
           lastConnectedAt: this.connectionState.lastConnectedAt,
@@ -626,28 +570,33 @@ export class CollaborationConnection {
     }
   }
 
-  private pullInbox(credential: Readonly<{ value: string }>): Promise<void> {
+  private pullInbox(): Promise<void> {
     const drain = async () => {
-      const afterSequence = this.options.store.snapshot().lastInboxSequence
-      const page = await this.requireClient().pullAgentInbox({
-        afterSequence,
-        limit: 100,
-        credential
-      })
-      const sorted = [...page.messages].sort((left, right) => left.sequence - right.sequence)
-      const installationId = (await this.options.settings.require()).installationId
-      for (const message of sorted) {
-        if (message.recipientType !== 'agent') continue
-        const localAgentId = this.options.store.snapshot().agents.find((agent) => (
-          agent.installationId === installationId
-        ))?.agentId
-        if (!localAgentId || message.recipientAgentId !== localAgentId) {
-          throw new Error('Cloud returned an inbox message for another Agent.')
+      const localAgentId = await this.requireLocalAgentId()
+      const pageLimit = 100
+      for (let pageCount = 0; pageCount < 1_000; pageCount += 1) {
+        const afterSequence = this.options.store.snapshot().lastInboxSequence
+        const page = await this.options.agentCloudRuntime.pullAgentInbox({
+          agentId: localAgentId,
+          afterSequence,
+          limit: pageLimit
+        })
+        const sorted = [...page.messages].sort((left, right) => left.sequence - right.sequence)
+        for (const message of sorted) {
+          if (message.recipientType !== 'agent') continue
+          if (!localAgentId || message.recipientAgentId !== localAgentId) {
+            throw new Error('Cloud returned an inbox message for another Agent.')
+          }
+          if (message.sequence <= this.options.store.snapshot().lastInboxSequence) continue
+          await this.options.inboxHandler.handle(message)
+          await this.persistInboxAck(message)
         }
-        if (message.sequence <= this.options.store.snapshot().lastInboxSequence) continue
-        await this.options.inboxHandler.handle(message)
-        await this.persistInboxAck(message)
+        if (page.messages.length < pageLimit) return
+        if (this.options.store.snapshot().lastInboxSequence <= afterSequence) {
+          throw new Error('Agent inbox refill did not advance its durable sequence.')
+        }
       }
+      throw new Error('Agent inbox refill exceeded the safe page limit.')
     }
     // A rejected event must stop this cursor advance, but it must not poison
     // the serialized pull tail forever. Explicit recovery can re-fetch the same
@@ -687,21 +636,21 @@ export class CollaborationConnection {
     this.options.outbox.wake()
   }
 
-  private requireClient(): CollaborationCloudClient {
-    if (!this.client) throw new Error('Collaboration service is not configured.')
-    return this.client
+  private async requireLocalAgentId(): Promise<string> {
+    const agentId = await this.localAgentId()
+    if (!agentId) throw new Error('This installation has no active Desktop Agent.')
+    return agentId
   }
 
-  private async requireUserCredential(): Promise<Readonly<{ value: string }>> {
-    const value = await this.options.packageSecrets.read(USER_CREDENTIAL_KEY)
-    if (!value) throw new Error('Verified collaboration user credential is unavailable.')
-    return { value }
-  }
-
-  private async requireDeviceCredential(): Promise<Readonly<{ value: string }>> {
-    const value = await this.options.packageSecrets.read(DEVICE_CREDENTIAL_KEY)
-    if (!value) throw new Error('Agent device credential is unavailable.')
-    return { value }
+  private requireIdentityReady(): Extract<
+    ReturnType<AuthenticatedCloudTransport['status']>,
+    { state: 'ready' }
+  > {
+    const status = this.options.authenticatedCloudTransport.status()
+    if (status.state === 'ready') return status
+    if (status.state === 'identity_required') throw new Error('Sign in to SciForge Cloud before using collaboration.')
+    if (status.state === 'device_required') throw new Error('Enroll this Desktop Device before using collaboration.')
+    throw new Error(status.reason)
   }
 
   private recordError(error: unknown, recoverable: boolean): void {
@@ -721,6 +670,52 @@ export class CollaborationConnection {
       }].slice(-256)
     }).catch(() => undefined)
   }
+
+  private async failClosedAuthority(agentId: string, error: unknown): Promise<boolean> {
+    if (!(error instanceof AgentCloudRuntimeError) || ![
+      'identity_required',
+      'device_required',
+      'runtime_required',
+      'runtime_unavailable',
+      'agent_required',
+      'agent_authority_invalid'
+    ].includes(error.code)) return false
+
+    const controller = this.abortController
+    this.abortController = null
+    controller?.abort(error)
+    this.options.outbox.stop()
+    await this.options.onAuthorityLost?.(agentId, error.message)
+    this.recordError(error, false)
+    return true
+  }
+}
+
+function authorityStatusError(
+  status: Exclude<Awaited<ReturnType<AgentCloudRuntime['authorityStatus']>>, { state: 'ready' }>
+): AgentCloudRuntimeError {
+  if (status.state === 'identity_required') {
+    return new AgentCloudRuntimeError(
+      'identity_required',
+      'Sign in to SciForge Cloud before continuing.'
+    )
+  }
+  if (status.state === 'device_required') {
+    return new AgentCloudRuntimeError(
+      'device_required',
+      'Enroll this Desktop Device before continuing.'
+    )
+  }
+  if (status.state === 'runtime_required') {
+    return new AgentCloudRuntimeError('runtime_required', status.reason)
+  }
+  if (status.state === 'agent_required') {
+    return new AgentCloudRuntimeError(
+      'agent_required',
+      'Register this Device as an Agent before continuing.'
+    )
+  }
+  return new AgentCloudRuntimeError('runtime_unavailable', status.reason)
 }
 
 function mapAssurance(value: HumanEndpointBinding['assurance']): 'low' | 'verified' | 'strong' {

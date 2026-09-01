@@ -23,6 +23,7 @@ import {
   type PortableResourceAuthorityResolver,
   type PortableResourceExportProjection,
   type PortableResourceLocalRegistration,
+  type PortableResourceMaterializationOptions,
   type PortableResourceMaterializedReference,
   type PortableResourceReferenceCodec,
   type PortableResourceReferenceEnvelope,
@@ -54,7 +55,8 @@ import {
 } from '../../shared/capability-broker'
 import type {
   ActiveCapabilityInvocation,
-  CapabilityBroker
+  CapabilityBroker,
+  CapabilityResourceInvocationBinding
 } from '../capabilities/broker'
 import type { CapabilityResourceRegistration } from '../capabilities/registry'
 
@@ -91,7 +93,8 @@ export type PortableResourceCapabilityBroker = Readonly<{
   currentInvocation(): ActiveCapabilityInvocation | undefined
   issueResource(
     caller: CapabilityCallerContextInput,
-    registration: CapabilityResourceRegistration
+    registration: CapabilityResourceRegistration,
+    invocationBinding?: CapabilityResourceInvocationBinding
   ): IssuedPortableResource
   bindResourceRef(
     caller: CapabilityCallerContextInput,
@@ -281,10 +284,13 @@ export class PortableResourceReferenceService {
   async materialize(
     rawEnvelope: string | unknown,
     rawCaller: CapabilityCallerContextInput,
-    options: Readonly<{ signal?: AbortSignal }> = {}
+    options: PortableResourceMaterializationOptions = {}
   ): Promise<PortableResourceMaterializedReference> {
     this.#requireAccepting('resolution_rejected')
     throwIfCancelled(options.signal)
+    const invocationBinding = options.exportPolicy === 'forbid'
+      ? this.#requireProcessLocalInvocationBinding(rawCaller)
+      : undefined
     const envelope = parsePortableResourceReference(rawEnvelope)
     const ownedCodec = this.#codecs.require(envelope.kind)
     const identity = decodeCanonicalIdentity(ownedCodec.codec, envelope.identity)
@@ -314,6 +320,7 @@ export class PortableResourceReferenceService {
         identity,
         resourceKind: ownedCodec.codec.resourceKind,
         authority,
+        audience: caller.audience,
         principal,
         assertPrincipalCurrent: assertCurrentPrincipal,
         ...(options.signal ? { signal: options.signal } : {})
@@ -343,10 +350,12 @@ export class PortableResourceReferenceService {
     const issuanceKey = digest(JSON.stringify({
       resourceId,
       workspaceId: workspaceId ?? null,
-      audiences
+      audiences,
+      exportPolicy: options.exportPolicy ?? 'allow',
+      invocationBinding: invocationBinding ?? null
     }))
     const knownIssuance = this.#issuanceClaims.get(issuanceKey)
-    if (!knownIssuance && exportProjection &&
+    if (!knownIssuance && options.exportPolicy !== 'forbid' && exportProjection &&
       this.#exportsByRef.size >= this.#maxExportBindings) {
       await this.#disposeRegistration(registration, false)
       throw portableError('export_capacity_exceeded')
@@ -361,7 +370,7 @@ export class PortableResourceReferenceService {
     }
     if (knownIssuance) {
       return await this.#reuseMaterialization({
-        caller,
+        caller: rawCaller,
         principal,
         registration,
         issuance: knownIssuance,
@@ -372,7 +381,7 @@ export class PortableResourceReferenceService {
     let issuedRef: string | undefined
     let issued: IssuedPortableResource
     try {
-      issued = this.#broker.issueResource(caller, toBrokerRegistration({
+      issued = this.#broker.issueResource(rawCaller, toBrokerRegistration({
         registration,
         resourceId,
         principal,
@@ -380,7 +389,7 @@ export class PortableResourceReferenceService {
         onDispose: async () => {
           if (issuedRef) this.#releaseClaim(resourceId, issuanceKey, issuedRef)
         }
-      }))
+      }), invocationBinding)
     } catch (error) {
       if (claim.references.size === 0) this.#resourceClaims.delete(resourceId)
       await this.#disposeRegistration(registration, false)
@@ -396,7 +405,7 @@ export class PortableResourceReferenceService {
     }))
     claim.references.add(issued.resourceRef)
     this.#recordLease(issued.resourceRef, principal, issued.retire)
-    if (exportProjection) {
+    if (options.exportPolicy !== 'forbid' && exportProjection) {
       this.#exportsByRef.set(
         issued.resourceRef,
         exportBinding(envelope, ownedCodec, exportProjection, principal)
@@ -419,7 +428,7 @@ export class PortableResourceReferenceService {
     this.#requireAccepting('unauthorized_export')
     throwIfCancelled(options.signal)
     const owner = portableResourceExportConsumerOwnerSchema.parse(rawOwner)
-    const caller = publicCaller(rawCaller)
+    const caller = rawCaller
     const principal = requireCurrentPrincipal(this.#currentPrincipal)
     assertInvocationPrincipal(rawCaller, principal)
     const assertCurrentPrincipal = principalLeaseAssertion(
@@ -446,6 +455,7 @@ export class PortableResourceReferenceService {
       assertCurrentPrincipal()
       const projected = await binding.projection.project({
         consumer: owner,
+        audience: caller.audience,
         principal,
         assertPrincipalCurrent: assertCurrentPrincipal,
         ...(options.signal ? { signal: options.signal } : {})
@@ -490,6 +500,10 @@ export class PortableResourceReferenceService {
         const invocation = this.#requireInvocation()
         return await this.materialize(reference, invocation.caller, options)
       },
+      discard: async (input) => {
+        const invocation = this.#requireInvocation()
+        await this.discard(invocation.caller, input)
+      },
       export: async (input, options) => {
         const invocation = this.#requireInvocation()
         return await this.exportForOwner(consumer, invocation.caller, input, options)
@@ -501,6 +515,41 @@ export class PortableResourceReferenceService {
     const invocation = this.#broker.currentInvocation()
     if (!invocation) throw portableError('unauthorized_export')
     return invocation
+  }
+
+  /** Retires one process-local materialization in the exact active execution. */
+  async discard(
+    rawCaller: CapabilityCallerContextInput,
+    input: Readonly<{ resourceRef: string }>
+  ): Promise<void> {
+    this.#requireAccepting('resolution_rejected')
+    const principal = requireCurrentPrincipal(this.#currentPrincipal)
+    assertInvocationPrincipal(rawCaller, principal)
+    const resourceRef = capabilityResourceBindRequestSchema.parse(input).resourceRef
+    try {
+      this.#broker.describeResourceRef(rawCaller, resourceRef)
+    } catch {
+      throw portableError('resolution_rejected')
+    }
+    assertCurrentPrincipalLease(principal, this.#currentPrincipal)
+    await this.#retireRef(resourceRef)
+  }
+
+  #requireProcessLocalInvocationBinding(
+    rawCaller: CapabilityCallerContextInput
+  ): CapabilityResourceInvocationBinding {
+    const invocation = this.#broker.currentInvocation()
+    const caller = rawCaller as CapabilityCallerContext
+    if (
+      !invocation || invocation.caller !== rawCaller || caller.audience !== 'system' ||
+      !isCanonicalDigest(caller.executionContextDigest)
+    ) {
+      throw portableError('resolution_rejected')
+    }
+    return Object.freeze({
+      callerId: caller.callerId,
+      executionContextDigest: caller.executionContextDigest
+    })
   }
 
   /**
@@ -926,7 +975,7 @@ function toBrokerRegistration(input: Readonly<{
     ...(registration.audiences ? { audiences: [...registration.audiences] } : {}),
     semanticRevision: registration.semanticRevision,
     ...(registration.layoutRevision ? { layoutRevision: registration.layoutRevision } : {}),
-    observe: async (_caller, context) => {
+    observe: async (caller, context) => {
       const assertCurrentPrincipal = principalLeaseAssertion(
         principal,
         currentPrincipal,
@@ -934,6 +983,7 @@ function toBrokerRegistration(input: Readonly<{
       )
       assertCurrentPrincipal()
       const observed = await registration.observe({
+        audience: caller.audience,
         principal,
         assertPrincipalCurrent: assertCurrentPrincipal,
         ...(context.signal ? { signal: context.signal } : {})
@@ -1109,6 +1159,10 @@ function boundedTrimmed(value: unknown, max: number): string {
 
 function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
+}
+
+function isCanonicalDigest(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value)
 }
 
 function portableError(

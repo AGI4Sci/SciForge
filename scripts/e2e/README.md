@@ -51,6 +51,17 @@ The canonical source Electron smoke is already wired through the checked-in
 npm run smoke:electron:source
 ```
 
+The Run-0 Cloud pre-login smoke uses the same source application path while
+freezing the accepted Cloud origin and OIDC issuer:
+
+```text
+npm run smoke:electron:source:cloud
+```
+
+This online smoke proves production composition, deployment selection, public
+reachability, and the signed-out identity boundary. It does not replace a Human
+OIDC login or the five-profile live collaboration run.
+
 The manifest stores role, PID, process creation identity, executable basename,
 command fingerprint, ports, profiles, phase, exit state, and teardown
 verification. It never stores inherited environment values or raw command

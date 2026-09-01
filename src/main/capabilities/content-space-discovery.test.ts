@@ -4,8 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
-import type { DomainMainHost } from '@sciforge/domain-sdk/host'
+import {
+  canonicalizeDomainMainFiniteCapabilityBatchPlan,
+  domainMainFiniteCapabilityBatchPlanDigestSchema,
+  domainMainFiniteCapabilityBatchPlanSchema,
+  type DomainMainHost
+} from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import { samePrincipalSnapshot, type PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
 import {
@@ -15,12 +21,17 @@ import {
 } from '@sciforge/domain-sdk/provider-composition'
 import {
   CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
+  CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT,
+  CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT,
+  CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT,
+  CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT,
   CONTENT_SPACE_ADMINISTRATION_OPERATIONS,
   defineContentSpaceAdministrationPort
 } from '@sciforge/domain-content-space/administration-contract'
 import {
   CONTENT_SPACE_CAPABILITY_IDS,
   CONTENT_SPACE_DOMAIN_MODULE_ID,
+  CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
   defineContentSpaceProvider,
   toPortableContentContainerReference,
   type ContentSpaceProvider
@@ -38,6 +49,7 @@ import { createDomainMainEntry as createMockProviderMainEntry } from
   '@sciforge/domain-content-space-mock-provider/main'
 
 import { CapabilityBroker } from './broker'
+import { defineCapability } from './registry'
 import {
   CAPABILITY_AGENT_TOOL_NAMES,
   createCapabilityAgentToolSurface
@@ -50,6 +62,8 @@ import {
 } from '../modules/application-composition'
 import { createNonSecretPackageStorageForTest } from
   '../modules/domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from
+  '../modules/domain-main-host.test-helper'
 import {
   activateMainRuntimeContributions,
   createMainSystemCapabilityInvokerFactory
@@ -413,6 +427,213 @@ describe('Content Space Agent discovery integration', () => {
       })).rejects.toMatchObject({ code: 'approval_denied' })
       expect(bind).toHaveBeenCalledTimes(bindCallsBeforeRemoval)
       expect(removeMember).not.toHaveBeenCalled()
+    } finally {
+      await application.dispose()
+    }
+  })
+
+  it('executes the ordinary Content Space provisioning chain only through one exact approved batch', async () => {
+    const createdRoot = toPortableContentContainerReference({
+      providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+      containerId: 'approved_batch_root'
+    })
+    const member = Object.freeze({
+      providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF,
+      kind: 'user' as const,
+      principalId: 'provider-user-batch-worker'
+    })
+    const providerMembers: typeof member[] = []
+    const providerCalls: string[] = []
+    const administration = defineContentSpaceAdministrationPort({
+      contractVersion: CONTENT_SPACE_ADMINISTRATION_CONTRACT_VERSION,
+      listSpaces: async () => Object.freeze({ items: Object.freeze([]) }),
+      createSpace: async (input) => {
+        providerCalls.push(`create:${input.label}`)
+        return Object.freeze({
+          root: createdRoot,
+          label: input.label,
+          contentOwnerUserId: input.contentOwnerUserId,
+          pinned: false
+        })
+      },
+      observeSpace: async () => { throw new Error('Unexpected observe-space operation.') },
+      updateSpace: async () => { throw new Error('Unexpected update-space operation.') },
+      pinSpace: async () => { throw new Error('Unexpected pin-space operation.') },
+      unpinSpace: async () => { throw new Error('Unexpected unpin-space operation.') },
+      openRoot: async () => { throw new Error('Unexpected open-root operation.') },
+      listMembers: async (input) => {
+        providerCalls.push(`list:${providerMembers.length}`)
+        return Object.freeze({
+          root: input.root,
+          items: Object.freeze(providerMembers.map((providerMember) => Object.freeze({
+            member: providerMember
+          })))
+        })
+      },
+      addMember: async (input) => {
+        providerCalls.push(`add:${input.member.principalId}`)
+        providerMembers.push(input.member as typeof member)
+        return Object.freeze({ root: input.root, member: input.member })
+      },
+      removeMember: async () => { throw new Error('Unexpected remove-member operation.') }
+    })
+    const bind = vi.fn(async () => Object.freeze({ administration }))
+    const providerEntry = createMockProviderFixtureEntry((provider) =>
+      defineContentSpaceProvider({
+        ...provider,
+        features: Object.freeze({
+          ...provider.features,
+          administration: Object.freeze({
+            describeOperations: () => Object.freeze(
+              CONTENT_SPACE_ADMINISTRATION_OPERATIONS.map((operation) => Object.freeze({
+                operation,
+                readiness: 'production_ready' as const,
+                reasonCode: 'available' as const
+              }))
+            ),
+            bind
+          })
+        })
+      })
+    )
+    const application = await activateContentSpaceTestApplication({
+      userDataDir: join(tmpdir(), 'sciforge-content-space-approved-batch-integration'),
+      providerEntry,
+      principal
+    })
+
+    try {
+      const { broker } = application
+      const invoker = createMainSystemCapabilityInvokerFactory(broker).forDomain(
+        { moduleId: 'sciforge.project-coordinator', moduleVersion: '1.0.0' },
+        [CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID]
+      )
+      await expect(invoker.invoke(
+        CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT,
+        { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF },
+        { idempotencyKey: 'standing-grant-must-not-authorize' }
+      )).rejects.toMatchObject({ code: 'delegated_batch_proof_denied' })
+      expect(bind).not.toHaveBeenCalled()
+
+      const plan = domainMainFiniteCapabilityBatchPlanSchema.parse({
+        requiredSystemCapabilityGrant: CONTENT_SPACE_PROVISIONING_BATCH_GRANT_ID,
+        revision: 'project-content:project-11:11',
+        operations: [
+          {
+            operationId: 'authorize',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.authorizeProviderAdministration,
+            idempotencyKey: 'project-11-revision-11-authorize',
+            input: { providerInstanceRef: LOCAL_MOCK_PROVIDER_INSTANCE_REF }
+          },
+          {
+            operationId: 'create',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminCreateSpace,
+            idempotencyKey: 'project-11-revision-11-create',
+            input: { label: 'Project 11 Team' },
+            resource: {
+              kind: 'operation-output', operationId: 'authorize', path: ['value', 'resource']
+            }
+          },
+          {
+            operationId: 'list-before',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+            input: { page: { limit: 200 } },
+            resource: {
+              kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
+            }
+          },
+          {
+            operationId: 'add-member',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminAddMember,
+            idempotencyKey: 'project-11-revision-11-add-worker',
+            input: { member },
+            resource: {
+              kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
+            }
+          },
+          {
+            operationId: 'list-after',
+            actionId: CONTENT_SPACE_CAPABILITY_IDS.agentAdminListMembers,
+            input: { page: { limit: 200 } },
+            resource: {
+              kind: 'operation-output', operationId: 'create', path: ['value', 'resource']
+            }
+          }
+        ]
+      })
+      const confirmedPlanDigest = createHash('sha256')
+        .update(canonicalizeDomainMainFiniteCapabilityBatchPlan(plan))
+        .digest('hex')
+      const outer = defineCapability({
+        id: 'fixture.project-content.provision',
+        version: '1.0.0',
+        title: 'Confirm exact Project content provisioning',
+        description: 'Binds one Human confirmation to the exact immutable provisioning revision.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: z.object({
+          revision: z.literal(11),
+          confirmedPlanDigest: domainMainFiniteCapabilityBatchPlanDigestSchema
+        }).strict(),
+        outputSchema: z.object({ memberCount: z.number().int() }).strict(),
+        handler: async () => {
+          const batch = invoker.createApprovedBatch(plan)
+          const controller = new AbortController()
+          await batch.invoke(
+            'authorize',
+            CONTENT_SPACE_AUTHORIZE_PROVIDER_ADMINISTRATION_CONTRACT,
+            { signal: controller.signal }
+          )
+          await batch.invoke(
+            'create',
+            CONTENT_SPACE_AGENT_ADMIN_CREATE_SPACE_CONTRACT,
+            { signal: controller.signal }
+          )
+          const before = await batch.invoke(
+            'list-before',
+            CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT
+          )
+          if (!before.ok || before.value.items.length !== 0) {
+            throw new Error('The exact first member observation is invalid.')
+          }
+          await batch.invoke(
+            'add-member',
+            CONTENT_SPACE_AGENT_ADMIN_ADD_MEMBER_CONTRACT,
+            { signal: controller.signal }
+          )
+          const after = await batch.invoke(
+            'list-after',
+            CONTENT_SPACE_AGENT_ADMIN_LIST_MEMBERS_CONTRACT
+          )
+          if (!after.ok) throw new Error('The exact final member observation failed.')
+          return { output: { memberCount: after.value.items.length } }
+        }
+      })
+      broker.registry.register(outer)
+
+      await expect(broker.invoke({
+        audience: 'ui',
+        callerId: 'window:project-owner',
+        approvals: [{
+          actionId: outer.descriptor.id,
+          invocationId: 'project-11-revision-11-human-confirmation',
+          mode: 'confirmation'
+        }]
+      }, {
+        actionId: outer.descriptor.id,
+        invocationId: 'project-11-revision-11-human-confirmation',
+        input: { revision: 11, confirmedPlanDigest }
+      })).resolves.toMatchObject({ output: { memberCount: 1 } })
+      expect(providerCalls).toEqual([
+        'create:Project 11 Team',
+        'list:0',
+        `add:${member.principalId}`,
+        'list:1'
+      ])
+      expect(bind).toHaveBeenCalledTimes(4)
     } finally {
       await application.dispose()
     }
@@ -1034,9 +1255,14 @@ function createTestApplicationCatalog(
 ) {
   return createApplicationDomainCatalog({
     getUserDataDir: () => userDataDir,
+    getDeviceId: () => 'content-space-discovery-test-device',
+    portableResourcesFor: createUnavailablePortableResourcesForTest(),
     packageStorageFor: createNonSecretPackageStorageForTest(),
     capabilityInvokerFor: () => Object.freeze({
       invoke: async () => {
+        throw new Error('Domain system capabilities are unavailable in this test.')
+      },
+      createApprovedBatch: () => {
         throw new Error('Domain system capabilities are unavailable in this test.')
       }
     }),

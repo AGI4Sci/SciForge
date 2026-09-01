@@ -801,6 +801,98 @@ describe('ClaudeCodeRuntimeService', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('uses Claude structured output and exposes only the exact JSON result as the final assistant item', async () => {
+    const structured = { result: 'schema-bound answer' }
+    const { sdk, calls } = fakeSdk(() => [
+      init('claude-session-structured'),
+      assistantText('intermediate prose', 'claude-session-structured'),
+      sdkMessage({
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: 'intermediate prose',
+        structured_output: structured,
+        session_id: 'claude-session-structured',
+        uuid: randomTestId('result'),
+        usage: { input_tokens: 3, output_tokens: 4 }
+      })
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-structured-thread',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+    const outputSchema = {
+      type: 'object',
+      properties: { result: { type: 'string' } },
+      required: ['result'],
+      additionalProperties: false
+    }
+
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'Return the exact result.',
+      workspace: '/tmp/workspace',
+      outputSchema
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(() => threadReachedState(service, thread.thread.id, 'completed'))
+
+    expect(calls[0]?.options?.outputFormat).toEqual({
+      type: 'json_schema',
+      schema: outputSchema
+    })
+    const page = await service.readThreadPage(thread.thread.id)
+    if (!page.ok) throw new Error(page.message)
+    const assistantItems = page.page.turns[0]?.items?.filter((item) => (
+      item.kind === 'assistant_message'
+    )) ?? []
+    expect(assistantItems.at(-1)?.text).toBe(JSON.stringify(structured))
+  })
+
+  it('fails closed when Claude omits required structured output', async () => {
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-structured-missing'),
+      result('{"result":"prompt-only fallback"}', 'claude-session-structured-missing')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-structured-missing-thread',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'Return the exact result.',
+      workspace: '/tmp/workspace',
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      }
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(() => threadReachedState(service, thread.thread.id, 'failed'))
+    const events = await storedEvents(service, thread.thread.id)
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'error',
+        code: 'claude_structured_output_missing'
+      })
+    ]))
+  })
+
   it('scopes Model Router correlation headers to the exact Claude turn', async () => {
     const { sdk, calls } = fakeSdk(() => [
       init('claude-session-trace'),
@@ -875,6 +967,53 @@ describe('ClaudeCodeRuntimeService', () => {
       expect(result.thread.runtimeId).toBe('claude')
       expect(result.thread.title).toBe('Draft')
     }
+  })
+
+  it('lists a fresh empty Coordinator Session with its persisted visibility metadata', async () => {
+    const { sdk, calls } = fakeSdk(() => [])
+    const storageRoot = await serviceRoot()
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      claudeAgentSdk: sdk
+    })
+
+    const started = await service.startThread({
+      threadId: 'coordinator-session',
+      workspace: '/tmp/workspace',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
+    })
+
+    expect(started).toMatchObject({
+      ok: true,
+      thread: {
+        id: 'coordinator-session',
+        title: 'Claude Code thread',
+        relation: 'side',
+        threadSource: 'domain-runtime',
+        sidebarVisibility: 'main',
+        hasUserMessage: false
+      }
+    })
+    const reloadedService = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      claudeAgentSdk: sdk
+    })
+    await expect(reloadedService.listThreads({ includeArchived: true })).resolves.toMatchObject({
+      ok: true,
+      threads: [{
+        id: 'coordinator-session',
+        title: 'Claude Code thread',
+        relation: 'side',
+        threadSource: 'domain-runtime',
+        sidebarVisibility: 'main',
+        hasUserMessage: false
+      }]
+    })
+    expect(calls).toHaveLength(0)
   })
 
   it('subscribes before replaying stored events and de-duplicates queued live echoes', async () => {

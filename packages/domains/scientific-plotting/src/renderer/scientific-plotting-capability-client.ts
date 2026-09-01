@@ -3,10 +3,14 @@ import {
   ARTIFACT_VERSIONS_CAPABILITY_IDS,
   artifactVersionListInputV1Schema,
   artifactVersionListResultV1Schema,
+  artifactVersionMaterializeInputV1Schema,
+  artifactVersionMaterializeResultV1Schema,
   artifactVersionReadInputV1Schema,
   artifactVersionReadResultV1Schema,
   type ArtifactVersionListInputV1,
   type ArtifactVersionListV1,
+  type ArtifactVersionMaterializeInputV1,
+  type ArtifactVersionMaterializeReceiptV1,
   type ArtifactVersionReadInputV1,
   type ArtifactVersionReadV1,
   type ArtifactVersionResultV1
@@ -33,6 +37,12 @@ export const scientificPlottingRendererCapabilityContracts = Object.freeze({
     inputSchema: artifactVersionReadInputV1Schema,
     outputSchema: artifactVersionReadResultV1Schema
   },
+  materializeArtifact: {
+    actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.materialize,
+    effect: 'workspace-write' as const,
+    inputSchema: artifactVersionMaterializeInputV1Schema,
+    outputSchema: artifactVersionMaterializeResultV1Schema
+  },
   rerun: SCIENTIFIC_PLOTTING_RERUN_CONTRACT,
   compare: SCIENTIFIC_PLOTTING_COMPARE_CONTRACT
 })
@@ -46,6 +56,10 @@ export type ScientificPlottingCapabilityClient = Readonly<{
     workspaceRoot: string,
     input: ArtifactVersionReadInputV1
   ): Promise<ArtifactVersionResultV1<ArtifactVersionReadV1>>
+  materializeArtifactVersion(
+    workspaceRoot: string,
+    input: ArtifactVersionMaterializeInputV1
+  ): Promise<ArtifactVersionResultV1<ArtifactVersionMaterializeReceiptV1>>
   rerun(
     workspaceRoot: string,
     input: ScientificPlottingRerunInput
@@ -69,6 +83,14 @@ export function createScientificPlottingCapabilityClient(
       scientificPlottingRendererCapabilityContracts.readArtifact,
       input,
       { workspaceId: workspaceRoot }
+    ),
+    materializeArtifactVersion: (workspaceRoot, input) => invoker.invoke(
+      scientificPlottingRendererCapabilityContracts.materializeArtifact,
+      input,
+      {
+        workspaceId: workspaceRoot,
+        approval: { mode: 'confirmation' }
+      }
     ),
     rerun: (workspaceRoot, input) => invoker.invoke(
       scientificPlottingRendererCapabilityContracts.rerun,

@@ -87,11 +87,10 @@ async function runPhase({
     electronApp = await electron.launch({
       executablePath: resolve(executablePath),
       cwd: applicationPath ? resolve(applicationPath) : dirname(resolve(executablePath)),
-      args: [
-        ...(applicationPath ? [resolve(applicationPath)] : []),
-        `--user-data-dir=${userDataDirectory}`,
-        '--hidden'
-      ],
+      args: providerCredentialSmokeLaunchArgs({
+        applicationPath,
+        userDataDirectory
+      }),
       env: {
         ...process.env,
         SCIFORGE_DEV_BROWSER_BRIDGE: '0',
@@ -131,6 +130,22 @@ async function runPhase({
   } finally {
     await closeElectron(electronApp)
   }
+}
+
+export function providerCredentialSmokeLaunchArgs({
+  applicationPath,
+  userDataDirectory,
+  platform = process.platform
+}) {
+  return [
+    ...(applicationPath ? [resolve(applicationPath)] : []),
+    `--user-data-dir=${resolve(userDataDirectory)}`,
+    // Playwright otherwise appends this after process startup. Passing it to the
+    // executable keeps unsigned/ad-hoc packaged acceptance runs from blocking on
+    // an interactive macOS Keychain authorization prompt.
+    ...(platform === 'darwin' ? ['--use-mock-keychain'] : []),
+    '--hidden'
+  ]
 }
 
 async function closeElectron(electronApp) {

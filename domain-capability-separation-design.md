@@ -308,13 +308,13 @@ Provider contribution contract
 Provider Instance policy
 当前资源 capability
 平台安全 Gate
-Provider-specific evidence profile
+当前 Principal 与 Provider live binding
 调用者 audience/approval policy
 ```
 
 只有受信 composition 和通过验证的合同证据可以提升 readiness。Renderer、Agent、Task、环境字符串、文件扩展名、成功 demo 或 Provider 自报自由文本不能提升。
 
-`blocked_by_contract` 在 Provider contact 前失败；`poc_only` 只能在明确隔离 profile 中执行；`production_ready` 必须逐 operation 验证，不能由 package 整体状态推导。
+`blocked_by_contract` 在 Provider contact 前失败；`poc_only` 只能由可信 Broker 在当前 Principal、精确 authority 与实时 Provider binding 下逐 invocation 授权；`production_ready` 必须逐 operation 验证，不能由 package 整体状态推导。
 
 ## 11. OpenContent V1 Adapter track
 

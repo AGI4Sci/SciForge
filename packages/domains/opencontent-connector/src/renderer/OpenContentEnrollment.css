@@ -266,30 +266,6 @@
   color: var(--oc-success);
 }
 
-.opencontent-enrollment__account {
-  border-bottom: 1px solid var(--oc-border);
-  border-top: 1px solid var(--oc-border);
-  display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  padding: 12px 0;
-}
-
-.opencontent-enrollment__account dt {
-  color: var(--oc-muted);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.opencontent-enrollment__account dd {
-  font-size: 13px;
-  font-weight: 550;
-  margin-top: 3px;
-  overflow-wrap: anywhere;
-}
-
 .opencontent-enrollment__confirmation {
   align-items: center;
   background: color-mix(in srgb, var(--oc-danger) 5%, var(--oc-surface));
@@ -354,11 +330,6 @@
 
   .opencontent-enrollment__button--primary {
     width: 100%;
-  }
-
-  .opencontent-enrollment__account {
-    grid-template-columns: 1fr;
-    gap: 10px;
   }
 
   .opencontent-enrollment__confirmation {

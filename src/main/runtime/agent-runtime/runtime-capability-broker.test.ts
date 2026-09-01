@@ -11,6 +11,63 @@ import {
 } from './runtime-mcp-tool-gateway'
 
 describe('RuntimeCapabilityBroker', () => {
+  it('projects only exact runtime/thread identity onto native Agent invocations', async () => {
+    const invoke = vi.fn(async () => ({
+      actionId: 'fixture.native-read',
+      output: { route: 'plain' },
+      changed: false,
+      replayed: false,
+      completedAt: '2026-08-28T00:00:00.000Z'
+    }))
+    const invokeOrdinarySession = vi.fn(async (_caller, request, ordinarySession) => ({
+      actionId: request.actionId,
+      output: ordinarySession,
+      changed: false,
+      replayed: false,
+      completedAt: '2026-08-28T00:00:00.000Z'
+    }))
+    const runtime = createRuntimeCapabilityBroker({
+      broker: { ...emptyBroker(), invoke, invokeOrdinarySession },
+      managedTools: createRuntimeMcpToolGateway({
+        servers: [],
+        clientFactory: async () => { throw new Error('unused') }
+      })
+    })
+    const caller = {
+      audience: 'agent' as const,
+      callerId: 'runtime-a:thread-a',
+      approvals: []
+    }
+    const request = { actionId: 'fixture.native-read', input: {} }
+
+    await runtime.invoke(caller, request, {
+      context: {
+        requestId: 'request-exact',
+        runtimeId: ' runtime-a ',
+        threadId: ' thread-a '
+      }
+    })
+    expect(invokeOrdinarySession).toHaveBeenCalledWith(
+      caller,
+      request,
+      { runtimeId: 'runtime-a', threadId: 'thread-a' },
+      { signal: undefined }
+    )
+    expect(invoke).not.toHaveBeenCalled()
+
+    await runtime.invoke(caller, {
+      actionId: 'fixture.native-read',
+      input: { title: 'thread-guessed', prompt: 'runtime-guessed' }
+    }, {
+      context: {
+        requestId: 'request-no-thread',
+        runtimeId: 'runtime-a'
+      }
+    })
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invokeOrdinarySession).toHaveBeenCalledTimes(1)
+  })
+
   it('passes local resource-handle descriptions through to the Host Broker', () => {
     const caller = {
       audience: 'agent' as const,
@@ -139,7 +196,11 @@ describe('RuntimeCapabilityBroker', () => {
         type: 'object',
         properties: {
           workspaceRoot: { type: 'string', required: false },
-          recipe: { type: 'object', required: true }
+          recipe: expect.objectContaining({
+            type: 'object',
+            required: true,
+            properties: expect.any(Object)
+          })
         }
       }
     })])

@@ -19,11 +19,14 @@ import type { DomainRuntimeContributionOwner } from '@sciforge/domain-sdk/host'
 import {
   principalAssuranceSchema,
   principalAuthoritySchema,
+  principalDeviceIdSchema,
   principalSubjectSchema,
+  samePrincipalSnapshot,
   type PrincipalSnapshot
 } from '@sciforge/domain-sdk/principal'
 import { z } from 'zod'
 import type { ManagedSecretRedactionRegistry } from './managed-secret-redaction'
+import { redactExactSensitiveValues } from '../shared/secret-redaction'
 
 export type PackageEncryptionState = 'available' | 'unavailable' | 'insecure'
 
@@ -93,11 +96,12 @@ type SecretsFile = Readonly<{
 
 const storedProviderCredentialSchema = z.object({
   version: z.literal(1),
-  nodeId: z.string().min(1).max(256),
+  executionNodeId: z.string().min(1).max(256),
   principal: z.object({
     authority: principalAuthoritySchema,
     subject: principalSubjectSchema,
-    assurance: principalAssuranceSchema
+    assurance: principalAssuranceSchema,
+    deviceId: principalDeviceIdSchema
   }).strict(),
   binding: domainMainProviderCredentialBindingSchema,
   secret: z.string().min(1).max(1_000_000)
@@ -108,7 +112,8 @@ type StoredProviderCredential = z.infer<typeof storedProviderCredentialSchema>
 export function createDomainPackageStorageFactory(input: Readonly<{
   userDataDir: string
   encryption: PackageEncryption
-  getDeviceId: () => string
+  /** Stable Host installation identity; independent from the current Principal's Device ID. */
+  getExecutionNodeId: () => string
   currentPrincipal: () => PrincipalSnapshot | undefined
   secretRedaction?: ManagedSecretRedactionRegistry
   atomicWrite?: (path: string, value: unknown) => Promise<void>
@@ -117,20 +122,29 @@ export function createDomainPackageStorageFactory(input: Readonly<{
   const stores = new Map<string, DomainPackageStorage>()
   const operationTails = new Map<string, Promise<void>>()
 
-  const serialize = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
-    const previous = operationTails.get(key) ?? Promise.resolve()
+  const serialize = async <T>(
+    key: string,
+    operation: () => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> => {
+    signal?.throwIfAborted()
+    const previous = (operationTails.get(key) ?? Promise.resolve())
+      .catch(() => undefined)
     let release!: () => void
     const current = new Promise<void>((resolve) => {
       release = resolve
     })
-    const tail = previous.catch(() => undefined).then(() => current)
+    const tail = previous.then(() => current)
     operationTails.set(key, tail)
-    await previous.catch(() => undefined)
+    void tail.then(() => {
+      if (operationTails.get(key) === tail) operationTails.delete(key)
+    })
     try {
+      await waitForStorageTurn(previous, signal)
+      signal?.throwIfAborted()
       return await operation()
     } finally {
       release()
-      if (operationTails.get(key) === tail) operationTails.delete(key)
     }
   }
 
@@ -146,77 +160,93 @@ export function createDomainPackageStorageFactory(input: Readonly<{
       const secretsLock = `${ownerKey}:secrets`
 
       const providerCredentials: DomainMainProviderCredentialStoreHost = Object.freeze({
-        status: (rawAccess) => serialize(secretsLock, async () => {
+        status: (rawAccess, options) => serialize(secretsLock, async () => {
+          options?.signal?.throwIfAborted()
           const context = providerCredentialContext(input, rawAccess, ownerKey)
           requireProviderEncryption(input.encryption)
           const file = await readProviderSecrets(secretsPath)
+          assertCurrentProviderContext(input, context)
+          options?.signal?.throwIfAborted()
           const encrypted = file.encrypted[context.key]
           if (encrypted === undefined) return Object.freeze({ state: 'absent' as const })
-          const record = readProviderCredential(input.encryption, encrypted, context)
-          input.secretRedaction?.activate({ recordId: context.redactionId, secret: record.secret })
+          readProviderCredential(input.encryption, encrypted, context)
+          assertCurrentProviderContext(input, context)
+          options?.signal?.throwIfAborted()
           return Object.freeze({ state: 'available' as const, recordVersion: 1 as const })
-        }),
-        replace: (rawAccess, secret) => serialize(secretsLock, async () => {
+        }, options?.signal),
+        replace: (rawAccess, secret, options) => serialize(secretsLock, async () => {
+          options?.signal?.throwIfAborted()
           const context = providerCredentialContext(input, rawAccess, ownerKey)
           if (typeof secret !== 'string' || secret.length === 0 || secret.length > 1_000_000) {
             throw new TypeError('Provider credential values must be non-empty bounded strings.')
           }
           requireProviderEncryption(input.encryption)
-          assertCurrentProviderPrincipal(input, context.principal)
+          assertCurrentProviderContext(input, context)
           const file = await readProviderSecrets(secretsPath)
-          const priorEncrypted = file.encrypted[context.key]
-          const prior = priorEncrypted === undefined
-            ? undefined
-            : readProviderCredential(input.encryption, priorEncrypted, context)
           const record = storedProviderCredentialSchema.parse({
             version: 1,
-            nodeId: context.nodeId,
+            executionNodeId: context.executionNodeId,
             principal: stablePrincipalIdentity(context.principal),
             binding: context.binding,
             secret
           })
-          input.secretRedaction?.activate({
-            recordId: context.redactionId,
-            secret,
-            ...(prior ? { replacedSecret: prior.secret } : {})
-          })
           const encryptedValue = encryptProviderCredential(input.encryption, record)
-          assertCurrentProviderPrincipal(input, context.principal)
+          assertCurrentProviderContext(input, context)
+          options?.signal?.throwIfAborted()
           await (input.atomicWrite ?? writeJsonFile)(secretsPath, {
             version: 1,
             encrypted: { ...file.encrypted, [context.key]: encryptedValue }
           } satisfies SecretsFile)
-        }),
-        use: (rawAccess, operation) => serialize(secretsLock, async () => {
+        }, options?.signal),
+        use: (rawAccess, operation, options) => serialize(secretsLock, async () => {
+          options?.signal?.throwIfAborted()
           if (typeof operation !== 'function') throw new TypeError('Credential use requires an operation.')
           const context = providerCredentialContext(input, rawAccess, ownerKey)
           requireProviderEncryption(input.encryption)
           const file = await readProviderSecrets(secretsPath)
+          assertCurrentProviderContext(input, context)
+          options?.signal?.throwIfAborted()
           const encrypted = file.encrypted[context.key]
           if (encrypted === undefined) throw providerCredentialError('credential_unavailable')
           const record = readProviderCredential(input.encryption, encrypted, context)
+          assertCurrentProviderContext(input, context)
           input.secretRedaction?.activate({ recordId: context.redactionId, secret: record.secret })
-          assertCurrentProviderPrincipal(input, context.principal)
-          const result = await operation(record.secret)
-          assertCurrentProviderPrincipal(input, context.principal)
-          return result
-        }),
-        remove: (rawAccess) => serialize(secretsLock, async () => {
+          try {
+            const result = await (async () => {
+              try {
+                return await operation(record.secret)
+              } catch (error) {
+                throw sanitizeProviderCredentialOperationFailure(error, record.secret)
+              }
+            })()
+            assertCurrentProviderContext(input, context)
+            options?.signal?.throwIfAborted()
+            return result
+          } finally {
+            input.secretRedaction?.release({
+              recordId: context.redactionId,
+              secret: record.secret
+            })
+          }
+        }, options?.signal),
+        remove: (rawAccess, options) => serialize(secretsLock, async () => {
+          options?.signal?.throwIfAborted()
           const context = providerCredentialContext(input, rawAccess, ownerKey)
           requireProviderEncryption(input.encryption)
           const file = await readProviderSecrets(secretsPath)
+          assertCurrentProviderContext(input, context)
+          options?.signal?.throwIfAborted()
           const priorEncrypted = file.encrypted[context.key]
           if (priorEncrypted === undefined) return
-          const prior = readProviderCredential(input.encryption, priorEncrypted, context)
           const encrypted = { ...file.encrypted }
           delete encrypted[context.key]
-          assertCurrentProviderPrincipal(input, context.principal)
+          assertCurrentProviderContext(input, context)
+          options?.signal?.throwIfAborted()
           await (input.atomicWrite ?? writeJsonFile)(
             secretsPath,
             { version: 1, encrypted } satisfies SecretsFile
           )
-          input.secretRedaction?.retire({ recordId: context.redactionId, secret: prior.secret })
-        })
+        }, options?.signal)
       })
 
       const settings: DomainMainPackageSettingsHost = Object.freeze({
@@ -288,6 +318,90 @@ export function createDomainPackageStorageFactory(input: Readonly<{
   })
 }
 
+async function waitForStorageTurn(
+  previous: Promise<void>,
+  signal: AbortSignal | undefined
+): Promise<void> {
+  if (!signal) {
+    await previous
+    return
+  }
+  signal.throwIfAborted()
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const finish = (operation: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      operation()
+    }
+    const onAbort = (): void => {
+      finish(() => reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    void previous.then(() => finish(resolve))
+  })
+}
+
+function sanitizeProviderCredentialOperationFailure(
+  error: unknown,
+  secret: string
+): Error {
+  const rawMessage = typeof error === 'string'
+    ? error
+    : ownStringField(error, 'message')
+  const message = redactExactSensitiveValues(
+    rawMessage ?? 'Provider credential operation failed.',
+    [secret]
+  ).slice(0, 256)
+  const rawName = ownStringField(error, 'name') ?? plainErrorName(error) ??
+    'ProviderCredentialOperationError'
+  const redactedName = redactExactSensitiveValues(rawName, [secret])
+  const name = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(redactedName)
+    ? redactedName
+    : 'ProviderCredentialOperationError'
+  const failure = new Error(message || 'Provider credential operation failed.')
+  failure.name = name
+  const rawCode = ownStringField(error, 'code')
+  if (rawCode) {
+    const code = redactExactSensitiveValues(rawCode, [secret])
+    if (/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/u.test(code)) {
+      Object.defineProperty(failure, 'code', {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: code
+      })
+    }
+  }
+  return failure
+}
+
+function ownStringField(value: unknown, key: string): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    return descriptor && 'value' in descriptor && typeof descriptor.value === 'string'
+      ? descriptor.value
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function plainErrorName(value: unknown): 'Error' | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  try {
+    return Object.getPrototypeOf(value) === Error.prototype ? 'Error' : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function packageOwnerKey(owner: DomainRuntimeContributionOwner): string {
   const moduleId = owner.moduleId.trim()
   const moduleVersion = owner.moduleVersion.trim()
@@ -305,33 +419,31 @@ function packageOwnerKey(owner: DomainRuntimeContributionOwner): string {
 type ProviderCredentialContext = Readonly<{
   key: string
   redactionId: string
-  nodeId: string
+  executionNodeId: string
   principal: PrincipalSnapshot
   binding: DomainMainProviderCredentialBinding
 }>
 
 function providerCredentialContext(
   input: Readonly<{
-    getDeviceId: () => string
+    getExecutionNodeId: () => string
     currentPrincipal: () => PrincipalSnapshot | undefined
   }>,
   rawAccess: DomainMainProviderCredentialAccess,
   ownerKey: string
 ): ProviderCredentialContext {
+  const access = domainMainProviderCredentialAccessSchema.parse(rawAccess)
   const principal = input.currentPrincipal()
   if (!principal) throw providerCredentialError('principal_unavailable')
-  const nodeId = input.getDeviceId().trim()
-  if (!nodeId || principal.deviceId !== nodeId) {
-    throw providerCredentialError('principal_device_mismatch')
-  }
-  const access = domainMainProviderCredentialAccessSchema.parse(rawAccess)
-  if (!access.acceptedPrincipalAssurances.includes(principal.assurance)) {
-    throw providerCredentialError('principal_assurance_insufficient')
+  const executionNodeId = input.getExecutionNodeId().trim()
+  if (!executionNodeId) throw providerCredentialError('credential_binding_mismatch')
+  if (!samePrincipalSnapshot(principal, access.expectedPrincipal)) {
+    throw providerCredentialError('credential_binding_mismatch')
   }
   const binding = domainMainProviderCredentialBindingSchema.parse(access.binding)
   const digest = createHash('sha256')
     .update(JSON.stringify({
-      nodeId,
+      executionNodeId,
       principal: stablePrincipalIdentity(principal),
       binding
     }))
@@ -339,7 +451,7 @@ function providerCredentialContext(
   return Object.freeze({
     key: domainMainPackageSecretKeySchema.parse(`provider.${digest}`),
     redactionId: `${ownerKey}:${digest}`,
-    nodeId,
+    executionNodeId,
     principal,
     binding
   })
@@ -349,26 +461,23 @@ function stablePrincipalIdentity(principal: PrincipalSnapshot): StoredProviderCr
   return Object.freeze({
     authority: principal.authority,
     subject: principal.subject,
-    assurance: principal.assurance
+    assurance: principal.assurance,
+    deviceId: principal.deviceId
   })
 }
 
-function assertCurrentProviderPrincipal(
+function assertCurrentProviderContext(
   input: Readonly<{
-    getDeviceId: () => string
+    getExecutionNodeId: () => string
     currentPrincipal: () => PrincipalSnapshot | undefined
   }>,
-  captured: PrincipalSnapshot
+  captured: ProviderCredentialContext
 ): void {
   const current = input.currentPrincipal()
   if (!current) throw providerCredentialError('principal_unavailable')
   if (
-    input.getDeviceId().trim() !== captured.deviceId ||
-    current.authority !== captured.authority ||
-    current.subject !== captured.subject ||
-    current.assurance !== captured.assurance ||
-    current.deviceId !== captured.deviceId ||
-    current.identityVersion !== captured.identityVersion
+    input.getExecutionNodeId().trim() !== captured.executionNodeId ||
+    !samePrincipalSnapshot(current, captured.principal)
   ) {
     throw providerCredentialError('credential_binding_mismatch')
   }
@@ -393,10 +502,11 @@ function readProviderCredential(
     throw providerCredentialError('secure_storage_corrupt')
   }
   if (
-    record.nodeId !== context.nodeId ||
+    record.executionNodeId !== context.executionNodeId ||
     record.principal.authority !== context.principal.authority ||
     record.principal.subject !== context.principal.subject ||
     record.principal.assurance !== context.principal.assurance ||
+    record.principal.deviceId !== context.principal.deviceId ||
     record.binding.providerInstanceRef !== context.binding.providerInstanceRef ||
     record.binding.connectionId !== context.binding.connectionId
   ) {
@@ -422,8 +532,6 @@ function providerCredentialError(
 ): DomainMainProviderCredentialError {
   const messages = {
     principal_unavailable: 'A current Host principal is required for provider credentials.',
-    principal_device_mismatch: 'The current Host principal does not belong to this execution node.',
-    principal_assurance_insufficient: 'The current Host principal assurance is not admitted.',
     credential_unavailable: 'No provider credential is available for the current binding.',
     credential_binding_mismatch: 'The provider credential binding does not match the current Host context.',
     secure_storage_unavailable: 'The operating-system secure storage service is unavailable.',

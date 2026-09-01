@@ -4,18 +4,19 @@ import type { Server } from 'node:http'
 import { webSocketMessageSchema } from '@sciforge/collaboration-contracts'
 import { WebSocket, WebSocketServer } from 'ws'
 
-import { actorInboxRecipient, type AuthenticationService } from './auth.js'
+import { actorInboxRecipient } from './actor.js'
 import type { InboxRecipient } from './model.js'
-import type { InboxAvailabilityNotifier } from './service.js'
+import type { CollaborationRequestActorResolver } from './network-boundary.js'
+import type { CollaborationRuntimeNotifier } from './runtime-notifier.js'
 
 export type CollaborationWebSocketOptions = {
-  authentication: AuthenticationService
+  authentication: CollaborationRequestActorResolver
   basePath?: string
   allowedOrigins?: readonly string[]
   now?: () => Date
 }
 
-export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
+export class CollaborationWebSocketHub implements CollaborationRuntimeNotifier {
   private readonly clients = new Map<string, Set<WebSocket>>()
   private server?: WebSocketServer
 
@@ -31,9 +32,7 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
         socket.destroy()
         return
       }
-      const authorization = firstHeader(request.headers.authorization)
-      const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
-      options.authentication.resolveBearer(token).then((actor) => {
+      options.authentication.resolveRequestActor(request).then((actor) => {
         const recipient = actorInboxRecipient(actor)
         if (recipient.kind === 'human_endpoint') throw new Error('Provider endpoints do not use the public WebSocket.')
         server.handleUpgrade(request, socket, head, (webSocket) => {
@@ -80,6 +79,14 @@ export class CollaborationWebSocketHub implements InboxAvailabilityNotifier {
     }
   }
 
+  disconnectAgentAuthority(agentId: string): void {
+    const key = recipientKey({ kind: 'agent', id: agentId })
+    const clients = this.clients.get(key)
+    if (!clients) return
+    this.clients.delete(key)
+    for (const client of clients) client.close(4003, 'Agent authority revoked')
+  }
+
   async close(): Promise<void> {
     for (const clients of this.clients.values()) {
       for (const client of clients) client.close(1001, 'Server shutting down')
@@ -97,7 +104,6 @@ function normalizeBasePath(value: string | undefined): string {
   if (!value || value === '/') return ''
   return `/${value.replace(/^\/+|\/+$/g, '')}`
 }
-function firstHeader(value: string | string[] | undefined): string | undefined { return Array.isArray(value) ? value[0] : value }
 function originAllowed(origin: string | undefined, allowed: readonly string[] | undefined): boolean {
   if (!origin) return true
   return Boolean(allowed?.includes(origin))

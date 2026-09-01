@@ -9,6 +9,8 @@ import {
   capabilityObservationSchema,
   capabilityObserveRequestSchema,
   capabilityResourceChangeEventSchema,
+  capabilityResourceBindRequestSchema,
+  capabilityResourceHandleSchema,
   capabilityReadinessRequestSchema,
   capabilityReadinessSchema,
   type CapabilityEffect,
@@ -48,7 +50,7 @@ export type RendererCapabilityObserveOptions = Readonly<{
 
 type CapabilityTransport = Pick<
   SciForgeApi['capabilities'],
-  'readiness' | 'observe' | 'invoke' | 'cancel' | 'subscribe' | 'unsubscribe' | 'onEvent'
+  'readiness' | 'observe' | 'bind' | 'invoke' | 'cancel' | 'subscribe' | 'unsubscribe' | 'onEvent'
 >
 
 export type RendererCapabilityClientOptions = Readonly<{
@@ -125,6 +127,20 @@ export class RendererCapabilityClient {
     }
   }
 
+  async bind(
+    resourceRef: string,
+    options: RendererCapabilityObserveOptions = {}
+  ): Promise<DomainCapabilityResourceHandle> {
+    throwIfAborted(options.signal)
+    const request = capabilityResourceBindRequestSchema.parse({ resourceRef })
+    const rawHandle = await this.getTransport().bind({
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      request
+    })
+    throwIfAborted(options.signal)
+    return capabilityResourceHandleSchema.parse(rawHandle)
+  }
+
   async invoke<TInput, TOutput>(
     contract: RendererCapabilityContract<TInput, TOutput>,
     input: TInput,
@@ -135,7 +151,10 @@ export class RendererCapabilityClient {
     const parsedInput = contract.inputSchema.parse(input)
     const jsonInput = capabilityJsonValueSchema.parse(parsedInput)
     throwIfAborted(options.signal)
-    const readiness = await this.readiness([actionId], options.workspaceId)
+    const readiness = await waitForAbortableResult(
+      this.readiness([actionId], options.workspaceId),
+      options.signal
+    )
     throwIfAborted(options.signal)
     if (readiness.status !== 'ready') throw new Error(readiness.message)
     const workspaceLocator = options.workspaceLocator ??
@@ -265,7 +284,37 @@ function defaultTransportRequestId(): string {
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return
+  throw capabilityInvocationAbortError()
+}
+
+function capabilityInvocationAbortError(): Error {
   const error = new Error('Capability invocation was cancelled.')
   error.name = 'AbortError'
-  throw error
+  return error
+}
+
+async function waitForAbortableResult<T>(
+  operation: Promise<T>,
+  signal: AbortSignal | undefined
+): Promise<T> {
+  if (!signal) return operation
+  throwIfAborted(signal)
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (settle: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      settle()
+    }
+    const onAbort = (): void => {
+      finish(() => reject(capabilityInvocationAbortError()))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    void operation.then(
+      (value) => finish(() => resolve(value)),
+      (error: unknown) => finish(() => reject(error))
+    )
+    if (signal.aborted) onAbort()
+  })
 }

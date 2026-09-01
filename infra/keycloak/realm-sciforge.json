@@ -1,6 +1,8 @@
 {
   "realm": "SciForge",
   "displayName": "SciForge",
+  "displayNameHtml": "<span class=\"sciforge-wordmark\"><span class=\"sciforge-wordmark__lead\">SCI</span><span class=\"sciforge-wordmark__core\">FORGE</span></span>",
+  "loginTheme": "sciforge",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": true,

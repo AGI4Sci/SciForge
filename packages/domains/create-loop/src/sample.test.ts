@@ -326,7 +326,8 @@ function runtimeContext(): DomainMainRuntimeLifecycleContext {
       hasActiveTurns: () => false
     },
     capabilities: {
-      invoke: async () => { throw new Error('not used') }
+      invoke: async () => { throw new Error('not used') },
+      createApprovedBatch: () => { throw new Error('not used') }
     },
     modelAccess: {
       textReasoner: async () => null

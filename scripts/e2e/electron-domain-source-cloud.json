@@ -1,0 +1,22 @@
+{
+  "stateRoot": "../../.e2e-runtime",
+  "roots": [],
+  "task": {
+    "role": "electron-domain-source-cloud",
+    "command": "node",
+    "args": [
+      "scripts/electron-domain-smoke.mjs",
+      "--expected-cloud-origin",
+      "https://cloud-test.sciforge.cn",
+      "--expected-oidc-issuer",
+      "https://login-test.sciforge.cn/realms/SciForge",
+      "--timeout-ms",
+      "180000"
+    ],
+    "cwd": "../..",
+    "timeoutMs": 200000
+  },
+  "ports": [],
+  "profileDirectories": ["profiles/electron-domain-smoke"],
+  "stopGraceMs": 10000
+}

@@ -95,6 +95,61 @@ export type OpenContentSupplierExecutionContext = Readonly<{
   assertPrincipalCurrent(): void | Promise<void>
 }>
 
+/**
+ * One currently observable, token-free hierarchy edge. Provider numeric IDs
+ * remain Connector-private and are never part of this contract.
+ */
+export type OpenContentEntryParentFact = Readonly<{
+  child:
+    | Readonly<{ kind: 'container'; resourceGuid: string }>
+    | Readonly<{ kind: 'file'; resourceGuid: string }>
+  parent?: Readonly<{ kind: 'container'; resourceGuid: string }>
+}>
+
+export type OpenContentObservedEntry =
+  | Readonly<{ kind: 'container'; folderGuid: string; label: string }>
+  | Readonly<{ kind: 'file'; fileGuid: string; label: string; size: number }>
+
+/** Exact token-free file fact re-read after one upload-new write. */
+export type OpenContentUploadWriteAfterObservation = Readonly<{
+  parentFolderGuid: string
+  fileGuid: string
+  name: string
+  size: number
+}>
+
+/**
+ * Opaque one-use read authorization. It contains no Token, URL, Provider
+ * locator, or reusable handle and remains inside the Connector/Provider main
+ * process boundary.
+ */
+export type OpenContentDownloadAuthorizationLease = Readonly<{
+  consume(input: Readonly<{
+    write(chunk: Uint8Array): Promise<void>
+  }>): Promise<Readonly<{ bytesWritten: number }>>
+  retire(): Promise<void>
+}>
+
+/**
+ * One proof-scoped view of the exact current Connector session. The session
+ * owns the Token and Provider numeric identities; its caller receives only
+ * generic, token-free observations and the captured binding attestation.
+ */
+export type OpenContentHierarchyProofSession = Readonly<{
+  bindingAttestation: OpenContentExternalBindingAttestation
+  observeContainer(input: Readonly<{
+    resourceGuid: string
+  }>): Promise<Readonly<{
+    kind: 'container'
+    folderGuid: string
+    label: string
+  }>>
+  observeEntryParent(input: Readonly<{
+    kind: 'container' | 'file'
+    resourceGuid: string
+  }>): Promise<OpenContentEntryParentFact>
+}>
+
 /** The token-free main-process contract acquired by the pinned Provider. */
 export type OpenContentContentSpaceFacade = Readonly<{
   attestExternalBinding(input: Readonly<{
@@ -119,6 +174,16 @@ export type OpenContentContentSpaceFacade = Readonly<{
       externalIdentityId: OpenContentIdentityId
       administration: OpenContentBoundTeamAdministration
     }>) => T | Promise<T>
+  ): Promise<T>
+  useHierarchyProofSession<T>(
+    input: Readonly<{
+      principal: PrincipalSnapshot
+      providerInstanceRef: string
+      expectedBindingAttestation: OpenContentExternalBindingAttestation
+      signal: AbortSignal
+      assertPrincipalCurrent(): void | Promise<void>
+    }>,
+    operation: (session: OpenContentHierarchyProofSession) => T | Promise<T>
   ): Promise<T>
   listRootFolders(input: Readonly<{
     principal: PrincipalSnapshot
@@ -163,10 +228,7 @@ export type OpenContentContentSpaceFacade = Readonly<{
     resourceGuid: string
     signal?: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
-  }>): Promise<
-    | Readonly<{ kind: 'container'; folderGuid: string; label: string }>
-    | Readonly<{ kind: 'file'; fileGuid: string; label: string; size: number }>
-  >
+  }>): Promise<OpenContentObservedEntry>
   createFolder(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
@@ -186,14 +248,16 @@ export type OpenContentContentSpaceFacade = Readonly<{
     read(range: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
     signal: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
-  }>): Promise<Readonly<{ fileGuid: string }>>
-  downloadFile(input: Readonly<{
+  }>): Promise<Readonly<{
+    fileGuid: string
+    writeAfterObservation: OpenContentUploadWriteAfterObservation
+  }>>
+  authorizeDownload(input: Readonly<{
     principal: PrincipalSnapshot
     providerInstanceRef: string
-    expectedBindingAttestation?: OpenContentExternalBindingAttestation
+    expectedBindingAttestation: OpenContentExternalBindingAttestation
     fileGuid: string
-    write(chunk: Uint8Array): Promise<void>
     signal: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
-  }>): Promise<Readonly<{ bytesWritten: number }>>
+  }>): Promise<OpenContentDownloadAuthorizationLease>
 }>

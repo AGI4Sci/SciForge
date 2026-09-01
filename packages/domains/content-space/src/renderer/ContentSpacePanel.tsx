@@ -27,8 +27,8 @@ import {
 } from 'lucide-react'
 
 import type {
-  DomainRendererFileTransferHost,
-  DomainRendererSessionResource
+  DomainCapabilityResourceHandle,
+  DomainRendererFileTransferHost
 } from '@sciforge/domain-sdk/host'
 
 import {
@@ -67,8 +67,10 @@ export type ContentSpacePanelProps = Readonly<{
   fileTransfers?: DomainRendererFileTransferHost
   className?: string
   onCollapse?: () => void
-  initialResource?: DomainRendererSessionResource
+  initialResource?: ContentSpaceInitialResource
+  workspaceId?: string
   enrollmentViews?: readonly ContentSpaceProviderEnrollmentView[]
+  embedded?: boolean
 }>
 
 export function ContentSpacePanel({
@@ -77,7 +79,9 @@ export function ContentSpacePanel({
   className,
   onCollapse,
   initialResource,
-  enrollmentViews = EMPTY_ENROLLMENT_VIEWS
+  workspaceId,
+  enrollmentViews = EMPTY_ENROLLMENT_VIEWS,
+  embedded = false
 }: ContentSpacePanelProps) {
   const [providers, setProviders] = useState<readonly Readonly<{
     providerInstanceRef: string
@@ -116,12 +120,23 @@ export function ContentSpacePanel({
   }>>()
   const requestEpoch = useRef(0)
   const mutationEpoch = useRef(0)
+  const enrollmentViewsRef = useRef(enrollmentViews)
+  const initialResourceRef = useRef(initialResource)
   const selectedProviderRef = useRef('')
   const activeDiscovery = useRef<AbortController | undefined>(undefined)
   const activeRead = useRef<AbortController | undefined>(undefined)
   const activeMutation = useRef<AbortController | undefined>(undefined)
   const containerPagination = useRef(newPaginationLedger())
   const entryPagination = useRef(newPaginationLedger())
+  enrollmentViewsRef.current = enrollmentViews
+  initialResourceRef.current = initialResource
+  const initialResourceIdentity = isContentSpaceInitialResource(initialResource)
+    ? JSON.stringify([
+        initialResource.kind,
+        initialResource.resourceRef,
+        initialResource.resource?.semanticRevision ?? null
+      ])
+    : ''
 
   const beginRead = useCallback(() => {
     activeRead.current?.abort()
@@ -285,12 +300,7 @@ export function ContentSpacePanel({
   }, [beginRead, client])
 
   const openInitialResource = useCallback((
-    resource: DomainRendererSessionResource & Readonly<{
-      kind:
-        | typeof CONTENT_CONTAINER_RESOURCE_KIND
-        | typeof CONTENT_FILE_RESOURCE_KIND
-        | typeof ARTIFACT_RESOURCE_KIND
-    }>,
+    resource: ContentSpaceInitialResource,
     expectedProviderInstanceRef?: string
   ) => {
     const { controller, epoch } = beginRead()
@@ -304,10 +314,16 @@ export function ContentSpacePanel({
     setFileCapabilities([])
     setStatus('Opening Content Space resource…')
     setError(undefined)
-    void client.observeResource({
+    void resolveInitialResourceHandle(client, resource, {
+      ...(workspaceId ? { workspaceId } : {}),
+      signal: controller.signal
+    }).then((handle) => client.observeResource({
       resourceKind: resource.kind,
-      resource: resource.resource
-    }, { signal: controller.signal }).then((observed) => {
+      resource: handle
+    }, {
+      ...(workspaceId ? { workspaceId } : {}),
+      signal: controller.signal
+    })).then((observed) => {
       if (controller.signal.aborted || epoch !== requestEpoch.current || !observed) return
       const reference = observed.reference
       if (expectedProviderInstanceRef &&
@@ -343,7 +359,7 @@ export function ContentSpacePanel({
         setStatus('')
       }
     })
-  }, [beginRead, client, loadEntries, supersedeMutation])
+  }, [beginRead, client, loadEntries, supersedeMutation, workspaceId])
 
   const checkProviderAccess = useCallback(async (
     targetProviderInstanceRef: string,
@@ -383,12 +399,7 @@ export function ContentSpacePanel({
 
   const activateProvider = useCallback((
     next: string,
-    resource?: DomainRendererSessionResource & Readonly<{
-      kind:
-        | typeof CONTENT_CONTAINER_RESOURCE_KIND
-        | typeof CONTENT_FILE_RESOURCE_KIND
-        | typeof ARTIFACT_RESOURCE_KIND
-    }>
+    resource?: ContentSpaceInitialResource
   ) => {
     supersedeMutation()
     clearProviderContent()
@@ -408,7 +419,7 @@ export function ContentSpacePanel({
       setStatus('The selected Provider is no longer installed.')
       return
     }
-    const matchingViews = enrollmentViews.filter((view) =>
+    const matchingViews = enrollmentViewsRef.current.filter((view) =>
       view.providerKind === provider.providerKind
     )
     if (matchingViews.length > 1) {
@@ -432,7 +443,6 @@ export function ContentSpacePanel({
   }, [
     checkProviderAccess,
     clearProviderContent,
-    enrollmentViews,
     loadProvider,
     openInitialResource,
     providers,
@@ -472,18 +482,20 @@ export function ContentSpacePanel({
   }, [])
 
   useEffect(() => {
-    if (!providerDiscoveryReady || !isContentSpaceInitialResource(initialResource)) return
+    const currentInitialResource = initialResourceRef.current
+    if (!providerDiscoveryReady ||
+      !isContentSpaceInitialResource(currentInitialResource)) return
     if (providers.length === 0) {
-      activateProvider('', initialResource)
+      activateProvider('', currentInitialResource)
       setStatus('No Content Space Provider is installed.')
       return
     }
     if (providers.length === 1) {
-      activateProvider(providers[0]!.providerInstanceRef, initialResource)
+      activateProvider(providers[0]!.providerInstanceRef, currentInitialResource)
       return
     }
-    activateProvider('', initialResource)
-  }, [activateProvider, initialResource, providerDiscoveryReady, providers])
+    activateProvider('', currentInitialResource)
+  }, [activateProvider, initialResourceIdentity, providerDiscoveryReady, providers])
 
   const selectProvider = (next: string) => {
     activateProvider(
@@ -776,18 +788,23 @@ export function ContentSpacePanel({
   const readyCapabilityCount = displayedCapabilities.filter((state) =>
     state.admission.status === 'admitted'
   ).length
-  const verificationRequiredCount = displayedCapabilities.filter((state) =>
+  const runtimeAuthorizationRequiredCount = displayedCapabilities.filter((state) =>
     state.admission.status === 'blocked' &&
-      state.admission.reasonCode === 'verification_profile_required'
+      state.admission.reasonCode === 'runtime_authorization_required'
   ).length
 
   return (
     <section
-      className={mergeClassNames('content-space-panel', className)}
+      className={mergeClassNames(
+        'content-space-panel',
+        embedded ? 'is-embedded' : undefined,
+        className
+      )}
       data-content-space-panel
+      data-content-space-embedded={embedded ? 'true' : 'false'}
       aria-busy={busy}
     >
-      <header className="content-space-header">
+      {!embedded ? <header className="content-space-header">
         <span className="content-space-brand-mark" aria-hidden>
           <Library size={17} strokeWidth={1.75} />
         </span>
@@ -809,17 +826,29 @@ export function ContentSpacePanel({
           </button>
         )}
         </span>
-      </header>
+      </header> : null}
 
       <div className="content-space-provider-section">
         <div className="content-space-source-stack">
           <div className="content-space-section-label">
             <label htmlFor="content-space-provider">Content source</label>
-            <span aria-live="polite">{providerInstanceRef
-              ? selectedEnrollmentView && selectedAccessState
-                ? providerAccessLabel(selectedAccessState)
-                : 'Source selected'
-              : 'Choose a source'}</span>
+            <span>
+              <span aria-live="polite">{providerInstanceRef
+                ? selectedEnrollmentView && selectedAccessState
+                  ? providerAccessLabel(selectedAccessState)
+                  : 'Source selected'
+                : 'Choose a source'}</span>
+              {embedded && busy ? (
+                <button
+                  type="button"
+                  onClick={cancelMutation}
+                  className="content-space-inline-cancel"
+                >
+                  <X size={12} strokeWidth={1.9} aria-hidden />
+                  Cancel
+                </button>
+              ) : null}
+            </span>
           </div>
           <div className="content-space-select-wrap">
             <HardDrive size={16} strokeWidth={1.75} aria-hidden />
@@ -838,14 +867,14 @@ export function ContentSpacePanel({
           {providerInstanceRef && displayedCapabilities.length > 0 && (
             <details className="content-space-readiness">
               <summary>
-                <span className={verificationRequiredCount > 0
+                <span className={runtimeAuthorizationRequiredCount > 0
                   ? 'content-space-status-dot is-development'
                   : 'content-space-status-dot is-ready'} aria-hidden />
                 <span className="content-space-readiness-summary">
                   Provider details · {readyCapabilityCount} of {displayedCapabilities.length} operations available
                 </span>
-                {verificationRequiredCount > 0 && (
-                  <span className="content-space-readiness-profile">Verification required</span>
+                {runtimeAuthorizationRequiredCount > 0 && (
+                  <span className="content-space-readiness-runtime-auth">Provider connection required</span>
                 )}
                 <ChevronDown className="content-space-readiness-chevron" size={14}
                   strokeWidth={1.8} aria-hidden />
@@ -1101,31 +1130,42 @@ function mergeClassNames(...values: Array<string | undefined>): string {
   return values.filter(Boolean).join(' ')
 }
 
-type ContentSpaceInitialResource = DomainRendererSessionResource & Readonly<{
+export type ContentSpaceInitialResource = Readonly<{
   kind:
     | typeof CONTENT_CONTAINER_RESOURCE_KIND
     | typeof CONTENT_FILE_RESOURCE_KIND
     | typeof ARTIFACT_RESOURCE_KIND
+  resourceRef: string
+  resource?: DomainCapabilityResourceHandle
 }>
 
 function isContentSpaceInitialResource(
-  resource: DomainRendererSessionResource | undefined
+  resource: ContentSpaceInitialResource | undefined
 ): resource is ContentSpaceInitialResource {
   return resource?.kind === CONTENT_CONTAINER_RESOURCE_KIND ||
     resource?.kind === CONTENT_FILE_RESOURCE_KIND ||
     resource?.kind === ARTIFACT_RESOURCE_KIND
 }
 
+async function resolveInitialResourceHandle(
+  client: ContentSpaceCapabilityClient,
+  resource: ContentSpaceInitialResource,
+  options: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
+): Promise<DomainCapabilityResourceHandle> {
+  if (resource.resource) return resource.resource
+  return client.bindResource(resource.resourceRef, options)
+}
+
 function readinessLabel(state: ContentSpaceAdmittedCapabilityState): string {
   if (state.admission.status === 'admitted') {
     return state.readiness === 'production_ready'
       ? 'ready'
-      : 'PoC (verification profile admitted)'
+      : 'PoC (runtime authorized)'
   }
-  if (state.admission.reasonCode === 'verification_profile_required') {
+  if (state.admission.reasonCode === 'runtime_authorization_required') {
     return state.readiness === 'poc_only'
-      ? 'PoC unavailable (verification required)'
-      : 'unavailable (verification required)'
+      ? 'PoC unavailable (connect Provider)'
+      : 'unavailable (connect Provider)'
   }
   if (state.admission.reasonCode === 'platform_gate_blocked') {
     return 'unavailable (Host platform gate)'

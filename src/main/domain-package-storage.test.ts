@@ -21,7 +21,10 @@ afterEach(async () => {
   })))
 })
 
-async function fixture(currentPrincipal?: () => PrincipalSnapshot | undefined) {
+async function fixture(
+  currentPrincipal?: () => PrincipalSnapshot | undefined,
+  getExecutionNodeId: () => string = () => 'test-device'
+) {
   const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-domain-storage-'))
   temporaryDirectories.push(userDataDir)
   const encryption = {
@@ -43,7 +46,7 @@ async function fixture(currentPrincipal?: () => PrincipalSnapshot | undefined) {
     factory: createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId,
       currentPrincipal: currentPrincipal ?? (() => undefined),
       secretRedaction: new ManagedSecretRedactionRegistry()
     })
@@ -63,7 +66,7 @@ const accessA = Object.freeze({
     providerInstanceRef: 'opencontent.demo',
     connectionId: 'connection-a'
   }),
-  acceptedPrincipalAssurances: ['local-selection'] as const
+  expectedPrincipal: principalA
 })
 
 async function storedSecretsPath(userDataDir: string): Promise<string> {
@@ -110,14 +113,16 @@ describe('domain package storage', () => {
       return { ownerRoot, content: await readFile(join(ownerRoot, 'secrets.enc.json'), 'utf8') }
     })
     expect(files.content).not.toContain(sensitiveValue)
-    expect((await stat(files.ownerRoot)).mode & 0o777).toBe(0o700)
-    expect((await stat(join(files.ownerRoot, 'secrets.enc.json'))).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect((await stat(files.ownerRoot)).mode & 0o777).toBe(0o700)
+      expect((await stat(join(files.ownerRoot, 'secrets.enc.json'))).mode & 0o777).toBe(0o600)
+    }
 
     await storage.secrets.remove('device.credential')
     await expect(storage.secrets.read('device.credential')).resolves.toBeNull()
   })
 
-  it('restores the identity session and Device key in a separate process', async () => {
+  it('restores owner-scoped generic package secrets in a separate process', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-identity-secrets-process-'))
     temporaryDirectories.push(userDataDir)
 
@@ -128,8 +133,8 @@ describe('domain package storage', () => {
     expect(restored).toMatchObject({ ok: true, mode: 'read' })
     expect(restored.pid).not.toBe(written.pid)
     const encrypted = await readFile(await storedSecretsPath(userDataDir), 'utf8')
-    expect(encrypted).not.toContain('fixture-refresh-session-cross-process')
-    expect(encrypted).not.toContain('fixture-device-private-key-cross-process')
+    expect(encrypted).not.toContain('fixture-primary-secret-cross-process')
+    expect(encrypted).not.toContain('fixture-secondary-secret-cross-process')
   })
 
   it('fails closed when operating-system encryption is unavailable', async () => {
@@ -153,22 +158,135 @@ describe('domain package storage', () => {
     await credentials.replace(accessA, 'opaque-token')
     await expect(credentials.use(accessA, async (secret) => secret.length)).resolves.toBe(12)
 
-    currentPrincipal = {
+    const principalB: PrincipalSnapshot = {
       ...currentPrincipal,
       subject: 'local-account-b',
       identityVersion: 2
     }
-    await expect(credentials.status(accessA)).resolves.toEqual({ state: 'absent' })
-    await expect(credentials.use(accessA, async () => undefined)).rejects.toMatchObject({
+    currentPrincipal = principalB
+    await expect(credentials.status(accessA)).rejects.toMatchObject({
+      code: 'credential_binding_mismatch'
+    })
+    const accessB = { ...accessA, expectedPrincipal: principalB }
+    await expect(credentials.status(accessB)).resolves.toEqual({ state: 'absent' })
+    await expect(credentials.use(accessB, async () => undefined)).rejects.toMatchObject({
       code: 'credential_unavailable'
     })
 
-    currentPrincipal = {
+    const renewedPrincipalA: PrincipalSnapshot = {
       ...currentPrincipal,
       subject: 'local-account-a',
       identityVersion: 3
     }
-    await expect(credentials.use(accessA, async (secret) => secret.length)).resolves.toBe(12)
+    currentPrincipal = renewedPrincipalA
+    await expect(credentials.use(accessA, async () => undefined)).rejects.toMatchObject({
+      code: 'credential_binding_mismatch'
+    })
+    await expect(credentials.use({
+      ...accessA,
+      expectedPrincipal: renewedPrincipalA
+    }, async (secret) => secret.length)).resolves.toBe(12)
+  })
+
+  it('binds a cloud-authenticated Principal independently from the Host execution node', async () => {
+    const cloudPrincipal: PrincipalSnapshot = Object.freeze({
+      authority: 'sciforge-cloud',
+      subject: 'cloud-user-a',
+      assurance: 'cloud-authenticated',
+      deviceId: 'cloud-device-a',
+      identityVersion: 4
+    })
+    const cloudAccess = Object.freeze({
+      ...accessA,
+      expectedPrincipal: cloudPrincipal
+    })
+    const { factory } = await fixture(() => cloudPrincipal)
+    const credentials = factory.forOwner({
+      moduleId: 'example.cloud-principal',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+
+    await expect(credentials.status(cloudAccess)).resolves.toEqual({ state: 'absent' })
+    await credentials.replace(cloudAccess, 'cloud-principal-token')
+    await expect(credentials.use(cloudAccess, (secret) => secret)).resolves
+      .toBe('cloud-principal-token')
+  })
+
+  it('does not reuse a provider credential after the Cloud Principal moves to another Device', async () => {
+    const cloudPrincipalA: PrincipalSnapshot = Object.freeze({
+      authority: 'sciforge-cloud',
+      subject: 'cloud-user-a',
+      assurance: 'cloud-authenticated',
+      deviceId: 'cloud-device-a',
+      identityVersion: 4
+    })
+    let currentPrincipal: PrincipalSnapshot | undefined = cloudPrincipalA
+    const { factory } = await fixture(() => currentPrincipal)
+    const credentials = factory.forOwner({
+      moduleId: 'example.cloud-device-binding',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    const accessFor = (expectedPrincipal: PrincipalSnapshot) => Object.freeze({
+      ...accessA,
+      expectedPrincipal
+    })
+    await credentials.replace(accessFor(cloudPrincipalA), 'cloud-device-a-token')
+
+    const cloudPrincipalB: PrincipalSnapshot = Object.freeze({
+      ...cloudPrincipalA,
+      deviceId: 'cloud-device-b',
+      identityVersion: 5
+    })
+    currentPrincipal = cloudPrincipalB
+    await expect(credentials.status(accessFor(cloudPrincipalB))).resolves
+      .toEqual({ state: 'absent' })
+    await expect(credentials.use(accessFor(cloudPrincipalB), () => undefined)).rejects
+      .toMatchObject({ code: 'credential_unavailable' })
+
+    const renewedCloudPrincipalA: PrincipalSnapshot = Object.freeze({
+      ...cloudPrincipalA,
+      identityVersion: 6
+    })
+    currentPrincipal = renewedCloudPrincipalA
+    await expect(credentials.use(
+      accessFor(renewedCloudPrincipalA),
+      (secret) => secret
+    )).resolves.toBe('cloud-device-a-token')
+  })
+
+  it('does not commit an expected Principal credential into a Principal that wins the storage lock', async () => {
+    let currentPrincipal: PrincipalSnapshot | undefined = principalA
+    const { factory } = await fixture(() => currentPrincipal)
+    const credentials = factory.forOwner({
+      moduleId: 'example.principal-lock-race',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    await credentials.replace(accessA, 'principal-a-token')
+
+    let releaseUse!: () => void
+    let markUseStarted!: () => void
+    const useGate = new Promise<void>((resolve) => { releaseUse = resolve })
+    const useStarted = new Promise<void>((resolve) => { markUseStarted = resolve })
+    const activeUse = credentials.use(accessA, async () => {
+      markUseStarted()
+      await useGate
+    })
+    await useStarted
+    const queuedReplace = credentials.replace(accessA, 'must-not-bind-to-principal-b')
+    const principalB = Object.freeze({
+      ...principalA,
+      subject: 'local-account-b',
+      identityVersion: 2
+    })
+    currentPrincipal = principalB
+    releaseUse()
+
+    await expect(activeUse).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
+    await expect(queuedReplace).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
+    await expect(credentials.status({
+      ...accessA,
+      expectedPrincipal: principalB
+    })).resolves.toEqual({ state: 'absent' })
   })
 
   it('persists one atomic credential across replace, restart, remove, and restart', async () => {
@@ -181,7 +299,7 @@ describe('domain package storage', () => {
     const restarted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner({ ...owner, moduleVersion: '2.0.0' }).secrets.providerCredentials!
     await expect(restarted.use(accessA, (secret) => secret)).resolves.toBe('first-opaque-value')
@@ -190,7 +308,7 @@ describe('domain package storage', () => {
     const afterReplace = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(afterReplace.use(accessA, (secret) => secret)).resolves.toBe('second-opaque-value')
@@ -199,7 +317,7 @@ describe('domain package storage', () => {
     const afterRemove = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(afterRemove.status(accessA)).resolves.toEqual({ state: 'absent' })
@@ -208,7 +326,7 @@ describe('domain package storage', () => {
     })
   })
 
-  it('fails closed for absent, wrong-node, and insufficient-assurance principals', async () => {
+  it('fails closed for absent and mismatched expected principals', async () => {
     let current: PrincipalSnapshot | undefined
     const { factory } = await fixture(() => current)
     const credentials = factory.forOwner({
@@ -219,13 +337,13 @@ describe('domain package storage', () => {
     await expect(credentials.status(accessA)).rejects.toMatchObject({ code: 'principal_unavailable' })
     current = { ...principalA, deviceId: 'other-device' }
     await expect(credentials.status(accessA)).rejects.toMatchObject({
-      code: 'principal_device_mismatch'
+      code: 'credential_binding_mismatch'
     })
     current = principalA
     await expect(credentials.status({
       ...accessA,
-      acceptedPrincipalAssurances: ['cloud-authenticated']
-    })).rejects.toMatchObject({ code: 'principal_assurance_insufficient' })
+      expectedPrincipal: { ...principalA, assurance: 'cloud-authenticated' }
+    })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
   })
 
   it('does not enumerate another principal, binding, node, or package owner', async () => {
@@ -244,13 +362,16 @@ describe('domain package storage', () => {
       binding: { ...accessA.binding, connectionId: 'connection-b' }
     })).resolves.toEqual({ state: 'absent' })
     current = { ...principalA, subject: 'local-account-b', identityVersion: 2 }
-    await expect(credentials.status(accessA)).resolves.toEqual({ state: 'absent' })
+    await expect(credentials.status({
+      ...accessA,
+      expectedPrincipal: current
+    })).resolves.toEqual({ state: 'absent' })
 
     current = principalA
     const otherOwner = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => current
     }).forOwner({ moduleId: 'example.owner-b', moduleVersion: '1.0.0' })
       .secrets.providerCredentials!
@@ -267,6 +388,24 @@ describe('domain package storage', () => {
     await credentials.replace(accessA, 'lease-secret')
     await expect(credentials.use(accessA, () => {
       current = { ...principalA, identityVersion: 2 }
+      return 'must-not-return'
+    })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
+  })
+
+  it('rejects an execution-node lease change during bounded secret use', async () => {
+    let executionNodeId = 'test-device'
+    const { factory } = await fixture(
+      () => principalA,
+      () => executionNodeId
+    )
+    const credentials = factory.forOwner({
+      moduleId: 'example.execution-node-lease-change',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    await credentials.replace(accessA, 'execution-node-secret')
+
+    await expect(credentials.use(accessA, () => {
+      executionNodeId = 'other-execution-node'
       return 'must-not-return'
     })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
   })
@@ -305,7 +444,7 @@ describe('domain package storage', () => {
         ...encryption,
         decryptString: () => { throw new Error('keychain locked') }
       },
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => principalA
     })
     const decryptingCredentials = decryptingFactory.forOwner({
@@ -326,7 +465,7 @@ describe('domain package storage', () => {
     const interrupted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal,
       atomicWrite: async () => { throw new Error('simulated interruption') }
     }).forOwner(owner).secrets.providerCredentials!
@@ -338,20 +477,137 @@ describe('domain package storage', () => {
     const restarted = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal
     }).forOwner(owner).secrets.providerCredentials!
     await expect(restarted.use(accessA, (secret) => secret)).resolves
       .toBe('committed-before-interruption')
   })
 
-  it('keeps canaries out of persistence and registers active and retired values', async () => {
+  it('does not commit queued provider mutations after their signal aborts', async () => {
+    const { factory } = await fixture(() => principalA)
+    const credentials = factory.forOwner({
+      moduleId: 'example.aborted-mutation',
+      moduleVersion: '1.0.0'
+    }).secrets.providerCredentials!
+    await credentials.replace(accessA, 'committed-token')
+
+    const holdLock = async (): Promise<() => void> => {
+      let release!: () => void
+      let started!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const active = new Promise<void>((resolve) => { started = resolve })
+      const use = credentials.use(accessA, async () => {
+        started()
+        await gate
+      })
+      await active
+      return () => {
+        release()
+        void use
+      }
+    }
+
+    const releaseReplaceLock = await holdLock()
+    const replaceController = new AbortController()
+    const replace = credentials.replace(
+      accessA,
+      'must-not-commit',
+      { signal: replaceController.signal }
+    )
+    let replaceSettled = false
+    let replaceFailure: unknown
+    void replace.then(
+      () => { replaceSettled = true },
+      (error: unknown) => {
+        replaceSettled = true
+        replaceFailure = error
+      }
+    )
+    replaceController.abort(new Error('replace aborted before commit'))
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    try {
+      expect(replaceSettled).toBe(true)
+      expect(replaceFailure).toMatchObject({ message: 'replace aborted before commit' })
+    } finally {
+      releaseReplaceLock()
+    }
+    await expect(replace).rejects.toThrow('replace aborted before commit')
+    await expect(credentials.use(accessA, (secret) => secret)).resolves.toBe('committed-token')
+
+    const releaseRemoveLock = await holdLock()
+    const removeController = new AbortController()
+    const remove = credentials.remove(accessA, { signal: removeController.signal })
+    let removeSettled = false
+    let removeFailure: unknown
+    void remove.then(
+      () => { removeSettled = true },
+      (error: unknown) => {
+        removeSettled = true
+        removeFailure = error
+      }
+    )
+    removeController.abort(new Error('remove aborted before commit'))
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    try {
+      expect(removeSettled).toBe(true)
+      expect(removeFailure).toMatchObject({ message: 'remove aborted before commit' })
+    } finally {
+      releaseRemoveLock()
+    }
+    await expect(remove).rejects.toThrow('remove aborted before commit')
+    await expect(credentials.use(accessA, (secret) => secret)).resolves.toBe('committed-token')
+  })
+
+  it('finishes an atomic provider mutation once commit dispatch has started', async () => {
+    const currentPrincipal = () => principalA
+    const { userDataDir, encryption, factory } = await fixture(currentPrincipal)
+    const owner = { moduleId: 'example.commit-boundary', moduleVersion: '1.0.0' }
+    await factory.forOwner(owner).secrets.providerCredentials!
+      .replace(accessA, 'before-commit-boundary')
+    let markWriteStarted!: () => void
+    let releaseWrite!: () => void
+    const writeStarted = new Promise<void>((resolve) => { markWriteStarted = resolve })
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve })
+    const credentials = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getExecutionNodeId: () => 'test-device',
+      currentPrincipal,
+      atomicWrite: async (path, value) => {
+        markWriteStarted()
+        await writeGate
+        await writeFile(path, `${JSON.stringify(value)}\n`, 'utf8')
+      }
+    }).forOwner(owner).secrets.providerCredentials!
+    const controller = new AbortController()
+    const replace = credentials.replace(
+      accessA,
+      'after-commit-boundary',
+      { signal: controller.signal }
+    )
+    await writeStarted
+    controller.abort(new Error('abort arrived after commit dispatch'))
+    releaseWrite()
+
+    await expect(replace).resolves.toBeUndefined()
+    const restarted = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getExecutionNodeId: () => 'test-device',
+      currentPrincipal
+    }).forOwner(owner).secrets.providerCredentials!
+    await expect(restarted.use(accessA, (secret) => secret)).resolves
+      .toBe('after-commit-boundary')
+  })
+
+  it('keeps non-use provider credential operations free of retained plaintext', async () => {
     const registry = new ManagedSecretRedactionRegistry()
     const { userDataDir, encryption } = await fixture(() => principalA)
     const credentials = createDomainPackageStorageFactory({
       userDataDir,
       encryption,
-      getDeviceId: () => 'test-device',
+      getExecutionNodeId: () => 'test-device',
       currentPrincipal: () => principalA,
       secretRedaction: registry
     }).forOwner({ moduleId: 'example.redaction', moduleVersion: '1.0.0' })
@@ -359,12 +615,107 @@ describe('domain package storage', () => {
     const first = 'opaque-canary-alpha-9d22'
     const second = 'opaque-canary-beta-17c4'
     await credentials.replace(accessA, first)
+    expect(registry.values()).toEqual([])
+    await expect(credentials.status(accessA)).resolves.toEqual({
+      state: 'available',
+      recordVersion: 1
+    })
+    expect(registry.values()).toEqual([])
     await credentials.replace(accessA, second)
-    expect(registry.values()).toEqual(expect.arrayContaining([first, second]))
+    expect(registry.values()).toEqual([])
     expect(await readFile(await storedSecretsPath(userDataDir), 'utf8')).not.toContain(first)
     expect(await readFile(await storedSecretsPath(userDataDir), 'utf8')).not.toContain(second)
     await credentials.remove(accessA)
-    expect(registry.values()).toEqual(expect.arrayContaining([first, second]))
+    expect(registry.values()).toEqual([])
+  })
+
+  it('registers provider credential plaintext only for the bounded use callback', async () => {
+    const registry = new ManagedSecretRedactionRegistry()
+    const { userDataDir, encryption } = await fixture(() => principalA)
+    const credentials = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getExecutionNodeId: () => 'test-device',
+      currentPrincipal: () => principalA,
+      secretRedaction: registry
+    }).forOwner({ moduleId: 'example.bounded-redaction', moduleVersion: '1.0.0' })
+      .secrets.providerCredentials!
+    const secret = 'opaque-use-canary-32b1'
+    await credentials.replace(accessA, secret)
+
+    await expect(credentials.use(accessA, (value) => {
+      expect(value).toBe(secret)
+      expect(registry.values()).toEqual([secret])
+      return 'used'
+    })).resolves.toBe('used')
+    expect(registry.values()).toEqual([])
+
+    const safeFailure = new Error('bounded use failed')
+    const outwardFailure = await credentials.use(accessA, () => {
+      expect(registry.values()).toEqual([secret])
+      throw safeFailure
+    }).catch((error: unknown) => error)
+    expect(outwardFailure).not.toBe(safeFailure)
+    expect(outwardFailure).toMatchObject({ name: 'Error', message: 'bounded use failed' })
+    expect(registry.values()).toEqual([])
+  })
+
+  it('scrubs callback failures before releasing the provider credential redaction lease', async () => {
+    class FixtureProviderError extends Error {
+      readonly code = 'provider_unavailable'
+      readonly detail: Readonly<{ url: string }>
+      readonly #capturedSecret: string
+
+      constructor(secret: string) {
+        super(`Provider echoed ${secret}`)
+        this.name = 'FixtureProviderError'
+        this.#capturedSecret = secret
+        this.detail = Object.freeze({ url: `https://provider.invalid/failure?value=${secret}` })
+      }
+
+      get leakedFromPrototype(): string {
+        return this.#capturedSecret
+      }
+
+      revealFromPrototype(): string {
+        return this.#capturedSecret
+      }
+    }
+
+    const registry = new ManagedSecretRedactionRegistry()
+    const { userDataDir, encryption } = await fixture(() => principalA)
+    const credentials = createDomainPackageStorageFactory({
+      userDataDir,
+      encryption,
+      getExecutionNodeId: () => 'test-device',
+      currentPrincipal: () => principalA,
+      secretRedaction: registry
+    }).forOwner({ moduleId: 'example.redacted-failure', moduleVersion: '1.0.0' })
+      .secrets.providerCredentials!
+    const secret = 'opaque-error-canary-7c14'
+    await credentials.replace(accessA, secret)
+
+    let failure: unknown
+    try {
+      await credentials.use(accessA, (value) => {
+        throw new FixtureProviderError(value)
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).not.toBeInstanceOf(FixtureProviderError)
+    expect(failure).toMatchObject({ code: 'provider_unavailable' })
+    expect(typeof failure === 'object' && failure !== null
+      ? Reflect.get(failure, 'leakedFromPrototype')
+      : undefined).toBeUndefined()
+    expect(typeof failure === 'object' && failure !== null
+      ? Reflect.get(failure, 'revealFromPrototype')
+      : undefined).toBeUndefined()
+    expect(JSON.stringify(failure)).not.toContain(secret)
+    expect(String(failure)).not.toContain(secret)
+    expect(failure instanceof Error ? failure.stack : '').not.toContain(secret)
+    expect(registry.values()).toEqual([])
   })
 
   it('approves only supported platform secure-storage backends', () => {
@@ -377,6 +728,8 @@ describe('domain package storage', () => {
       decryptString: (value: Buffer) => value.toString()
     }
     expect(createPlatformPackageEncryption({ safeStorage, platform: 'darwin' }).state())
+      .toBe('available')
+    expect(createPlatformPackageEncryption({ safeStorage, platform: 'win32' }).state())
       .toBe('available')
     expect(createPlatformPackageEncryption({ safeStorage, platform: 'linux' }).state())
       .toBe('available')
@@ -396,7 +749,7 @@ async function runIdentitySecretsProcess(
   mode: 'write' | 'read',
   userDataDir: string
 ): Promise<{ ok: true; mode: string; pid: number }> {
-  const fixturePath = resolve('scripts/fixtures/identity-package-secrets-process.mjs')
+  const fixturePath = resolve('scripts/fixtures/package-secrets-process.mjs')
   const child = spawn(process.execPath, ['--import', 'tsx', fixturePath, mode, userDataDir], {
     cwd: process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe']

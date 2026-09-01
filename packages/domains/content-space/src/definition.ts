@@ -17,6 +17,15 @@ export const CONTENT_SPACE_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
 export const CONTENT_SPACE_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
   'main', 'main.runtime-lifecycle'
 )
+export const CONTENT_SPACE_SYSTEM_TRANSFER_GRANT_CONTRIBUTION = contributionFor(
+  'main', 'main.system-capability-grant'
+)
+export const CONTENT_SPACE_PROVISIONING_BATCH_GRANT_CONTRIBUTION = contributionById(
+  'main', 'content-space.provisioning-batch'
+)
+export const CONTENT_SPACE_RECOVERY_OBSERVATION_GRANT_CONTRIBUTION = contributionById(
+  'main', 'content-space.recovery-observation'
+)
 export const CONTENT_SPACE_CONTAINER_REFERENCE_CODEC_CONTRIBUTION = contributionById(
   'main', 'content-space.container-reference-codec'
 )
@@ -35,8 +44,11 @@ export const CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
 export const CONTENT_SPACE_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.command'
 )
-export const CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
-  'renderer', 'renderer.workbench-toolbar-action'
+export const CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRIBUTION = contributionById(
+  'renderer', 'content-space.workspace-files'
+)
+export const CONTENT_SPACE_RENDERER_I18N_CONTRIBUTION = contributionById(
+  'renderer', 'content-space.translations'
 )
 export const CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION = contributionFor(
   'renderer', 'renderer.resource-navigation'
@@ -57,8 +69,8 @@ export const CONTENT_SPACE_PORTABLE_AUTHORITY_RESOLVER_CONTRACT = contractFor(
 export const CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRACT = contractFor(
   CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
 )
-export const CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRACT = contractFor(
-  CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
+export const CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRACT = contractFor(
+  CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRIBUTION.id
 )
 export const CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRACT = contractFor(
   CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION.id

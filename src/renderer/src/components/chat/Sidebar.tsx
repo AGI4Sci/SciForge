@@ -18,6 +18,10 @@ import {
 } from '../sidebar/SidebarPrimitives'
 
 type Props = {
+  navigationSections?: readonly Readonly<{
+    id: string
+    content: ReactElement | null
+  }>[]
   threads: NormalizedThread[]
   activeThreadId: string | null
   activeView: 'chat' | 'schedule'
@@ -124,6 +128,7 @@ export function buildSidebarVisibleContextComponent({
 }
 
 export function Sidebar({
+  navigationSections = [],
   threads,
   activeThreadId,
   activeView,
@@ -217,6 +222,16 @@ export function Sidebar({
       </div>
 
       <div className="ds-no-drag mx-1 my-3" />
+
+      {navigationSections.map(({ id, content }) => (
+        <div key={id} className="ds-no-drag shrink-0">
+          {content}
+        </div>
+      ))}
+
+      {navigationSections.length > 0 ? (
+        <div className="ds-no-drag mx-1 my-2" />
+      ) : null}
 
       <SidebarProjectsSection
         threads={threads}

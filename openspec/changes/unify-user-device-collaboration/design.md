@@ -102,11 +102,11 @@ Project 成员、真人问题、审计记录和 Agent 所有权都引用稳定�
 
 SciForge 重启后应恢复原 Agent 身份，不能每次重启都产生一台“新机器”。Agent 所有权变更必须显式进行，并同时轮换设备凭据。
 
-### 3.5 主要 Agent 由用户选择
+### 3.5 当前 Device Agent 由 Identity 自动确保
 
-首期允许同一用户注册多台 SciForge，但必须明确选择一台主要 Agent，作为手机创建个人 Session 时的默认目标。
+首期允许同一用户使用多台 SciForge。每台 ACTIVE Device 在 Runtime ready 后由 Identity 自动 ensure 并复用唯一 active Agent；renderer 不提供手工注册或主要 Agent 选择。
 
-主要 Agent 离线时，系统应显示离线并等待、取消或让用户显式选择另一台机器。不得自动把工作交给最近在线机器，更不能交给另一个用户的机器。
+个人 Session projection 固定其建立时的 Agent/Runtime/thread。该 Agent 离线时，系统应显示离线并等待或取消；不得自动把工作交给同一 User 最近在线的另一台机器，更不能交给另一个用户的机器。
 
 ## 4. 两种消息空间
 
@@ -460,7 +460,7 @@ Project 页面集中展示：
 
 ### 14.3 SciForge 协作领域
 
-同一个领域包同时拥有桌面后端和界面，负责 Agent 注册、Session 投影、本地队列、Task 接入和协作页面。它通过标准领域清单安装，不修改 Host 中央功能表。
+同一个领域包同时拥有桌面后端和界面，消费 Identity 的 canonical Device→Agent 事实，并负责 Session 投影、本地队列、Task 接入和协作页面。它通过标准领域清单安装，不修改 Host 中央功能表。
 
 ### 14.4 IM Provider 适配器
 
@@ -484,11 +484,10 @@ Zulip Server 和云端协作服务可以部署在同一台阿里云 ECS 上，�
 
 1. 登录或创建统一用户身份。
 2. 重新验证 Zulip 手机端点。
-3. 注册自己的 SciForge Agent。
-4. 选择主要 Agent。
-5. 重新分享需要在手机访问的个人 Session。
-6. 加入或创建多人 Project。
-7. 分别验证手机到桌面、桌面到手机和多人 Task 流程。
+3. 由 Identity 自动确保并复用当前 Device Agent。
+4. 重新分享需要在手机访问的个人 Session。
+5. 加入或创建多人 Project。
+6. 分别验证手机到桌面、桌面到手机和多人 Task 流程。
 
 旧的工作区—频道绑定、由 Topic 名生成身份、Topic 静默切换 Session、Host 内置 provider 分支和两套同步路径全部删除，不增加长期兼容层。
 
@@ -496,7 +495,7 @@ Zulip Server 和云端协作服务可以部署在同一台阿里云 ECS 上，�
 
 ### 阶段一：统一身份
 
-实现用户、手机端点、Agent 所有权、主要 Agent 和撤销流程。此阶段先回答清楚“谁是谁、哪台机器属于谁”。
+实现用户、手机端点、自动 Device Agent 所有权和撤销流程。此阶段先回答清楚“谁是谁、哪台机器属于谁”。
 
 ### 阶段二：只读连接
 
@@ -525,11 +524,11 @@ Zulip Server 和云端协作服务可以部署在同一台阿里云 ECS 上，�
 方案完成后，应满足以下可观察结果：
 
 1. 六名用户分别绑定自己的手机和 SciForge，系统显示为六个协作个体。
-2. 用户 A 从个人 Topic 发消息，只进入 A 明确选择的 Agent 和固定 Session。
+2. 用户 A 从个人 Topic 发消息，只进入该 projection 固定的 A-owned Agent 和 Session。
 3. 用户 B 的 Agent 不会因为在线或处于同一 Stream 而收到 A 的个人任务。
 4. 桌面和手机看到同一个个人 Session 中相同顺序的用户消息与最终回复，且没有重复。
 5. Project Topic 中 A、B、C 的消息保留各自身份，进入云端 Project，而不是任意一个人的私人 Session。
-6. Coordinator 可以把两个独立 Task 分配给不同用户的 Agent，并行收集结果。
+6. Coordinator 可以把两个独立 Task 分配给不同 Worker User，由各 User 成功 claim 的 Device Agent 并行执行并收集结果。
 7. 用户 B 的 Task 需要决定时，只通知 B；无权成员不能代答。
 8. 手机触发的高风险操作仍遵守本地权限策略。
 9. Agent、云端或 Zulip 短暂断线后可以恢复，不重复执行消息或 Task。

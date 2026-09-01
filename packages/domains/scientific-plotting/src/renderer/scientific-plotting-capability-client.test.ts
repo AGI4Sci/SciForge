@@ -44,6 +44,12 @@ test('plot provenance renderer uses only workspace-scoped public capabilities', 
   await client.readArtifactVersion(workspaceRoot, {
     versionId: 'artifact-version:manifest-v1'
   })
+  await client.materializeArtifactVersion(workspaceRoot, {
+    idempotencyKey: 'plot-code-restore-v1',
+    versionId: 'artifact-version:code-v1',
+    destinationPath: '.sciforge/plots/plot-v1.render.py',
+    overwrite: true
+  })
   await client.rerun(workspaceRoot, {
     operationId: 'fixture-rerun-operation-v1',
     baselineFigureVersionRef: artifactRef('figure-v1', 'image/png'),
@@ -58,17 +64,19 @@ test('plot provenance renderer uses only workspace-scoped public capabilities', 
   assert.deepEqual(calls.map(({ actionId }) => actionId), [
     'artifact-versions.list',
     'artifact-versions.read',
+    'artifact-versions.materialize',
     'scientific-plotting.rerun',
     'scientific-plotting.compare'
   ])
   assert.deepEqual(calls.map(({ options }) => options), [
     { workspaceId: workspaceRoot },
     { workspaceId: workspaceRoot },
+    { workspaceId: workspaceRoot, approval: { mode: 'confirmation' } },
     { workspaceId: workspaceRoot },
     { workspaceId: workspaceRoot }
   ])
   assert.deepEqual(
     Object.values(scientificPlottingRendererCapabilityContracts).map(({ effect }) => effect),
-    ['read', 'read', 'workspace-write', 'read']
+    ['read', 'read', 'workspace-write', 'workspace-write', 'read']
   )
 })

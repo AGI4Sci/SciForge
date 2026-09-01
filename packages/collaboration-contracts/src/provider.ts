@@ -3,8 +3,8 @@ import {
   assuranceLevelSchema,
   challengeIdSchema,
   displayNameSchema,
-  humanEndpointIdSchema,
   humanRequestIdSchema,
+  humanEndpointIdSchema,
   nonEmptyTextSchema,
   protocolVersionSchema,
   providerCursorSchema,
@@ -167,6 +167,19 @@ export const providerReactionEventSchema = z.object({
   operation: z.enum(['added', 'removed'])
 }).strict()
 
+export const providerMessageActionSchema = z.enum(['allow_once', 'deny_once'])
+export type ProviderMessageAction = z.infer<typeof providerMessageActionSchema>
+
+export const providerMessageActionEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.message.action'),
+  identity: providerIdentitySchema,
+  providerMessageId: providerMessageIdSchema,
+  operation: z.enum(['add', 'remove']),
+  action: providerMessageActionSchema
+}).strict()
+export type ProviderMessageActionEvent = z.infer<typeof providerMessageActionEventSchema>
+
 export const providerLocatorChangedEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.locator.changed'),
@@ -189,18 +202,6 @@ export const providerChallengeInvalidEventSchema = z.object({
   identity: providerIdentitySchema
 }).strict()
 
-export const providerHumanAnswerRespondedEventSchema = z.object({
-  ...providerEventEnvelopeShape,
-  type: z.literal('provider.human_answer.responded'),
-  identity: providerIdentitySchema,
-  locator: providerLocatorSchema,
-  providerMessageId: providerMessageIdSchema,
-  humanRequestId: humanRequestIdSchema,
-  requestRevision: revisionSchema,
-  answer: nonEmptyTextSchema
-}).strict()
-export type ProviderHumanAnswerRespondedEvent = z.infer<typeof providerHumanAnswerRespondedEventSchema>
-
 export const providerRemoteApprovalRespondedEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.remote_approval.responded'),
@@ -214,6 +215,25 @@ export type ProviderRemoteApprovalRespondedEvent = z.infer<
   typeof providerRemoteApprovalRespondedEventSchema
 >
 
+/**
+ * A provider-authored candidate is not a HumanAnswer. Cloud must first resolve
+ * the Provider identity to one active verified Human Endpoint, match that
+ * endpoint to the request's exact target User and Project locator, require that
+ * User's active Project Membership, and then run the canonical HumanAnswer
+ * service.
+ */
+export const providerHumanAnswerCandidateEventSchema = z.object({
+  ...providerEventEnvelopeShape,
+  type: z.literal('provider.human_answer.candidate'),
+  identity: providerIdentitySchema,
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  humanRequestId: humanRequestIdSchema,
+  requestRevision: revisionSchema,
+  answer: nonEmptyTextSchema
+}).strict()
+export type ProviderHumanAnswerCandidateEvent = z.infer<typeof providerHumanAnswerCandidateEventSchema>
+
 export const providerLifecycleEventSchema = z.object({
   ...providerEventEnvelopeShape,
   type: z.literal('provider.lifecycle.changed'),
@@ -226,11 +246,12 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   providerMessageEditedEventSchema,
   providerMessageDeletedEventSchema,
   providerReactionEventSchema,
+  providerMessageActionEventSchema,
   providerLocatorChangedEventSchema,
   providerChallengeRespondedEventSchema,
   providerChallengeInvalidEventSchema,
-  providerHumanAnswerRespondedEventSchema,
   providerRemoteApprovalRespondedEventSchema,
+  providerHumanAnswerCandidateEventSchema,
   providerLifecycleEventSchema
 ])
 export type ProviderEvent = z.infer<typeof providerEventSchema>
@@ -258,9 +279,19 @@ const providerDirectMessageSendRequestSchema = z.object({
   presentation: providerMessagePresentationSchema.optional()
 }).strict()
 
+const providerMessageActionSendRequestSchema = z.object({
+  protocolVersion: protocolVersionSchema,
+  type: z.literal('provider.ensure.message_action'),
+  locator: providerLocatorSchema,
+  providerMessageId: providerMessageIdSchema,
+  clientMessageId: providerOpaqueIdSchema,
+  action: providerMessageActionSchema
+}).strict()
+
 export const providerSendRequestSchema = z.union([
   providerLocatorMessageSendRequestSchema,
   providerDirectMessageSendRequestSchema,
+  providerMessageActionSendRequestSchema,
   z.object({
     protocolVersion: protocolVersionSchema,
     type: z.literal('provider.send.status'),
@@ -330,6 +361,7 @@ export const providerLocatorListRequestSchema = z.object({
   protocolVersion: protocolVersionSchema,
   type: z.literal('provider.locator.list'),
   realmId: providerOpaqueIdSchema,
+  ownerIdentity: providerIdentitySchema.optional(),
   container: providerManagedContainerRefSchema.optional(),
   containerDisplayName: displayNameSchema.optional(),
   query: z.string().trim().max(200).optional(),
@@ -423,7 +455,9 @@ export const humanEndpointProviderContractSchema = z.object({
     identityChallenge: z.literal(true),
     directMessages: z.literal(true),
     managedContainers: z.boolean().optional(),
-    messageUpdates: z.boolean().optional()
+    privateContainerDiscovery: z.boolean().optional(),
+    messageUpdates: z.boolean().optional(),
+    messageActions: z.boolean().optional()
   }).strict(),
   onboarding: z.object({
     realmLabel: displayNameSchema,
@@ -451,24 +485,6 @@ export interface HumanEndpointProvider {
   diagnose(): Promise<ProviderDiagnostic>
 }
 
-export interface HumanEndpointProviderSecretReader {
-  readSecret(secretReference: string): Promise<string>
-}
-
-export interface HumanEndpointProviderHttpRequest {
-  readonly url: string
-  readonly method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
-  readonly headers: Readonly<Record<string, string>>
-  readonly body?: string
-  readonly timeoutMs: number
-}
-
-export interface HumanEndpointProviderHttpResponse {
-  readonly status: number
-  readonly headers: Readonly<Record<string, string>>
-  readonly body: string
-}
-
 export interface HumanEndpointProviderServices {
   resolveLocator(input: Readonly<{
     provider: string
@@ -487,14 +503,14 @@ export interface HumanEndpointProviderServices {
   reconcileDelivery(request: ProviderSendRequest): Promise<ProviderSendResult | undefined>
   recordDelivery(clientMessageId: string, result: ProviderSendResult): Promise<void>
   verifyChallenge(request: ProviderVerifyIdentityRequest): Promise<ProviderVerifyIdentityResult>
-  http(request: HumanEndpointProviderHttpRequest): Promise<HumanEndpointProviderHttpResponse>
   reportDiagnostic(diagnostic: ProviderDiagnostic): void
 }
 
 export interface HumanEndpointProviderFactoryContext {
   readonly provider: string
   readonly configuration: Readonly<Record<string, string | number | boolean>>
-  readonly secretReader: HumanEndpointProviderSecretReader
+  /** Non-secret root containing provider-owned secret files named by configuration references. */
+  readonly secretFileDirectory: string
   readonly services: HumanEndpointProviderServices
   readonly now: () => string
 }

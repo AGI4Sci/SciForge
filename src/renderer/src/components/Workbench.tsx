@@ -145,6 +145,7 @@ import {
   subscribeSessionRightPanelRekeys
 } from '../lib/session-right-panel-lifecycle'
 import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
+import { buildWorkbenchNavigationSectionRenderContext } from '../domain-modules/workbench-navigation-context'
 import {
   DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
   DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
@@ -189,6 +190,11 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
     default:
       return String(mode)
   }
+}
+
+function rightPanelPreferredWidth(mode: Exclude<RightPanelMode, null>): number {
+  return installedRendererContributions.rightPanels.resolve(mode)
+    ?.contribution.preferredWidth ?? CODE_PANEL_PREFERRED
 }
 
 const CORE_RIGHT_PANEL_RESOURCE_KINDS: Partial<Record<Exclude<RightPanelMode, null>, string>> = {
@@ -721,6 +727,8 @@ export function Workbench(): ReactElement {
   const sddDraftOperationStatus = activeSddSession?.operationStatus ?? 'idle'
   const stageInsetClass = 'ds-stage-inset'
   const installedRightPanels = installedRendererContributions.rightPanels.list()
+  const installedNavigationSections =
+    installedRendererContributions.navigationSections.list()
   const installedToolbarActions = installedRendererContributions.toolbarActions.list()
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const keyboardShortcutBindings = useMemo(
@@ -1262,7 +1270,8 @@ export function Workbench(): ReactElement {
         setRightPanelPaneWidthForSession(
           sessionId,
           pane.paneId,
-          (width) => Math.max(width, CODE_PANEL_PREFERRED)
+          (width) => Math.max(width, registered.contribution.preferredWidth ??
+            CODE_PANEL_PREFERRED)
         )
         rebindRightPanelPaneForSession(sessionId, pane.paneId, binding)
         return
@@ -1271,7 +1280,7 @@ export function Workbench(): ReactElement {
         sessionId,
         binding,
         target.placement,
-        { width: CODE_PANEL_PREFERRED }
+        { width: registered.contribution.preferredWidth ?? CODE_PANEL_PREFERRED }
       )
     }
     window.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, openDomainRightPanel)
@@ -1690,7 +1699,7 @@ export function Workbench(): ReactElement {
       },
       'focused',
       installedRendererContributions.rightPanels.resolve(mode)
-        ? { width: CODE_PANEL_PREFERRED }
+        ? { width: rightPanelPreferredWidth(mode) }
         : undefined
     )
   }
@@ -2848,7 +2857,7 @@ export function Workbench(): ReactElement {
                   setRightPanelPaneWidthForSession(
                     sessionId,
                     paneId,
-                    (width) => Math.max(width, CODE_PANEL_PREFERRED)
+                    (width) => Math.max(width, rightPanelPreferredWidth(mode))
                   )
                 }
               }}
@@ -2864,6 +2873,29 @@ export function Workbench(): ReactElement {
       </div>
     )
   }
+
+  const navigationSectionContext = rightPanelOwnerId
+    ? buildWorkbenchNavigationSectionRenderContext({
+        active: !leftSidebarCollapsed,
+        className: 'w-full',
+        session: {
+          id: rightPanelOwnerId,
+          ...(activeThread?.title ? { title: activeThread.title } : {}),
+          ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
+          ...(activeWorkspaceReferenceRoot
+            ? { workspaceRoot: activeWorkspaceReferenceRoot }
+            : {})
+        },
+        threads: codeThreads,
+        selectSession: openThread
+      })
+    : null
+  const sidebarNavigationSections = navigationSectionContext
+    ? installedNavigationSections.map(({ id, contribution }) => ({
+        id,
+        content: contribution.render(navigationSectionContext)
+      }))
+    : []
 
   return (
     <div
@@ -2902,6 +2934,7 @@ export function Workbench(): ReactElement {
         <>
           <div className="min-h-0 shrink-0" style={{ width: leftSidebarWidth }}>
             <Sidebar
+              navigationSections={sidebarNavigationSections}
               threads={codeThreads}
               activeThreadId={activeThreadId}
               activeView={sidebarView}

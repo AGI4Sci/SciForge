@@ -189,6 +189,12 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: ' thread-1 ',
       text: ' hello ',
+      outputSchema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false
+      },
       clientDirectiveId: ' directive-1 ',
       executionIntent: {
         mode: 'execute',
@@ -220,6 +226,12 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: 'thread-1',
       text: 'hello',
+      outputSchema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false
+      },
       clientDirectiveId: 'directive-1',
       executionIntent: {
         mode: 'execute',
@@ -257,6 +269,12 @@ describe('app-ipc-schemas', () => {
         name: 'spec.pdf',
         delivery: 'inline_context'
       }]
+    })).toThrow()
+    expect(() => agentRuntimeStartTurnPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      text: 'hello',
+      outputSchema: ['not-an-object-schema']
     })).toThrow()
   })
 

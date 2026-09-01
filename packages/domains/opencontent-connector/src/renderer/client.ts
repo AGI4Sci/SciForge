@@ -23,8 +23,10 @@ export type OpenContentConnectionRendererClient = Readonly<{
   ): Promise<OpenContentConnectionResult>
   bind(
     providerInstanceRef: string,
-    username: string,
-    password: string,
+    credentials: {
+      account: string
+      password: string
+    },
     options?: OpenContentConnectionRequestOptions
   ): Promise<OpenContentConnectionResult>
   unbind(
@@ -40,7 +42,7 @@ export function createOpenContentConnectionRendererClient(
     status: (providerInstanceRef, options) => {
       const contract = {
         actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.status,
-        effect: 'read' as const,
+        effect: 'external-write' as const,
         inputSchema: openContentConnectionTargetInputSchema,
         outputSchema: openContentConnectionResultSchema
       }
@@ -49,17 +51,31 @@ export function createOpenContentConnectionRendererClient(
         ? invoker.invoke(contract, input, { signal: options.signal })
         : invoker.invoke(contract, input)
     },
-    bind: (providerInstanceRef, username, password, options) => {
+    bind: async (providerInstanceRef, credentials, options) => {
       const contract = {
         actionId: OPENCONTENT_CONNECTION_CAPABILITY_IDS.bind,
         effect: 'external-write' as const,
         inputSchema: openContentBindInputSchema,
         outputSchema: openContentConnectionResultSchema
       }
-      const input = { providerInstanceRef, username, password }
-      return options?.signal
-        ? invoker.invoke(contract, input, { signal: options.signal })
-        : invoker.invoke(contract, input)
+      const input = {
+        providerInstanceRef,
+        account: credentials.account,
+        password: credentials.password
+      }
+      const invocation = (() => {
+        try {
+          return options?.signal
+            ? invoker.invoke(contract, input, { signal: options.signal })
+            : invoker.invoke(contract, input)
+        } finally {
+          credentials.account = ''
+          credentials.password = ''
+          input.account = ''
+          input.password = ''
+        }
+      })()
+      return await invocation
     },
     unbind: (providerInstanceRef, options) => {
       const contract = {

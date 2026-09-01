@@ -1,16 +1,16 @@
 {
   "name": "@sciforge/domain-opencontent-connector",
-  "version": "2.0.3",
+  "version": "5.0.2",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Principal-bound OpenContent enrollment and transport integration for SciForge.",
   "sciforgeDeploymentConfiguration": {
     "contractVersion": 1,
-    "sourceRelativePath": ".sciforge/private/deployments/opencontent-connector.json",
+    "sourceRelativePath": "packages/domains/opencontent-connector/config/opencontent-connector.json",
     "packagedResourcesRelativePath": "domain-deployments/opencontent-connector.json",
     "maxBytes": 4096,
-    "publicRelease": "forbidden"
+    "publicRelease": "allowed"
   },
   "sciforgeInternalRuntimeTrust": {
     "contractVersion": 1,
@@ -60,6 +60,21 @@
       }
     ]
   },
+  "sciforgeTeamDeliveryTrust": {
+    "contractVersion": 1,
+    "deliveries": [
+      {
+        "deliveryId": "opencontent-team-delivery-pr82-0b09e1c1",
+        "deliveryFileName": "SciForge-OpenContent-team-delivery-pr82-0b09e1c1.zip",
+        "deliverySha256": "82f874e5e346e3b66bc76be9f51ba70c4aefea47beea5424be04555217fcef79",
+        "overlayId": "opencontent-attachment-assets",
+        "overlayVersion": "1.0.1",
+        "overlayArchiveSha256": "5838c94033e467d7a9e3be6669c7e72390cd9cecfa4b2a7466690734e718b598",
+        "deploymentConfigurationFileName": "opencontent-connector.json",
+        "deploymentConfigurationSha256": "163d8e7a2e72eb4a2dbd492d84ea78b647e909776225fad6d50e28c94cd891f5"
+      }
+    ]
+  },
   "exports": {
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
@@ -69,6 +84,7 @@
     "./renderer/enrollment": "./src/renderer/enrollment-renderer.ts"
   },
   "files": [
+    "config",
     "src",
     "sciforge.domain.json",
     "package.json",
@@ -79,7 +95,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.1",
+    "@sciforge/collaboration-contracts": "5.1.0",
+    "@sciforge/domain-identity-access": "^4.0.1",
+    "@sciforge/domain-sdk": "^0.2.8",
     "@sciforge/internal-runtime-integrity": "0.1.1",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

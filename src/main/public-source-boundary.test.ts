@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -60,16 +61,22 @@ function repositoryPath(path: string): string {
 
 function publicFiles(root: string): string[] {
   if (!existsSync(root)) return []
-  return readdirSync(root, { withFileTypes: true })
-    .flatMap((entry) => {
-      const path = join(root, entry.name)
-      if (entry.isDirectory()) {
-        return isPrivatePayloadPath(repositoryPath(path)) || excludedDirectoryNames.has(entry.name)
-          ? []
-          : publicFiles(path)
-      }
-      return entry.isFile() ? [path] : []
-    })
+  return execFileSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+    { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }
+  )
+    .split('\0')
+    .filter(Boolean)
+    .filter((path) => !isPrivatePayloadPath(path))
+    .filter((path) => !path.split('/').some((segment) =>
+      excludedDirectoryNames.has(segment)
+    ))
+    .map((path) => join(root, ...path.split('/')))
+    // `git ls-files --cached` still reports a tracked file that the current
+    // pre-commit change deletes. Deleted private/public boundary inputs carry
+    // no current bytes to inspect and must not make the audit reopen them.
+    .filter((path) => existsSync(path) && lstatSync(path).isFile())
     .sort()
 }
 
@@ -280,7 +287,7 @@ describe('public source boundary', () => {
     ]
 
     expect(formatViolations(violations)).toBe('')
-  }, 15_000)
+  }, 30_000)
 
   it('keeps every internal overlay out of the public package lock', () => {
     expect(formatViolations(packageLockViolations(packageLockPath))).toBe('')

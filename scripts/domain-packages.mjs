@@ -175,7 +175,7 @@ export async function generateDomainPackageFiles(root, { check = false } = {}) {
     const target = path.join(root, relativePath)
     if (check) {
       const current = await readFile(target, 'utf8').catch(() => '')
-      if (current !== content) stale.push(relativePath)
+      if (!generatedDomainPackageContentMatches(current, content)) stale.push(relativePath)
     } else {
       await mkdir(path.dirname(target), { recursive: true })
       await writeFile(target, content)
@@ -188,6 +188,10 @@ export async function generateDomainPackageFiles(root, { check = false } = {}) {
     )
   }
   return packages
+}
+
+export function generatedDomainPackageContentMatches(current, generated) {
+  return current.replaceAll('\r\n', '\n') === generated.replaceAll('\r\n', '\n')
 }
 
 export async function discoverMainBundlePackageNames(root, packages) {
@@ -209,19 +213,34 @@ export async function discoverMainBundlePackageNames(root, packages) {
       )
       .map((candidate) => candidate.packageJson)
   ]
-  const visited = new Set()
-  const bundled = new Set()
+  const reachable = new Set()
   const visit = (packageName) => {
-    if (visited.has(packageName)) return
-    visited.add(packageName)
+    if (reachable.has(packageName)) return
     const candidate = workspacePackages.get(packageName)
     if (!candidate) return
-    if (hasTypeScriptRuntimeEntrypoint(candidate.packageJson)) bundled.add(packageName)
+    reachable.add(packageName)
     for (const dependency of dependencyNames(candidate.packageJson)) visit(dependency)
   }
   for (const candidate of roots) {
     if (workspacePackages.has(candidate.name)) visit(candidate.name)
     for (const dependency of dependencyNames(candidate)) visit(dependency)
+  }
+  const bundled = new Set(
+    [...reachable].filter((packageName) =>
+      hasTypeScriptRuntimeEntrypoint(workspacePackages.get(packageName).packageJson)
+    )
+  )
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const packageName of reachable) {
+      if (bundled.has(packageName)) continue
+      const candidate = workspacePackages.get(packageName)
+      if (dependencyNames(candidate.packageJson).some((dependency) => bundled.has(dependency))) {
+        bundled.add(packageName)
+        changed = true
+      }
+    }
   }
   return Object.freeze([...bundled].sort())
 }
@@ -653,11 +672,29 @@ function relative(filePath) {
   return path.relative(ROOT, filePath).split(path.sep).join('/')
 }
 
+export function domainPackageNpmInvocation({
+  platform = process.platform,
+  npmExecPath = process.env.npm_execpath,
+  nodeExecutable = process.execPath
+} = {}) {
+  if (platform !== 'win32') {
+    return Object.freeze({ command: 'npm', leadingArguments: Object.freeze([]) })
+  }
+  if (typeof npmExecPath !== 'string' || !path.win32.isAbsolute(npmExecPath)) {
+    throw new Error('Windows domain package scripts require an absolute npm_execpath.')
+  }
+  return Object.freeze({
+    command: nodeExecutable,
+    leadingArguments: Object.freeze([npmExecPath])
+  })
+}
+
 function runPackageScript(packages, scriptName) {
+  const npm = domainPackageNpmInvocation()
   for (const candidate of packages) {
     const result = spawnSync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['--workspace', candidate.packageName, 'run', scriptName],
+      npm.command,
+      [...npm.leadingArguments, '--workspace', candidate.packageName, 'run', scriptName],
       { cwd: ROOT, stdio: 'inherit' }
     )
     if (result.error) throw result.error

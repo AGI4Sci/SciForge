@@ -1,5 +1,15 @@
 import { z } from 'zod'
-import { managedProviderContainerSchema, providerLocatorSchema } from '@sciforge/collaboration-contracts'
+import {
+  managedProviderContainerSchema,
+  providerLocatorSchema,
+  taskExecutionStateSchema,
+} from '@sciforge/collaboration-contracts'
+import {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema,
+  type CollaborationTaskCheckpoint,
+  type CollaborationTaskInteraction
+} from './task-interaction.js'
 
 const idSchema = z.string().trim().min(1).max(256)
 const isoDateSchema = z.iso.datetime({ offset: true })
@@ -12,16 +22,20 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   connectionConnect: 'collaboration.connection.connect',
   endpointChallengeStart: 'collaboration.endpoint.challenge.start',
   endpointChallengePoll: 'collaboration.endpoint.challenge.poll',
-  agentRegister: 'collaboration.agent.register',
-  primaryAgentSelect: 'collaboration.participant.primary-agent.select',
   projectionLink: 'collaboration.projection.link',
   projectionUpdate: 'collaboration.projection.update',
   projectionShare: 'collaboration.projection.share',
   synchronizationRetry: 'collaboration.sync.retry',
   taskList: 'collaboration.task.list',
+  taskInteractionSubmit: 'collaboration.task.interaction.submit',
+  taskInteractionRead: 'collaboration.task.interaction.read',
+  taskCheckpointAppend: 'collaboration.task.checkpoint.append',
+  workerAcceptanceUpdate: 'collaboration.worker.acceptance-policy.update',
+  taskOfferDecide: 'collaboration.task.offer.decide',
   managedContainerInspect: 'collaboration.managed-container.inspect',
   managedContainerProvision: 'collaboration.managed-container.provision',
-  managedContainerArchive: 'collaboration.managed-container.archive'
+  managedContainerArchive: 'collaboration.managed-container.archive',
+  privateChannelDiscover: 'collaboration.private-channel.discover'
 } as const)
 
 export const collaborationProviderLocatorFieldSchema = z.object({
@@ -45,7 +59,7 @@ export const collaborationConnectionViewSchema = z.object({
   configured: z.boolean(),
   baseUrl: z.url().max(2_048).optional(),
   state: z.enum(['unconfigured', 'disconnected', 'connecting', 'connected', 'recovering', 'error']),
-  deviceCredentialAvailable: z.boolean().optional(),
+  agentAuthorityReady: z.boolean().optional(),
   localAgentId: idSchema.optional(),
   lastConnectedAt: isoDateSchema.optional(),
   lastInboxSequence: z.number().int().nonnegative(),
@@ -72,7 +86,7 @@ export const collaborationAgentViewSchema = z.object({
   status: z.enum(['online', 'offline', 'revoked']),
   capabilities: z.array(idSchema).max(256),
   lastSeenAt: isoDateSchema.optional(),
-  primary: z.boolean()
+  workerAcceptanceMode: z.enum(['manual', 'automatic']).optional()
 }).strict()
 
 export const collaborationParticipantViewSchema = z.object({
@@ -82,7 +96,6 @@ export const collaborationParticipantViewSchema = z.object({
   revision: z.number().int().nonnegative(),
   complete: z.boolean(),
   primaryHumanEndpointId: idSchema.optional(),
-  primaryAgentId: idSchema.optional(),
   endpoints: z.array(collaborationEndpointViewSchema).max(64),
   agents: z.array(collaborationAgentViewSchema).max(64)
 }).strict()
@@ -132,20 +145,35 @@ export const collaborationProjectionViewSchema = z.object({
 export const collaborationTaskViewSchema = z.object({
   taskId: idSchema,
   projectId: idSchema,
-  assigneeAgentId: idSchema,
+  taskOfferId: idSchema,
+  workerUserId: idSchema,
+  executionId: idSchema.optional(),
+  assigneeAgentId: idSchema.optional(),
+  hasDedicatedSession: z.boolean(),
   revision: z.number().int().positive(),
   title: displayTextSchema,
   state: z.enum([
     'offered',
-    'accepted',
+    'awaiting-manual',
+    'accepting',
+    'rejecting',
     'running',
     'needs-human',
+    'submitting',
     'completed',
+    'dismissed',
+    'claimed-elsewhere',
+    'closed',
     'failed',
-    'cancelled',
-    'stale'
+    'fenced',
+    'manual-recovery'
   ]),
+  acceptanceMode: z.enum(['manual', 'automatic']),
+  decisionRequired: z.boolean(),
+  preflightReasons: z.array(z.string().trim().min(1).max(128)).max(16),
   localTurnId: idSchema.optional(),
+  resultSummary: z.string().trim().min(1).max(4_000).optional(),
+  needsHumanQuestion: z.string().trim().min(1).max(4_000).optional(),
   updatedAt: isoDateSchema,
   error: safeTextSchema.optional()
 }).strict()
@@ -156,7 +184,6 @@ export const collaborationProjectViewSchema = z.object({
   state: z.enum(['active', 'paused', 'completed', 'cancelled']),
   revision: z.number().int().nonnegative(),
   coordinatorAgentId: idSchema,
-  memberUserIds: z.array(idSchema).max(1_000),
   tasks: z.array(collaborationTaskViewSchema).max(10_000)
 }).strict()
 
@@ -201,7 +228,6 @@ export const collaborationConnectionConnectResultSchema = z.object({
 
 export const collaborationEndpointChallengeStartInputSchema = z.object({
   providerKey: idSchema,
-  requestedDisplayName: displayTextSchema,
   locator: z.record(
     z.string().trim().min(1).max(64),
     z.string().trim().min(1).max(1_024)
@@ -231,23 +257,6 @@ export const collaborationEndpointChallengePollResultSchema = z.discriminatedUni
     assurance: z.enum(['low', 'verified', 'strong'])
   }).strict()
 ])
-
-export const collaborationAgentRegisterInputSchema = z.object({
-  displayName: displayTextSchema,
-  nodeType: z.enum(['desktop', 'server']).default('desktop'),
-  capabilities: z.array(idSchema).max(256).default([])
-}).strict()
-export const collaborationAgentRegisterResultSchema = z.object({
-  agent: collaborationAgentViewSchema
-}).strict()
-
-export const collaborationPrimaryAgentSelectInputSchema = z.object({
-  agentId: idSchema,
-  expectedParticipantRevision: z.number().int().nonnegative()
-}).strict()
-export const collaborationPrimaryAgentSelectResultSchema = z.object({
-  participant: collaborationParticipantViewSchema
-}).strict()
 
 const projectionCommonSchema = z.object({
   agentId: idSchema,
@@ -279,24 +288,8 @@ export const collaborationProjectionUpdateInputSchema = z.discriminatedUnion('ac
     expectedRevision: z.number().int().nonnegative()
   }).strict(),
   z.object({
-    action: z.enum(['pause', 'resume', 'close']),
+    action: z.enum(['pause', 'resume']),
     projectionId: idSchema,
-    expectedRevision: z.number().int().nonnegative()
-  }).strict(),
-  z.object({
-    action: z.literal('relink'),
-    projectionId: idSchema,
-    runtimeId: idSchema,
-    threadId: idSchema,
-    workspaceRoot: z.string().min(1).max(4_096).optional(),
-    expectedRevision: z.number().int().nonnegative()
-  }).strict(),
-  z.object({
-    action: z.literal('restore'),
-    projectionId: idSchema,
-    runtimeId: idSchema,
-    threadId: idSchema,
-    workspaceRoot: z.string().min(1).max(4_096).optional(),
     expectedRevision: z.number().int().nonnegative()
   }).strict()
 ])
@@ -335,6 +328,105 @@ export const collaborationTaskListInputSchema = z.object({
 }).strict()
 export const collaborationTaskListResultSchema = z.object({
   tasks: z.array(collaborationTaskViewSchema).max(100_000)
+}).strict()
+
+export const collaborationPrivateChannelDiscoverInputSchema = z.object({
+  humanEndpointId: idSchema
+}).strict()
+export const collaborationPrivateChannelDiscoverResultSchema = z.object({
+  locatorCount: z.number().int().nonnegative()
+}).strict()
+
+/** Local-only Task interaction contracts; these do not mutate Cloud state. */
+export const collaborationTaskInteractionSubmitInputSchema = z.object({
+  projectId: idSchema,
+  taskId: idSchema,
+  executionId: idSchema.optional(),
+  kind: z.enum(['guidance', 'pause', 'resume', 'cancel', 'retry']),
+  text: z.string().trim().min(1).max(32_000).optional(),
+  idempotencyKey: z.string().min(16).max(128).regex(/^idem_[A-Za-z0-9._:-]+$/u).optional(),
+  clientDirectiveId: z.string().trim().min(1).max(256)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u).optional(),
+  origin: z.enum(['human', 'agent', 'system']).optional()
+}).strict().superRefine((value, context) => {
+  if (value.kind === 'guidance' && !value.text) {
+    context.addIssue({ code: 'custom', path: ['text'], message: 'Guidance interactions require text.' })
+  }
+})
+
+export const collaborationTaskInteractionReadInputSchema = z.object({
+  projectId: idSchema,
+  taskId: idSchema,
+  executionId: idSchema.optional()
+}).strict()
+
+export const collaborationTaskInteractionViewSchema = z.object({
+  projectId: idSchema,
+  taskId: idSchema,
+  executionId: idSchema.optional(),
+  state: z.enum([
+    'idle', 'running', 'waiting_human', 'intervention_queued',
+    'paused_local', 'awaiting_cloud', 'blocked_cloud', 'completed'
+  ]),
+  pending: z.array(collaborationTaskInteractionSchema).max(10_000),
+  interactions: z.array(collaborationTaskInteractionSchema).max(100_000),
+  latestInteraction: collaborationTaskInteractionSchema.optional(),
+  checkpoints: z.array(collaborationTaskCheckpointSchema).max(20_000),
+  cloudExecutionState: taskExecutionStateSchema.optional(),
+  cloudTaskRevision: z.number().int().positive().optional(),
+  localUpdatedAt: isoDateSchema.optional()
+}).strict()
+
+export const collaborationTaskInteractionSubmitResultSchema = z.object({
+  interaction: collaborationTaskInteractionSchema,
+  view: collaborationTaskInteractionViewSchema
+}).strict()
+
+export const collaborationTaskInteractionReadResultSchema = z.object({
+  view: collaborationTaskInteractionViewSchema
+}).strict()
+
+export const collaborationTaskCheckpointAppendInputSchema = z.object({
+  projectId: idSchema,
+  taskId: idSchema,
+  executionId: idSchema.nullable(),
+  kind: z.enum(['progress', 'partial-result', 'human-note', 'status']),
+  source: z.enum(['human', 'agent', 'system']),
+  summary: z.string().trim().min(1).max(4_000),
+  detail: z.string().trim().min(1).max(32_000).nullable().optional(),
+  idempotencyKey: z.string().min(16).max(128).regex(/^idem_[A-Za-z0-9._:-]+$/u).optional()
+}).strict()
+
+export const collaborationTaskCheckpointAppendResultSchema = z.object({
+  checkpoint: collaborationTaskCheckpointSchema,
+  view: collaborationTaskInteractionViewSchema
+}).strict()
+
+export const collaborationWorkerAcceptanceUpdateInputSchema = z.object({
+  agentId: idSchema,
+  mode: z.enum(['manual', 'automatic'])
+}).strict()
+export const collaborationWorkerAcceptanceUpdateResultSchema = z.object({
+  agentId: idSchema,
+  mode: z.enum(['manual', 'automatic'])
+}).strict()
+
+export const collaborationTaskOfferDecisionInputSchema = z.discriminatedUnion('decision', [
+  z.object({
+    taskOfferId: idSchema,
+    decision: z.literal('accept')
+  }).strict(),
+  z.object({
+    taskOfferId: idSchema,
+    decision: z.literal('dismiss')
+  }).strict(),
+  z.object({
+    taskOfferId: idSchema,
+    decision: z.literal('reject')
+  }).strict()
+])
+export const collaborationTaskOfferDecisionResultSchema = z.object({
+  accepted: z.literal(true)
 }).strict()
 
 const managedContainerEnsureInputSchema = z.object({ action: z.literal('ensure'), humanEndpointId: idSchema }).strict()
@@ -383,11 +475,26 @@ export type CollaborationConnectionConfigureInput = z.infer<typeof collaboration
 export type CollaborationConnectionConnectInput = z.infer<typeof collaborationConnectionConnectInputSchema>
 export type CollaborationEndpointChallengeStartInput = z.infer<typeof collaborationEndpointChallengeStartInputSchema>
 export type CollaborationEndpointChallengePollInput = z.infer<typeof collaborationEndpointChallengePollInputSchema>
-export type CollaborationAgentRegisterInput = z.infer<typeof collaborationAgentRegisterInputSchema>
-export type CollaborationPrimaryAgentSelectInput = z.infer<typeof collaborationPrimaryAgentSelectInputSchema>
 export type CollaborationProjectionLinkInput = z.infer<typeof collaborationProjectionLinkInputSchema>
 export type CollaborationProjectionUpdateInput = z.infer<typeof collaborationProjectionUpdateInputSchema>
 export type CollaborationProjectionShareInput = z.infer<typeof collaborationProjectionShareInputSchema>
 export type CollaborationSynchronizationRetryInput = z.infer<typeof collaborationSynchronizationRetryInputSchema>
 export type CollaborationTaskListInput = z.infer<typeof collaborationTaskListInputSchema>
+export type CollaborationPrivateChannelDiscoverInput = z.infer<typeof collaborationPrivateChannelDiscoverInputSchema>
+export type CollaborationTaskInteractionSubmitInput = z.infer<
+  typeof collaborationTaskInteractionSubmitInputSchema
+>
+export type CollaborationTaskInteractionReadInput = z.infer<
+  typeof collaborationTaskInteractionReadInputSchema
+>
+export type CollaborationTaskCheckpointAppendInput = z.infer<
+  typeof collaborationTaskCheckpointAppendInputSchema
+>
+export type { CollaborationTaskInteraction, CollaborationTaskCheckpoint }
+export type CollaborationWorkerAcceptanceUpdateInput = z.infer<
+  typeof collaborationWorkerAcceptanceUpdateInputSchema
+>
+export type CollaborationTaskOfferDecisionInput = z.infer<
+  typeof collaborationTaskOfferDecisionInputSchema
+>
 export type CollaborationManagedContainerManageInput = z.infer<typeof collaborationManagedContainerManageInputSchema>

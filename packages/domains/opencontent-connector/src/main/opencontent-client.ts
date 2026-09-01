@@ -9,6 +9,7 @@ import { z } from 'zod'
 import {
   OpenContentConnectorError
 } from '../contract.js'
+import type { OpenContentEntryParentFact } from '../main-contract.js'
 import { readOpenContentFolderInfo } from './folder-info-reader.js'
 import {
   requestOpenContentProviderJson,
@@ -23,14 +24,13 @@ const MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 const openContentExternalAccountSchema = z.object({
   id: z.string().trim().min(1).max(256),
   identityId: z.number().int().nonnegative().safe(),
-  account: z.string().trim().min(1).max(256),
-  name: z.string().trim().min(1).max(256),
-  topPersonalFolderId: z.string().regex(/^\d+$/u)
+  name: z.string().trim().min(1).max(256)
 }).strict().readonly()
 
+const openContentSessionTokenSchema = z.string().trim().min(16).max(4096)
+
 const openContentAuthenticatedSessionSchema = z.object({
-  token: z.string().trim().min(16).max(4096),
-  account: openContentExternalAccountSchema
+  token: openContentSessionTokenSchema
 }).strict().readonly()
 
 type OpenContentExternalAccount = z.infer<typeof openContentExternalAccountSchema>
@@ -50,7 +50,7 @@ const publicKeyResponseSchema = z.object({
 const loginResponseSchema = z.object({
   result: z.number().int(),
   msg: z.string().max(1024),
-  data: z.string().trim().min(16).max(4096),
+  data: z.unknown(),
   clientId: z.string().max(4096).nullable()
 }).strict()
 
@@ -166,6 +166,13 @@ export type OpenContentPersonalRootFolder = Readonly<{
   label: string
 }>
 
+export type OpenContentDownloadAuthorization = Readonly<{
+  fileGuid: string
+  regionType: number
+  regionHash: string
+  regionUrl: string
+}>
+
 export type OpenContentClient = Readonly<{
   authenticateExistingAccount(input: Readonly<{
     username: string
@@ -213,6 +220,13 @@ export type OpenContentClient = Readonly<{
     | Readonly<{ kind: 'container'; folderGuid: string; label: string }>
     | Readonly<{ kind: 'file'; fileGuid: string; label: string; size: number }>
   >
+  observeEntryParent(input: Readonly<{
+    token: string
+    kind: 'container' | 'file'
+    resourceGuid: string
+    signal?: AbortSignal
+    assertPrincipalCurrent(): void | Promise<void>
+  }>): Promise<OpenContentEntryParentFact>
   createFolder(input: Readonly<{
     token: string
     parentFolderGuid: string
@@ -228,10 +242,24 @@ export type OpenContentClient = Readonly<{
     read(range: Readonly<{ offset: number; length: number }>): Promise<Uint8Array>
     signal: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
-  }>): Promise<Readonly<{ fileGuid: string }>>
-  downloadFile(input: Readonly<{
+  }>): Promise<Readonly<{
+    fileGuid: string
+    writeAfterObservation: Readonly<{
+      parentFolderGuid: string
+      fileGuid: string
+      name: string
+      size: number
+    }>
+  }>>
+  authorizeDownload(input: Readonly<{
     token: string
     fileGuid: string
+    signal: AbortSignal
+    assertPrincipalCurrent(): void | Promise<void>
+  }>): Promise<OpenContentDownloadAuthorization>
+  downloadAuthorizedFile(input: Readonly<{
+    token: string
+    authorization: OpenContentDownloadAuthorization
     write(chunk: Uint8Array): Promise<void>
     signal: AbortSignal
     assertPrincipalCurrent(): void | Promise<void>
@@ -303,6 +331,36 @@ export function createOpenContentClient(options: Readonly<{
     })
   }
 
+  const folderInfoById = async (
+    token: string,
+    folderId: number,
+    signal: AbortSignal | undefined,
+    assertPrincipalCurrent: () => void | Promise<void>
+  ) => {
+    const receipt = await readOpenContentFolderInfo({
+      token,
+      folderId,
+      signal,
+      request: ({ path, body, signal: requestSignal }) => requestJson({
+        baseUrl,
+        fetchImplementation,
+        path,
+        method: 'POST',
+        body,
+        signal: requestSignal,
+        assertPrincipalCurrent
+      })
+    })
+    requireBusinessSuccess(receipt.result, 'provider_unavailable')
+    if (!receipt.folder || receipt.folder.id !== folderId) {
+      throw connectorError('provider_contract_violation')
+    }
+    if (!folderGuidSchema.safeParse(receipt.folder.folderGuid).success) {
+      throw connectorError('provider_contract_violation')
+    }
+    return receipt.folder
+  }
+
   const observeCurrentExternalAccount: OpenContentClient['observeCurrentExternalAccount'] =
     async (rawInput) => {
       const input = parseClientInput(currentAccountRequestSchema, rawInput)
@@ -321,10 +379,11 @@ export function createOpenContentClient(options: Readonly<{
         'provider_contract_violation'
       )
       requireBusinessSuccess(envelope.result, 'reauthentication_required')
-      return Object.freeze({
-        ...envelope.data,
-        topPersonalFolderId: String(envelope.data.topPersonalFolderId)
-      })
+      return Object.freeze(openContentExternalAccountSchema.parse({
+        id: envelope.data.id,
+        identityId: envelope.data.identityId,
+        name: envelope.data.name
+      }))
     }
 
   return Object.freeze({
@@ -349,72 +408,82 @@ export function createOpenContentClient(options: Readonly<{
     observeCurrentExternalAccount,
     authenticateExistingAccount: async (rawInput) => {
       const input = parseClientInput(enrollmentInputSchema, rawInput)
-      const publicKeyResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/inbiz/org/api/auth/GetLoginRsaPublicKey',
-        method: 'GET',
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      const publicKeyEnvelope = parseProviderResponse(
-        publicKeyResponseSchema,
-        publicKeyResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(publicKeyEnvelope.result, 'provider_unavailable')
-      assertRsaOaepSha256(publicKeyEnvelope.data)
+      try {
+        const publicKeyResponse = await requestJson({
+          baseUrl,
+          fetchImplementation,
+          path: '/inbiz/org/api/auth/GetLoginRsaPublicKey',
+          method: 'GET',
+          signal: rawInput.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        const publicKeyEnvelope = parseProviderResponse(
+          publicKeyResponseSchema,
+          publicKeyResponse,
+          'provider_contract_violation'
+        )
+        requireBusinessSuccess(publicKeyEnvelope.result, 'provider_unavailable')
+        assertRsaOaepSha256(publicKeyEnvelope.data)
 
-      const key = normalizePublicKey(publicKeyEnvelope.data.PublicKey)
-      const loginResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/flatsdk/api/services/Auth/UserLogin',
-        method: 'POST',
-        body: {
-          userName: rsaOaepSha256(input.username, key),
-          password: rsaOaepSha256(input.password, key),
-          clientType: 4,
-          secure: false,
-          rsaSecure: true
-        },
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      const loginEnvelope = parseProviderResponse(
-        loginResponseSchema,
-        loginResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(loginEnvelope.result, 'unauthorized')
-      const token = loginEnvelope.data
+        const key = normalizePublicKey(publicKeyEnvelope.data.PublicKey)
+        let userNameCiphertext = ''
+        let passwordCiphertext = ''
+        try {
+          userNameCiphertext = rsaOaepSha256(input.username, key)
+          passwordCiphertext = rsaOaepSha256(input.password, key)
+        } finally {
+          input.username = ''
+          input.password = ''
+        }
+        const loginResponse = await requestJson({
+          baseUrl,
+          fetchImplementation,
+          path: '/flatsdk/api/services/Auth/UserLogin',
+          method: 'POST',
+          body: {
+            userName: userNameCiphertext,
+            password: passwordCiphertext,
+            clientType: 4,
+            secure: false,
+            rsaSecure: true
+          },
+          signal: rawInput.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        const loginEnvelope = parseProviderResponse(
+          loginResponseSchema,
+          loginResponse,
+          'provider_contract_violation'
+        )
+        requireBusinessSuccess(loginEnvelope.result, 'unauthorized')
+        const token = parseProviderResponse(
+          openContentSessionTokenSchema,
+          loginEnvelope.data,
+          'provider_contract_violation'
+        )
 
-      const validityResponse = await requestJson({
-        baseUrl,
-        fetchImplementation,
-        path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
-        method: 'POST',
-        query: { token },
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      const validityEnvelope = parseProviderResponse(
-        tokenValidityResponseSchema,
-        validityResponse,
-        'provider_contract_violation'
-      )
-      requireBusinessSuccess(validityEnvelope.result, 'reauthentication_required')
-      if (!validityEnvelope.data) throw connectorError('reauthentication_required')
+        const validityResponse = await requestJson({
+          baseUrl,
+          fetchImplementation,
+          path: '/flatsdk/api/services/Auth/CheckUserTokenValidity',
+          method: 'POST',
+          query: { token },
+          signal: rawInput.signal,
+          assertPrincipalCurrent: input.assertPrincipalCurrent
+        })
+        const validityEnvelope = parseProviderResponse(
+          tokenValidityResponseSchema,
+          validityResponse,
+          'provider_contract_violation'
+        )
+        requireBusinessSuccess(validityEnvelope.result, 'reauthentication_required')
+        if (!validityEnvelope.data) throw connectorError('reauthentication_required')
 
-      const account = await observeCurrentExternalAccount({
-        token,
-        signal: rawInput.signal,
-        assertPrincipalCurrent: input.assertPrincipalCurrent
-      })
-      return Object.freeze(openContentAuthenticatedSessionSchema.parse({
-        token,
-        account
-      }))
+        return Object.freeze(openContentAuthenticatedSessionSchema.parse({ token }))
+      } finally {
+        input.username = ''
+        input.password = ''
+      }
     },
     listPersonalRootFolder: async (rawInput) => {
       const input = parseClientInput(personalRootFolderRequestSchema, rawInput)
@@ -513,6 +582,67 @@ export function createOpenContentClient(options: Readonly<{
         fileGuid: envelope.data.fileGuid,
         label: envelope.data.fileName,
         size: envelope.data.fileSize
+      })
+    },
+    observeEntryParent: async (rawInput) => {
+      const input = parseClientInput(entryParentRequestSchema, rawInput)
+      const child = Object.freeze({
+        kind: input.kind,
+        resourceGuid: input.resourceGuid
+      })
+      if (input.kind === 'file') {
+        const file = await fileByGuidOrId(
+          input.token,
+          input.resourceGuid,
+          input.signal,
+          input.assertPrincipalCurrent
+        )
+        if (file.fileGuid !== input.resourceGuid || file.parentFolderId <= 0) {
+          throw connectorError('provider_contract_violation')
+        }
+        const parent = await folderInfoById(
+          input.token,
+          file.parentFolderId,
+          input.signal,
+          input.assertPrincipalCurrent
+        )
+        return Object.freeze({
+          child,
+          parent: Object.freeze({
+            kind: 'container' as const,
+            resourceGuid: parent.folderGuid
+          })
+        })
+      }
+
+      const folder = await folderByGuid(
+        input.token,
+        input.resourceGuid,
+        input.signal,
+        input.assertPrincipalCurrent
+      )
+      const observed = await folderInfoById(
+        input.token,
+        folder.id,
+        input.signal,
+        input.assertPrincipalCurrent
+      )
+      if (observed.folderGuid !== input.resourceGuid) {
+        throw connectorError('provider_contract_violation')
+      }
+      if (observed.parentFolderId === 0) return Object.freeze({ child })
+      const parent = await folderInfoById(
+        input.token,
+        observed.parentFolderId,
+        input.signal,
+        input.assertPrincipalCurrent
+      )
+      return Object.freeze({
+        child,
+        parent: Object.freeze({
+          kind: 'container' as const,
+          resourceGuid: parent.folderGuid
+        })
       })
     },
     createFolder: async (rawInput) => {
@@ -735,10 +865,18 @@ export function createOpenContentClient(options: Readonly<{
         file.name !== input.name ||
         file.size !== input.size
       ) throw connectorError('outcome_unknown')
-      return Object.freeze({ fileGuid: file.fileGuid })
+      return Object.freeze({
+        fileGuid: file.fileGuid,
+        writeAfterObservation: Object.freeze({
+          parentFolderGuid: input.parentFolderGuid,
+          fileGuid: file.fileGuid,
+          name: file.name,
+          size: file.size
+        })
+      })
     },
-    downloadFile: async (rawInput) => {
-      const input = parseClientInput(downloadFileRequestSchema, rawInput)
+    authorizeDownload: async (rawInput) => {
+      const input = parseClientInput(authorizeDownloadRequestSchema, rawInput)
       const rawCheck = await requestJson({
         baseUrl,
         fetchImplementation,
@@ -753,35 +891,65 @@ export function createOpenContentClient(options: Readonly<{
         rawCheck,
         'provider_contract_violation'
       )
-      requireBusinessSuccess(envelope.result, 'provider_unavailable')
+      requireBusinessSuccess(envelope.result, 'unauthorized')
       const check = parseProviderResponse(
         downloadCheckDataSchema,
         envelope.data,
         'provider_contract_violation'
       )
-      const transferBaseUrl = trustedTransferBase(baseUrl, check.regionType, check.regionUrl)
+      trustedTransferBase(baseUrl, check.regionType, check.regionUrl)
+      try {
+        await input.assertPrincipalCurrent()
+      } catch {
+        throw connectorError('unauthorized')
+      }
+      return Object.freeze({
+        fileGuid: input.fileGuid,
+        regionType: check.regionType,
+        regionHash: check.regionHash,
+        regionUrl: check.regionUrl
+      })
+    },
+    downloadAuthorizedFile: async (rawInput) => {
+      const input = parseClientInput(downloadAuthorizedFileRequestSchema, rawInput)
+      const authorization = downloadAuthorizationSchema.parse(input.authorization)
+      const transferBaseUrl = trustedTransferBase(
+        baseUrl,
+        authorization.regionType,
+        authorization.regionUrl
+      )
       const response = await requestOpenContentProviderResponse({
         baseUrl: transferBaseUrl,
         fetchImplementation,
         path: '/downLoad/index',
         query: {
           token: input.token,
-          fileGuid: input.fileGuid,
-          regionHash: check.regionHash
+          fileGuid: authorization.fileGuid,
+          regionHash: authorization.regionHash
         },
         signal: input.signal,
         timeoutMs: TRANSFER_TIMEOUT_MS,
         assertPrincipalCurrent: input.assertPrincipalCurrent,
         errorFactory: connectorError
       })
-      const declaredLength = response.headers.get('content-length')
-      if (declaredLength && Number(declaredLength) > MAX_DOWNLOAD_BYTES) {
-        throw connectorError('bounds_exceeded')
-      }
       if (!response.body) throw connectorError('provider_contract_violation')
       const reader = response.body.getReader()
       let bytesWritten = 0
+      let failed = false
+      let primaryError: unknown
+      let releaseFailed = false
+      let releaseError: unknown
       try {
+        const declaredLength = response.headers.get('content-length')
+        if (declaredLength !== null) {
+          if (!/^\d+$/u.test(declaredLength) ||
+            !Number.isSafeInteger(Number(declaredLength))) {
+            throw connectorError('provider_contract_violation')
+          }
+          if (Number(declaredLength) > MAX_DOWNLOAD_BYTES) {
+            throw connectorError('bounds_exceeded')
+          }
+        }
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -792,9 +960,24 @@ export function createOpenContentClient(options: Readonly<{
           if (bytesWritten > MAX_DOWNLOAD_BYTES) throw connectorError('bounds_exceeded')
           await input.write(value)
         }
+      } catch (error) {
+        failed = true
+        primaryError = error
+        try {
+          await reader.cancel(primaryError)
+        } catch {
+          // Cancellation cleanup must never replace the download's primary error.
+        }
       } finally {
-        reader.releaseLock()
+        try {
+          reader.releaseLock()
+        } catch (error) {
+          releaseFailed = true
+          releaseError = error
+        }
       }
+      if (failed) throw primaryError
+      if (releaseFailed) throw releaseError
       return Object.freeze({ bytesWritten })
     }
   })
@@ -845,6 +1028,14 @@ const observeEntryRequestSchema = z.object({
   assertPrincipalCurrent: principalAssertionSchema
 }).strict()
 
+const entryParentRequestSchema = z.object({
+  token: z.string().trim().min(16).max(4096),
+  kind: z.enum(['container', 'file']),
+  resourceGuid: folderGuidSchema,
+  signal: z.instanceof(AbortSignal).optional(),
+  assertPrincipalCurrent: principalAssertionSchema
+}).strict()
+
 const transferNameSchema = z.string().trim().min(1).max(240)
   .refine((name) => !/[\\/\0]/u.test(name) && name !== '.' && name !== '..')
 
@@ -868,9 +1059,23 @@ const uploadFileRequestSchema = z.object({
   assertPrincipalCurrent: principalAssertionSchema
 }).strict()
 
-const downloadFileRequestSchema = z.object({
+const authorizeDownloadRequestSchema = z.object({
   token: z.string().trim().min(16).max(4096),
   fileGuid: z.string().trim().min(1).max(256),
+  signal: z.instanceof(AbortSignal),
+  assertPrincipalCurrent: principalAssertionSchema
+}).strict()
+
+const downloadAuthorizationSchema = z.object({
+  fileGuid: z.string().trim().min(1).max(256),
+  regionType: z.number().int(),
+  regionHash: z.string().trim().min(1).max(16_384),
+  regionUrl: z.string().max(2_048)
+}).strict().readonly()
+
+const downloadAuthorizedFileRequestSchema = z.object({
+  token: z.string().trim().min(16).max(4096),
+  authorization: downloadAuthorizationSchema,
   write: z.custom<(chunk: Uint8Array) => Promise<void>>(
     (value) => typeof value === 'function'
   ),
@@ -1003,7 +1208,12 @@ function providerLocalTimestamp(date: Date): string {
 function trustedTransferBase(mainBaseUrl: URL, regionType: number, regionUrl: string): URL {
   if (regionType === 1 && regionUrl === '') return mainBaseUrl
   if (regionType !== 2) throw connectorError('provider_contract_violation')
-  const candidate = new URL(regionUrl)
+  let candidate: URL
+  try {
+    candidate = new URL(regionUrl)
+  } catch {
+    throw connectorError('provider_contract_violation')
+  }
   if (
     candidate.protocol !== 'https:' ||
     candidate.origin !== mainBaseUrl.origin ||
@@ -1155,14 +1365,17 @@ function normalizePublicKey(value: string): string {
 }
 
 function rsaOaepSha256(value: string, publicKey: string): string {
+  const plaintext = Buffer.from(value, 'utf8')
   try {
     return publicEncrypt({
       key: publicKey,
       padding: constants.RSA_PKCS1_OAEP_PADDING,
       oaepHash: 'sha256'
-    }, Buffer.from(value, 'utf8')).toString('base64')
+    }, plaintext).toString('base64')
   } catch {
     throw connectorError('provider_contract_violation')
+  } finally {
+    plaintext.fill(0)
   }
 }
 

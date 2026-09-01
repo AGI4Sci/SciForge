@@ -7,15 +7,17 @@ import type {
   DomainRendererFileTransferHost
 } from './file-transfer.js'
 import {
+  domainPackageJsonValueSchema,
   domainPackageModuleIdSchema,
   domainPackagePermissionIdSchema,
   domainPackageStableVersionSchema,
   type DomainPackageContributionPublicReleasePolicy,
   type DomainPackageJsonValue
 } from './contract.js'
-import type {
-  DomainExecutionEventInput,
-  DomainExecutionEventV1
+import {
+  canonicalizeReproValue,
+  type DomainExecutionEventInput,
+  type DomainExecutionEventV1
 } from './reproducibility.js'
 import type { DomainMainPowerHost } from './power.js'
 import type { DomainMainRemoteCapabilityApprovalHost } from './remote-approval.js'
@@ -30,6 +32,7 @@ import type {
 } from './package-storage.js'
 import type { TrustedDomainProcessEntryInput } from './process-entry.js'
 import {
+  domainCapabilityResourceHandleSchema,
   domainWorkbenchRightPanelPlacementSchema,
   type DomainCapabilityResourceHandle,
   type DomainRendererSessionResource,
@@ -46,6 +49,7 @@ import type {
   WorkspaceHostOpenRemoteSessionInput
 } from './workspace-host.js'
 export * from './agent-execution.js'
+export * from './agent-routing.js'
 export * from './external-navigation.js'
 export * from './file-transfer.js'
 export * from './power.js'
@@ -423,6 +427,116 @@ export type DomainCapabilityContract<TInput, TOutput> = Readonly<{
   outputSchema: z.ZodType<TOutput>
 }>
 
+function deepFreezeHostContract<Value>(value: Value): Value {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value)
+    for (const nested of Object.values(value)) deepFreezeHostContract(nested)
+  }
+  return value
+}
+
+const domainMainFiniteCapabilityBatchOperationIdSchema = z.string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/u)
+
+const domainMainFiniteCapabilityBatchOutputPathSegmentSchema = z.union([
+  z.string().trim().min(1).max(192),
+  z.number().int().nonnegative().max(10_000)
+])
+
+export const DOMAIN_MAIN_FINITE_CAPABILITY_BATCH_CONFIRMED_PLAN_DIGEST_FIELD =
+  'confirmedPlanDigest' as const
+
+export const domainMainFiniteCapabilityBatchPlanDigestSchema = z.string()
+  .regex(/^[a-f0-9]{64}$/u, 'Expected a lowercase SHA-256 finite batch plan digest.')
+
+export const domainMainFiniteCapabilityBatchResourceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('fixed'),
+    resource: domainCapabilityResourceHandleSchema
+  }).strict(),
+  z.object({
+    kind: z.literal('operation-output'),
+    operationId: domainMainFiniteCapabilityBatchOperationIdSchema,
+    path: z.array(domainMainFiniteCapabilityBatchOutputPathSegmentSchema).min(1).max(16)
+  }).strict()
+])
+
+export const domainMainFiniteCapabilityBatchOperationSchema = z.object({
+  operationId: domainMainFiniteCapabilityBatchOperationIdSchema,
+  actionId: domainPackagePermissionIdSchema,
+  idempotencyKey: z.string().trim().min(1).max(256).optional(),
+  input: domainPackageJsonValueSchema,
+  resource: domainMainFiniteCapabilityBatchResourceSchema.optional()
+}).strict()
+
+/**
+ * One immutable, process-local operation plan derived from a current Human
+ * confirmation. Project/revision meaning remains package-owned; the Host binds
+ * the exact string, ordered operations, inputs, and resource ancestry without
+ * interpreting that domain state.
+ */
+export const domainMainFiniteCapabilityBatchPlanSchema = z.object({
+  requiredSystemCapabilityGrant: domainPackagePermissionIdSchema,
+  revision: z.string().trim().min(1).max(256),
+  workspaceId: z.string().trim().min(1).max(1_024).optional(),
+  operations: z.array(domainMainFiniteCapabilityBatchOperationSchema).min(1).max(64)
+}).strict().superRefine((plan, context) => {
+  const operationIndexes = new Map<string, number>()
+  plan.operations.forEach((operation, index) => {
+    if (operationIndexes.has(operation.operationId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['operations', index, 'operationId'],
+        message: 'Finite capability batch operation IDs must be unique.'
+      })
+      return
+    }
+    operationIndexes.set(operation.operationId, index)
+    if (operation.resource?.kind !== 'operation-output') return
+    const sourceIndex = operationIndexes.get(operation.resource.operationId)
+    if (sourceIndex === undefined || sourceIndex >= index) {
+      context.addIssue({
+        code: 'custom',
+        path: ['operations', index, 'resource', 'operationId'],
+        message: 'A batch resource must come from an earlier operation.'
+      })
+    }
+  })
+}).transform((plan) => deepFreezeHostContract(plan))
+
+export type DomainMainFiniteCapabilityBatchPlan = z.infer<
+  typeof domainMainFiniteCapabilityBatchPlanSchema
+>
+
+/**
+ * Canonical bytes for the complete finite batch plan confirmed by a Human.
+ * Hashing remains in the Node-owning package or Host; callers cannot use the
+ * resulting digest as authority without the matching active confirmation.
+ */
+export function canonicalizeDomainMainFiniteCapabilityBatchPlan(
+  input: unknown
+): string {
+  const plan = domainMainFiniteCapabilityBatchPlanSchema.parse(input)
+  return canonicalizeReproValue(domainPackageJsonValueSchema.parse(plan))
+}
+
+export type DomainMainApprovedCapabilityBatch = Readonly<{
+  revision: string
+  /** Digest of the exact Host-captured plan; it is audit identity, not authority. */
+  planDigest: string
+  /** Executes only the next enumerated operation and consumes its Host-owned proof. */
+  invoke<TInput, TOutput>(
+    operationId: string,
+    contract: DomainCapabilityContract<TInput, TOutput>,
+    options?: Readonly<{ signal?: AbortSignal }>
+  ): Promise<TOutput>
+  /** Irrevocably drops every unconsumed proof in this process-local batch. */
+  discard(): void
+}>
+
 export type DomainMainSystemCapabilityInvoker = Readonly<{
   /**
    * Invokes a capability through host policy. This system-facing surface has no
@@ -438,6 +552,12 @@ export type DomainMainSystemCapabilityInvoker = Readonly<{
       resource?: DomainCapabilityResourceHandle
       expectedRevision?: string
       signal?: AbortSignal
+      /**
+       * Package-owned execution facts carried outside the capability input.
+       * The Host must canonicalize and bind these facts to system authority;
+       * handlers must never accept caller-authored digests in their input.
+       */
+      systemExecutionContext?: DomainPackageJsonValue
       authorization?: Readonly<{
         /**
          * The host may propagate an already-approved outer action. It must
@@ -447,6 +567,13 @@ export type DomainMainSystemCapabilityInvoker = Readonly<{
       }>
     }>
   ): Promise<TOutput>
+  /**
+   * Derives one finite batch from the exact active Human-confirmed invocation.
+   * The package cannot mint, inspect, persist, or replay per-operation proofs.
+   */
+  createApprovedBatch(
+    plan: DomainMainFiniteCapabilityBatchPlan
+  ): DomainMainApprovedCapabilityBatch
 }>
 
 export type DomainMainTextReasoner = Readonly<{
@@ -749,7 +876,7 @@ export type DomainWorkbenchRightPanelPlacement = z.infer<
  */
 export type DomainWorkbenchRightPanelTarget =
   | Readonly<{
-      placement?: 'focused'
+      placement?: 'focused' | undefined
       surfaceId?: never
     }>
   | Readonly<{
@@ -789,10 +916,15 @@ export type DomainWorkbenchOpenRightPanelInput =
 export type DomainWorkbenchExactResource = Readonly<{
   resourceKind: string
   resourceId: string
+  /**
+   * Optional non-authorizing Broker reference. The target renderer must bind
+   * it through the Host before use; this value never carries a capability.
+   */
+  resourceRef?: string | undefined
   integrity?: Readonly<{
     algorithm: 'sha256'
     expectedDigest: string
-  }>
+  }> | undefined
 }>
 
 export type DomainWorkbenchOpenResourceInput =
@@ -885,6 +1017,35 @@ export type DomainMainInternalServiceHost = Readonly<{
     registration: DomainMainInternalServiceRegistration<Service>
   ): void
   acquire<Service extends object>(serviceId: string, contractVersion: string): Service
+}>
+
+/**
+ * Host-authenticated identity of one ordinary Agent Runtime Session.
+ *
+ * This deliberately carries no domain scope or authorization claim. Domain
+ * packages may interpret the Session only by joining it to their own durable
+ * facts and the current Principal.
+ */
+export const domainMainOrdinarySessionIdentitySchema = z.object({
+  runtimeId: z.string().trim().min(1).max(256),
+  threadId: z.string().trim().min(1).max(512)
+}).strict().readonly()
+
+export type DomainMainOrdinarySessionIdentity = z.infer<
+  typeof domainMainOrdinarySessionIdentitySchema
+>
+
+/** Trusted subset of the Host capability invocation context exposed to packages. */
+export type DomainMainCapabilityInvocationContext = Readonly<{
+  caller: Readonly<{
+    audience: 'ui' | 'agent' | 'system'
+    principal?: PrincipalSnapshot
+  }>
+  invocationId?: string
+  /** Present only for a Host-routed invocation from an ordinary Agent Session. */
+  ordinarySession?: DomainMainOrdinarySessionIdentity
+  assertPrincipalCurrent: () => void
+  signal?: AbortSignal
 }>
 
 /**
@@ -1068,11 +1229,21 @@ export type DomainRendererVisibleContextHost = Readonly<{
 }>
 
 export type DomainRendererCapabilityInvoker = Readonly<{
+  /** Rebinds one non-authorizing reference after Host scope and lease checks. */
+  bind?(
+    resourceRef: string,
+    options?: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
+  ): Promise<DomainCapabilityResourceHandle>
   observe<TState>(
     contract: DomainRendererCapabilityObservationContract<TState>,
     resource: DomainCapabilityResourceHandle,
     options?: Readonly<{ workspaceId?: string; signal?: AbortSignal }>
   ): Promise<DomainRendererCapabilityObservation<TState>>
+  /**
+   * Validates and snapshots `input` synchronously before returning. A caller
+   * may therefore clear its own mutable sensitive-input container as soon as
+   * this method returns the invocation Promise.
+   */
   invoke<TInput, TOutput>(
     contract: DomainRendererCapabilityContract<TInput, TOutput>,
     input: TInput,

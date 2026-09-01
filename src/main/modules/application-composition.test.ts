@@ -19,17 +19,21 @@ import {
   listMainCapabilityDomainPolicies
 } from './main-contributions'
 import { createNonSecretPackageStorageForTest } from './domain-package-storage.test-helper'
+import { createUnavailablePortableResourcesForTest } from './domain-main-host.test-helper'
 
 describe('application domain composition', () => {
   it('composes explicit host-core and installed package capabilities through one catalog', () => {
     const packageInvokerOwners: Array<{ moduleId: string; moduleVersion: string }> = []
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => '/tmp/sciforge-domain-composition-test',
+      getDeviceId: () => 'device-composition-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: (owner) => {
         packageInvokerOwners.push(owner)
         return Object.freeze({
-          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+          createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
         })
       }
     })
@@ -85,6 +89,7 @@ describe('application domain composition', () => {
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => root,
       getDeviceId: () => 'device-composition-test',
+      portableResourcesFor: createUnavailablePortableResourcesForTest(),
       getAppVersion: () => {
         appVersionReads += 1
         return '9.8.7-host'
@@ -93,7 +98,8 @@ describe('application domain composition', () => {
       isPackaged: () => true,
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
-        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+        createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
       })
     })
     const lifecycle = catalog.listContributions(

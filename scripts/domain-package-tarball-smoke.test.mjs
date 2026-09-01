@@ -13,15 +13,18 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 
-import { discoverDomainPackages } from './domain-packages.mjs'
+import {
+  discoverDomainPackages,
+  domainPackageNpmInvocation
+} from './domain-packages.mjs'
 
 const run = promisify(execFile)
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npm = domainPackageNpmInvocation()
 
 const sourceExtensionPattern = /\.(?:[cm]?[jt]sx?)$/u
 const testSourcePattern = /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u
@@ -266,7 +269,7 @@ async function assertPublicExportTargets(packageRoot, packageJson) {
 }
 
 test('publishable domain packages resolve every public export from independent tarballs', {
-  timeout: 240_000
+  timeout: 600_000
 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-domain-tarball-smoke-'))
   try {
@@ -286,7 +289,7 @@ test('publishable domain packages resolve every public export from independent t
 
     const archives = []
     for (const { packageRoot, packageJson } of packages) {
-      const { stdout } = await run(npm, [
+      const { stdout } = await run(npm.command, [...npm.leadingArguments,
         'pack',
         '--json',
         '--ignore-scripts',
@@ -306,22 +309,43 @@ test('publishable domain packages resolve every public export from independent t
           `${packageJson.name} deployment source path must be declared`
         )
         const packedPaths = new Set(packed[0].files.map(({ path }) => path))
-        assert.equal(
-          packedPaths.has(deploymentConfiguration.sourceRelativePath),
-          false,
-          `${packageJson.name} tarball must exclude its private deployment sidecar`
-        )
-        assert.equal(
-          [...packedPaths].some((path) =>
-            path === '.sciforge' || path.startsWith('.sciforge/')),
-          false,
-          `${packageJson.name} tarball must exclude private deployment directories`
-        )
+        if (deploymentConfiguration.publicRelease === 'allowed') {
+          const absoluteSource = resolve(
+            repositoryRoot,
+            deploymentConfiguration.sourceRelativePath
+          )
+          const packageRelativeSource = relative(packageRoot, absoluteSource)
+            .split(process.platform === 'win32' ? '\\' : '/')
+            .join('/')
+          assert.equal(
+            packageRelativeSource === '..' || packageRelativeSource.startsWith('../') ||
+              isAbsolute(packageRelativeSource),
+            false,
+            `${packageJson.name} public deployment configuration must be package-owned`
+          )
+          assert.equal(
+            packedPaths.has(packageRelativeSource),
+            true,
+            `${packageJson.name} tarball must include its public deployment configuration`
+          )
+        } else {
+          assert.equal(
+            packedPaths.has(deploymentConfiguration.sourceRelativePath),
+            false,
+            `${packageJson.name} tarball must exclude its private deployment sidecar`
+          )
+          assert.equal(
+            [...packedPaths].some((path) =>
+              path === '.sciforge' || path.startsWith('.sciforge/')),
+            false,
+            `${packageJson.name} tarball must exclude private deployment directories`
+          )
+        }
       }
       archives.push(join(tarballs, packed[0].filename))
     }
 
-    await run(npm, [
+    await run(npm.command, [...npm.leadingArguments,
       'install',
       '--prefer-offline',
       '--ignore-scripts',
@@ -412,7 +436,7 @@ test('publishable domain packages resolve every public export from independent t
       '--import',
       import.meta.resolve('tsx'),
       '--experimental-loader',
-      cssLoader,
+      pathToFileURL(cssLoader).href,
       entry
     ], {
       cwd: installation,

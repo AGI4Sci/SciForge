@@ -196,9 +196,26 @@ function resolverFixture(observeEntry: ContentSpaceProvider['observeEntry']) {
     }),
     listEntries: async ({ parent }) => ({ parent, items: [] }),
     observeEntry,
+    proveFileDescendant: async ({ context, root, candidate }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: context.expectedExternalBinding ?? {
+        providerInstanceRef: context.providerInstanceRef,
+        principal: context.principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
+      counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 0 },
+      provedAt: new Date().toISOString(),
+      cacheable: false,
+      portable: false
+    }),
     createFolder: async () => { throw new Error('unused') },
     uploadNewFile: async () => { throw new Error('unused') },
-    downloadFile: async () => { throw new Error('unused') },
+    authorizeDownload: async () => { throw new Error('unused') },
     resolvePortalTarget: async () => { throw new Error('unused') },
     observeImmutableVersion: async () => ({
       proven: true,

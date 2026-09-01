@@ -68,6 +68,12 @@ export const capabilityDescriptorSchema = z.object({
   effect: capabilityEffectSchema,
   approval: capabilityApprovalModeSchema,
   /**
+   * Provider-owned grant whose system audience is reachable only through one
+   * Host-captured, finite, Human-confirmed batch. The grant alone is never
+   * sufficient authority and no proof crosses a package or transport boundary.
+   */
+  delegatedBatchGrant: capabilityIdSchema.optional(),
+  /**
    * Allows an Agent external write to rely on an already-issued Broker
    * resource as its complete authority, without manufacturing a Human
    * confirmation grant. This policy is deliberately unavailable to global,
@@ -132,11 +138,38 @@ export const capabilityDescriptorSchema = z.object({
         message: 'Resource-authorized autonomous writes use no separate approval.'
       })
     }
-    if (descriptor.audiences.length !== 1 || descriptor.audiences[0] !== 'agent') {
+    const agentOnly = descriptor.audiences.length === 1 && descriptor.audiences[0] === 'agent'
+    const delegatedAgentAndSystem = descriptor.delegatedBatchGrant !== undefined &&
+      descriptor.audiences.length === 2 &&
+      descriptor.audiences.includes('agent') && descriptor.audiences.includes('system')
+    if (!agentOnly && !delegatedAgentAndSystem) {
       context.addIssue({
         code: 'custom',
         path: ['audiences'],
-        message: 'Resource-authorized autonomous writes are Agent-only.'
+        message: 'Resource-authorized autonomous writes must be Agent-only unless their system audience is finite-batch delegated.'
+      })
+    }
+  }
+  if (descriptor.delegatedBatchGrant !== undefined) {
+    if (!descriptor.audiences.includes('system')) {
+      context.addIssue({
+        code: 'custom',
+        path: ['audiences'],
+        message: 'A delegated batch capability must declare the system audience.'
+      })
+    }
+    if (descriptor.approval === 'system') {
+      context.addIssue({
+        code: 'custom',
+        path: ['approval'],
+        message: 'A finite Human-confirmed batch cannot delegate system approval.'
+      })
+    }
+    if (descriptor.principalTransition !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['principalTransition'],
+        message: 'A finite capability batch cannot delegate Host Principal transitions.'
       })
     }
   }
@@ -252,6 +285,10 @@ export type CapabilityCallerContext = z.infer<typeof capabilityCallerContextSche
   principalContextVersion?: number
   /** Host-issued package authority; this is intentionally absent from the public raw schema. */
   capabilityGrants?: readonly string[]
+  /** Host-derived digest of the exact Principal captured for a system execution. */
+  principalSnapshotDigest?: string
+  /** Host-derived digest of package execution facts; the raw facts never reach the handler. */
+  executionContextDigest?: string
 }>
 export type CapabilityCallerContextInput = z.input<typeof capabilityCallerContextSchema>
 

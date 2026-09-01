@@ -16,6 +16,7 @@
     "baseUrl": "../..",
     "paths": {
       "@sciforge/collaboration-contracts": ["packages/collaboration-contracts/src/index.ts"],
+      "@sciforge/collaboration-contracts/node": ["packages/collaboration-contracts/src/node.ts"],
       "@sciforge/collaboration-provider-zulip/server": ["packages/collaboration-provider-zulip/src/server.ts"]
     },
     "types": ["node"]

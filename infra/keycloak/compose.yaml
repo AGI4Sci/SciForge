@@ -37,6 +37,7 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./realm-sciforge.json:/opt/keycloak/data/import/realm-sciforge.json:ro
+      - ./themes/sciforge:/opt/keycloak/themes/sciforge:ro
     networks:
       - identity-internal
 

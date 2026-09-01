@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { request } from 'node:http'
 import { readFileSync } from 'node:fs'
@@ -163,6 +164,7 @@ describe('dev browser bridge server', () => {
     expect(mainSource).toContain("process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0'")
     expect(mainSource).toContain('!app.isPackaged')
     expect(mainSource).toContain('instanceId: devBrowserBridgeInstanceId')
+    expect(mainSource).toContain('resolveCapabilityTags: (actionId) =>')
     expect(mainSource).not.toContain('allowAllChannels')
   })
 
@@ -264,6 +266,7 @@ describe('dev browser bridge server', () => {
 
     server = await startDevBrowserBridgeServer({
       dispatcher: capabilityDispatcher,
+      resolveCapabilityTags: (actionId) => broker.registry.get(actionId)?.descriptor.tags,
       port: 0
     })
 
@@ -293,6 +296,109 @@ describe('dev browser bridge server', () => {
     })
   })
 
+  it('rejects sensitive-input capabilities on HTTP while canonical capability IPC remains available', async () => {
+    const handler = vi.fn(async () => ({ output: { connected: true } }))
+    const broker = new CapabilityBroker(new CapabilityRegistry([defineCapability({
+      id: 'provider-session.connect',
+      version: '1',
+      title: 'Connect provider session',
+      description: 'Connects a provider session using caller-supplied credentials.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['provider-connection', 'sensitive-input'],
+      inputSchema: z.object({ account: z.string(), password: z.string() }).strict(),
+      outputSchema: z.object({ connected: z.boolean() }).strict(),
+      handler
+    })]))
+    const capabilityDispatcher = registerCapabilityIpc({
+      broker,
+      ipc: { removeHandler: vi.fn(), handle: vi.fn() } as never,
+      isTrustedIpcSender: () => true
+    })
+    server = await startDevBrowserBridgeServer({
+      dispatcher: capabilityDispatcher,
+      port: 0,
+      resolveCapabilityTags: (actionId) => broker.registry.get(actionId)?.descriptor.tags
+    })
+    const requestPayload = {
+      transportRequestId: '123e4567-e89b-42d3-a456-426614174111',
+      request: {
+        actionId: 'provider-session.connect',
+        invocationId: 'connect-http-1',
+        input: {
+          account: 'http-account-canary',
+          password: 'http-password-canary'
+        }
+      }
+    }
+
+    const denied = await postJson('/invoke', {
+      channel: 'capability:invoke',
+      payload: requestPayload
+    })
+
+    expect(denied.status).toBe(403)
+    expect(JSON.parse(denied.body)).toEqual({
+      ok: false,
+      message: 'Capabilities tagged sensitive-input require the Electron preload transport.'
+    })
+    expect(handler).not.toHaveBeenCalled()
+
+    const senderEvents = new EventEmitter()
+    const sender = {
+      id: 91,
+      send: vi.fn(),
+      isDestroyed: () => false,
+      once: senderEvents.once.bind(senderEvents),
+      removeListener: senderEvents.removeListener.bind(senderEvents)
+    }
+    await expect(capabilityDispatcher.invoke(
+      'capability:invoke',
+      { ...requestPayload, transportRequestId: '123e4567-e89b-42d3-a456-426614174112' },
+      sender
+    )).resolves.toMatchObject({
+      contractVersion: 1,
+      ok: true,
+      payload: {
+        actionId: 'provider-session.connect',
+        output: { connected: true },
+        changed: false
+      }
+    })
+    expect(handler).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed before dispatch when HTTP capability tags cannot be resolved', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }))
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke },
+      port: 0,
+      resolveCapabilityTags: () => undefined
+    })
+
+    const response = await postJson('/invoke', {
+      channel: 'capability:invoke',
+      payload: {
+        transportRequestId: '123e4567-e89b-42d3-a456-426614174113',
+        request: {
+          actionId: 'provider-session.unresolved',
+          invocationId: 'connect-http-unresolved-1',
+          input: { secret: 'unresolved-http-canary' }
+        }
+      }
+    })
+
+    expect(response.status).toBe(403)
+    expect(JSON.parse(response.body)).toEqual({
+      ok: false,
+      message: 'Dev browser capability transport could not resolve the requested capability.'
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
   it('preserves typed capability errors inside the dev HTTP bridge envelope', async () => {
     const brokerError = new CapabilityBrokerError(
       'outcome_unknown',
@@ -310,6 +416,7 @@ describe('dev browser bridge server', () => {
     })
     server = await startDevBrowserBridgeServer({
       dispatcher: capabilityDispatcher,
+      resolveCapabilityTags: () => [],
       port: 0
     })
 
@@ -825,6 +932,103 @@ describe('dev browser bridge server', () => {
     expect(response.status).toBe(400)
     await captureRejection
     sse.close()
+  })
+
+  it('waits for a browser pixel-capture channel that is still connecting', async () => {
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn(async () => ({ ok: true })) },
+      port: 0,
+      surfaceCaptureTimeoutMs: 1_000
+    })
+    // An invoke creates the browser client before its EventSource is ready,
+    // which mirrors renderer startup/reload ordering in the dev app.
+    const invokeResponse = await postJson('/invoke', {
+      channel: 'settings:get',
+      payload: null
+    }, 'browser-connecting')
+    expect(invokeResponse.status).toBe(200)
+
+    const capturePromise = server.captureSurface(1, { revision: 11 })
+    const sse = await openSse('/events?clientId=browser-connecting')
+    await vi.waitFor(() => {
+      expect(sse.chunks.join('')).toContain(
+        '"channel":"devBrowserBridge:surface-capture-requested"'
+      )
+    })
+    const captureMessage = sse.chunks.join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as {
+        channel?: string
+        payload?: { requestId?: string; revision?: number }
+      })
+      .find((message) => message.channel === 'devBrowserBridge:surface-capture-requested')
+    const canvas = createCanvas(64, 48)
+    const response = await postJson('/surface-capture', {
+      requestId: captureMessage?.payload?.requestId,
+      revision: captureMessage?.payload?.revision,
+      ok: true,
+      viewportWidth: 64,
+      viewportHeight: 48,
+      pngBase64: canvas.toBuffer('image/png').toString('base64')
+    }, 'browser-connecting')
+
+    expect(response.status).toBe(200)
+    await expect(capturePromise).resolves.toMatchObject({
+      png: expect.any(Uint8Array),
+      width: 64,
+      height: 48,
+      scaleFactor: 1
+    })
+    sse.close()
+  })
+
+  it('keeps the browser surface identity stable when EventSource reconnects', async () => {
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn(async () => ({ ok: true })) },
+      port: 0,
+      surfaceCaptureTimeoutMs: 2_000
+    })
+    const first = await openSse('/events?clientId=browser-reconnect')
+    expect(server.hasClient(1)).toBe(true)
+    first.close()
+    // The bridge retires an unconnected client after a short grace period.
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+
+    const capturePromise = server.captureSurface(1, { revision: 12 })
+    const second = await openSse('/events?clientId=browser-reconnect')
+    await vi.waitFor(() => {
+      expect(second.chunks.join('')).toContain(
+        '"channel":"devBrowserBridge:surface-capture-requested"'
+      )
+    })
+    expect(server.hasClient(1)).toBe(true)
+    const captureMessage = second.chunks.join('')
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => JSON.parse(line.slice('data: '.length)) as {
+        channel?: string
+        payload?: { requestId?: string; revision?: number }
+      })
+      .find((message) => message.channel === 'devBrowserBridge:surface-capture-requested')
+    const canvas = createCanvas(40, 30)
+    const response = await postJson('/surface-capture', {
+      requestId: captureMessage?.payload?.requestId,
+      revision: captureMessage?.payload?.revision,
+      ok: true,
+      viewportWidth: 40,
+      viewportHeight: 30,
+      pngBase64: canvas.toBuffer('image/png').toString('base64')
+    }, 'browser-reconnect')
+
+    expect(response.status).toBe(200)
+    await expect(capturePromise).resolves.toMatchObject({
+      png: expect.any(Uint8Array),
+      width: 40,
+      height: 30,
+      scaleFactor: 1
+    })
+    second.close()
   })
 
   it('broadcasts server-level messages to connected browser clients', async () => {

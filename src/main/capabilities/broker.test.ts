@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
 import type { PrincipalSnapshot } from '@sciforge/domain-sdk/principal'
@@ -165,6 +166,103 @@ describe('Capability resource change events', () => {
   })
 })
 
+describe('ordinary Agent Session invocation provenance', () => {
+  function sessionCapability() {
+    return defineCapability({
+      id: 'session-provenance.inspect',
+      version: '1',
+      title: 'Inspect Session provenance',
+      description: 'Returns only Host-authenticated ordinary Session provenance.',
+      audiences: ['ui', 'agent', 'system'],
+      scope: 'global',
+      effect: 'compute',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ hint: z.string().optional() }).strict(),
+      outputSchema: z.object({
+        runtimeId: z.string().nullable(),
+        threadId: z.string().nullable()
+      }).strict(),
+      handler: async (_input, context) => ({
+        output: {
+          runtimeId: context.ordinarySession?.runtimeId ?? null,
+          threadId: context.ordinarySession?.threadId ?? null
+        }
+      })
+    })
+  }
+
+  it('accepts provenance only through the Host ordinary Session route', async () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([sessionCapability()]))
+    const request = {
+      actionId: 'session-provenance.inspect',
+      invocationId: 'session-provenance-agent-1',
+      input: { hint: 'runtime-x/thread-from-input' }
+    }
+
+    await expect(broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-x',
+      threadId: 'thread-x'
+    })).resolves.toMatchObject({
+      output: { runtimeId: 'runtime-x', threadId: 'thread-x' }
+    })
+    await expect(broker.invoke(agent, {
+      ...request,
+      invocationId: 'session-provenance-agent-raw'
+    }, {
+      ordinarySession: { runtimeId: 'forged-runtime', threadId: 'forged-thread' }
+    } as never)).resolves.toMatchObject({
+      output: { runtimeId: null, threadId: null }
+    })
+    await expect(broker.invokeOrdinarySession(ui, {
+      ...request,
+      invocationId: 'session-provenance-ui'
+    }, {
+      runtimeId: 'runtime-ui',
+      threadId: 'thread-ui'
+    })).rejects.toSatisfy((error: unknown) => (
+      expectBrokerCode(error, 'invalid_invocation_provenance')
+    ))
+    await expect(broker.invokeOrdinarySession({
+      audience: 'system',
+      callerId: 'system-1'
+    }, {
+      ...request,
+      invocationId: 'session-provenance-system'
+    }, {
+      runtimeId: 'runtime-system',
+      threadId: 'thread-system'
+    })).rejects.toSatisfy((error: unknown) => (
+      expectBrokerCode(error, 'invalid_invocation_provenance')
+    ))
+  })
+
+  it('includes exact ordinary Session identity in mutation idempotency', async () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([sessionCapability()]))
+    const request = {
+      actionId: 'session-provenance.inspect',
+      invocationId: 'session-provenance-stable',
+      input: {}
+    }
+    const first = await broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-a',
+      threadId: 'thread-a'
+    })
+    const replay = await broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-a',
+      threadId: 'thread-a'
+    })
+    expect(first.replayed).toBe(false)
+    expect(replay.replayed).toBe(true)
+    await expect(broker.invokeOrdinarySession(agent, request, {
+      runtimeId: 'runtime-a',
+      threadId: 'thread-b'
+    })).rejects.toSatisfy((error: unknown) => (
+      expectBrokerCode(error, 'idempotency_conflict')
+    ))
+  })
+})
+
 describe('CapabilityRegistry', () => {
   it('atomically binds wire metadata, Zod schemas, and one executable handler', () => {
     const handler = vi.fn(async () => ({ output: { text: 'ok' } }))
@@ -242,6 +340,31 @@ describe('CapabilityRegistry', () => {
       outputSchema: z.object({ ok: z.boolean() }).strict(),
       handler: async () => ({ output: { ok: true } })
     })).toThrow(/Principal transitions/)
+
+    const delegatedBase = {
+      id: 'content.delegated-batch-operation',
+      version: '1',
+      title: 'Delegated batch operation',
+      description: 'Exercises the finite Human-confirmed batch descriptor constraints.',
+      audiences: ['agent', 'system'] as CapabilityAudience[],
+      scope: 'global' as const,
+      effect: 'external-write' as const,
+      approval: 'confirmation' as const,
+      delegatedBatchGrant: 'content.provisioning-batch',
+      concurrency: { revision: 'none' as const, idempotency: 'required' as const },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }
+    expect(() => defineCapability({ ...delegatedBase, audiences: ['agent'] }))
+      .toThrow(/system audience/iu)
+    expect(() => defineCapability({ ...delegatedBase, approval: 'system' }))
+      .toThrow(/cannot delegate system approval/iu)
+    expect(() => defineCapability({
+      ...delegatedBase,
+      audiences: ['ui', 'system'],
+      principalTransition: 'host-authority'
+    })).toThrow(/cannot delegate Host Principal transitions/iu)
   })
 
   it('allows approval-free Agent writes only under explicit resource authority', async () => {
@@ -2079,6 +2202,58 @@ describe('CapabilityBroker', () => {
     })).rejects.toSatisfy((error) => expectBrokerCode(error, 'idempotency_conflict'))
     expect(handler).toHaveBeenCalledOnce()
     expect(JSON.stringify(broker.listAuditRecords())).not.toContain('fixture-secret')
+  })
+
+  it('does not retain an offline-guessable or Broker-stable verifier for sensitive input', async () => {
+    const password = 'fixture-low-entropy-password'
+    const offlineVerifier = createHash('sha256')
+      .update(JSON.stringify({ password }))
+      .digest('hex')
+    const capability = defineCapability({
+      id: 'provider-connection.bind',
+      version: '1',
+      title: 'Bind provider connection',
+      description: 'Validates a provider credential without retaining a reusable verifier.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['sensitive-input'],
+      inputSchema: z.object({ password: z.string().min(1) }).strict(),
+      outputSchema: z.object({ accepted: z.boolean() }).strict(),
+      handler: async () => ({ output: { accepted: true } })
+    })
+    const request = {
+      actionId: capability.descriptor.id,
+      invocationId: 'bind-sensitive-verifier-1',
+      input: { password }
+    }
+    const setSpy = vi.spyOn(Map.prototype, 'set')
+
+    try {
+      await new CapabilityBroker(new CapabilityRegistry([capability])).invoke(ui, request)
+      await new CapabilityBroker(new CapabilityRegistry([capability])).invoke(ui, request)
+
+      const fingerprints = setSpy.mock.calls.flatMap(([, value]) => {
+        if (!value || typeof value !== 'object') return []
+        const fingerprint = Reflect.get(value, 'fingerprint')
+        const promise = Reflect.get(value, 'promise')
+        return typeof fingerprint === 'string' && promise instanceof Promise
+          ? [fingerprint]
+          : []
+      })
+      expect(fingerprints).toHaveLength(2)
+      expect({
+        retainsOfflineVerifier: fingerprints.some((fingerprint) => fingerprint.includes(offlineVerifier)),
+        correlatesAcrossBrokerLifetimes: fingerprints[0] === fingerprints[1]
+      }).toEqual({
+        retainsOfflineVerifier: false,
+        correlatesAcrossBrokerLifetimes: false
+      })
+    } finally {
+      setSpy.mockRestore()
+    }
   })
 
   it('never evicts pending idempotency work or redispatches a failed write', async () => {

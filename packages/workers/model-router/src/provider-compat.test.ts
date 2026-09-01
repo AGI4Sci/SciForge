@@ -8,6 +8,8 @@ import {
   resolveProviderCompatibility,
 } from './provider-compat';
 import {
+  anthropicMessagesToResponses,
+  estimateAnthropicMessagesInputTokens,
   responsesToAnthropicMessages,
   responsesToChatCompletions,
   type JsonObject,
@@ -217,6 +219,417 @@ test('schema normalization preserves cross-schema required constraints through R
   assert.deepEqual(parameters.required, ['path']);
   assert.deepEqual(parameters.allOf, direct.allOf);
   assert.deepEqual(schema.required, ['path']);
+});
+
+test('structured output constraints survive Responses-to-Chat and Responses-to-Anthropic conversion', () => {
+  const outputSchema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+    additionalProperties: false,
+  };
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return the answer',
+    outputSchema,
+  };
+
+  const chat = responsesToChatCompletions(request);
+  assert.deepEqual(chat.response_format, {
+    type: 'json_schema',
+    json_schema: {
+      name: 'sciforge_output',
+      strict: true,
+      schema: outputSchema,
+    },
+  });
+  assert.equal(chat.outputSchema, undefined);
+
+  const anthropic = responsesToAnthropicMessages(request);
+  assert.deepEqual(anthropic.output_config, {
+    format: {
+      type: 'json_schema',
+      schema: outputSchema,
+    },
+  });
+  assert.equal(anthropic.outputSchema, undefined);
+});
+
+test('Anthropic conversion rejects a non-strict native Responses output schema', () => {
+  assert.throws(
+    () => responsesToAnthropicMessages({
+      model: 'neutral-model',
+      input: 'return the answer',
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'best_effort_result',
+          strict: false,
+          schema: {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+          },
+        },
+      },
+    }),
+    /cannot losslessly represent a non-strict Responses output schema/u,
+  );
+});
+
+test('native Responses structured output keeps its default non-strict Chat semantics', () => {
+  const schema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+  };
+  const chat = responsesToChatCompletions({
+    model: 'neutral-model',
+    input: 'return the answer',
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'best_effort_result',
+        schema,
+      },
+    },
+  });
+
+  assert.deepEqual(chat.response_format, {
+    type: 'json_schema',
+    json_schema: {
+      name: 'best_effort_result',
+      strict: false,
+      schema,
+    },
+  });
+});
+
+test('json_object mode survives Responses-to-Chat conversion and fails closed for Anthropic', () => {
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return one JSON object',
+    text: { format: { type: 'json_object' } },
+  };
+
+  assert.deepEqual(responsesToChatCompletions(request).response_format, {
+    type: 'json_object',
+  });
+  assert.throws(
+    () => responsesToAnthropicMessages(request),
+    /Anthropic cannot represent Responses json_object output mode/u,
+  );
+});
+
+test('malformed structured-output strict values fail closed instead of weakening the contract', () => {
+  const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+  assert.throws(
+    () => responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'answer',
+          strict: 'true',
+          schema,
+        },
+      },
+    }),
+    /Responses text\.format strict must be a boolean/u,
+  );
+  assert.throws(
+    () => responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'answer',
+          strict: 1,
+          schema,
+        },
+      },
+    }),
+    /Chat response_format strict must be a boolean/u,
+  );
+});
+
+test('native OpenAI nullable strict values retain their default non-strict semantics', () => {
+  const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+  assert.deepEqual(
+    responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'answer',
+          strict: null,
+          schema,
+        },
+      },
+    }).response_format,
+    {
+      type: 'json_schema',
+      json_schema: { name: 'answer', strict: false, schema },
+    },
+  );
+  assert.deepEqual(
+    responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'answer',
+          strict: null,
+          schema,
+        },
+      },
+    }).response_format,
+    {
+      type: 'json_schema',
+      json_schema: { name: 'answer', strict: false, schema },
+    },
+  );
+});
+
+test('Chat-only JSON Schema formats may omit schema without weakening another wire', () => {
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return the answer',
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'answer',
+        strict: null,
+      },
+    },
+  };
+
+  assert.deepEqual(responsesToChatCompletions(request).response_format, {
+    type: 'json_schema',
+    json_schema: { name: 'answer', strict: false },
+  });
+  assert.throws(
+    () => responsesToAnthropicMessages(request),
+    /cannot represent a Chat JSON Schema without a schema/u,
+  );
+});
+
+test('native OpenAI JSON Schema formats require their documented name', () => {
+  const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+  assert.throws(
+    () => responsesToChatCompletions({
+      input: 'return the answer',
+      text: { format: { type: 'json_schema', schema } },
+    }),
+    /Responses text\.format name is required/u,
+  );
+  assert.throws(
+    () => responsesToChatCompletions({
+      input: 'return the answer',
+      response_format: { type: 'json_schema', json_schema: { schema } },
+    }),
+    /Chat response_format name is required/u,
+  );
+});
+
+test('structured-output schemas reject non-JSON object instances instead of normalizing them to empty objects', () => {
+  const nonJsonValues: unknown[] = [
+    new Date('2026-01-01T00:00:00.000Z'),
+    new Map([['answer', 1]]),
+    new Set(['answer']),
+    /answer/u,
+    new Number(7),
+    new Uint8Array([1, 2, 3]),
+  ];
+  for (const outputSchema of nonJsonValues) {
+    assert.throws(
+      () => responsesToChatCompletions({ input: 'return the answer', outputSchema }),
+      /must contain only plain JSON objects and arrays/u,
+    );
+    assert.throws(
+      () => responsesToChatCompletions({
+        input: 'return the answer',
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'answer',
+            schema: outputSchema,
+          },
+        },
+      }),
+      /must contain only plain JSON objects and arrays/u,
+    );
+  }
+});
+
+test('Anthropic null output format remains an explicit native no-op', () => {
+  const canonical = anthropicMessagesToResponses({
+    model: 'neutral-model',
+    messages: [{ role: 'user', content: 'return the answer' }],
+    output_config: { format: null },
+  });
+  assert.deepEqual(
+    responsesToAnthropicMessages(canonical).output_config,
+    { format: null },
+  );
+});
+
+test('Anthropic input-token estimates include structured output configuration', () => {
+  const base = estimateAnthropicMessagesInputTokens({
+    messages: [{ role: 'user', content: 'x' }],
+  });
+  const configured = estimateAnthropicMessagesInputTokens({
+    messages: [{ role: 'user', content: 'x' }],
+    output_config: {
+      format: {
+        type: 'json_schema',
+        schema: {
+          type: 'object',
+          description: 'structured-contract-'.repeat(1_000),
+        },
+      },
+    },
+  });
+  assert.ok(configured > base + 1_000);
+});
+
+test('structured-output descriptions survive OpenAI conversion and fail closed for Anthropic', () => {
+  const schema = { type: 'object', properties: { answer: { type: 'string' } } };
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return the answer',
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'answer',
+        description: 'Return the final answer object.',
+        strict: true,
+        schema,
+      },
+    },
+  };
+
+  assert.deepEqual(responsesToChatCompletions(request).response_format, {
+    type: 'json_schema',
+    json_schema: {
+      name: 'answer',
+      description: 'Return the final answer object.',
+      strict: true,
+      schema,
+    },
+  });
+  assert.throws(
+    () => responsesToAnthropicMessages(request),
+    /Anthropic cannot represent a structured-output description/u,
+  );
+});
+
+test('provider-neutral outputSchema stays canonical when native Responses format is also present', () => {
+  const hostSchema = {
+    type: 'object',
+    properties: { host: { type: 'string' } },
+    required: ['host'],
+  };
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return the answer',
+    outputSchema: hostSchema,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'native_result',
+        strict: true,
+        schema: hostSchema,
+      },
+    },
+  };
+
+  assert.deepEqual(
+    (responsesToChatCompletions(request).response_format as JsonObject).json_schema,
+    { name: 'sciforge_output', strict: true, schema: hostSchema },
+  );
+  assert.deepEqual(
+    responsesToAnthropicMessages(request).output_config,
+    { format: { type: 'json_schema', schema: hostSchema } },
+  );
+});
+
+test('conflicting structured-output representations fail closed', () => {
+  assert.throws(
+    () => responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      outputSchema: {
+        type: 'object',
+        properties: { host: { type: 'string' } },
+        required: ['host'],
+      },
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'native_result',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: { native: { type: 'string' } },
+            required: ['native'],
+          },
+        },
+      },
+    }),
+    /Conflicting structured-output contracts/u,
+  );
+});
+
+test('explicit text output conflicts with structured-output representations', () => {
+  const schema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+  };
+  assert.throws(
+    () => responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      outputSchema: schema,
+      text: { format: { type: 'text' } },
+    }),
+    /Conflicting structured-output contracts/u,
+  );
+  assert.throws(
+    () => responsesToChatCompletions({
+      model: 'neutral-model',
+      input: 'return the answer',
+      text: { format: { type: 'json_object' } },
+      response_format: { type: 'text' },
+    }),
+    /Conflicting structured-output contracts/u,
+  );
+});
+
+test('malformed native Responses JSON Schema fails closed before protocol fallback', () => {
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: 'return the answer',
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'invalid_result',
+        strict: true,
+        schema: [],
+      },
+    },
+  };
+
+  assert.throws(
+    () => responsesToChatCompletions(request),
+    /Responses text\.format JSON Schema must be an object/u,
+  );
+  assert.throws(
+    () => responsesToAnthropicMessages(request),
+    /Responses text\.format JSON Schema must be an object/u,
+  );
 });
 
 test('schema normalization preserves prototype-shaped names without polluting prototypes', () => {

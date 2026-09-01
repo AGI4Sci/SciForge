@@ -394,6 +394,41 @@ export type DiagramLayerManifest = {
 export type ImageGenerationProvider = 'image-endpoint' | 'placeholder'
 export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
 
+/**
+ * Persisted model-side execution inputs captured beside every generated
+ * image.  Model rendering is stochastic, so replay means repeating the same
+ * governed request rather than promising byte-identical pixels.
+ */
+export type ImageGenerationModelExecutionV1 = {
+  schemaVersion: 1
+  provider: ImageGenerationProvider
+  model: {
+    /** Public Model Router identity; private provider routing never leaks. */
+    id: string
+    version: string
+  }
+  effectivePrompt: string
+  effectivePromptHash: string
+  parameters: {
+    mode: ImageGenerationMode
+    size: ImageSize
+    outputFormat: ImageOutputFormat
+    negativePrompt?: string
+    stylePreset?: string
+    referencePath?: string
+    promptProfile?: ImageGenerationRecipe['promptProfile']
+  }
+  renderer: {
+    id: 'sciforge-image-generation-mcp'
+    version: string
+  }
+  replay: {
+    supported: true
+    recipeHash: string
+    exactOutputExpected: boolean
+  }
+}
+
 export type ImageGenerationRecipe = {
   mode: ImageGenerationMode
   prompt: string
@@ -513,6 +548,7 @@ export type ImageGenerationRenderResult =
       componentBasePath?: string
       componentAssetPaths?: string[]
       provider: ImageGenerationProvider
+      modelExecution: ImageGenerationModelExecutionV1
       warnings: string[]
     }
   | {
@@ -719,5 +755,6 @@ export type ImageGenerationManifest = {
   componentAssetPaths?: string[]
   promptProfile?: ImageGenerationRecipe['promptProfile']
   provider: ImageGenerationProvider
+  modelExecution?: ImageGenerationModelExecutionV1
   warnings: string[]
 }

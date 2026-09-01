@@ -3,6 +3,9 @@
 本文说明统一协作功能的日常使用方式。运维部署、备份和故障恢复见
 [香港 ECS 与 Zulip 运维手册](./operations/zulip-aliyun-deployment.zh-CN.md)。
 
+只需要完成手机配对、私人 Channel / Topic 绑定和表情审批的普通用户，可直接阅读
+[SciForge Zulip 手机协作操作手册](./zulip-phone-link-user-manual.zh-CN.md)。
+
 > 普通用户不需要选择、切换或理解任何 Git 分支。管理员提供可安装的 SciForge 桌面版、协作服务
 > 地址和个人 Zulip 账号后，按本文操作即可。只有从源码启动桌面端的开发者才需要接触 Git。
 
@@ -11,7 +14,7 @@
 开始前只向管理员确认三项信息：
 
 1. SciForge 桌面安装包或已安装的桌面应用；
-2. 协作服务地址，例如 `https://chat.sciforge.cn/collaboration`；
+2. 协作服务地址，例如测试环境的 `https://cloud-test.sciforge.cn`；
 3. 自己的 Zulip 账号、Zulip Server 地址以及允许使用的 channel / Topic。
 
 然后完成四步：安装并登录**官方 Zulip 手机 App** → 启动 SciForge 桌面端 → 在桌面“协作”面板连接
@@ -20,9 +23,10 @@
 当前手机端就是官方 Zulip App，不是 SciForge 仓库内开发或打包的自研手机 App；用户无需编译、安装
 仓库中的任何移动端工程。
 
-启用“托管私人 Channel”的组织还可以由管理员为每位用户配置一个私人、受保护历史的 Channel。Channel
-只有该用户与 SciForge Bot；用户在手机中手工创建项目 Topic，再在 Desktop 中分别把每个 Topic 连接到
-不同的固定 Session。普通 Bot 私聊仍只用于 `/bind`，不能控制 Desktop Agent。
+用户通过手机浏览器或电脑浏览器打开 Zulip Web，创建一个或多个私人 Channel，并把当前已验证用户与 SciForge Bot 都加入成员。Zulip 原生手机 App 当前不能创建 Channel。
+SciForge 只发现并绑定满足这两个成员条件的私人 Channel，不创建、修复或归档 Channel。每个 Channel 首次
+绑定时会被当前 Desktop 安装独占；即使另一台电脑连接同一个 Zulip 账号，也不能复用该 Channel、Topic 或
+固定 Session。普通 Bot 私聊仍只用于 `/bind`，不能控制 Desktop Agent。
 
 ## 版本与发布关系
 
@@ -39,11 +43,12 @@
 | --- | --- | --- |
 | User | 稳定的人类身份；Project 成员、Agent 所有者和真人问题都引用它 | 云端协作服务 |
 | 手机端点 | 已验证的个人 Zulip 账号；它代表用户发消息，但不是本机管理员 | 云端绑定 + Zulip 身份 |
-| Agent | 一台明确属于某名用户的 SciForge；每台机器有独立、可撤销的设备身份 | 云端目录 + 本机 secret store |
+| Agent | 一台明确属于某名用户、运行在某台 Device 上的执行身份 | 云端目录 + Identity 私有 secret store |
 | 个人 Session | 一台固定 Agent 上的固定 runtime/thread；可投影到一个手机 Topic | 本地 AgentRuntime thread |
 
-Project 是多人共享的目标和任务账本。Project Topic 只把带真实发送者身份的输入交给唯一
-Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 Agent。
+Project 是多人共享的目标和任务账本。Project Topic 只把带真实发送者身份的输入交给该 Project
+唯一的 Coordinator，不是任何成员的私人 Session。Coordinator 派发 Task 时选择 Worker User；
+Cloud 才会把同一 Task Offer 通知给该 User 当前可用的所有 Device Agent。
 
 ## 2. 首次准备
 
@@ -67,8 +72,8 @@ Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 
 
 1. 启动新版 SciForge，并打开任意 Session；手机绑定本身不要求先选择 Project。
 2. 点击工具栏的协作个体图标，打开右侧“协作”面板。
-3. 在“协作服务地址”填写管理员提供的地址；当前部署示例为
-   `https://chat.sciforge.cn/collaboration`。点击“保存并连接”。
+3. 在“协作服务地址”填写管理员提供的 Cloud 地址；测试环境示例为
+   `https://cloud-test.sciforge.cn`。点击“保存并连接”。
 4. 状态应从“连接中”变为“已连接”。如果显示“连接异常”，不要反复注册；先看“队列与恢复”的明确错误。
 
 ## 3. 绑定个人手机端点
@@ -85,29 +90,33 @@ Coordinator，不是任何成员的私人 Session，也不会广播唤醒全部 
 
 ### 3.1 私人 Channel 与多个固定 Session（启用后）
 
-1. 在协作面板的“托管私人 Channel”中确认状态为 active，隐私、历史、成员、发言和 Topic 检查均通过。
-2. 在手机 Zulip 的该 Channel 中手工创建项目 Topic；SciForge Bot 不会主动创建项目 Topic。
-3. 回到 Desktop 点击“刷新手机 Topic”。下拉列表会标明每个 Topic 是“未绑定”还是已经绑定到某个
-   Session；为每个未绑定 Topic 分别选择当前或新 Session。系统会阻止同一 Topic 重复绑定。
-4. 在每个 Topic 发一条无敏感内容的测试消息，确认回复回到原 Topic；当前 Session 顶部应持续显示
+每台电脑完成配对并注册自己的 Agent 后，用户应在 Zulip Web 中为该电脑创建新的私人 Channel。新电脑
+可以继续使用原 Zulip 账号和同一个云端 User/手机端点，但不会继承旧电脑的 Channel、Topic、Projection 或
+本地 Session。旧 Channel 与其中的历史消息仍属于旧电脑的安装身份。
+
+1. 在手机浏览器或电脑浏览器打开 Zulip Web，点击“新建 Channel”，把可见性设为私人，并加入当前已验证用户与 SciForge Bot。原生手机 App 当前不能创建 Channel。
+2. 可以为当前电脑创建多个私人 Channel；在各 Channel 中手工创建 Topic。SciForge 不会创建 Channel 或 Topic。
+3. 回到 Desktop 点击“发现私人 Channel”。公开 Channel、成员列表不可验证，或缺少用户/Bot 任一成员的
+   Channel 都不会出现。下拉列表会显示所有合格私人 Channel 中的 Topic。
+4. 为每个未绑定 Topic 选择一个 Session。一个 Session 一旦绑定某 Topic，就永久占用该映射；暂停后仍不能
+   换绑，关闭历史记录也不能恢复或改绑。另一个手机登录身份同样不能改写本机既有 Session 绑定。
+5. 在每个 Topic 发一条无敏感内容的测试消息，确认回复回到原 Topic；当前 Session 顶部应持续显示
    对应的 Channel / Topic。内部 runtimeId/threadId 仅在“技术详情”中提供给诊断人员。
-5. “检查状态”执行真实只读核验；发现 drifted 时不要自行改权限，联系管理员使用受控的“修复”操作。
 
 Topic 名称可以调整，但不要删除后以同名 Topic 代替原 Topic；路由依据稳定 locator，不是显示名称。私人
 Channel 只隔离普通未授权用户，不是端到端加密。Channel 内所有 Topic 共享同一阅读权限；需要不同成员
-权限的项目必须使用不同私人 Channel。详细管理员流程见
-[每用户私人 Zulip Channel 运维说明](./operations/zulip-private-channel-provisioning.zh-CN.md)。
+权限的项目必须使用不同私人 Channel。
 
-## 4. 注册并选择主要 Agent
+## 4. 确认当前 Device Agent
 
 手机端点验证后：
 
-1. 点击“注册这台 SciForge”，输入便于识别的设备名称。
-2. 确认参与者卡片中的 Agent owner 是自己。
-3. 如果拥有多台 Agent，点击“设为主要 Agent”明确选择默认机器。
+1. 确认当前 Desktop Device 已处于 active，且本机 Agent Runtime 可用。
+2. Identity 会自动 ensure 一个以该 Device 名称显示的 Agent；确认参与者卡片中的 Agent owner 是自己。
+3. 多台 Device 会各自拥有独立 Agent，不需要也不存在“主要 Agent”选择。
 
-主要 Agent 离线时，消息会保持有界等待或返回明确离线状态。系统不会选择最近在线机器，也不会
-把工作交给其他用户的 Agent。
+个人 Session 始终由当前 Device Agent 运行。Task Offer 则发给被选择的 Worker User；该 User 任一
+eligible Device 都可以回复，第一台原子认领成功的 Device 才成为这次 Task Execution 的执行者。
 
 ## 5. 把现有 Session 绑定到手机 Topic
 
@@ -124,13 +133,7 @@ Channel 只隔离普通未授权用户，不是端到端加密。Channel 内所�
 建立映射后，切换桌面焦点、打开其他 Project 或修改 Topic 中文标题，都不会改变该映射。一个 Topic
 只投影一个固定 Session；需要另一个上下文时应建立另一个 projection。
 
-可用操作：
-
-- “修改映射名称”只改 SciForge 中的显示名，不会重命名手机 Topic或改变 projection ID；
-- “暂停/恢复”控制新消息处理；
-- “绑定到当前 Session”会明确显示目标手机 Topic和当前 Desktop Session，确认后才更新固定映射；
-- “关闭”终止该远端入口，之后的消息不得继续触发执行；
-- “编辑允许发送者”不会改变实际执行 Agent，界面会持续显示 Agent owner。
+映射建立后，Session UI 只提供“暂停/恢复”控制新消息处理；没有解绑、关闭、恢复或换绑入口。
 
 ## 6. 双向消息规则
 
@@ -153,9 +156,10 @@ token、原始工具日志、敏感命令参数、编辑、删除、reaction 或
 
 ## 7. Project 与 Task
 
-- Project 成员是 User；Coordinator 和 Task assignee 是 Agent，二者不可互换。
-- 每个 Project 同时只有一个 active Coordinator。只有它能维护正式计划、创建或改派 Task、接受结果。
-- Worker 只处理明确分配给自己的 Task，可提交结果、观察或子任务建议，不能直接改写全局计划。
+- Project 成员和 Task Offer 目标都是 User；Agent 是 Device 上的执行身份，二者不可互换。
+- 创建 Project 的 User，其当前 Device Agent 自动成为该 Project 的 Coordinator；这不是账号级永久角色。每个 Project 同时只有一个 active Coordinator，只有它能维护正式计划、创建或改派 Task、接受结果。
+- Coordinator 只选择 Worker User。Cloud 向该 User 的 eligible Device Agent 广播同一 Offer，第一台成功认领的 Agent 才成为精确 Task Execution assignee。
+- 某台 Device 点击“忽略”只影响本机，不会代表该 User 全局拒绝；其他 Device 仍可认领。Worker execution 可提交结果、观察或子任务建议，不能直接改写全局计划。
 - Coordinator 转交必须由有权用户显式完成；旧 Coordinator 随后写入会被拒绝。
 - Project Topic 中每条输入都保留 senderUserId，并进入 Project 队列；它不会进入成员的私人 Session。
 
@@ -172,11 +176,16 @@ HumanNeeded 必须指定 targetUserId，只投递给该用户的 active 手机�
 凭据使用始终由本地唯一 Capability Broker 持有最终状态。只有 Broker 明确标记为可远程一次性审批的
 请求，才会在原 Channel / Topic 收到短期审批卡片；默认策略为不可远程审批。
 
-审批时只能在原 Topic 严格回复卡片给出的 `1 AP1-…`（仅本次允许）或 `2 AP1-…`（仅本次拒绝）。
-裸 `1`、`2`、`yes`、`allow`、`deny` 和普通 Bot 私聊都不会形成审批。短期编号只能使用一次且默认
-5 分钟过期；Server 还会核对已认证发送者、Endpoint、Topic locator、Projection、固定 Session、turn
-和 capability request。卡片终态会更新为已允许、已拒绝、已过期或需回到 Desktop 处理；消息更新失败
-只会走持久重试或追加安全通知，不会重复执行决定。
+当请求不具备手机审批权限时，原 Topic 仍会收到一条单行通知：`需在 SciForge 电脑端审批：<安全摘要>`。
+该通知不带 👍/👎，添加任何 reaction 都不会产生权限决定。
+
+可手机审批的通知只显示两行：`需审批（5 分钟）：<安全摘要>` 和 `👍 允许一次　👎 拒绝`。Generic Bot
+会在原卡片下预置 👍 和 👎。目标用户只需点击已有的 👍（仅本次允许）
+或 👎（仅本次拒绝），不需要复制编号或输入命令。删除 reaction、其他 emoji、裸 `1`、`2`、`yes`、
+`allow`、`deny` 和普通 Bot 私聊都不会形成审批。卡片默认 5 分钟过期；Server 会按精确卡片 message ID
+核对已认证发送者、Endpoint、Topic locator、Projection、固定 Session、turn 和 capability request。第一项
+有效决定获胜，之后的 reaction 不能覆盖或撤销。卡片终态会更新为已允许、已拒绝、已过期或需回到
+Desktop 处理；消息更新失败只会走持久重试或追加安全通知，不会重复执行决定。
 
 ## 9. 断线与恢复
 
@@ -196,8 +205,8 @@ HumanNeeded 必须指定 targetUserId，只投递给该用户的 active 手机�
 3. 确认最终 Agent 回复只在原 Topic 出现一次。
 4. 从桌面同一 Session 再发送一条唯一标记，确认手机看到 user message 和最终回复。
 5. 让桌面暂时离线，手机再发一条消息；重新上线后确认只执行一次且顺序正确。
-6. 触发一项测试 policy 明确允许远程一次性审批的无副作用能力，确认只有原 Topic 中带完整短期编号的
-   owner 回复可以决定；再确认默认不可远程审批的能力仍要求回到 Desktop。
+6. 触发一项测试 policy 明确允许远程一次性审批的无副作用能力，确认只有 owner 点击原审批卡片下的
+   👍 或 👎 可以决定；再确认默认不可远程审批的能力仍要求回到 Desktop。
 7. 触发一个包含可见中间进展的测试 turn，确认中间进展默认折叠、最终报告直接显示，且手机端没有模型
    推理或原始工具日志。
 

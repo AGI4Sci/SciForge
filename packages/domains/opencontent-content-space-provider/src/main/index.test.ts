@@ -7,13 +7,14 @@ import {
   defineProviderInstanceDirectoryEntry
 } from '@sciforge/domain-sdk/provider-composition'
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   OPENCONTENT_PROVIDER_KIND
 } from '@sciforge/domain-opencontent-connector/contract'
 import type { OpenContentContentSpaceFacade } from '@sciforge/domain-opencontent-connector/main-contract'
 import { openContentIdentityIdSchema } from '@sciforge/domain-opencontent-connector/team-administration-contract'
 
 import { createDomainMainEntry } from './index.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 describe('OpenContent Content Space Provider factory', () => {
   it('keeps identity binding construction outside the public main-entry arguments', () => {
@@ -51,12 +52,13 @@ describe('OpenContent Content Space Provider factory', () => {
         bindingRevision: 'b'.repeat(64)
       }),
       useTeamAdministration,
+      useHierarchyProofSession: vi.fn(),
       listRootFolders: vi.fn(),
       listFolderEntries: vi.fn(),
       observeEntry: vi.fn(),
       createFolder: vi.fn(),
       uploadNewFile: vi.fn(),
-      downloadFile: vi.fn()
+      authorizeDownload: vi.fn()
     }
     const acquireFacade = vi.fn()
     const acquire: NonNullable<DomainMainHost['internalServices']>['acquire'] =
@@ -123,8 +125,15 @@ describe('OpenContent Content Space Provider factory', () => {
     expect(binding && Object.keys(binding)).toEqual(['administration'])
   })
 
-  it('rejects a second same-kind Instance before acquiring the credential-bearing facade', () => {
-    const acquire = vi.fn()
+  it('binds the Provider to the exact installed same-kind Instance without a demo-ID branch', () => {
+    const acquireCall = vi.fn()
+    const acquire: NonNullable<DomainMainHost['internalServices']>['acquire'] =
+      <Service extends object>() => {
+        acquireCall()
+        return Object.freeze({
+          useSupplierTransport: undefined
+        }) as unknown as Service
+      }
     const host: DomainMainHost = Object.freeze({
       getUserDataDir: () => '/private/tmp/sciforge-opencontent-factory-test',
       defineCapability: (options: unknown) => options,
@@ -142,7 +151,7 @@ describe('OpenContent Content Space Provider factory', () => {
       displayName: 'Secondary OpenContent'
     })
 
-    expect(() => factory.createProvider({
+    const provider = factory.createProvider({
       owner: Object.freeze({
         packageName: '@sciforge/domain-opencontent-content-space-provider',
         moduleId: 'sciforge.opencontent-content-space-provider',
@@ -151,7 +160,9 @@ describe('OpenContent Content Space Provider factory', () => {
       }),
       instance: secondInstance,
       ports: Object.freeze({})
-    })).toThrow('Provider Instance is not installed')
-    expect(acquire).not.toHaveBeenCalled()
+    }) as ContentSpaceProvider
+
+    expect(provider.contractVersion).toBe('4.0.0')
+    expect(acquireCall).toHaveBeenCalledOnce()
   })
 })

@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import { createZulipHumanEndpointProvider, formatZulipOutboundContent } from './adapter.js'
 import type { ZulipDeliveryLedger, ZulipDeliveryRecord } from './delivery.js'
 import { ZulipProviderError } from './errors.js'
+import type { ZulipProviderDiagnostic } from './http-client.js'
 import { createZulipLocator } from './locator.js'
 
 const resolveLocator = async (coordinates: {
@@ -223,8 +224,9 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.ok(unsubscribeIndex > archiveIndex)
     assert.equal(mutations.some((entry) => entry.method === 'PATCH' && entry.body.has('is_archived')), false)
   })
-  it('accepts the strict Zulip 12.2 register and events response envelopes', async () => {
+  it('accepts Zulip 12.2 compatibility metadata while registering a replacement event queue', async () => {
     const seenPaths: string[] = []
+    const diagnostics: ZulipProviderDiagnostic[] = []
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://example.invalid/team-chat/',
       botEmail: 'service-bot@example.invalid'
@@ -234,6 +236,7 @@ describe('ZulipHumanEndpointProvider', () => {
       reconcileDelivery: async () => ({ status: 'not_sent' }),
       resolveLocator,
       verifyIdentity: rejectIdentity,
+      logger: (diagnostic) => { diagnostics.push(diagnostic) },
       now: () => new Date('2026-08-15T00:00:00.000Z'),
       fetch: async (input) => {
         const url = new URL(input)
@@ -247,7 +250,8 @@ describe('ZulipHumanEndpointProvider', () => {
             idle_queue_timeout_secs: 600,
             zulip_version: '12.2',
             zulip_feature_level: 481,
-            zulip_merge_base: '12.2'
+            zulip_merge_base: '12.2',
+            ignored_parameters_unsupported: ['fetch_event_types']
           })
         }
         if (url.pathname === '/team-chat/api/v1/events') {
@@ -255,6 +259,7 @@ describe('ZulipHumanEndpointProvider', () => {
             result: 'success',
             msg: '',
             queue_id: 'queue-zulip-12-2',
+            ignored_parameters_unsupported: ['dont_block'],
             events: [{ id: 0, type: 'heartbeat' }]
           })
         }
@@ -284,6 +289,11 @@ describe('ZulipHumanEndpointProvider', () => {
       '/team-chat/api/v1/register',
       '/team-chat/api/v1/events'
     ])
+    assert.deepEqual(diagnostics, [{
+      level: 'info',
+      code: 'zulip.events.queue_connected',
+      message: 'Zulip event queue connected.'
+    }])
   })
 
   it('authenticates through a realm subpath and maps strict inbound events while filtering self echoes', async () => {
@@ -318,7 +328,7 @@ describe('ZulipHumanEndpointProvider', () => {
         }
         if (url.pathname === '/team-chat/api/v1/register') {
           const body = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams()
-          assert.deepEqual(JSON.parse(body.get('event_types') ?? '[]'), ['message', 'update_message'])
+          assert.deepEqual(JSON.parse(body.get('event_types') ?? '[]'), ['message', 'update_message', 'reaction'])
           registerCount += 1
           return json({
             result: 'success',
@@ -618,6 +628,57 @@ describe('ZulipHumanEndpointProvider', () => {
       '/team/api/v1/users/me/12/topics',
       '/team/api/v1/users/me/12/topics'
     ])
+  })
+
+  it('discovers Topics only from native private Channels containing the verified user and Bot', async () => {
+    const requested: string[] = []
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://example.invalid/team/',
+      botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator,
+      verifyIdentity: rejectIdentity,
+      fetch: async (input) => {
+        const url = new URL(input)
+        requested.push(`${url.pathname}?${url.searchParams.toString()}`)
+        if (url.pathname.endsWith('/api/v1/users/me')) return json({
+          result: 'success', user_id: 99, email: 'service-bot@example.invalid',
+          full_name: 'Service Bot', is_bot: true
+        })
+        if (url.pathname.endsWith('/api/v1/users/me/subscriptions')) return json({
+          result: 'success', subscriptions: [
+            { stream_id: 12, name: '电脑 A', invite_only: true, is_web_public: false, subscribers: [42, 99] },
+            { stream_id: 13, name: '公开 Channel', invite_only: false, is_web_public: true, subscribers: [42, 99] },
+            { stream_id: 14, name: '缺少 Bot', invite_only: true, is_web_public: false, subscribers: [42] },
+            { stream_id: 15, name: '成员未知', invite_only: true, is_web_public: false }
+          ]
+        })
+        if (url.pathname.endsWith('/api/v1/users/me/12/topics')) return json({
+          result: 'success', topics: [{ name: '实验 Topic', max_id: 100 }]
+        })
+        throw new Error(`unexpected route: ${url.pathname}`)
+      }
+    })
+
+    const page = await provider.listLocators({
+      protocolVersion: '1.0', type: 'provider.locator.list', realmId: provider.realmId,
+      ownerIdentity: { type: 'provider_identity', provider: 'zulip', realmId: provider.realmId,
+        providerUserId: '42' },
+      limit: 50
+    })
+
+    assert.deepEqual(page.locators.map((locator) => ({
+      containerId: locator.containerId,
+      containerDisplayName: locator.containerDisplayName,
+      topicDisplayName: locator.topicDisplayName
+    })), [{ containerId: '12', containerDisplayName: '电脑 A', topicDisplayName: '实验 Topic' }])
+    assert.equal(requested.some((path) => path.includes('include_subscribers=true')), true)
+    assert.equal(requested.some((path) => path.includes('/13/topics')), false)
+    assert.equal(requested.some((path) => path.includes('/14/topics')), false)
+    assert.equal(requested.some((path) => path.includes('/15/topics')), false)
   })
 
   it('keeps one stable topic identity across a real-shape external rename, move, and following message', async () => {
@@ -1130,87 +1191,9 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.equal(requests[0]?.get('topic'), null)
   })
 
-  it('emits a deduplicable HumanAnswer event from a strict bound-topic command', async () => {
-    let registerCount = 0
-    const provider = createZulipHumanEndpointProvider({
-      realmUrl: 'https://chat.example.invalid',
-      botEmail: 'service-bot@example.invalid'
-    }, {
-      resolveCredential: async () => ({ apiKey: randomUUID() }),
-      deliveryLedger: new MemoryLedger(),
-      reconcileDelivery: async () => ({ status: 'not_sent' }),
-      resolveLocator,
-      verifyIdentity: rejectIdentity,
-      now: () => new Date('2026-08-15T00:00:00.000Z'),
-      fetch: async () => {
-        registerCount += 1
-        return json({
-          result: 'success',
-          msg: '',
-          queue_id: `queue-human-answer-${registerCount}`,
-          last_event_id: 70,
-          events: [{
-            id: 71,
-            type: 'message',
-            message: rawMessage({
-              id: 1_100,
-              senderId: 42,
-              senderEmail: 'human@example.invalid',
-              senderName: '研究员甲',
-              content: 'sciforge-answer hrq_abcdefghijkl 3 继续执行\n优先处理样本甲'
-            })
-          }]
-        })
-      }
-    })
-
-    const first = await provider.registerEventQueue()
-    const replayed = await provider.registerEventQueue()
-
-    assert.equal(first.events.length, 1)
-    assert.equal(replayed.events.length, 1)
-    const event = first.events[0]
-    assert.equal(event?.type, 'provider.human_answer.responded')
-    if (event?.type !== 'provider.human_answer.responded') assert.fail('expected HumanAnswer event')
-    assert.deepEqual(event, {
-      protocolVersion: '1.0',
-      provider: 'zulip',
-      type: 'provider.human_answer.responded',
-      eventId: event.eventId,
-      eventCursor: event.eventCursor,
-      occurredAt: '2026-08-15T00:00:00.000Z',
-      identity: {
-        type: 'provider_identity',
-        provider: 'zulip',
-        realmId: provider.realmId,
-        providerUserId: '42',
-        displayName: '研究员甲'
-      },
-      locator: {
-        type: 'provider_locator',
-        provider: 'zulip',
-        realmId: provider.realmId,
-        containerId: '12',
-        topicId: 'stable-12-蛋白质结构',
-        containerDisplayName: '研究协作',
-        topicDisplayName: '蛋白质结构'
-      },
-      providerMessageId: '1100',
-      humanRequestId: 'hrq_abcdefghijkl',
-      requestRevision: 3,
-      answer: '继续执行\n优先处理样本甲'
-    })
-    assert.equal(replayed.events[0]?.eventId, event.eventId)
-    assert.equal(
-      replayed.events[0]?.type === 'provider.human_answer.responded'
-        ? replayed.events[0].providerMessageId
-        : undefined,
-      event.providerMessageId
-    )
-  })
-
-  it('keeps malformed HumanAnswer commands as ordinary messages and requires a unique locator for valid answers', async () => {
-    const malformed = [
+  it('emits only a non-authoritative HumanAnswer candidate and keeps malformed text ordinary', async () => {
+    const messages = [
+      'sciforge-answer hrq_abcdefghijkl 3 继续执行\n优先处理样本甲',
       'SCIFORGE-ANSWER hrq_abcdefghijkl 1 不应识别',
       'sciforge-answer hrq_abcdefghijkl 0 修订号无效',
       'sciforge-answer hrq_short 1 请求 ID 无效'
@@ -1227,9 +1210,9 @@ describe('ZulipHumanEndpointProvider', () => {
       fetch: async () => json({
         result: 'success',
         msg: '',
-        queue_id: 'queue-malformed-human-answer',
+        queue_id: 'queue-ordinary-topic-messages',
         last_event_id: 80,
-        events: malformed.map((content, index) => ({
+        events: messages.map((content, index) => ({
           id: 81 + index,
           type: 'message',
           message: rawMessage({
@@ -1243,42 +1226,28 @@ describe('ZulipHumanEndpointProvider', () => {
       })
     })
     const ordinary = await ordinaryProvider.registerEventQueue()
-    assert.equal(ordinary.events.length, malformed.length)
-    assert.ok(ordinary.events.every((event) => event.type === 'provider.message.created'))
-
-    const unboundProvider = createZulipHumanEndpointProvider({
-      realmUrl: 'https://chat.example.invalid',
-      botEmail: 'service-bot@example.invalid'
+    assert.equal(ordinary.events.length, messages.length)
+    const candidate = ordinary.events[0]
+    assert.equal(candidate?.type, 'provider.human_answer.candidate')
+    if (candidate?.type !== 'provider.human_answer.candidate') assert.fail('expected HumanAnswer candidate')
+    assert.deepEqual({
+      identity: candidate.identity,
+      locator: candidate.locator,
+      providerMessageId: candidate.providerMessageId,
+      humanRequestId: candidate.humanRequestId,
+      requestRevision: candidate.requestRevision,
+      answer: candidate.answer
     }, {
-      resolveCredential: async () => ({ apiKey: randomUUID() }),
-      deliveryLedger: new MemoryLedger(),
-      reconcileDelivery: async () => ({ status: 'not_sent' }),
-      resolveLocator: async () => {
-        throw new ZulipProviderError('locator_missing', 'answer source is unbound')
-      },
-      verifyIdentity: rejectIdentity,
-      fetch: async () => json({
-        result: 'success',
-        msg: '',
-        queue_id: 'queue-unbound-human-answer',
-        last_event_id: 90,
-        events: [{
-          id: 91,
-          type: 'message',
-          message: rawMessage({
-            id: 1_300,
-            senderId: 42,
-            senderEmail: 'human@example.invalid',
-            senderName: '研究员甲',
-            content: 'sciforge-answer hrq_abcdefghijkl 1 不得跨越未绑定 Topic'
-          })
-        }]
-      })
+      identity: { type: 'provider_identity', provider: 'zulip', realmId: ordinaryProvider.realmId,
+        providerUserId: '42', displayName: '研究员甲' },
+      locator: await resolveLocator({ provider: 'zulip', realmId: ordinaryProvider.realmId,
+        containerId: '12', topicDisplayName: '蛋白质结构' }),
+      providerMessageId: '1200', humanRequestId: 'hrq_abcdefghijkl', requestRevision: 3,
+      answer: '继续执行\n优先处理样本甲'
     })
-    await assert.rejects(
-      unboundProvider.registerEventQueue(),
-      (error) => error instanceof ZulipProviderError && error.code === 'locator_missing'
-    )
+    assert.deepEqual(ordinary.events.slice(1).map((event) => (
+      event.type === 'provider.message.created' ? event.text : undefined
+    )), messages.slice(1))
   })
 
   it('updates only the referenced Zulip Bot message through the provider-neutral update contract', async () => {
@@ -1323,18 +1292,65 @@ describe('ZulipHumanEndpointProvider', () => {
     assert.equal(requests[0]?.body.get('content'), '本次权限审批已处理。')
   })
 
-  it('accepts only an exact Topic-scoped 1/2 plus AP1 approval command', async () => {
-    const fixtureReference = `AP1-${'A'.repeat(20)}`
-    const messages = [
-      ` 1 ${fixtureReference.toLowerCase()} `,
-      `2 ${fixtureReference}`,
-      '1',
-      '2',
-      'y',
-      'yes',
-      `allow ${fixtureReference}`,
-      `1 AP1-${'0'.repeat(20)}`
-    ]
+  it('ensures both provider-neutral approval actions with stable Zulip unicode emoji codes', async () => {
+    const requests: Array<{ path: string; method: string; body: URLSearchParams }> = []
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid', botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }), deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }), resolveLocator, verifyIdentity: rejectIdentity,
+      fetch: async (url, init) => {
+        requests.push({
+          path: new URL(url).pathname,
+          method: init?.method ?? 'GET',
+          body: new URLSearchParams(String(init?.body ?? ''))
+        })
+        return json({ result: 'success', msg: '' })
+      }
+    })
+    const locator = {
+      type: 'provider_locator' as const, provider: 'zulip' as const, realmId: provider.realmId,
+      containerId: '12', topicId: 'topic-approval', topicDisplayName: '审批'
+    }
+    for (const action of ['allow_once', 'deny_once'] as const) {
+      const result = await provider.send({
+        protocolVersion: '1.0', type: 'provider.ensure.message_action', locator,
+        providerMessageId: '31415', clientMessageId: `ensure-${action}`, action
+      })
+      assert.equal(result.type, 'provider.send.succeeded')
+    }
+    assert.deepEqual(requests.map((request) => request.path), [
+      '/api/v1/messages/31415/reactions', '/api/v1/messages/31415/reactions'
+    ])
+    assert.ok(requests.every((request) => request.method === 'POST'))
+    assert.deepEqual(requests.map((request) => request.body.get('emoji_code')), ['1f44d', '1f44e'])
+    assert.deepEqual(requests.map((request) => request.body.get('emoji_name')), ['+1', '-1'])
+    assert.ok(requests.every((request) => request.body.get('reaction_type') === 'unicode_emoji'))
+  })
+
+  it('treats REACTION_ALREADY_EXISTS as idempotent action success', async () => {
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid', botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }), deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }), resolveLocator, verifyIdentity: rejectIdentity,
+      fetch: async () => json(
+        { result: 'error', msg: 'Reaction already exists', code: 'REACTION_ALREADY_EXISTS' },
+        { status: 400 }
+      )
+    })
+    const result = await provider.send({
+      protocolVersion: '1.0', type: 'provider.ensure.message_action',
+      locator: {
+        type: 'provider_locator', provider: 'zulip', realmId: provider.realmId,
+        containerId: '12', topicId: 'topic-approval', topicDisplayName: '审批'
+      },
+      providerMessageId: '31415', clientMessageId: 'ensure-existing', action: 'allow_once'
+    })
+    assert.equal(result.type, 'provider.send.succeeded')
+  })
+
+  it('normalizes only owner-added stable unicode approval reactions', async () => {
     const provider = createZulipHumanEndpointProvider({
       realmUrl: 'https://chat.example.invalid',
       botEmail: 'service-bot@example.invalid'
@@ -1349,30 +1365,80 @@ describe('ZulipHumanEndpointProvider', () => {
         msg: '',
         queue_id: 'queue-remote-approval',
         last_event_id: 200,
-        events: messages.map((content, index) => ({
-          id: 201 + index,
-          type: 'message',
-          message: rawMessage({
-            id: 2_000 + index,
-            senderId: 42,
-            senderEmail: 'human@example.invalid',
-            senderName: '研究员甲',
-            content
-          })
-        }))
+        events: [
+          { id: 201, type: 'reaction', op: 'add', message_id: 2_000, user_id: 42,
+            emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'unicode_emoji' },
+          { id: 202, type: 'reaction', op: 'add', message_id: 2_001, user_id: 42,
+            emoji_name: '-1', emoji_code: '1f44e', reaction_type: 'unicode_emoji' },
+          { id: 203, type: 'reaction', op: 'remove', message_id: 2_000, user_id: 42,
+            emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'unicode_emoji' },
+          { id: 204, type: 'reaction', op: 'add', message_id: 2_000, user_id: 42,
+            emoji_name: 'wave', emoji_code: '1f44b', reaction_type: 'unicode_emoji' },
+          { id: 205, type: 'reaction', op: 'add', message_id: 2_000, user_id: 42,
+            emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'realm_emoji' },
+          { id: 9_999, type: 'reaction', op: 'add', message_id: 2_000, user_id: 42,
+            emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'unicode_emoji' }
+        ]
       })
     })
 
     const result = await provider.registerEventQueue()
-    assert.equal(result.events[0]?.type, 'provider.remote_approval.responded')
-    assert.equal(result.events[1]?.type, 'provider.remote_approval.responded')
-    if (result.events[0]?.type !== 'provider.remote_approval.responded') assert.fail('expected approval')
-    if (result.events[1]?.type !== 'provider.remote_approval.responded') assert.fail('expected approval')
-    assert.equal(result.events[0].decision, 'allow_once')
-    assert.equal(result.events[1].decision, 'deny_once')
-    assert.equal(result.events[0].approvalReference, fixtureReference)
+    assert.equal(result.events.length, 3)
+    assert.equal(result.events[0]?.type, 'provider.message.action')
+    assert.equal(result.events[1]?.type, 'provider.message.action')
+    if (result.events[0]?.type !== 'provider.message.action') assert.fail('expected action')
+    if (result.events[1]?.type !== 'provider.message.action') assert.fail('expected action')
+    assert.equal(result.events[0].action, 'allow_once')
+    assert.equal(result.events[1].action, 'deny_once')
+    assert.equal(result.events[0].providerMessageId, '2000')
     assert.equal(result.events[0].identity.providerUserId, '42')
-    assert.ok(result.events.slice(2).every((event) => event.type === 'provider.message.created'))
+    assert.equal(result.events[2]?.eventId, result.events[0].eventId)
+  })
+
+  it('ignores the Generic Bot own pre-seeded reactions', async () => {
+    let request = 0
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid', botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }),
+      deliveryLedger: new MemoryLedger(), reconcileDelivery: async () => ({ status: 'not_sent' }),
+      resolveLocator, verifyIdentity: rejectIdentity,
+      fetch: async () => {
+        request += 1
+        if (request === 1) return json({
+          result: 'success', msg: '', user_id: 99, email: 'service-bot@example.invalid',
+          full_name: 'SciForge Bot', is_bot: true
+        })
+        return json({
+          result: 'success', msg: '', queue_id: 'queue-bot-reaction', last_event_id: 2,
+          events: [{ id: 2, type: 'reaction', op: 'add', message_id: 2_000, user_id: 99,
+            emoji_name: '+1', emoji_code: '1f44d', reaction_type: 'unicode_emoji' }]
+        })
+      }
+    })
+    await provider.authenticate()
+    const result = await provider.registerEventQueue()
+    assert.equal(result.events.length, 0)
+  })
+
+  it('treats legacy AP1-shaped stream text as ordinary content, never an approval', async () => {
+    const fixtureReference = `AP1-${'B'.repeat(20)}`
+    const provider = createZulipHumanEndpointProvider({
+      realmUrl: 'https://chat.example.invalid', botEmail: 'service-bot@example.invalid'
+    }, {
+      resolveCredential: async () => ({ apiKey: randomUUID() }), deliveryLedger: new MemoryLedger(),
+      reconcileDelivery: async () => ({ status: 'not_sent' }), resolveLocator, verifyIdentity: rejectIdentity,
+      fetch: async () => json({
+        result: 'success', msg: '', queue_id: 'queue-legacy-command', last_event_id: 300,
+        events: [{ id: 301, type: 'message', message: rawMessage({
+          id: 3_000, senderId: 42, senderEmail: 'human@example.invalid', senderName: '研究员甲',
+          content: `1 ${fixtureReference}`
+        }) }]
+      })
+    })
+    const result = await provider.registerEventQueue()
+    assert.equal(result.events.length, 1)
+    assert.equal(result.events[0]?.type, 'provider.message.created')
   })
 
   it('never treats an approval-shaped private message as a remote approval', async () => {

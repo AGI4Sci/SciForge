@@ -7,9 +7,15 @@ import {
   domainMainProviderCredentialBindingSchema,
   domainMainPackageSecretKeySchema,
   domainMainPackageSettingsSnapshotSchema,
+  type DomainMainProviderCredentialErrorCode,
   type DomainMainPackageSecretStoreHost,
   type DomainMainPackageSettingsHost
 } from './package-storage.js'
+
+// @ts-expect-error Host execution-node identity and Principal Device identity are independent.
+const retiredPrincipalDeviceMismatch: DomainMainProviderCredentialErrorCode =
+  'principal_device_mismatch'
+void retiredPrincipalDeviceMismatch
 
 describe('package-owned storage contracts', () => {
   it('keeps non-secret settings JSON behind an exact revision', async () => {
@@ -67,7 +73,7 @@ describe('package-owned storage contracts', () => {
     assert.equal('list' in secrets, false)
   })
 
-  it('keeps provider credential input limited to a non-secret local binding', () => {
+  it('keeps the provider binding local and requires an exact Principal lease', () => {
     assert.deepEqual(domainMainProviderCredentialBindingSchema.parse({
       providerInstanceRef: 'opencontent.demo',
       connectionId: 'connection-a'
@@ -84,25 +90,32 @@ describe('package-owned storage contracts', () => {
       providerInstanceRef: 'https://caller.invalid',
       connectionId: 'connection-a'
     }), z.ZodError)
+    const expectedPrincipal = {
+      authority: 'sciforge.local-account',
+      subject: 'local-account-a',
+      assurance: 'local-selection',
+      deviceId: 'test-device',
+      identityVersion: 7
+    } as const
     assert.deepEqual(domainMainProviderCredentialAccessSchema.parse({
       binding: {
         providerInstanceRef: 'opencontent.demo',
         connectionId: 'connection-a'
       },
-      acceptedPrincipalAssurances: ['local-selection']
+      expectedPrincipal
     }), {
       binding: {
         providerInstanceRef: 'opencontent.demo',
         connectionId: 'connection-a'
       },
-      acceptedPrincipalAssurances: ['local-selection']
+      expectedPrincipal
     })
     assert.throws(() => domainMainProviderCredentialAccessSchema.parse({
       binding: {
         providerInstanceRef: 'opencontent.demo',
         connectionId: 'connection-a'
       },
-      acceptedPrincipalAssurances: []
+      acceptedPrincipalAssurances: ['local-selection']
     }), z.ZodError)
   })
 })

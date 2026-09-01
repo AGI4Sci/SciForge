@@ -1,4 +1,5 @@
 import type { ExecutionReceipt } from '@sciforge/execution-governance'
+import type { DomainMainAgentExecutionOutputSchema } from '@sciforge/domain-sdk/agent-execution'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type {
   PrincipalContextSnapshot,
@@ -608,6 +609,8 @@ export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
+  /** Provider-neutral JSON Schema for the exact final assistant message. */
+  outputSchema?: DomainMainAgentExecutionOutputSchema
   /** @internal Trusted sender provenance injected only after strict IPC validation. */
   visibleContextSurfaceId?: string
   /** @internal Opaque question-time surface binding prepared by the trusted Host. */

@@ -1,17 +1,22 @@
 {
   "name": "@sciforge/domain-sdk",
-  "version": "0.2.3",
+  "version": "0.2.15",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Pure contracts for compile-time and sandboxed runtime SciForge domain packages.",
   "exports": {
     ".": "./src/index.ts",
+    "./agent-routing": "./src/agent-routing.ts",
     "./agent-execution": "./src/agent-execution.ts",
     "./contract": "./src/contract.ts",
     "./controlled-process": "./src/controlled-process.ts",
     "./external-navigation": "./src/external-navigation.ts",
     "./file-transfer": "./src/file-transfer.ts",
+    "./file-transfer-portability": {
+      "types": "./src/file-transfer-portability.d.ts",
+      "import": "./src/file-transfer-portability.js"
+    },
     "./host": "./src/host.ts",
     "./main": "./src/main.ts",
     "./package-storage": "./src/package-storage.ts",

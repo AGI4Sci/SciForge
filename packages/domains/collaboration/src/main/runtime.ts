@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   restRequestSchema,
   type AgentInboxMessage,
@@ -9,10 +9,13 @@ import {
   type RestResponse,
   type Task
 } from '@sciforge/collaboration-contracts'
-import type {
-  DomainMainPackageSecretStoreHost,
-  DomainMainPackageSettingsHost
-} from '@sciforge/domain-sdk/package-storage'
+import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import type { AgentCloudRuntime } from '@sciforge/domain-identity-access/agent-cloud-runtime'
+import type { DomainMainPackageSettingsHost } from '@sciforge/domain-sdk/package-storage'
+import {
+  workerSessionExecutionBindingSchema,
+  type WorkerSessionExecutionBinding
+} from '../worker-session-projection.js'
 import type {
   DomainAgentTranscriptMessageEvent,
   DomainMainRuntimeDisposer,
@@ -22,27 +25,27 @@ import type {
   CollaborationConnectionConnectInput,
   CollaborationEndpointChallengePollInput,
   CollaborationEndpointChallengeStartInput,
-  CollaborationAgentRegisterInput,
   CollaborationManagedContainerManageInput,
-  CollaborationPrimaryAgentSelectInput,
   CollaborationProjectionLinkInput,
   CollaborationProjectionShareInput,
   CollaborationProjectionUpdateInput,
   CollaborationStatusSnapshot,
   CollaborationSynchronizationRetryInput,
   CollaborationTaskListInput,
+  CollaborationTaskOfferDecisionInput,
   CollaborationTaskView,
+  CollaborationWorkerAcceptanceUpdateInput,
   CollaborationProjectionView
 } from '../contract.js'
 import {
-  CollaborationConnection,
-  type CollaborationInboxHandler
-} from './connection.js'
-import {
-  HttpCollaborationCloudClient,
-  collaborationRequestId,
-  type CollaborationCloudClient
-} from './cloud-client.js'
+  coordinatorCloudCommandSchema,
+  type CoordinatorAgentInboxHandler,
+  type CoordinatorCloudCommand,
+  type CoordinatorCloudCommandReplay,
+  type CoordinatorCloudCommandReplayValidator
+} from '../coordinator-cloud-command.js'
+import { CollaborationConnection, type CollaborationInboxHandler } from './connection.js'
+import { collaborationRequestId } from './request-id.js'
 import { DurableCloudOutbox } from './outbox.js'
 import {
   ProjectionCoordinator,
@@ -53,20 +56,73 @@ import { RemoteApprovalCoordinator } from './remote-approval-coordinator.js'
 import {
   CollaborationLocalStore,
   FileCollaborationStateBackend,
+  claimLocalSessionProjectionBinding,
+  localSessionProjectionBindingFor,
+  type CollaborationLocalState,
+  type CollaborationPendingTaskOffer,
   type CollaborationLocalProjection,
+  type CollaborationTaskRun,
+  type CollaborationTaskCheckpoint,
+  type CollaborationTaskInteraction,
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
+import { parseWorkerRuntimeResult } from './worker-runtime-result.js'
+import type {
+  LocalTaskInteractionView,
+  TaskInteractionSubmit
+} from './task-interaction-controller.js'
+import type { TaskCheckpointCreate } from './task-interaction-journal.js'
 
 export type CollaborationRuntimeOptions = Readonly<{
   statePath: string
   packageSettings: DomainMainPackageSettingsHost
-  packageSecrets: DomainMainPackageSecretStoreHost
+  authenticatedCloudTransport: AuthenticatedCloudTransport
+  agentCloudRuntime: AgentCloudRuntime
+  coordinatorInboxHandler?: () => CoordinatorAgentInboxHandler | null
   stateBackend?: CollaborationStateBackend
-  createCloudClient?: (baseUrl: string) => CollaborationCloudClient
   sanitizeText?: (value: string) => string
   now?: () => Date
 }>
+
+export function isWorkerTaskInboxPayload(payload: AgentInboxMessage['payload']): boolean {
+  return payload.type === 'task.offered' ||
+    payload.type === 'task.offer.claimed' ||
+    (payload.type === 'task.offer.closed' && payload.audience === 'worker') ||
+    payload.type === 'task.recovery.output_linked' ||
+    payload.type === 'task.recovery.abandoned' ||
+    payload.type === 'task.execution.fenced' ||
+    payload.type === 'task.cancelled' ||
+    payload.type === 'task.updated' ||
+    payload.type === 'collaboration.state.changed'
+}
+
+export function isCoordinatorProjectInboxPayload(
+  payload: AgentInboxMessage['payload']
+): boolean {
+  return payload.type === 'project.started' ||
+    payload.type === 'project.plan.confirmed' ||
+    payload.type === 'task.result.submitted' ||
+    payload.type === 'task.execution.started' ||
+    payload.type === 'task.execution.failed' ||
+    (payload.type === 'task.offer.closed' && payload.audience === 'coordinator') ||
+    payload.type === 'project_record.submitted' ||
+    payload.type === 'coordinator.transferred' || (
+    payload.type === 'human.answer.received' &&
+    payload.answer.context.scope === 'coordinator_project'
+  )
+}
+
+function projectIdForInboxPayload(
+  payload: AgentInboxMessage['payload']
+): string | undefined {
+  if ('projectId' in payload) return payload.projectId
+  if (payload.type === 'human.answer.received') return payload.answer.projectId
+  if (payload.type === 'collaboration.state.changed' && 'projectId' in payload.event) {
+    return payload.event.projectId
+  }
+  return undefined
+}
 
 export class CollaborationRuntime {
   private readonly store: CollaborationLocalStore
@@ -82,6 +138,7 @@ export class CollaborationRuntime {
   }>>()
   private active = false
   private localAgentIdentity: string | undefined
+  private projectionLinkTail: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CollaborationRuntimeOptions) {
     this.store = new CollaborationLocalStore(
@@ -92,8 +149,8 @@ export class CollaborationRuntime {
 
   async activate(context: DomainMainRuntimeLifecycleContext): Promise<DomainMainRuntimeDisposer> {
     if (this.active) throw new Error('Collaboration runtime is already active.')
-    if (!context.agentExecution) {
-      throw new Error('Collaboration requires the canonical Agent execution Host.')
+    if (!context.agentExecution?.prepareSession) {
+      throw new Error('Collaboration requires the canonical durable Agent execution Host.')
     }
     if (!context.turnEvents) {
       throw new Error('Collaboration requires canonical Agent turn lifecycle events.')
@@ -101,24 +158,21 @@ export class CollaborationRuntime {
     await this.store.open()
     this.context = context
     this.active = true
-    const configured = await this.settings.read()
-    if (configured.settings) {
-      this.localAgentIdentity = this.store.snapshot().agents.find((agent) => (
-        agent.installationId === configured.settings!.installationId
-      ))?.agentId
-    }
-
     let connection!: CollaborationConnection
+    const durableAgentExecution = {
+      ...context.agentExecution,
+      prepareSession: context.agentExecution.prepareSession
+    }
     const outbox = new DurableCloudOutbox({
       store: this.store,
-      packageSecrets: this.options.packageSecrets,
-      cloudClient: () => connection.cloudClient(),
+      agentCloudRuntime: this.options.agentCloudRuntime,
+      localAgentId: () => this.localAgentIdentity,
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })
     const projections = new ProjectionCoordinator({
       store: this.store,
-      agentExecution: context.agentExecution,
+      agentExecution: durableAgentExecution,
       agentThreads: context.agentThreads,
       cloudOutbox: outbox,
       localAgentId: () => this.localAgentIdentity,
@@ -146,15 +200,38 @@ export class CollaborationRuntime {
           await projections.acceptPersonalInbox(message)
           return
         }
-        if (
-          message.payload.type === 'task.offered' ||
-          message.payload.type === 'task.cancelled' ||
-          message.payload.type === 'task.updated'
-        ) {
+        if (message.payload.type === 'project.deleted') {
+          await tasks.handleProjectUnavailable(message.payload.projectId, {
+            kind: 'permanent',
+            reason: 'Cloud deleted this Project; local execution was fenced.'
+          })
+          const handler = this.options.coordinatorInboxHandler?.()
+          if (handler) await handler(message)
+          return
+        }
+        const projectId = projectIdForInboxPayload(message.payload)
+        if (projectId && !await this.canHandleProjectInbox(projectId)) return
+        if (isCoordinatorProjectInboxPayload(message.payload)) {
+          const handler = this.options.coordinatorInboxHandler?.()
+          if (!handler) {
+            throw new Error('The Project Coordinator Inbox owner is unavailable.')
+          }
+          await handler(message)
+          return
+        }
+        if (message.payload.type === 'human.answer.received') {
+          await tasks.handleInbox(message)
+          return
+        }
+        if (isWorkerTaskInboxPayload(message.payload)) {
           await tasks.handleInbox(message)
           return
         }
         if (message.payload.type === 'agent.revoked') {
+          await tasks.fenceLocalAgent(
+            message.payload.agentId,
+            'Cloud revoked this Agent; all local executions were fenced.'
+          )
           await connection.acceptAgentRevocation(message.payload.agentId, message.createdAt)
           this.localAgentIdentity = undefined
           return
@@ -166,18 +243,25 @@ export class CollaborationRuntime {
           )
           return
         }
-        await this.refreshCollaborationFact(message)
       }
     }
     connection = new CollaborationConnection({
       store: this.store,
       settings: this.settings,
-      packageSecrets: this.options.packageSecrets,
       outbox,
-      createCloudClient: this.options.createCloudClient ?? ((baseUrl) => (
-        new HttpCollaborationCloudClient({ baseUrl })
-      )),
+      authenticatedCloudTransport: this.options.authenticatedCloudTransport,
+      agentCloudRuntime: this.options.agentCloudRuntime,
       inboxHandler,
+      afterHeartbeat: async (connectionStatus) => {
+        if (connectionStatus === 'online' && connection.state().state !== 'connected') {
+          await this.reconcileProjectFacts()
+        }
+        await tasks.publishAvailability(connectionStatus)
+      },
+      onAuthorityLost: (agentId, reason) => tasks.fenceLocalAgent(
+        agentId,
+        `Identity or Runtime authority was lost: ${reason}`
+      ),
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })
@@ -185,8 +269,14 @@ export class CollaborationRuntime {
       store: this.store,
       connection,
       outbox,
-      agentExecution: context.agentExecution,
+      agentExecution: durableAgentExecution,
+      capabilities: context.capabilities,
       localAgentId: () => this.localAgentIdentity,
+      workspaceRootForExecution: (executionId) => join(
+        dirname(this.options.statePath),
+        'worker-workspaces',
+        executionId
+      ),
       sanitizeText: this.options.sanitizeText,
       now: this.options.now
     })
@@ -194,6 +284,7 @@ export class CollaborationRuntime {
     this.outbox = outbox
     this.projections = projections
     this.tasks = tasks
+    this.localAgentIdentity = await connection.localAgentId()
 
     const disposeTurnEvents = context.turnEvents.subscribe(async (event) => {
       if (event.kind !== 'after-turn' || !('turnId' in event) || !event.turnId) return
@@ -224,10 +315,11 @@ export class CollaborationRuntime {
     await projections.recover()
     this.syncTranscriptSubscriptions()
     await connection.activate()
-    // Task reconciliation consults canonical cloud state before executing. Run
-    // it only after the connection has initialized; an offline activation keeps
-    // the runs durable in reconciling state until an explicit recovery/restart.
+    this.localAgentIdentity = await connection.localAgentId()
+    // Each canonical online transition reconciles Project visibility before
+    // Task recovery can execute; offline runs remain durable until that transition.
     await tasks.recover()
+    await tasks.publishAvailability(connection.state().state === 'connected' ? 'online' : 'offline')
 
     return async () => {
       await disposeTurnEvents()
@@ -265,6 +357,12 @@ export class CollaborationRuntime {
     const connection = this.requireConnection()
     const state = this.store.snapshot()
     const configured = await this.settings.read()
+    const connectionState = connection.state()
+    const localAgentId = await connection.localAgentId()
+    const agentAuthorityReady = localAgentId
+      ? (await this.options.agentCloudRuntime.authorityStatus(localAgentId)).state === 'ready'
+      : false
+    const localAgent = state.agents.find((agent) => agent.agentId === localAgentId)
     const participant = state.user && state.participant
       ? {
           userId: state.user.userId,
@@ -274,9 +372,6 @@ export class CollaborationRuntime {
           complete: state.participant.status === 'active',
           ...(state.participant.primaryHumanEndpointId
             ? { primaryHumanEndpointId: state.participant.primaryHumanEndpointId }
-            : {}),
-          ...(state.participant.primaryAgentId
-            ? { primaryAgentId: state.participant.primaryAgentId }
             : {}),
           endpoints: state.endpoints.map((endpoint) => ({
             humanEndpointId: endpoint.humanEndpointId,
@@ -298,37 +393,31 @@ export class CollaborationRuntime {
             status: agent.lifecycleStatus === 'revoked' ? 'revoked' as const : agent.connectionStatus,
             capabilities: agent.capabilities,
             ...(agent.lastSeenAt ? { lastSeenAt: agent.lastSeenAt } : {}),
-            primary: state.participant?.primaryAgentId === agent.agentId
+            ...(agent.agentId === localAgentId
+              ? { workerAcceptanceMode: this.requireTasks().acceptanceMode(agent.agentId) }
+              : {})
           }))
         }
       : undefined
     const projections = state.projections.map((projection) => (
       this.projectionView(projection.projection)
     ))
+    const taskViews = this.taskViews(state, {})
     const projectViews = state.projects.map((project) => ({
       projectId: project.projectId,
       name: project.displayName,
       state: mapProjectState(project.status),
       revision: project.revision,
       coordinatorAgentId: project.coordinatorAgentId,
-      memberUserIds: project.memberUserIds,
-      tasks: state.tasks.filter((task) => task.projectId === project.projectId).map(mapTaskView)
+      tasks: taskViews.filter((task) => task.projectId === project.projectId)
     }))
-    const connectionState = connection.state()
-    const deviceCredentialAvailable = await this.options.packageSecrets.has('device-credential')
-    const localAgent = configured.settings
-      ? state.agents.find((agent) => (
-          agent.installationId === configured.settings!.installationId
-          && agent.lifecycleStatus === 'active'
-        ))
-      : undefined
     return {
       revision: state.revision,
       connection: {
         configured: configured.settings !== null,
         ...(configured.settings ? { baseUrl: configured.settings.baseUrl } : {}),
         state: configured.settings ? connectionState.state : 'unconfigured',
-        deviceCredentialAvailable,
+        agentAuthorityReady,
         ...(localAgent ? { localAgentId: localAgent.agentId } : {}),
         ...(connectionState.lastConnectedAt ? { lastConnectedAt: connectionState.lastConnectedAt } : {}),
         lastInboxSequence: state.lastInboxSequence,
@@ -358,13 +447,20 @@ export class CollaborationRuntime {
     }
   }
 
+  /** Current exact Agent identity owned by this local runtime, if active. */
+  localAgentId(): string | undefined {
+    return this.localAgentIdentity
+  }
+
   async configureConnection(baseUrl: string): Promise<CollaborationStatusSnapshot['connection']> {
     await this.requireConnection().configure(baseUrl)
+    this.localAgentIdentity = await this.requireConnection().localAgentId()
     return (await this.status()).connection
   }
 
   async changeConnection(input: CollaborationConnectionConnectInput): Promise<CollaborationStatusSnapshot['connection']> {
     await this.requireConnection().applyConnectionAction(input)
+    this.localAgentIdentity = await this.requireConnection().localAgentId()
     return (await this.status()).connection
   }
 
@@ -376,23 +472,19 @@ export class CollaborationRuntime {
     return this.requireConnection().pollChallenge(input)
   }
 
-  async registerAgent(input: CollaborationAgentRegisterInput) {
-    const agent = await this.requireConnection().registerAgent(input)
-    this.localAgentIdentity = agent.agentId
-    return (await this.status()).participant!.agents.find((candidate) => (
-      candidate.agentId === agent.agentId
-    ))!
-  }
-
-  async selectPrimaryAgent(input: CollaborationPrimaryAgentSelectInput) {
-    await this.requireConnection().selectPrimaryAgent(
-      input.agentId,
-      input.expectedParticipantRevision
-    )
-    return (await this.status()).participant!
-  }
-
   async linkProjection(input: CollaborationProjectionLinkInput): Promise<CollaborationProjectionView> {
+    const previous = this.projectionLinkTail
+    let release!: () => void
+    this.projectionLinkTail = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    try {
+      return await this.linkProjectionSerial(input)
+    } finally {
+      release()
+    }
+  }
+
+  private async linkProjectionSerial(input: CollaborationProjectionLinkInput): Promise<CollaborationProjectionView> {
     const state = this.store.snapshot()
     const user = state.user
     if (!user) throw new Error('Verify a human endpoint before sharing a Session.')
@@ -410,12 +502,13 @@ export class CollaborationRuntime {
     ) {
       throw new Error('Projection locator does not belong to the verified endpoint realm.')
     }
-    if (input.mode === 'existing' && state.projections.some((candidate) => (
-      candidate.projection.status !== 'closed' &&
-      candidate.runtimeId === input.runtimeId &&
-      candidate.threadId === input.threadId
-    ))) {
-      throw new Error('This local Session already has an active remote projection.')
+    if (input.mode === 'existing' && (
+      localSessionProjectionBindingFor(state, input.runtimeId, input.threadId) ||
+      state.projections.some((candidate) => (
+        candidate.runtimeId === input.runtimeId && candidate.threadId === input.threadId
+      ))
+    )) {
+      throw new Error('This local Session is permanently bound to one phone Topic.')
     }
     const idempotencyKey = `idem_projection.create.${digest(JSON.stringify({
       userId: user.userId,
@@ -439,6 +532,15 @@ export class CollaborationRuntime {
     }))
     const projection = requireProjectionResponse(response)
     await this.store.transact((draft) => {
+      if (input.mode === 'existing') {
+        claimLocalSessionProjectionBinding(
+          draft,
+          projection,
+          input.runtimeId,
+          input.threadId,
+          projection.updatedAt
+        )
+      }
       draft.projections.push(localProjectionFromRemote(projection, {
         runtimeId: input.runtimeId,
         ...(input.mode === 'existing' ? { threadId: input.threadId } : {}),
@@ -459,68 +561,6 @@ export class CollaborationRuntime {
     ))
     if (!local) throw new Error('Projection was not found.')
     if (local.projection.revision !== input.expectedRevision) throw new Error('Projection revision is stale.')
-    if (input.action === 'relink' || input.action === 'restore') {
-      const occupied = this.store.snapshot().projections.some((candidate) => (
-        candidate.projection.projectionId !== input.projectionId &&
-        candidate.projection.status !== 'closed' &&
-        candidate.runtimeId === input.runtimeId &&
-        candidate.threadId === input.threadId
-      ))
-      if (occupied) throw new Error('This local Session already has an active remote projection.')
-      if (input.action === 'restore') {
-        if (local.projection.status !== 'closed') throw new Error('Only a closed projection can be restored.')
-        const pausedResponse = await this.requireConnection().executeAsUser(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'projection.update',
-          idempotencyKey: `idem_projection.restore.${digest(`${input.projectionId}\u0000${input.expectedRevision}`).slice(0, 48)}`,
-          projectionId: input.projectionId,
-          expectedRevision: input.expectedRevision,
-          status: 'paused'
-        }))
-        const paused = requireProjectionResponse(pausedResponse)
-        await this.replaceProjection(paused)
-        await this.store.transact((draft) => {
-          const target = draft.projections.find((candidate) => (
-            candidate.projection.projectionId === input.projectionId
-          ))!
-          target.runtimeId = input.runtimeId
-          target.threadId = input.threadId
-          target.workspaceRoot = input.workspaceRoot
-          target.bindingMode = 'existing'
-          target.lastError = undefined
-        })
-        const activeResponse = await this.requireConnection().executeAsUser(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'projection.update',
-          idempotencyKey: `idem_projection.restore.activate.${digest(`${input.projectionId}\u0000${paused.revision}`).slice(0, 48)}`,
-          projectionId: input.projectionId,
-          expectedRevision: paused.revision,
-          status: 'active'
-        }))
-        const active = requireProjectionResponse(activeResponse)
-        await this.replaceProjection(active)
-        await this.requireProjections().recover()
-        await this.reconcileProjectionTranscript(input.projectionId)
-        this.syncTranscriptSubscriptions()
-        return this.projectionView(active)
-      }
-      if (local.projection.status !== 'paused') throw new Error('Pause a projection before relinking it.')
-      await this.store.transact((draft) => {
-        const target = draft.projections.find((candidate) => (
-          candidate.projection.projectionId === input.projectionId
-        ))!
-        target.runtimeId = input.runtimeId
-        target.threadId = input.threadId
-        target.workspaceRoot = input.workspaceRoot
-        target.bindingMode = 'existing'
-        target.lastError = undefined
-      })
-      await this.reconcileProjectionTranscript(input.projectionId)
-      this.syncTranscriptSubscriptions()
-      return this.projectionView(local.projection)
-    }
     const response = await this.requireConnection().executeAsUser(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
@@ -531,7 +571,6 @@ export class CollaborationRuntime {
       ...(input.action === 'rename' ? { displayName: input.displayName } : {}),
       ...(input.action === 'pause' ? { status: 'paused' as const } : {}),
       ...(input.action === 'resume' ? { status: 'active' as const } : {}),
-      ...(input.action === 'close' ? { status: 'closed' as const } : {})
     }))
     const projection = requireProjectionResponse(response)
     await this.replaceProjection(projection)
@@ -585,95 +624,74 @@ export class CollaborationRuntime {
     if (input.scope === 'task') await this.requireTasks().recover()
   }
 
+  async discoverPrivateChannels(humanEndpointId: string): Promise<Readonly<{ locatorCount: number }>> {
+    return {
+      locatorCount: await this.requireConnection().refreshEndpointLocators(humanEndpointId)
+    }
+  }
+
   async manageContainer(input: CollaborationManagedContainerManageInput): Promise<Readonly<{
     managedContainer: ManagedProviderContainer | null
     locatorCount?: number
   }>> {
     const connection = this.requireConnection()
     if (input.action === 'refresh-locators') {
-      return {
-        managedContainer: null,
-        locatorCount: await connection.refreshEndpointLocators(input.humanEndpointId)
-      }
+      return { managedContainer: null, locatorCount: await connection.refreshEndpointLocators(input.humanEndpointId) }
     }
     if (input.action === 'refresh-status') {
       const containers = await connection.refreshManagedContainers()
+      const localAgentId = await connection.localAgentId()
+      if (!localAgentId) throw new Error('Register this computer before refreshing managed Channels.')
       const pending = new Map<string, number>()
       for (const container of containers) {
         if (!container.container || !['active', 'drifted', 'failed'].includes(container.status)) continue
         pending.set(container.managedContainerId, container.revision)
         await connection.executeAsUser(restRequestSchema.parse({
-          protocolVersion: '1.0',
-          requestId: collaborationRequestId(),
-          type: 'managed_container.inspect',
+          protocolVersion: '1.0', requestId: collaborationRequestId(), type: 'managed_container.inspect',
           idempotencyKey: `idem_managed_container.inspect.${digest(`${container.managedContainerId}\u0000${container.revision}`).slice(0, 48)}`,
-          managedContainerId: container.managedContainerId,
-          expectedRevision: container.revision
+          managedContainerId: container.managedContainerId, agentId: localAgentId, expectedRevision: container.revision
         }))
       }
       for (let attempt = 0; attempt < 40 && pending.size > 0; attempt += 1) {
         await delay(250)
-        const refreshed = await connection.refreshManagedContainers()
-        for (const container of refreshed) {
+        for (const container of await connection.refreshManagedContainers()) {
           const previousRevision = pending.get(container.managedContainerId)
-          if (previousRevision !== undefined && container.revision !== previousRevision) {
-            pending.delete(container.managedContainerId)
-          }
+          if (previousRevision !== undefined && container.revision !== previousRevision) pending.delete(container.managedContainerId)
         }
       }
       return { managedContainer: null }
     }
     const state = this.store.snapshot()
+    const localAgentId = await connection.localAgentId()
+    if (!localAgentId) throw new Error('Register this computer before managing a Channel.')
     let response: RestResponse
     if (input.action === 'ensure') {
       if (!state.user) throw new Error('A verified user is required to create a managed Channel.')
-      const provider = state.endpoints.find((endpoint) => (
-        endpoint.humanEndpointId === input.humanEndpointId
-      ))?.identity.provider
-      if (!provider || !connection.providers().some((option) => (
-        option.providerKey === provider && option.managedContainers
-      ))) {
+      const provider = state.endpoints.find((endpoint) => endpoint.humanEndpointId === input.humanEndpointId)?.identity.provider
+      if (!provider || !connection.providers().some((option) => option.providerKey === provider && option.managedContainers)) {
         throw new Error('This endpoint Provider does not offer managed Channels.')
       }
-      const existing = state.managedContainers.find((container) => (
-        container.humanEndpointId === input.humanEndpointId
-      ))
+      const existing = state.managedContainers.find((container) => container.humanEndpointId === input.humanEndpointId)
       const requestId = collaborationRequestId()
       const retryToken = existing?.status === 'failed' && !existing.container
-        ? `${existing.revision}\u0000${requestId}`
-        : undefined
+        ? `${existing.revision}\u0000${requestId}` : undefined
       response = await connection.executeAsUser(restRequestSchema.parse({
-        protocolVersion: '1.0',
-        requestId,
-        type: 'managed_container.ensure',
-        idempotencyKey: managedContainerEnsureIdempotencyKey(
-          state.user.userId,
-          input.humanEndpointId,
-          retryToken
-        ),
-        humanEndpointId: input.humanEndpointId,
+        protocolVersion: '1.0', requestId, type: 'managed_container.ensure',
+        idempotencyKey: managedContainerEnsureIdempotencyKey(state.user.userId, input.humanEndpointId, retryToken),
+        humanEndpointId: input.humanEndpointId, agentId: localAgentId,
         policy: {
-          version: 1,
-          visibility: 'private',
-          history: 'protected',
-          membership: 'owner_and_message_bot',
-          memberManagement: 'provisioning_service_only',
-          channelManagement: 'provisioning_service_only',
-          ownerCanSend: true,
-          ownerCanCreateTopics: true,
-          messageBotCanSend: true,
+          version: 1, visibility: 'private', history: 'protected', membership: 'owner_and_message_bot',
+          memberManagement: 'provisioning_service_only', channelManagement: 'provisioning_service_only',
+          ownerCanSend: true, ownerCanCreateTopics: true, messageBotCanSend: true,
           messageBotCreatesProjectTopics: false
         }
       }))
     } else {
       response = await connection.executeAsUser(restRequestSchema.parse({
-        protocolVersion: '1.0',
-        requestId: collaborationRequestId(),
-        type: input.action === 'reconcile'
-          ? 'managed_container.reconcile'
-          : 'managed_container.archive',
+        protocolVersion: '1.0', requestId: collaborationRequestId(),
+        type: input.action === 'reconcile' ? 'managed_container.reconcile' : 'managed_container.archive',
         idempotencyKey: `idem_managed_container.${input.action}.${digest(`${input.managedContainerId}\u0000${input.expectedRevision}`).slice(0, 48)}`,
-        managedContainerId: input.managedContainerId,
+        managedContainerId: input.managedContainerId, agentId: localAgentId,
         expectedRevision: input.expectedRevision
       }))
     }
@@ -684,9 +702,7 @@ export class CollaborationRuntime {
     const managedContainer = response.entity
     await this.store.transact((draft) => {
       draft.managedContainers = [
-        ...draft.managedContainers.filter((item) => (
-          item.managedContainerId !== managedContainer.managedContainerId
-        )),
+        ...draft.managedContainers.filter((item) => item.managedContainerId !== managedContainer.managedContainerId),
         managedContainer
       ]
     })
@@ -694,11 +710,184 @@ export class CollaborationRuntime {
   }
 
   listTasks(input: CollaborationTaskListInput): readonly CollaborationTaskView[] {
+    return this.taskViews(this.store.snapshot(), input)
+  }
+
+  private taskViews(
+    snapshot: CollaborationLocalState,
+    input: CollaborationTaskListInput
+  ): readonly CollaborationTaskView[] {
     const states = new Set(input.states ?? [])
-    return this.store.snapshot().tasks
-      .filter((task) => !input.projectId || task.projectId === input.projectId)
-      .map(mapTaskView)
+    const projectIds = new Set(snapshot.projects.map(({ projectId }) => projectId))
+    return [
+      ...snapshot.pendingTaskOffers
+        .filter((offer) => (
+          projectIds.has(offer.projectId) && (!input.projectId || offer.projectId === input.projectId)
+        ))
+        .map((offer) => mapPendingTaskOfferView(
+          offer,
+          this.requireTasks().acceptanceMode(offer.recipientAgentId),
+          snapshot.tasks.find((task) => task.taskId === offer.taskId)
+        )),
+      ...snapshot.taskRuns
+        .filter((run) => (
+          projectIds.has(run.offer.projectId) && (!input.projectId || run.offer.projectId === input.projectId)
+        ))
+        .map((run) => collaborationTaskViewForRun(
+          run,
+          this.requireTasks().acceptanceMode(run.offer.recipientAgentId)
+        ))
+    ]
       .filter((task) => states.size === 0 || states.has(task.state))
+  }
+
+  /**
+   * Persist and, when the exact Worker Runtime Session is available, dispatch
+   * one local human intervention. Cloud Task/Execution facts remain owned by
+   * their existing canonical capabilities.
+   */
+  submitTaskInteraction(input: TaskInteractionSubmit): Promise<CollaborationTaskInteraction> {
+    return this.requireTasks().submitTaskInteraction(input)
+  }
+
+  /**
+   * Authorize an ordinary Agent Session against the exact local Worker run.
+   * The capability broker authenticates the Principal and Session envelope;
+   * this domain joins those facts to its own durable execution ownership.
+   */
+  authorizeTaskInteraction(
+    input: Readonly<{ projectId: string; taskId: string; executionId?: string | null }>,
+    session: Readonly<{ runtimeId: string; threadId: string }>,
+    principalUserId: string
+  ): void {
+    const state = this.store.snapshot()
+    if (state.user?.userId !== principalUserId) {
+      throw new Error('The current Principal does not own this local collaboration identity.')
+    }
+    const candidates = state.taskRuns.filter((run) => (
+      run.offer.projectId === input.projectId &&
+      run.offer.taskId === input.taskId &&
+      (!input.executionId || run.offer.executionId === input.executionId)
+    ))
+    const boundRuns = candidates.filter((candidate) => (
+      candidate.runtimeId === session.runtimeId && candidate.threadId === session.threadId
+    ))
+    if (boundRuns.length !== 1) {
+      throw new Error('The ordinary Agent Session is not bound to this exact Worker execution.')
+    }
+    const run = boundRuns[0]
+    if (input.executionId && run.offer.executionId !== input.executionId) {
+      throw new Error('The requested execution does not match the bound Worker Session.')
+    }
+    if (
+      !run.execution ||
+      run.execution.assigneeUserId !== principalUserId ||
+      run.execution.assigneeAgentId !== this.localAgentIdentity
+    ) {
+      throw new Error('The current Principal and local Agent Device do not own this Worker execution.')
+    }
+  }
+
+  appendTaskCheckpoint(input: TaskCheckpointCreate): Promise<CollaborationTaskCheckpoint> {
+    return this.requireTasks().appendTaskCheckpoint(input)
+  }
+
+  taskInteractionView(
+    projectId: string,
+    taskId: string,
+    executionId?: string
+  ): LocalTaskInteractionView {
+    return this.requireTasks().taskInteractionView(projectId, taskId, executionId)
+  }
+
+  listTaskInteractions(
+    projectId: string,
+    taskId?: string
+  ): readonly CollaborationTaskInteraction[] {
+    return this.requireTasks().listTaskInteractions(projectId, taskId)
+  }
+
+  listTaskCheckpoints(
+    projectId: string,
+    taskId?: string
+  ): readonly CollaborationTaskCheckpoint[] {
+    return this.requireTasks().listTaskCheckpoints(projectId, taskId)
+  }
+
+  listWorkerSessionBindings(): readonly WorkerSessionExecutionBinding[] {
+    const snapshot = this.store.snapshot()
+    const projectIds = new Set(snapshot.projects.map(({ projectId }) => projectId))
+    return Object.freeze(snapshot.taskRuns.flatMap((run) => {
+      if (
+        !projectIds.has(run.offer.projectId) ||
+        !run.runtimeId ||
+        !run.threadId ||
+        !run.execution ||
+        !run.task
+      ) return []
+      return [workerSessionExecutionBindingSchema.parse({
+        schemaVersion: 1,
+        projectId: run.offer.projectId,
+        taskId: run.offer.taskId,
+        executionId: run.offer.executionId,
+        runtimeId: run.runtimeId,
+        threadId: run.threadId,
+        workerUserId: run.execution.assigneeUserId,
+        assigneeAgentId: run.execution.assigneeAgentId,
+        assigneeDeviceId: run.execution.assigneeDeviceId,
+        taskRevision: run.task.revision,
+        executionRevision: run.execution.revision,
+        executionState: run.execution.state,
+        fenceStatus: run.execution.fence.status,
+        projectExecutionAuthorityEpoch:
+          run.execution.fence.projectExecutionAuthorityEpoch,
+        userTaskAuthorityEpoch: run.execution.fence.userTaskAuthorityEpoch,
+        updatedAt: run.updatedAt
+      })]
+    }))
+  }
+
+  async updateWorkerAcceptancePolicy(
+    input: CollaborationWorkerAcceptanceUpdateInput
+  ): Promise<Readonly<{ agentId: string; mode: 'manual' | 'automatic' }>> {
+    const localAgentId = await this.requireConnection().localAgentId()
+    if (!localAgentId || input.agentId !== localAgentId) {
+      throw new Error('Worker acceptance policy can only be changed on its exact local Agent Device.')
+    }
+    const mode = await this.requireTasks().updateAcceptanceMode(input.agentId, input.mode)
+    return Object.freeze({ agentId: input.agentId, mode })
+  }
+
+  async decideTaskOffer(input: CollaborationTaskOfferDecisionInput): Promise<void> {
+    await this.requireTasks().decideOffer(input.taskOfferId, { decision: input.decision })
+  }
+
+  /**
+   * The sole Coordinator Agent write path. The internal-service caller cannot
+   * nominate an Agent; the durable outbox binds the currently active local
+   * Agent immediately before Identity executes the strict Cloud command.
+   */
+  async executeCoordinatorCloudCommand(command: CoordinatorCloudCommand): Promise<RestResponse> {
+    return this.requireOutbox().enqueueAndWait(
+      'coordinator.command',
+      coordinatorCloudCommandSchema.parse(command)
+    )
+  }
+
+  async resumeCoordinatorCloudCommand(
+    idempotencyKey: string,
+    validateCommand: CoordinatorCloudCommandReplayValidator
+  ): Promise<CoordinatorCloudCommandReplay | null> {
+    const replay = await this.requireOutbox().resumeAndWait(
+      'coordinator.command',
+      idempotencyKey,
+      (request) => validateCommand(coordinatorCloudCommandSchema.parse(request))
+    )
+    if (!replay) return null
+    return Object.freeze({
+      command: coordinatorCloudCommandSchema.parse(replay.request),
+      response: replay.response
+    })
   }
 
   private async reconcileTranscriptSnapshots(): Promise<void> {
@@ -750,27 +939,66 @@ export class CollaborationRuntime {
     }
   }
 
-  private async refreshCollaborationFact(message: AgentInboxMessage): Promise<void> {
-    const projectId = 'projectId' in message.payload ? message.payload.projectId : undefined
-    if (!projectId) return
-    const response = await this.requireConnection().executeAsDevice(restRequestSchema.parse({
+  private async canHandleProjectInbox(projectId: string): Promise<boolean> {
+    return await this.refreshProjectFact(projectId) === 'available'
+  }
+
+  private async reconcileProjectFacts(): Promise<void> {
+    const state = this.store.snapshot()
+    const projectIds = new Set([
+      ...state.projects.map(({ projectId }) => projectId),
+      ...state.projectUnavailableFences.map(({ projectId }) => projectId),
+      ...state.pendingTaskOffers.map(({ projectId }) => projectId),
+      ...state.taskRuns.map(({ offer }) => offer.projectId)
+    ])
+    await Promise.allSettled([...projectIds].map((projectId) => this.refreshProjectFact(projectId)))
+  }
+
+  private async refreshProjectFact(projectId: string): Promise<'available' | 'unavailable'> {
+    const fence = this.store.snapshot().projectUnavailableFences.find((candidate) => (
+      candidate.projectId === projectId
+    ))
+    if (fence?.kind === 'permanent') return 'unavailable'
+    const response = await this.requireConnection().executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'project.get',
       projectId
     }))
-    if (response.type !== 'rest.entity' || response.entity.type !== 'project') return
+    if (response.type === 'rest.error') {
+      if (response.error.code === 'not_found' || response.error.code === 'permission_denied') {
+        await this.requireTasks().handleProjectUnavailable(projectId, {
+          kind: response.error.code === 'not_found' ? 'permanent' : 'permission-denied',
+          reason: response.error.code === 'not_found'
+            ? 'Cloud deleted this Project; local execution was fenced.'
+            : 'Cloud revoked visibility for this Project; local execution was fenced.'
+        })
+        return 'unavailable'
+      }
+      throw new Error(response.error.message)
+    }
+    if (response.type !== 'rest.entity' || response.entity.type !== 'project') {
+      throw new Error(`Project refresh returned unexpected ${response.type}.`)
+    }
     const project = response.entity
-    await this.store.transact((draft) => {
+    const restored = await this.store.transact((draft) => {
+      if (draft.projectUnavailableFences.some((candidate) => (
+        candidate.projectId === projectId && candidate.kind === 'permanent'
+      ))) return false
       draft.projects = replaceById(draft.projects, project, (candidate) => candidate.projectId)
+      draft.projectUnavailableFences = draft.projectUnavailableFences.filter((candidate) => (
+        candidate.projectId !== projectId
+      ))
+      return true
     })
+    return restored ? 'available' : 'unavailable'
   }
 
   private async refreshProjectionFromInbox(
     projectionId: string,
     notifiedRevision: number
   ): Promise<void> {
-    const response = await this.requireConnection().executeAsDevice(restRequestSchema.parse({
+    const response = await this.requireConnection().executeAsAgent(restRequestSchema.parse({
       protocolVersion: '1.0',
       requestId: collaborationRequestId(),
       type: 'projection.get',
@@ -929,11 +1157,9 @@ export class CollaborationRuntime {
     return this.tasks
   }
 }
-
 export function collaborationStatePath(userDataDir: string): string {
   return join(userDataDir, 'domains', 'collaboration', 'state.json')
 }
-
 export function activeProjectionBindingsForSession(
   projections: readonly CollaborationLocalProjection[],
   runtimeId: string,
@@ -962,23 +1188,91 @@ function mapProjectState(status: Project['status']): 'active' | 'paused' | 'comp
   return status === 'draft' ? 'paused' : status
 }
 
-function mapTaskView(task: Task): CollaborationTaskView {
-  const state = task.status === 'needs_human'
-    ? 'needs-human'
-    : task.status === 'succeeded'
-      ? 'completed'
-      : task.status === 'rejected'
-        ? 'cancelled'
-        : task.status
+export function collaborationTaskViewForRun(
+  run: CollaborationTaskRun,
+  acceptanceMode: 'manual' | 'automatic'
+): CollaborationTaskView {
+  const latestTurn = [...run.agentJournal].reverse().find((entry) => entry.turnId)?.turnId
+  const humanQuestion = needsHumanQuestion(run)
+  if (!run.execution) {
+    throw new Error('A claimed local Task run is missing its immutable Worker execution.')
+  }
   return {
-    taskId: task.taskId,
-    projectId: task.projectId,
-    assigneeAgentId: task.assigneeAgentId,
-    revision: task.revision,
-    title: task.title,
+    taskId: run.offer.taskId,
+    projectId: run.offer.projectId,
+    taskOfferId: run.offer.taskOfferId,
+    workerUserId: run.execution.assigneeUserId,
+    executionId: run.offer.executionId,
+    assigneeAgentId: run.offer.recipientAgentId,
+    hasDedicatedSession: Boolean(run.runtimeId && run.threadId),
+    revision: run.task?.revision ?? run.expectedTaskRevision,
+    title: run.task?.title ?? 'Pending Task offer',
+    state: run.state,
+    acceptanceMode,
+    decisionRequired: false,
+    preflightReasons: run.latestPreflight?.reasons ?? [],
+    ...(latestTurn ? { localTurnId: latestTurn } : {}),
+    ...(run.resultSummary
+      ? { resultSummary: boundedTaskPresentationText(run.resultSummary, 4_000) }
+      : {}),
+    ...(humanQuestion ? { needsHumanQuestion: humanQuestion } : {}),
+    updatedAt: run.updatedAt,
+    ...(run.error ? { error: run.error } : {})
+  }
+}
+
+function boundedTaskPresentationText(value: string, maxCodeUnits: number): string {
+  if (value.length <= maxCodeUnits) return value
+  let truncated = ''
+  for (const character of value) {
+    if (truncated.length + character.length > maxCodeUnits - 1) break
+    truncated += character
+  }
+  return `${truncated.trimEnd()}…`
+}
+
+function needsHumanQuestion(run: CollaborationTaskRun): string | undefined {
+  if (run.state !== 'needs-human') return undefined
+  const resultText = [...run.agentJournal].reverse().find((entry) => (
+    entry.state === 'observed_success' && entry.safeResultText
+  ))?.safeResultText
+  if (!resultText) return undefined
+  try {
+    const result = parseWorkerRuntimeResult(resultText)
+    return result.outcome === 'needs_human' ? result.question : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function mapPendingTaskOfferView(
+  offer: CollaborationPendingTaskOffer,
+  acceptanceMode: 'manual' | 'automatic',
+  task?: Task
+): CollaborationTaskView {
+  const state = offer.state === 'pending'
+    ? 'offered' as const
+    : offer.state === 'claiming'
+      ? 'accepting' as const
+      : offer.state === 'claimed_elsewhere'
+        ? 'claimed-elsewhere' as const
+        : offer.state === 'dismissed'
+          ? 'dismissed' as const
+          : offer.state
+  return {
+    taskId: offer.taskId,
+    projectId: offer.projectId,
+    taskOfferId: offer.taskOfferId,
+    workerUserId: offer.workerUserId,
+    hasDedicatedSession: false,
+    revision: task?.revision ?? offer.currentTaskRevision,
+    title: task?.title ?? 'Pending Task offer',
     state,
-    ...(task.activeTurnId ? { localTurnId: task.activeTurnId } : {}),
-    updatedAt: task.updatedAt
+    acceptanceMode,
+    decisionRequired: offer.state === 'awaiting-manual',
+    preflightReasons: offer.preflightReasons,
+    updatedAt: offer.updatedAt,
+    ...(offer.error ? { error: offer.error } : {})
   }
 }
 
@@ -988,6 +1282,15 @@ function replaceById<Value>(
   id: (value: Value) => string
 ): Value[] {
   return [...values.filter((value) => id(value) !== id(replacement)), replacement]
+}
+
+export function managedContainerEnsureIdempotencyKey(
+  userId: string,
+  humanEndpointId: string,
+  retryToken?: string
+): string {
+  const attempt = retryToken ? `\u0000retry\u0000${retryToken}` : ''
+  return `idem_managed_container.ensure.${digest(`${userId}\u0000${humanEndpointId}${attempt}`).slice(0, 48)}`
 }
 
 function digest(value: string): string {
@@ -1013,13 +1316,4 @@ function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void
     const timer = setTimeout(finish, milliseconds)
     signal.addEventListener('abort', finish, { once: true })
   })
-}
-
-export function managedContainerEnsureIdempotencyKey(
-  userId: string,
-  humanEndpointId: string,
-  retryToken?: string
-): string {
-  const attempt = retryToken ? `\u0000retry\u0000${retryToken}` : ''
-  return `idem_managed_container.ensure.${digest(`${userId}\u0000${humanEndpointId}${attempt}`).slice(0, 48)}`
 }

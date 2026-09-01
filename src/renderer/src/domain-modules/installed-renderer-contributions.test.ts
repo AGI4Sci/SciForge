@@ -2,11 +2,14 @@ import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
 import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION,
+  WORKBENCH_NAVIGATION_SECTION_LOCATION,
   type DomainRendererResourceNavigationContract,
   type DomainRendererWorkbenchRightPanelContract
 } from '@sciforge/domain-sdk/renderer'
@@ -202,6 +205,7 @@ describe('installed renderer contributions', () => {
     expect(runtime.bottomPanels.list()).toEqual([])
     expect(runtime.globalOverlays.list()).toEqual([])
     expect(runtime.composerContexts.list()).toEqual([])
+    expect(runtime.navigationSections.list()).toEqual([])
     expect(runtime.toolbarActions.list()).toEqual([])
     expect(translations.bundle('en', 'common')).toEqual({ coreTitle: 'Core' })
     expect(translations.bundle('zh', 'common')).toEqual({ coreTitle: '核心' })
@@ -266,6 +270,22 @@ describe('installed renderer contributions', () => {
         },
         {
           ...template,
+          owner: { moduleId: 'fixture.navigation', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.navigation.section',
+            kind: RENDERER_EXTENSION_CONTRIBUTION_KIND,
+            priority: 25
+          },
+          contract: {
+            location: WORKBENCH_NAVIGATION_SECTION_LOCATION,
+            contractVersion: WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION,
+            label: 'fixtureNavigation'
+          },
+          value: { render: () => null },
+          onDispose: () => disposalOrder.push('navigation')
+        },
+        {
+          ...template,
           owner: { moduleId: 'fixture.composer', moduleVersion: '1.0.0' },
           declaration: {
             id: 'fixture.composer.context',
@@ -301,6 +321,10 @@ describe('installed renderer contributions', () => {
     expect(runtime.globalOverlays.resolve('fixture.overlay.dialog')).toMatchObject({
       ownerId: 'fixture.overlay'
     })
+    expect(runtime.navigationSections.list()).toContainEqual(expect.objectContaining({
+      id: 'fixture.navigation.section',
+      ownerId: 'fixture.navigation'
+    }))
     const composer = runtime.composerContexts.resolve('fixture.composer.context')
     expect(composer).toMatchObject({ ownerId: 'fixture.composer' })
     await expect(composer!.contribution.provide({
@@ -315,10 +339,75 @@ describe('installed renderer contributions', () => {
     })
 
     runtime.dispose()
-    expect(disposalOrder).toEqual(['composer', 'overlay', 'bottom'])
+    expect(disposalOrder).toEqual(['composer', 'navigation', 'overlay', 'bottom'])
     expect(runtime.bottomPanels.list()).toEqual([])
     expect(runtime.globalOverlays.list()).toEqual([])
     expect(runtime.composerContexts.list()).toEqual([])
+    expect(runtime.navigationSections.list()).toEqual([])
+  })
+
+  it('rejects an invalid Workbench navigation value atomically', () => {
+    const translations = new MemoryTranslationHost()
+    const template = installedRendererDomainEntrySet.contributions[0]!
+    const entrySet = {
+      ...installedRendererDomainEntrySet,
+      contributions: [
+        ...installedRendererDomainEntrySet.contributions,
+        {
+          ...template,
+          owner: { moduleId: 'fixture.invalid-navigation', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.invalid-navigation.section',
+            kind: RENDERER_EXTENSION_CONTRIBUTION_KIND,
+            priority: 10
+          },
+          contract: {
+            location: WORKBENCH_NAVIGATION_SECTION_LOCATION,
+            contractVersion: WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION,
+            label: 'fixtureInvalidNavigation'
+          },
+          value: {
+            render: () => null,
+            projectId: 'host-private-project'
+          }
+        }
+      ]
+    } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+
+    expect(() => createInstalledRendererContributions({ entrySet, translations }))
+      .toThrow('failed host validation')
+    expect(translations.mutations).toEqual([])
+  })
+
+  it('preserves unrelated generic renderer extension lifecycle behavior', () => {
+    const dispose = vi.fn()
+    const template = installedRendererDomainEntrySet.contributions[0]!
+    const entrySet = {
+      ...installedRendererDomainEntrySet,
+      contributions: [
+        ...installedRendererDomainEntrySet.contributions,
+        {
+          ...template,
+          owner: { moduleId: 'fixture.other-extension', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.other-extension.entry',
+            kind: RENDERER_EXTENSION_CONTRIBUTION_KIND,
+            priority: 10
+          },
+          contract: { location: 'fixture.other-extension' },
+          value: { packageOwned: true },
+          onDispose: dispose
+        }
+      ]
+    } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+
+    const runtime = createInstalledRendererContributions({
+      entrySet,
+      translations: new MemoryTranslationHost()
+    })
+    runtime.dispose()
+    runtime.dispose()
+    expect(dispose).toHaveBeenCalledOnce()
   })
 
   it('rejects an invalid composer provider before any renderer registration occurs', () => {

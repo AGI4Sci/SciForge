@@ -23,6 +23,8 @@ import {
 } from './contract.js'
 import {
   SCIENTIFIC_PLOTTING_CAPABILITY_FACTORY_CONTRIBUTION,
+  SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRIBUTION,
+  SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRACT,
   SCIENTIFIC_PLOTTING_DOMAIN_MODULE_ID,
   domainPackageDefinition
 } from './definition.js'
@@ -71,7 +73,9 @@ type ScientificPlottingMainHost = DomainMainHost & Readonly<{
 
 export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: ScientificPlottingMainHost
-): TrustedDomainProcessEntryInput<ScientificPlottingCapabilityFactory<CapabilityDefinition>> {
+): TrustedDomainProcessEntryInput<
+  ScientificPlottingCapabilityFactory<CapabilityDefinition> | null
+> {
   const services = new Map<string, ScientificPlottingService>()
   const statusService = host.createService?.() ?? createScientificPlottingService()
   const serviceFor = (workspaceRoot: string): ScientificPlottingService => {
@@ -110,6 +114,10 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
         serviceFor
       }),
       onDispose: () => services.clear()
+    }, {
+      ...SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRIBUTION,
+      value: null,
+      contract: SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRACT
     }]
   }
 }

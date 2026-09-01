@@ -298,7 +298,7 @@ function persistedDecision(overrides: {
 
 async function approvalStore(): Promise<CollaborationLocalStore> {
   const store = new CollaborationLocalStore(new MemoryBackend({
-    schemaVersion: 1,
+    schemaVersion: 3,
     revision: 1,
     lastInboxSequence: 0,
     endpoints: [],

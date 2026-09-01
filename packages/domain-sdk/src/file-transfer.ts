@@ -1,4 +1,14 @@
 import { z } from 'zod'
+import { domainPackagePermissionIdSchema } from './contract.js'
+import {
+  isPortableWorkspacePathSegment,
+  portableWorkspacePathComparisonKey
+} from './file-transfer-portability.js'
+
+export {
+  isPortableWorkspacePathSegment,
+  portableWorkspacePathComparisonKey
+} from './file-transfer-portability.js'
 
 export const DOMAIN_FILE_TRANSFER_LIMITS = Object.freeze({
   maxBytes: 1_073_741_824,
@@ -22,12 +32,29 @@ export const domainWorkspaceRelativePathSchema = z.string().min(1).max(4_096)
   )), {
     message: 'The Workspace-relative path contains an unsafe segment.'
   })
+  .refine((value) => value.split(/[\\/]+/u).every(isPortableWorkspacePathSegment), {
+    message: 'The Workspace-relative path contains a non-portable segment.'
+  })
   .refine(isControlFreeText, {
     message: 'The Workspace-relative path must not contain control characters.'
   })
 
 export type DomainFileTransferHandle = z.infer<typeof domainFileTransferHandleSchema>
 export type DomainWorkspaceRelativePath = z.infer<typeof domainWorkspaceRelativePathSchema>
+
+/**
+ * Provider-neutral authority requested by a trusted system runtime. The Host
+ * matches this exact manifest-issued grant against the current Broker
+ * invocation; packages cannot supply a caller, Principal, invocation, domain,
+ * or absolute Workspace root through this descriptor.
+ */
+export const domainSystemWorkspaceTransferAuthorizationSchema = z.object({
+  requiredSystemCapabilityGrant: domainPackagePermissionIdSchema
+}).strict().readonly()
+
+export type DomainSystemWorkspaceTransferAuthorization = z.infer<
+  typeof domainSystemWorkspaceTransferAuthorizationSchema
+>
 
 export const domainFileTransferLabelSchema = z.string().min(1)
   .max(DOMAIN_FILE_TRANSFER_LIMITS.maxLabelCharacters)
@@ -37,8 +64,8 @@ export const domainFileTransferLabelSchema = z.string().min(1)
   .refine((value) => value !== '.' && value !== '..', {
     message: 'The file label must not be a relative path segment.'
   })
-  .refine(isSafeSuggestedFileName, {
-    message: 'The file label must be one safe file name.'
+  .refine(isPortableWorkspacePathSegment, {
+    message: 'The file label must be one portable file name.'
   })
 
 const domainRendererFilePickerTitleSchema = z.string()
@@ -169,31 +196,26 @@ export type DomainMainFileTransferHost = Readonly<{
     signal?: AbortSignal
   }>): Promise<DomainMainDownloadDestination>
   /**
-   * Agent-only canonical Workspace path. The Host derives the active Task
-   * Workspace and internally mints then consumes the same one-shot grant used
-   * by renderer pickers; packages never receive an absolute path.
+   * Canonical Workspace path. With no system authorization this retains the
+   * Agent/resource-scope contract. Trusted system callers provide only the
+   * exact manifest-issued grant; the Host derives every other authority field
+   * from the current Broker invocation. Packages never receive an absolute
+   * Workspace root.
    */
   openWorkspaceUploadSource(input: Readonly<{
     relativePath: DomainWorkspaceRelativePath
     maxBytes: number
+    systemAuthorization?: DomainSystemWorkspaceTransferAuthorization
     signal?: AbortSignal
   }>): Promise<DomainMainUploadSource>
-  /** Agent-only, Broker-authorized, no-overwrite Workspace destination. */
+  /** Broker-authorized, no-overwrite Workspace destination. */
   openWorkspaceDownloadDestination(input: Readonly<{
     relativePath: DomainWorkspaceRelativePath
     maxBytes: number
+    systemAuthorization?: DomainSystemWorkspaceTransferAuthorization
     signal?: AbortSignal
   }>): Promise<DomainMainDownloadDestination>
 }>
-
-function isSafeSuggestedFileName(value: string): boolean {
-  if (value.includes('/') || value.includes('\\')) return false
-  for (const character of value) {
-    const codePoint = character.codePointAt(0)!
-    if (codePoint <= 0x1f || codePoint === 0x7f) return false
-  }
-  return true
-}
 
 function isControlFreeText(value: string): boolean {
   for (const character of value) {

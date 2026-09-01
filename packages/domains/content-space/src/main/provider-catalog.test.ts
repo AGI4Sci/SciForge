@@ -187,6 +187,23 @@ function providerFixture(providerInstanceRef: string): ContentSpaceProvider {
       },
       capabilities: []
     }),
+    proveFileDescendant: async ({ context, root, candidate }) => ({
+      invocationId: context.invocationId,
+      providerInstanceRef: context.providerInstanceRef,
+      authority: context.providerInstanceRef,
+      root,
+      candidate,
+      binding: context.expectedExternalBinding ?? {
+        providerInstanceRef: context.providerInstanceRef,
+        principal: context.principal,
+        externalSubject: 'a'.repeat(64),
+        bindingRevision: 'b'.repeat(64)
+      },
+      counts: { depth: 1, pages: 1, nodes: 2, elapsedMs: 0 },
+      provedAt: new Date().toISOString(),
+      cacheable: false,
+      portable: false
+    }),
     createFolder: async ({ context, parent, name }) => ({
       invocationId: context.invocationId,
       parent,
@@ -198,12 +215,21 @@ function providerFixture(providerInstanceRef: string): ContentSpaceProvider {
       parent,
       name,
       sourceSize: source.size,
-      reference: { providerInstanceRef, fileId: 'file-a' }
+      reference: { providerInstanceRef, fileId: 'file-a' },
+      writeAfterObservation: {
+        parent,
+        reference: { providerInstanceRef, fileId: 'file-a' },
+        name,
+        size: source.size
+      }
     }),
-    downloadFile: async ({ context, reference }) => ({
-      invocationId: context.invocationId,
-      reference,
-      bytesWritten: 0
+    authorizeDownload: async ({ context, reference }) => ({
+      consume: async () => ({
+        invocationId: context.invocationId,
+        reference,
+        bytesWritten: 0
+      }),
+      retire: async () => undefined
     }),
     resolvePortalTarget: async () => ({
       url: 'https://content-space.invalid/portal',

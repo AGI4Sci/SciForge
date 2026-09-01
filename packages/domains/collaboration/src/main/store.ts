@@ -1,17 +1,37 @@
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import {
   agentNodeSchema,
+  cloudResourceRefSchema,
+  externalOperationRecoveryJournalEntrySchema,
+  humanAnswerSchema,
   humanEndpointBindingSchema,
+  localSessionProjectionBindingSchema,
   managedProviderContainerSchema,
   participantProfileSchema,
   projectSchema,
   providerLocatorSchema,
   remoteSessionProjectionSchema,
+  taskExecutionPreflightSchema,
+  taskExecutionSchema,
+  taskResultOutputSchema,
   taskSchema,
+  type RemoteSessionProjection,
   userPrincipalSchema
 } from '@sciforge/collaboration-contracts'
+import {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema,
+  type CollaborationTaskCheckpoint,
+  type CollaborationTaskInteraction
+} from '../task-interaction.js'
+
+export {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema
+} from '../task-interaction.js'
 
 const timestampSchema = z.iso.datetime({ offset: true })
 const opaqueLocalIdSchema = z.string().regex(/^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$/)
@@ -19,6 +39,20 @@ const projectionIdSchema = remoteSessionProjectionSchema.shape.projectionId
 const userIdSchema = userPrincipalSchema.shape.userId
 const endpointIdSchema = humanEndpointBindingSchema.shape.humanEndpointId
 const providerMessageIdSchema = z.string().min(1).max(512)
+
+export const collaborationWorkerAcceptanceModeSchema = z.enum(['manual', 'automatic'])
+export const collaborationWorkerAcceptancePolicySchema = z.object({
+  agentId: agentNodeSchema.shape.agentId,
+  mode: collaborationWorkerAcceptanceModeSchema,
+  updatedAt: timestampSchema
+}).strict()
+
+export const collaborationProjectUnavailableFenceSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  kind: z.enum(['permanent', 'permission-denied']),
+  reason: z.string().trim().min(1).max(4_000),
+  observedAt: timestampSchema
+}).strict()
 
 export const collaborationLocalProjectionSchema = z.object({
   projection: remoteSessionProjectionSchema,
@@ -113,6 +147,11 @@ export const collaborationOutboxEntrySchema = z.object({
     'task.progress',
     'task.result',
     'task.failed',
+    'task.offer-decision',
+    'task.external-operation',
+    'task.human-needed',
+    'coordinator.command',
+    'worker.availability',
     'agent.heartbeat',
     'inbox.ack',
     'capability.approval.create',
@@ -125,27 +164,262 @@ export const collaborationOutboxEntrySchema = z.object({
   createdAt: timestampSchema,
   updatedAt: timestampSchema,
   deliveredAt: timestampSchema.optional(),
+  response: z.record(z.string(), z.json()).optional(),
   error: z.string().trim().min(1).max(4_000).optional()
 }).strict().superRefine((entry, context) => {
   if ((entry.state === 'delivered') !== (entry.deliveredAt !== undefined)) {
     context.addIssue({ code: 'custom', path: ['deliveredAt'], message: 'Delivered outbox entry requires deliveredAt.' })
   }
+  if (entry.response !== undefined && entry.state !== 'delivered') {
+    context.addIssue({
+      code: 'custom',
+      path: ['response'],
+      message: 'Only a delivered outbox command may retain its strict Cloud response.'
+    })
+  }
 })
 
-export const collaborationTaskRunSchema = z.object({
-  task: taskSchema,
-  state: z.enum(['offered', 'accepting', 'running', 'reconciling', 'needs-human', 'completed', 'failed', 'stale']),
-  runtimeId: z.string().trim().min(1).max(128).optional(),
-  threadId: z.string().trim().min(1).max(512).optional(),
-  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
-  clientDirectiveId: z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
-  localTurnId: z.string().trim().min(1).max(512).optional(),
-  resultText: z.string().max(32_000).optional(),
-  startedAt: timestampSchema.optional(),
-  updatedAt: timestampSchema,
-  completedAt: timestampSchema.optional(),
-  error: z.string().trim().min(1).max(4_000).optional()
+const taskExecutionIdSchema = taskExecutionSchema.shape.executionId
+const taskOfferIdSchema = z.string()
+  .regex(/^ofr_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$/u)
+const localInvocationIdSchema = z.string().trim().min(1).max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
+const clientDirectiveIdSchema = z.string().trim().min(1).max(256)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u)
+
+const collaborationContentTransferPreflightObservationSchema = z.object({
+  operation: z.enum(['download', 'upload-new']),
+  status: z.enum(['ready', 'provider_not_ready', 'principal_stale', 'binding_stale']),
+  intentDigest: sha256Schema,
+  observationRevision: sha256Schema
 }).strict()
+
+export const collaborationTaskOfferJournalSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  taskId: taskSchema.shape.taskId,
+  executionId: taskExecutionIdSchema,
+  taskOfferId: taskOfferIdSchema,
+  currentTaskRevision: taskSchema.shape.revision,
+  currentExecutionRevision: taskExecutionSchema.shape.revision,
+  offerRevision: taskSchema.shape.revision,
+  recipientAgentId: agentNodeSchema.shape.agentId,
+  receivedAt: timestampSchema
+}).strict()
+
+export const collaborationPendingTaskOfferSchema = z.object({
+  projectId: projectSchema.shape.projectId,
+  taskId: taskSchema.shape.taskId,
+  taskOfferId: taskOfferIdSchema,
+  workerUserId: userPrincipalSchema.shape.userId,
+  currentTaskRevision: taskSchema.shape.revision,
+  offerRevision: taskSchema.shape.revision,
+  recipientAgentId: agentNodeSchema.shape.agentId,
+  receivedAt: timestampSchema,
+  preflightReasons: z.array(z.enum([
+    'runtime_not_ready',
+    'task_unavailable',
+    'offer_not_current',
+    'content_not_ready',
+    'provider_not_ready'
+  ])).max(5),
+  state: z.enum([
+    'pending',
+    'awaiting-manual',
+    'claiming',
+    'rejecting',
+    'dismissed',
+    'claimed_elsewhere',
+    'closed',
+    'failed'
+  ]),
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.nullable(),
+  error: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((offer, context) => {
+  const terminal = ['dismissed', 'claimed_elsewhere', 'closed', 'failed'].includes(offer.state)
+  if (terminal !== (offer.completedAt !== null)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completedAt'],
+      message: 'A terminal pending-offer journal requires its completion time.'
+    })
+  }
+})
+
+export const collaborationWorkerPreflightSchema = z.object({
+  cloud: taskExecutionPreflightSchema,
+  outcome: z.enum(['allowed', 'denied']),
+  reasons: z.array(z.enum([
+    'cloud_denied',
+    'runtime_not_ready',
+    'provider_not_ready',
+    'content_not_ready',
+    'agent_inactive',
+    'execution_mismatch'
+  ])).max(16),
+  contentTransferReadiness: z.array(
+    collaborationContentTransferPreflightObservationSchema
+  ).max(101),
+  evaluatedAt: timestampSchema
+}).strict().superRefine((preflight, context) => {
+  if ((preflight.outcome === 'allowed') !== (preflight.reasons.length === 0)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['reasons'],
+      message: 'An allowed local preflight has no denial reasons.'
+    })
+  }
+})
+
+export const collaborationTaskOfferDecisionSchema = z.object({
+  decision: z.literal('accept'),
+  decidedAt: timestampSchema
+}).strict()
+
+export const collaborationAgentInvocationJournalSchema = z.object({
+  logicalInvocationId: localInvocationIdSchema,
+  clientDirectiveId: clientDirectiveIdSchema,
+  state: z.enum([
+    'prepared',
+    'dispatched',
+    'observed_success',
+    'observed_failure',
+    'late_outcome'
+  ]),
+  preparedAt: timestampSchema,
+  dispatchedAt: timestampSchema.nullable(),
+  observedAt: timestampSchema.nullable(),
+  runtimeId: z.string().trim().min(1).max(128).nullable(),
+  threadId: z.string().trim().min(1).max(512).nullable(),
+  turnId: z.string().trim().min(1).max(512).nullable(),
+  runtimeState: z.enum(['completed', 'failed', 'cancelled']).nullable(),
+  safeResultText: z.string().max(32_000).nullable(),
+  safeError: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((entry, context) => {
+  const dispatched = entry.state !== 'prepared'
+  if (dispatched !== (entry.dispatchedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['dispatchedAt'], message: 'Dispatched Agent work requires dispatch time.' })
+  }
+  const observed = entry.state === 'observed_success' ||
+    entry.state === 'observed_failure' || entry.state === 'late_outcome'
+  if (observed !== (entry.observedAt !== null && entry.runtimeState !== null)) {
+    context.addIssue({ code: 'custom', path: ['observedAt'], message: 'Observed Agent work requires exact outcome facts.' })
+  }
+})
+
+export const collaborationExternalOperationJournalSchema = z.object({
+  logicalInvocationId: localInvocationIdSchema,
+  operation: z.enum(['download', 'upload_new']),
+  workspaceRelativePath: z.string().trim().min(1).max(4_096),
+  requestDigest: sha256Schema,
+  state: z.enum([
+    'prepared',
+    'cloud_prepared',
+    'cloud_dispatched',
+    'effect_dispatched',
+    'observed_success',
+    'observed_failure',
+    'outcome_unknown',
+    'late_outcome'
+  ]),
+  cloudJournal: externalOperationRecoveryJournalEntrySchema.nullable(),
+  receiptDigest: sha256Schema.nullable(),
+  observationDigest: sha256Schema.nullable(),
+  preparedAt: timestampSchema,
+  effectDispatchedAt: timestampSchema.nullable(),
+  observedAt: timestampSchema.nullable(),
+  safeFailureCode: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u).nullable(),
+  safeError: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((entry, context) => {
+  if ((entry.state !== 'prepared') !== (entry.cloudJournal !== null)) {
+    context.addIssue({ code: 'custom', path: ['cloudJournal'], message: 'Cloud-prepared work retains its canonical journal entry.' })
+  }
+  const effectDispatched = ['effect_dispatched', 'observed_success', 'observed_failure', 'outcome_unknown', 'late_outcome']
+    .includes(entry.state)
+  if (effectDispatched !== (entry.effectDispatchedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['effectDispatchedAt'], message: 'Provider dispatch requires its durable local time.' })
+  }
+  const observed = ['observed_success', 'observed_failure', 'outcome_unknown', 'late_outcome']
+    .includes(entry.state)
+  if (observed !== (entry.observedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['observedAt'], message: 'Observed transfer state requires observation time.' })
+  }
+  const lateSuccess = entry.state === 'late_outcome' && entry.safeFailureCode === 'completed_after_fence'
+  const success = entry.state === 'observed_success' || lateSuccess
+  if (success !== (entry.receiptDigest !== null && entry.observationDigest !== null)) {
+    context.addIssue({ code: 'custom', path: ['observationDigest'], message: 'Successful transfer requires exact receipt and observation digests.' })
+  }
+  if (
+    entry.state === 'late_outcome' &&
+    !['completed_after_fence', 'failed_after_fence', 'outcome_unknown'].includes(entry.safeFailureCode ?? '')
+  ) {
+    context.addIssue({ code: 'custom', path: ['safeFailureCode'], message: 'A late transfer requires its exact bounded outcome.' })
+  }
+})
+
+export const collaborationTaskLateOutcomeSchema = z.object({
+  source: z.enum(['agent_runtime', 'content_space', 'cloud']),
+  logicalInvocationId: localInvocationIdSchema,
+  outcome: z.enum(['completed_after_fence', 'failed_after_fence', 'outcome_unknown']),
+  observedAt: timestampSchema,
+  safeDetail: z.string().trim().min(1).max(4_000)
+}).strict()
+
+export const collaborationTaskRunSchema = z.object({
+  offer: collaborationTaskOfferJournalSchema,
+  task: taskSchema.nullable(),
+  execution: taskExecutionSchema.nullable(),
+  latestPreflight: collaborationWorkerPreflightSchema.nullable(),
+  decision: collaborationTaskOfferDecisionSchema,
+  expectedTaskRevision: taskSchema.shape.revision,
+  expectedExecutionRevision: taskExecutionSchema.shape.revision,
+  state: z.enum([
+    'accepting',
+    'running',
+    'needs-human',
+    'submitting',
+    'completed',
+    'failed',
+    'fenced',
+    'manual-recovery'
+  ]),
+  workspaceRoot: z.string().trim().min(1).max(4_096),
+  runtimeId: z.string().trim().min(1).max(128).nullable(),
+  threadId: z.string().trim().min(1).max(512).nullable(),
+  humanRequestId: z.string().regex(/^hrq_[A-Za-z0-9]{12,64}$/u).nullable(),
+  humanAnswer: humanAnswerSchema.nullable(),
+  resources: z.array(cloudResourceRefSchema).max(101),
+  agentJournal: z.array(collaborationAgentInvocationJournalSchema).max(1_000),
+  externalJournal: z.array(collaborationExternalOperationJournalSchema).max(1_000),
+  outputs: z.array(taskResultOutputSchema).max(100),
+  recoveryJournalEntryIds: z.array(
+    externalOperationRecoveryJournalEntrySchema.shape.contentRecoveryJournalEntryId
+  ).max(100),
+  resultSummary: z.string().trim().min(1).max(32_000).nullable(),
+  lateOutcomes: z.array(collaborationTaskLateOutcomeSchema).max(1_000),
+  startedAt: timestampSchema.nullable(),
+  updatedAt: timestampSchema,
+  completedAt: timestampSchema.nullable(),
+  error: z.string().trim().min(1).max(4_000).nullable()
+}).strict().superRefine((run, context) => {
+  if (run.task && (
+    run.task.taskId !== run.offer.taskId || run.task.projectId !== run.offer.projectId
+  )) {
+    context.addIssue({ code: 'custom', path: ['task'], message: 'Task snapshot must match the immutable offer.' })
+  }
+  if (run.execution && (
+    run.execution.taskId !== run.offer.taskId ||
+    run.execution.executionId !== run.offer.executionId ||
+    run.execution.assigneeAgentId !== run.offer.recipientAgentId
+  )) {
+    context.addIssue({ code: 'custom', path: ['execution'], message: 'Execution snapshot must match the immutable offer.' })
+  }
+  const terminal = ['completed', 'failed', 'fenced', 'manual-recovery'].includes(run.state)
+  if (terminal !== (run.completedAt !== null)) {
+    context.addIssue({ code: 'custom', path: ['completedAt'], message: 'Terminal Worker run requires completion time.' })
+  }
+})
 
 export const collaborationDiagnosticRecordSchema = z.object({
   code: z.string().trim().min(1).max(128),
@@ -175,8 +449,7 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
   updatedAt: timestampSchema
 }).strict()
 
-export const collaborationLocalStateSchema = z.object({
-  schemaVersion: z.literal(1),
+const collaborationLocalStateShape = {
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -189,14 +462,55 @@ export const collaborationLocalStateSchema = z.object({
   agents: z.array(agentNodeSchema).max(64),
   participant: participantProfileSchema.optional(),
   projections: z.array(collaborationLocalProjectionSchema).max(10_000),
+  sessionBindings: z.array(localSessionProjectionBindingSchema).max(10_000).optional(),
   projects: z.array(projectSchema).max(10_000),
+  projectUnavailableFences: z.array(collaborationProjectUnavailableFenceSchema)
+    .max(10_000)
+    .default([])
+    .superRefine((fences, context) => {
+      const seen = new Set<string>()
+      for (const [index, fence] of fences.entries()) {
+        if (seen.has(fence.projectId)) {
+          context.addIssue({
+            code: 'custom',
+            path: [index, 'projectId'],
+            message: 'Each Project has at most one local unavailable fence.'
+          })
+        }
+        seen.add(fence.projectId)
+      }
+    }),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
+  taskInteractions: z.array(collaborationTaskInteractionSchema).max(100_000).default([]),
+  taskCheckpoints: z.array(collaborationTaskCheckpointSchema).max(200_000).default([]),
+  pendingTaskOffers: z.array(collaborationPendingTaskOfferSchema).max(100_000).default([]),
+  workerAcceptancePolicies: z.array(collaborationWorkerAcceptancePolicySchema)
+    .max(64)
+    .default([])
+    .superRefine((policies, context) => {
+      const seen = new Set<string>()
+      for (const [index, policy] of policies.entries()) {
+        if (seen.has(policy.agentId)) {
+          context.addIssue({
+            code: 'custom',
+            path: [index, 'agentId'],
+            message: 'Each local Agent Device has exactly one acceptance policy.'
+          })
+        }
+        seen.add(policy.agentId)
+      }
+    }),
   queue: z.array(collaborationQueueItemSchema).max(100_000),
   receipts: z.array(collaborationLocalReceiptSchema).max(200_000),
   outbox: z.array(collaborationOutboxEntrySchema).max(100_000),
   diagnostics: z.array(collaborationDiagnosticRecordSchema).max(256),
   remoteApprovals: z.array(collaborationLocalRemoteApprovalSchema).max(10_000).default([])
+} as const
+
+export const collaborationLocalStateSchema = z.object({
+  schemaVersion: z.literal(3),
+  ...collaborationLocalStateShape
 }).strict()
 
 export type CollaborationLocalState = z.infer<typeof collaborationLocalStateSchema>
@@ -205,10 +519,24 @@ export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
+export type { CollaborationTaskInteraction, CollaborationTaskCheckpoint }
+export type CollaborationPendingTaskOffer = z.infer<typeof collaborationPendingTaskOfferSchema>
+export type CollaborationExternalOperationJournal = z.infer<
+  typeof collaborationExternalOperationJournalSchema
+>
+export type CollaborationWorkerAcceptanceMode = z.infer<
+  typeof collaborationWorkerAcceptanceModeSchema
+>
+export type CollaborationWorkerAcceptancePolicy = z.infer<
+  typeof collaborationWorkerAcceptancePolicySchema
+>
+export type CollaborationProjectUnavailableFence = z.infer<
+  typeof collaborationProjectUnavailableFenceSchema
+>
 export type CollaborationLocalRemoteApproval = z.infer<typeof collaborationLocalRemoteApprovalSchema>
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 3,
   revision: 0,
   lastInboxSequence: 0,
   endpoints: [],
@@ -216,9 +544,15 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   managedContainers: [],
   agents: [],
   projections: [],
+  sessionBindings: [],
   projects: [],
+  projectUnavailableFences: [],
   tasks: [],
   taskRuns: [],
+  taskInteractions: [],
+  taskCheckpoints: [],
+  pendingTaskOffers: [],
+  workerAcceptancePolicies: [],
   queue: [],
   receipts: [],
   outbox: [],
@@ -229,6 +563,7 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
 export interface CollaborationStateBackend {
   read(): Promise<unknown | undefined>
   write(value: CollaborationLocalState): Promise<void>
+  quarantineUnsupportedState?(): Promise<void>
 }
 
 export class FileCollaborationStateBackend implements CollaborationStateBackend {
@@ -258,17 +593,18 @@ export class FileCollaborationStateBackend implements CollaborationStateBackend 
       }
       await rename(temporaryPath, this.path)
       await chmod(this.path, 0o600)
-      const directory = await open(directoryPath, 'r')
-      try {
-        await directory.sync().catch((error: unknown) => {
-          if (!isUnsupportedDirectorySync(error)) throw error
-        })
-      } finally {
-        await directory.close()
-      }
+      await syncDirectory(directoryPath)
     } finally {
       await rm(temporaryPath, { force: true }).catch(() => undefined)
     }
+  }
+
+  async quarantineUnsupportedState(): Promise<void> {
+    const directoryPath = dirname(this.path)
+    const preservedPath = `${this.path}.unsupported-${Date.now()}-${randomUUID()}`
+    await rename(this.path, preservedPath)
+    await chmod(preservedPath, 0o600)
+    await syncDirectory(directoryPath)
   }
 }
 
@@ -281,9 +617,24 @@ export class CollaborationLocalStore {
   async open(): Promise<CollaborationLocalState> {
     if (this.state) return structuredClone(this.state)
     const stored = await this.backend.read()
+    if (
+      stored !== undefined &&
+      (!stored || typeof stored !== 'object' || Array.isArray(stored) ||
+        (stored as { schemaVersion?: number }).schemaVersion !== 3)
+    ) {
+      if (!this.backend.quarantineUnsupportedState) {
+        throw new Error(
+          'Collaboration local state is not schema version 3; clear the obsolete local Collaboration state and reconnect to Cloud.'
+        )
+      }
+      await this.backend.quarantineUnsupportedState()
+      this.state = structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
+      await this.backend.write(this.state)
+      return this.snapshot()
+    }
     this.state = stored === undefined
       ? structuredClone(EMPTY_COLLABORATION_LOCAL_STATE)
-      : collaborationLocalStateSchema.parse(stored)
+      : collaborationLocalStateSchema.parse(normalizePersistedState(stored))
     await this.recoverInterruptedWork()
     return this.snapshot()
   }
@@ -319,6 +670,24 @@ export class CollaborationLocalStore {
     return result
   }
 
+  async prepareForAuthenticatedUser(userId: string): Promise<void> {
+    const snapshot = this.snapshot()
+    if (!snapshot.user || snapshot.user.userId === userId) return
+    await this.transact((draft) => {
+      if (!draft.user || draft.user.userId === userId) return
+      if (!isReplaceableIdentityCache(draft)) {
+        throw new Error(
+          'This Desktop already has Phone Link or Session data for another signed-in SciForge User.'
+        )
+      }
+      const revision = draft.revision
+      Object.assign(draft, structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+      delete draft.user
+      delete draft.participant
+      draft.revision = revision
+    })
+  }
+
   private async recoverInterruptedWork(): Promise<void> {
     if (!this.state) return
     let changed = false
@@ -341,10 +710,14 @@ export class CollaborationLocalStore {
       entry.updatedAt = recoveredAt
       changed = true
     }
-    for (const run of draft.taskRuns) {
-      if (run.state !== 'accepting' && run.state !== 'running') continue
-      run.state = 'reconciling'
-      run.updatedAt = recoveredAt
+    for (const interaction of draft.taskInteractions) {
+      if (interaction.state !== 'dispatching') continue
+      // A directive may already have reached the local Agent Runtime when
+      // Desktop stopped. Keep its idempotent identity and wait for the
+      // controller to reconcile the outcome instead of dispatching a second
+      // turn automatically.
+      interaction.state = 'awaiting_cloud'
+      interaction.updatedAt = recoveredAt
       changed = true
     }
     if (!changed) return
@@ -352,6 +725,128 @@ export class CollaborationLocalStore {
     const parsed = collaborationLocalStateSchema.parse(draft)
     await this.backend.write(parsed)
     this.state = parsed
+  }
+}
+
+function isReplaceableIdentityCache(state: CollaborationLocalState): boolean {
+  return state.lastInboxSequence === 0 &&
+    state.endpoints.length === 0 &&
+    state.endpointLocators.length === 0 &&
+    state.managedContainers.length === 0 &&
+    !state.participant?.primaryHumanEndpointId &&
+    state.projections.length === 0 &&
+    (state.sessionBindings?.length ?? 0) === 0 &&
+    state.projects.length === 0 &&
+    state.tasks.length === 0 &&
+    state.taskRuns.length === 0 &&
+    state.workerAcceptancePolicies.length === 0 &&
+    state.queue.length === 0 &&
+    state.receipts.length === 0 &&
+    state.remoteApprovals.length === 0 &&
+    state.outbox.every((entry) => (
+      entry.kind === 'worker.availability' || entry.kind === 'agent.heartbeat'
+    ))
+}
+
+export function claimLocalSessionProjectionBinding(
+  state: CollaborationLocalState,
+  projection: RemoteSessionProjection,
+  runtimeId: string,
+  threadId: string,
+  at: string
+): void {
+  const bindings = state.sessionBindings ??= []
+  const sessionBinding = bindings.find((binding) => (
+    binding.runtimeId === runtimeId && binding.threadId === threadId
+  ))
+  if (sessionBinding && sessionBinding.projectionId !== projection.projectionId) {
+    throw new Error('This local Session is permanently bound to another phone Topic.')
+  }
+  const projectionBinding = bindings.find((binding) => binding.projectionId === projection.projectionId)
+  if (projectionBinding && (
+    projectionBinding.runtimeId !== runtimeId || projectionBinding.threadId !== threadId
+  )) {
+    throw new Error('A phone Topic cannot be rebound to another local Session.')
+  }
+  if (sessionBinding || projectionBinding) return
+  bindings.push(localSessionProjectionBindingSchema.parse({
+    schemaVersion: 1,
+    type: 'local_session_projection_binding',
+    projectionId: projection.projectionId,
+    agentId: projection.agentId,
+    runtimeId,
+    threadId,
+    createdAt: at,
+    updatedAt: at
+  }))
+}
+
+export function localSessionProjectionBindingFor(
+  state: CollaborationLocalState,
+  runtimeId: string,
+  threadId: string
+) {
+  return state.sessionBindings?.find((binding) => (
+    binding.runtimeId === runtimeId && binding.threadId === threadId
+  ))
+}
+
+function normalizePersistedState(stored: unknown): unknown {
+  const scoped = dropUnscopedManagedContainerCache(stored)
+  if (!scoped || typeof scoped !== 'object' || Array.isArray(scoped)) return scoped
+  const record = scoped as Record<string, unknown>
+  if (Array.isArray(record.sessionBindings)) return scoped
+  const projections = Array.isArray(record.projections) ? record.projections : []
+  const bindings: unknown[] = []
+  const occupiedSessions = new Set<string>()
+  for (const candidate of projections) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+    const local = candidate as Record<string, unknown>
+    const projection = local.projection
+    if (!projection || typeof projection !== 'object' || Array.isArray(projection)) continue
+    const remote = projection as Record<string, unknown>
+    if (
+      typeof local.runtimeId !== 'string' || typeof local.threadId !== 'string' ||
+      typeof remote.projectionId !== 'string' || typeof remote.agentId !== 'string' ||
+      typeof remote.createdAt !== 'string' || typeof remote.updatedAt !== 'string'
+    ) continue
+    const sessionKey = JSON.stringify([local.runtimeId, local.threadId])
+    if (occupiedSessions.has(sessionKey)) continue
+    occupiedSessions.add(sessionKey)
+    bindings.push({
+      schemaVersion: 1,
+      type: 'local_session_projection_binding',
+      projectionId: remote.projectionId,
+      agentId: remote.agentId,
+      runtimeId: local.runtimeId,
+      threadId: local.threadId,
+      createdAt: remote.createdAt,
+      updatedAt: remote.updatedAt
+    })
+  }
+  return { ...record, sessionBindings: bindings }
+}
+
+function dropUnscopedManagedContainerCache(stored: unknown): unknown {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return stored
+  const record = stored as Record<string, unknown>
+  if (!Array.isArray(record.managedContainers)) return stored
+  const managedContainers = record.managedContainers.filter((container) => (
+    container !== null && typeof container === 'object' && !Array.isArray(container) &&
+    typeof (container as Record<string, unknown>).installationId === 'string'
+  ))
+  if (managedContainers.length === record.managedContainers.length) return stored
+  return { ...record, managedContainers }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const directory = await open(path, 'r')
+  try {
+    await directory.sync().catch((error: unknown) => {
+      if (!isUnsupportedDirectorySync(error)) throw error
+    })
+  } finally {
+    await directory.close()
   }
 }
 

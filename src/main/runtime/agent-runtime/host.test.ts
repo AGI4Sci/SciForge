@@ -12,6 +12,7 @@ import {
   type PrincipalContextSnapshot,
   type PrincipalSnapshot
 } from '@sciforge/domain-sdk/principal'
+import type { DomainRemoteCapabilityApproval } from '@sciforge/domain-sdk/remote-approval'
 import {
   sanitizeTraceTextChunks,
   type TraceEvent,
@@ -51,7 +52,7 @@ import {
 import { CodexRuntimeService } from '../codex'
 import { CodexThreadStore } from '../codex/codex-thread-store'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
-import { createAgentRuntimeHost } from './host'
+import { createAgentRuntimeHost, renderAgentRoutingGuidance } from './host'
 import {
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_VERSION,
@@ -80,6 +81,7 @@ import {
   type SettingsMemoryRecordUpdater
 } from '../../../renderer/src/lib/settings-memory-actions'
 import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
+import { defineDomainMainAgentRoutingContract } from '@sciforge/domain-sdk/agent-routing'
 
 function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
   return {
@@ -402,6 +404,50 @@ function shellWrappedCommandToolEvent(command: string, index: number): AgentRunt
     }
   }
 }
+
+describe('renderAgentRoutingGuidance', () => {
+  it('renders package-owned route contracts without host-specific branching', () => {
+    const contract = defineDomainMainAgentRoutingContract({
+      intent: 'scientific-plot-provenance',
+      title: 'Scientific plot provenance routing',
+      summary: 'Route traceable scientific figures through the governed visual workflow.',
+      triggerHints: ['图表溯源'],
+      allowedRoutes: ['code', 'model', 'hybrid'],
+      workflow: [
+        {
+          id: 'visual-plan',
+          description: 'Call visual_generate before choosing the route.',
+          tool: 'visual_generate'
+        },
+        {
+          id: 'render-code',
+          description: 'Render code and hybrid plots through Scientific Plotting.',
+          tool: 'sciforge_invoke',
+          capabilityId: 'scientific-plotting.render',
+          appliesToRoutes: ['code', 'hybrid']
+        },
+        {
+          id: 'render-model',
+          description: 'Render model-only visuals through image generation with a replay receipt.',
+          tool: 'image_generation_render',
+          appliesToRoutes: ['model']
+        }
+      ],
+      reproducibilityRequirements: [
+        'Persist the selected route and exact model inputs.'
+      ]
+    })
+
+    expect(renderAgentRoutingGuidance([])).toBe('')
+    const guidance = renderAgentRoutingGuidance([contract])
+    expect(guidance).toContain('Package-contributed Agent routing guidance:')
+    expect(guidance).toContain('Intent: scientific-plot-provenance')
+    expect(guidance).toContain('tool=visual_generate')
+    expect(guidance).toContain('capability=scientific-plotting.render')
+    expect(guidance).toContain('routes=model')
+    expect(guidance).toContain('Persist the selected route and exact model inputs.')
+  })
+})
 
 const evidenceQueueRoots: string[] = []
 
@@ -1062,6 +1108,131 @@ describe('AgentRuntimeHost', () => {
     await expect(host.decideRemoteCapabilityApproval(exactDecision)).resolves.toBe('applied')
     await expect(host.decideRemoteCapabilityApproval(exactDecision)).resolves.toBe('already_terminal')
     await expect(eligible).resolves.toBe('allowed')
+    dispose()
+    host.dispose()
+  })
+
+  it('routes one exact native Codex command approval from the phone without leaking the command', async () => {
+    const thread = {
+      id: 'native-approval-thread',
+      runtimeId: 'codex' as const,
+      title: 'Native approval',
+      updatedAt: '2026-08-28T04:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    adapter.resolveApproval = vi.fn(async () => undefined)
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      yield {
+        kind: 'approval_requested',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'native-approval-turn',
+        itemId: 'native-approval-item',
+        approvalId: 'native-runtime-request',
+        summary: 'A raw command that must never be copied to the phone',
+        toolName: 'command execution',
+        meta: {
+          codexRequestKind: 'approval',
+          codexRequestMethod: 'item/commandExecution/requestApproval'
+        }
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'approval_requested',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'native-approval-turn-after-restart',
+        itemId: 'native-approval-item-after-restart',
+        approvalId: 'native-runtime-request',
+        summary: 'The same short request id was reused after a runtime restart',
+        toolName: 'command execution',
+        meta: {
+          codexRequestKind: 'approval',
+          codexRequestMethod: 'item/commandExecution/requestApproval'
+        }
+      } satisfies AgentRuntimeEvent
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter] })
+    const published: DomainRemoteCapabilityApproval[] = []
+    const dispose = host.subscribeRemoteCapabilityApprovals((approval) => { published.push(approval) })
+    const abort = new AbortController()
+    const events = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: thread.id,
+      signal: abort.signal
+    })[Symbol.asyncIterator]()
+
+    await expect(events.next()).resolves.toMatchObject({
+      value: { kind: 'approval_requested', approvalId: 'native-runtime-request' }
+    })
+    expect(published).toHaveLength(1)
+    expect(published[0]).toMatchObject({
+      runtimeId: 'codex',
+      threadId: thread.id,
+      turnId: 'native-approval-turn',
+      actionId: 'runtime.command-execution',
+      safeSummary: '命令执行',
+      effect: 'destructive',
+      remoteEligible: true,
+      state: 'pending'
+    })
+    expect(JSON.stringify(published)).not.toContain('raw command')
+    const notice = published[0]!
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: notice.approvalId,
+      runtimeId: notice.runtimeId,
+      threadId: notice.threadId,
+      turnId: notice.turnId,
+      capabilityRequestId: notice.capabilityRequestId,
+      decisionId: 'native-phone-decision',
+      decision: 'allow_once'
+    })).resolves.toBe('applied')
+    expect(adapter.resolveApproval).toHaveBeenCalledOnce()
+    expect(adapter.resolveApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        runtimeId: 'codex',
+        threadId: thread.id,
+        approvalId: 'native-runtime-request',
+        decision: 'allowed'
+      })
+    )
+    expect(published.map(({ state }) => state)).toEqual(['pending', 'approved'])
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: notice.approvalId,
+      runtimeId: notice.runtimeId,
+      threadId: notice.threadId,
+      turnId: notice.turnId,
+      capabilityRequestId: notice.capabilityRequestId,
+      decisionId: 'native-phone-decision-repeated',
+      decision: 'deny_once'
+    })).resolves.toBe('already_terminal')
+
+    await expect(events.next()).resolves.toMatchObject({
+      value: {
+        kind: 'approval_requested',
+        turnId: 'native-approval-turn-after-restart',
+        approvalId: 'native-runtime-request'
+      }
+    })
+    const reusedRequest = published.at(-1)!
+    expect(reusedRequest.state).toBe('pending')
+    expect(reusedRequest.approvalId).not.toBe(notice.approvalId)
+    expect(JSON.stringify(reusedRequest)).not.toContain('same short request id')
+    await expect(host.decideRemoteCapabilityApproval({
+      approvalId: reusedRequest.approvalId,
+      runtimeId: reusedRequest.runtimeId,
+      threadId: reusedRequest.threadId,
+      turnId: reusedRequest.turnId,
+      capabilityRequestId: reusedRequest.capabilityRequestId,
+      decisionId: 'native-phone-decision-reused-request-id',
+      decision: 'deny_once'
+    })).resolves.toBe('applied')
+    expect(adapter.resolveApproval).toHaveBeenCalledTimes(2)
+    expect(published.at(-1)?.state).toBe('denied')
+
+    abort.abort()
+    await events.return?.()
     dispose()
     host.dispose()
   })
@@ -1879,13 +2050,28 @@ describe('AgentRuntimeHost', () => {
       'When the user explicitly requests an external Provider operation, `sciforge_discover` may search matching global native operations even when no current component resourceRef exists.'
     )
     expect(dispatched?.text).toContain(
+      'Package workflow steps may name an MCP tool that is not exposed as a direct provider function.'
+    )
+    expect(dispatched?.text).toContain(
+      'providerFamily: "managed-mcp"'
+    )
+    expect(dispatched?.text).toContain(
       'This includes authorization operations that establish the initial Broker resource.'
     )
     expect(dispatched?.text).toContain(
-      'When an exact capability ID is already supplied, pass it unchanged as `capabilityId` with `includeSchema=true` and `limit=1`.'
+      'when one is explicitly supplied, pass that value unchanged as `capabilityId` with `includeSchema=true` and `limit=1`.'
     )
     expect(dispatched?.text).toContain(
-      'Do not replace that exact lookup with text, scope, effect, resource-kind, or provider-family filters.'
+      'A discovery result\'s opaque `operationRef` (the `op_...` value) is not a capability ID'
+    )
+    expect(dispatched?.text).toContain(
+      'Never put an `op_...` or `schema_...` reference in `capabilityId`'
+    )
+    expect(dispatched?.text).toContain(
+      'If `sciforge_discover` returns `capability_discovery_empty`, inspect its bounded `error.details.suggestedQueries` recovery hints and try at most one suggested query.'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not replace an exact capability-ID lookup with text, scope, effect, resource-kind, or provider-family filters.'
     )
     expect(dispatched?.text).toContain(
       'A missing component resourceRef blocks only observation or operations that depend on that current UI resource; it does not block discovery of global native operations that are independent of the current UI resource.'
@@ -1907,6 +2093,73 @@ describe('AgentRuntimeHost', () => {
     )
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
+  })
+
+  it('exposes an independent Project panel target without treating it as Session authority', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const snapshot = {
+      schemaVersion: 3 as const,
+      windowId: 'electron:1',
+      revision: 27,
+      publishedAt: '2026-08-20T06:28:16.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+      activeThreadId: 'codex-thread',
+      route: 'chat',
+      components: [{
+        id: 'right-sidebar:project-coordinator',
+        region: 'right-sidebar',
+        component: 'project-coordinator-panel',
+        title: 'Project Coordinator',
+        visible: true,
+        updatedAt: '2026-08-20T06:28:16.000Z',
+        summary: 'Project panel selected by the user.',
+        state: {
+          projectId: 'prj_panel_target_01',
+          sessionId: 'another-session',
+          mode: 'projects'
+        },
+        resources: [{
+          kind: 'project-coordinator-panel',
+          metadata: { projectId: 'prj_panel_target_01', panelTarget: true }
+        }]
+      }]
+    }
+    const visibleContext = {
+      bindSurface: vi.fn(async () => snapshot)
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      visibleContextSurfaceId: 'electron:1',
+      text: 'Read the selected Project plan.',
+      displayText: 'Read the selected Project plan.'
+    })
+
+    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(dispatched?.text).toContain('"selectedProjectId": "prj_panel_target_01"')
+    expect(dispatched?.text).toContain(
+      'The right-side Project panel is an independent target selector, not a binding to this conversation Session.'
+    )
+    expect(dispatched?.text).toContain(
+      'A panel-selected Project ID is routing context only, not permission'
+    )
+    expect(dispatched?.text).toContain(
+      'Do not use `sciforge_look`, `sciforge_capture`, DOM/private stores, or screenshots to read or edit business state'
+    )
+    expect(dispatched?.text).toContain(
+      '`snapshotRef` identifies a visual snapshot and is not a broker resource.'
+    )
   })
 
   it('claims the prepared question-time surface instead of rebinding the later UI surface', async () => {

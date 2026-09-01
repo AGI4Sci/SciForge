@@ -84,7 +84,7 @@ describe('capability IPC adapter', () => {
       missingCapabilityIds: string[]
     }
     expect(ready).toMatchObject({
-      contractVersion: 2,
+      contractVersion: 3,
       status: 'ready',
       availableCapabilityIds: ['test-resource.update'],
       missingCapabilityIds: []

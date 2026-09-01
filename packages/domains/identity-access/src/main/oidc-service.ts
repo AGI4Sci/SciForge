@@ -1,10 +1,10 @@
 import { createHash, randomBytes, webcrypto } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import {
-  CollaborationIdentityClientError,
-  type CollaborationIdentityClient
-} from '@sciforge/collaboration-identity'
-import type { MeResponse, VerifiedOidcClaims } from '@sciforge/collaboration-contracts'
+  CloudIdentityClientError,
+  type CloudIdentityClient
+} from './cloud-identity-client.js'
+import type { MeResponse } from '@sciforge/collaboration-contracts'
 import type {
   DesktopIdentityActionResult,
   DesktopIdentityErrorCode,
@@ -28,7 +28,7 @@ export type DesktopIdentityServiceOptions = {
   issuer: string | null
   clientId: string
   audience: string
-  identityClient: Pick<CollaborationIdentityClient, 'getCurrentUser'>
+  identityClient: Pick<CloudIdentityClient, 'getCurrentUser'>
   sessionStore: DesktopIdentitySessionStore
   linkAuthenticatedUser?: (user: DesktopIdentityUser) => void | Promise<void>
   openExternal: (url: string) => Promise<unknown>
@@ -306,37 +306,6 @@ function statusFromClaims(
   }
 }
 
-function verifiedClaimsFromAccessToken(
-  accessClaims: Record<string, unknown>,
-  idClaims: Record<string, unknown>
-): VerifiedOidcClaims {
-  const issuedAt = typeof accessClaims.iat === 'number'
-    ? new Date(accessClaims.iat * 1000).toISOString()
-    : new Date().toISOString()
-  const audiences = Array.isArray(accessClaims.aud)
-    ? accessClaims.aud.filter((audience): audience is string => typeof audience === 'string')
-    : typeof accessClaims.aud === 'string'
-      ? [accessClaims.aud]
-      : []
-  const email = readString(idClaims.email) ?? readString(accessClaims.email)
-  const displayName = readString(idClaims.name) ?? readString(accessClaims.name)
-  return {
-    type: 'verified_oidc_claims',
-    issuer: readString(accessClaims.iss)!,
-    subject: readString(accessClaims.sub)!,
-    audiences,
-    issuedAt,
-    expiresAt: new Date((accessClaims.exp as number) * 1000).toISOString(),
-    ...(email ? { email } : {}),
-    ...(typeof idClaims.email_verified === 'boolean'
-      ? { emailVerified: idClaims.email_verified }
-      : typeof accessClaims.email_verified === 'boolean'
-        ? { emailVerified: accessClaims.email_verified }
-        : {}),
-    ...(displayName ? { displayName } : {})
-  }
-}
-
 function callbackHtml(success: boolean): string {
   const title = success ? 'SciForge login completed' : 'SciForge login failed'
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{font-family:system-ui,sans-serif;margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f9fc;color:#172033}.panel{max-width:32rem;padding:2rem;text-align:center}h1{font-size:1.5rem}p{color:#536078}</style></head><body><main class="panel"><h1>${title}</h1><p>You can close this tab and return to SciForge.</p></main></body></html>`
@@ -465,6 +434,17 @@ export class DesktopIdentityService {
 
   getAccessToken(): string | null {
     return this.getStatus().state === 'signed-in' ? this.accessToken : null
+  }
+
+  async useAccessToken<Result>(operation: (accessToken: string) => Promise<Result>): Promise<Result> {
+    const accessToken = this.getAccessToken()
+    if (!accessToken) {
+      throw new DesktopIdentityError(
+        'OIDC_SESSION_EXPIRED',
+        'Sign in to SciForge Cloud before continuing.'
+      )
+    }
+    return operation(accessToken)
   }
 
   subscribe(listener: DesktopIdentityStatusListener): () => void {
@@ -606,6 +586,16 @@ export class DesktopIdentityService {
       return await this.refreshSession(generation)
     } catch (error) {
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      if (error instanceof DesktopIdentitySessionStoreError) {
+        try {
+          await this.enqueueSessionPersistence(() => this.options.sessionStore.clear())
+        } catch (clearError) {
+          if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+          return this.failure(this.normalizeError(clearError))
+        }
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+        return { ok: true, status: this.status }
+      }
       return this.failure(this.normalizeError(error))
     }
   }
@@ -660,7 +650,7 @@ export class DesktopIdentityService {
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const verified = await this.verifyLoginTokens(discovery, tokens, nonce)
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
-      const currentUser = await this.readCurrentUser(tokens.accessToken, verified)
+      const currentUser = await this.readCurrentUser(tokens.accessToken)
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       if (expectedUserId && currentUser.userId !== expectedUserId) {
         throw new DesktopIdentityError(
@@ -705,7 +695,7 @@ export class DesktopIdentityService {
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const verified = await this.verifyRefreshedTokens(discovery, tokens)
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
-      const currentUser = await this.readCurrentUser(tokens.accessToken, verified)
+      const currentUser = await this.readCurrentUser(tokens.accessToken)
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const activated = await this.activateSession({
         ...tokens,
@@ -769,11 +759,8 @@ export class DesktopIdentityService {
     return true
   }
 
-  private async readCurrentUser(accessToken: string, verified: VerifiedTokens): Promise<MeResponse> {
-    return this.options.identityClient.getCurrentUser({
-      accessToken,
-      verifiedClaims: verifiedClaimsFromAccessToken(verified.accessClaims, verified.idClaims)
-    })
+  private async readCurrentUser(accessToken: string): Promise<MeResponse> {
+    return this.options.identityClient.getCurrentUser({ accessToken })
   }
 
   private async readDiscovery(): Promise<OidcDiscovery> {
@@ -966,7 +953,7 @@ export class DesktopIdentityService {
     if (error instanceof DesktopIdentitySessionStoreError) {
       return new DesktopIdentityError('OIDC_SESSION_STORAGE_UNAVAILABLE', error.message)
     }
-    if (error instanceof CollaborationIdentityClientError) {
+    if (error instanceof CloudIdentityClientError) {
       if (error.code === 'authentication_required' || error.code === 'credential_revoked') {
         return new DesktopIdentityError('SCIFORGE_CLOUD_AUTH_FAILED', error.message)
       }

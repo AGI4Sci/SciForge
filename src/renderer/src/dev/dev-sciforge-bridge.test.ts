@@ -561,6 +561,12 @@ describe('dev sciforge browser bridge', () => {
       if (body.channel === 'file:unwatch-workspace') {
         return new Response(JSON.stringify({ ok: true, payload: true }))
       }
+      if (body.channel === 'capability:discover') {
+        return new Response(JSON.stringify({
+          ok: true,
+          payload: [{ id: 'workspace-preview.list', tags: [] }]
+        }))
+      }
       if (body.channel === 'capability:observe' || body.channel === 'capability:invoke') {
         return new Response(JSON.stringify({
           ok: true,
@@ -640,6 +646,12 @@ describe('dev sciforge browser bridge', () => {
       }
     })
     expect(bridgeRequests).toContainEqual({
+      channel: 'capability:discover',
+      payload: {
+        query: { capabilityId: 'workspace-preview.list' }
+      }
+    })
+    expect(bridgeRequests).toContainEqual({
       channel: 'capability:invoke',
       payload: {
         ...capabilityRequest,
@@ -673,22 +685,102 @@ describe('dev sciforge browser bridge', () => {
     expect(bridgeRequests).toContainEqual({ channel: 'file:unwatch-workspace', payload: 'watch-1' })
   })
 
+  it('rejects sensitive-input capabilities before credentials enter the browser HTTP proxy', async () => {
+    installWindow()
+    const account = 'browser-account-canary'
+    const password = 'browser-password-canary'
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { channel?: string }
+      if (body.channel === 'capability:discover') {
+        return new Response(JSON.stringify({
+          ok: true,
+          payload: [{
+            id: 'provider-session.connect',
+            tags: ['provider-connection', 'sensitive-input']
+          }]
+        }))
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        payload: {
+          contractVersion: 1,
+          ok: true,
+          payload: { actionId: 'provider-session.connect', output: { connected: true } }
+        }
+      }))
+    })
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+
+    await expect(window.sciforge.capabilities.invoke({
+      request: {
+        actionId: 'provider-session.connect',
+        invocationId: 'connect-browser-1',
+        input: { account, password }
+      }
+    })).rejects.toThrow('sensitive-input')
+
+    const serializedRequests = fetchMock.mock.calls.map(([, init]) => String(init?.body))
+    expect(serializedRequests).toHaveLength(1)
+    expect(JSON.parse(serializedRequests[0])).toEqual({
+      channel: 'capability:discover',
+      payload: {
+        query: { capabilityId: 'provider-session.connect' }
+      }
+    })
+    expect(serializedRequests.join('\n')).not.toContain(account)
+    expect(serializedRequests.join('\n')).not.toContain(password)
+  })
+
+  it('fails closed before serializing input when browser transport cannot resolve one descriptor', async () => {
+    installWindow()
+    const secret = 'unresolved-input-canary'
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({
+        ok: true,
+        payload: []
+      })))
+    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+
+    await expect(window.sciforge.capabilities.invoke({
+      request: {
+        actionId: 'provider-session.unresolved',
+        invocationId: 'connect-browser-unresolved-1',
+        input: { secret }
+      }
+    })).rejects.toThrow('could not resolve exactly one capability descriptor')
+
+    const serializedRequests = fetchMock.mock.calls.map(([, init]) => String(init?.body))
+    expect(serializedRequests).toHaveLength(1)
+    expect(serializedRequests.join('\n')).not.toContain(secret)
+  })
+
   it('unwraps dev HTTP capability errors into preload-shaped typed Errors', async () => {
     installWindow()
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      payload: {
-        contractVersion: 1,
-        ok: false,
-        error: {
-          code: 'outcome_unknown',
-          message: 'The mutation outcome is unknown.',
-          category: 'failed',
-          retryable: false,
-          details: { expected: 'revision-2' }
-        }
-      }
-    })))
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { channel?: string }
+      return new Response(JSON.stringify({
+        ok: true,
+        payload: body.channel === 'capability:discover'
+          ? [{ id: 'content-space.upload-new', tags: [] }]
+          : {
+              contractVersion: 1,
+              ok: false,
+              error: {
+                code: 'outcome_unknown',
+                message: 'The mutation outcome is unknown.',
+                category: 'failed',
+                retryable: false,
+                details: { expected: 'revision-2' }
+              }
+            }
+      }))
+    })
     Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
 

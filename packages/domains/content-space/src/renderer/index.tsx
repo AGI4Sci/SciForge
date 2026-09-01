@@ -1,5 +1,5 @@
 import { lazy, type ReactElement } from 'react'
-import { Folder } from 'lucide-react'
+import { FolderOpen, type LucideIcon } from 'lucide-react'
 import { z } from 'zod'
 
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
@@ -9,7 +9,7 @@ import {
   type DomainRendererResourceNavigationValue,
   type DomainRendererSessionResource,
   type DomainRendererWorkbenchRightPanelValue,
-  type DomainRendererWorkbenchToolbarActionValue,
+  type DomainRendererWorkbenchWorkspaceSectionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 
@@ -19,8 +19,9 @@ import {
   CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
   CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRACT,
   CONTENT_SPACE_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRACT,
+  CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRIBUTION,
+  CONTENT_SPACE_RENDERER_I18N_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import {
@@ -29,7 +30,12 @@ import {
   CONTENT_FILE_RESOURCE_KIND
 } from '../contract.js'
 import { createContentSpaceCapabilityClient } from './capability-client.js'
+import type { ContentSpaceInitialResource } from './ContentSpacePanel.js'
 import { collectContentSpaceProviderEnrollmentViews } from './provider-enrollment-view.js'
+import {
+  contentSpaceI18nResourceContribution,
+  type ContentSpaceI18nResourceContribution
+} from './messages.js'
 
 const ContentSpacePanel = lazy(() => import('./ContentSpacePanel.js').then((module) => ({
   default: module.ContentSpacePanel
@@ -37,13 +43,14 @@ const ContentSpacePanel = lazy(() => import('./ContentSpacePanel.js').then((modu
 
 export type ContentSpaceRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
-export type ContentSpaceToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof Folder>
+export type ContentSpaceWorkspaceSectionContribution =
+  DomainRendererWorkbenchWorkspaceSectionValue<ReactElement, LucideIcon>
 export type ContentSpaceRendererContribution =
   | ContentSpaceRightPanelContribution
-  | ContentSpaceToolbarActionContribution
+  | ContentSpaceWorkspaceSectionContribution
   | DomainRendererCommandHandler
   | DomainRendererResourceNavigationValue
+  | ContentSpaceI18nResourceContribution
 
 export function createContentSpaceRightPanelContribution(
   host: DomainRendererHost
@@ -64,6 +71,7 @@ export function createContentSpaceRightPanelContribution(
           className={className}
           onCollapse={onCollapse}
           initialResource={initialResource}
+          workspaceId={session.workspaceRoot}
         />
       )
     }
@@ -92,6 +100,25 @@ export function createContentSpaceCommand(host: DomainRendererHost): DomainRende
   })
 }
 
+export function createContentSpaceWorkspaceFilesContribution(
+  host: DomainRendererHost
+): ContentSpaceWorkspaceSectionContribution {
+  const client = createContentSpaceCapabilityClient(host.capabilityInvoker)
+  return Object.freeze({
+    icon: FolderOpen,
+    render: ({ className, session }) => (
+      <ContentSpacePanel
+        client={client}
+        fileTransfers={host.fileTransfers}
+        enrollmentViews={collectContentSpaceProviderEnrollmentViews(host)}
+        className={className}
+        embedded
+        workspaceId={session.workspaceRoot}
+      />
+    )
+  })
+}
+
 export function createContentSpaceResourceNavigationContribution():
 DomainRendererResourceNavigationValue {
   return Object.freeze({
@@ -101,12 +128,16 @@ DomainRendererResourceNavigationValue {
         CONTENT_CONTAINER_RESOURCE_KIND,
         CONTENT_FILE_RESOURCE_KIND
       ].includes(resource.resourceKind as typeof ARTIFACT_RESOURCE_KIND)) return null
+      if (resource.resourceRef && resource.resourceRef !== resource.resourceId) return null
       return Object.freeze({
         activation: Object.freeze({
           revision: 1,
           payload: Object.freeze({
             resourceKind: resource.resourceKind,
-            resourceId: resource.resourceId
+            resourceId: resource.resourceId,
+            ...(resource.resourceRef ? {
+              materializedResourceRef: resource.resourceRef
+            } : {})
           })
         })
       })
@@ -130,9 +161,13 @@ export function createDomainRendererEntry(
         value: createContentSpaceCommand(host)
       },
       {
-        ...CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
-        contract: CONTENT_SPACE_RENDERER_TOOLBAR_ACTION_CONTRACT,
-        value: Object.freeze({ icon: Folder })
+        ...CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRIBUTION,
+        contract: CONTENT_SPACE_RENDERER_WORKSPACE_FILES_CONTRACT,
+        value: createContentSpaceWorkspaceFilesContribution(host)
+      },
+      {
+        ...CONTENT_SPACE_RENDERER_I18N_CONTRIBUTION,
+        value: contentSpaceI18nResourceContribution
       },
       {
         ...CONTENT_SPACE_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
@@ -146,14 +181,22 @@ export function createDomainRendererEntry(
 export function findContentSpaceActivationResource(
   payload: unknown,
   resources?: readonly DomainRendererSessionResource[]
-): DomainRendererSessionResource | undefined {
+): ContentSpaceInitialResource | undefined {
   const parsed = contentSpaceActivationPayloadSchema.safeParse(payload)
   if (!parsed.success) return undefined
+  if (parsed.data.materializedResourceRef) {
+    return Object.freeze({
+      kind: parsed.data.resourceKind,
+      resourceRef: parsed.data.materializedResourceRef
+    })
+  }
   const matches = (resources ?? []).filter((resource) =>
     resource.kind === parsed.data.resourceKind &&
     resource.resourceRef === parsed.data.resourceId
   )
-  return matches.length === 1 ? matches[0] : undefined
+  return matches.length === 1
+    ? Object.freeze({ ...matches[0], kind: parsed.data.resourceKind })
+    : undefined
 }
 
 const contentSpaceActivationPayloadSchema = z.object({
@@ -162,7 +205,18 @@ const contentSpaceActivationPayloadSchema = z.object({
     CONTENT_CONTAINER_RESOURCE_KIND,
     CONTENT_FILE_RESOURCE_KIND
   ]),
-  resourceId: z.string().trim().min(1).max(512)
-}).strict()
+  resourceId: z.string().trim().min(1).max(512),
+  materializedResourceRef: z.string().trim()
+    .regex(/^res_[A-Za-z0-9_-]{20,}$/u).optional()
+}).strict().superRefine((activation, context) => {
+  if (activation.materializedResourceRef &&
+      activation.materializedResourceRef !== activation.resourceId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['materializedResourceRef'],
+      message: 'Materialized Content Space resource reference must match navigation identity.'
+    })
+  }
+})
 
 export * from './provider-enrollment-view.js'

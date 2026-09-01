@@ -4,6 +4,50 @@ import type { ClaudeCodeRuntimeService } from './claude-code-service'
 import { createClaudeCodeAgentRuntimeAdapter } from './claude-code-agent-runtime-adapter'
 
 describe('createClaudeCodeAgentRuntimeAdapter', () => {
+  it('preserves fresh Coordinator Session visibility metadata across start and list', async () => {
+    const received: unknown[] = []
+    const thread = {
+      id: 'coordinator-session',
+      runtimeId: 'claude' as const,
+      title: 'Claude Code thread',
+      updatedAt: '2026-08-29T00:00:00.000Z',
+      relation: 'side' as const,
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main' as const,
+      hasUserMessage: false
+    }
+    const adapter = createClaudeCodeAgentRuntimeAdapter({
+      startThread: async (input: unknown) => {
+        received.push(input)
+        return { ok: true, thread }
+      },
+      listThreads: async () => ({ ok: true, threads: [thread] })
+    } as unknown as ClaudeCodeRuntimeService)
+    const context = { settings: {} } as AgentRuntimeAdapterContext
+
+    await expect(adapter.startThread(context, {
+      runtimeId: 'claude',
+      threadId: 'coordinator-session',
+      workspace: '/tmp/workspace',
+      title: 'Claude Code thread',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
+    })).resolves.toEqual(thread)
+    await expect(adapter.listThreads(context, {
+      runtimeId: 'claude',
+      includeArchived: true
+    })).resolves.toEqual([thread])
+    expect(received).toEqual([{
+      threadId: 'coordinator-session',
+      workspace: '/tmp/workspace',
+      title: 'Claude Code thread',
+      relation: 'side',
+      threadSource: 'domain-runtime',
+      sidebarVisibility: 'main'
+    }])
+  })
+
   it('seeds Claude pre-dispatch governance from Host-owned typed turn metadata', async () => {
     const received: unknown[] = []
     const adapter = createClaudeCodeAgentRuntimeAdapter({
@@ -30,12 +74,24 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
       threadId: 'thread-seeded-governance',
       text: 'Host prepared text',
       workspace: '/tmp/workspace',
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
       allowedTools: ['sciforge_discover']
     })
 
     expect(received).toEqual([expect.objectContaining({
       threadId: 'thread-seeded-governance',
       allowedTools: ['sciforge_discover'],
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
       ownedVisualToolsAvailable: true,
       nativeVisualProofChainPending: true
     })])

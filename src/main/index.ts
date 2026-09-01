@@ -16,7 +16,7 @@ import {
   type IpcMainInvokeEvent,
   type WebContents
 } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -27,6 +27,7 @@ import sciforgeTrayPng from '../asset/img/sciforge_tray.png?url'
 import { createAppIcon, pickTrayIcon } from './app-icon'
 import { configureLinuxWaylandImeSwitches } from './app-command-line'
 import { APP_PRODUCT_NAME, configureAppIdentity } from './app-identity'
+import { resolveDevelopmentUserDataPath } from './development-user-data'
 import {
   applyCodexRuntimePatch,
   applyClaudeRuntimePatch,
@@ -162,6 +163,7 @@ import {
   createApplicationDomainCatalog,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvokerFactory,
+  listMainAgentRoutingContributions,
   listMainArtifactConsumers,
   listMainExtensionContributions,
   listMainMcpTrustedInvocationMetadataContributions,
@@ -197,7 +199,10 @@ import {
   projectDomainAgentTurnMessages,
   subscribeDomainAgentTranscriptMessages
 } from './domain-agent-transcript'
-import { createDomainAgentExecutionHost } from './domain-agent-execution'
+import {
+  createDomainAgentExecutionHost,
+  resolveDomainAgentRuntimeReadiness
+} from './domain-agent-execution'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HIDDEN_START_ARG = '--hidden'
@@ -373,6 +378,16 @@ traceStartup('main module evaluated')
 // 抽到 app-identity.ts 是为了让测试可以直接 import,不被 main 的
 // whenReady 副作用污染。
 configureAppIdentity()
+const developmentUserDataPath = resolveDevelopmentUserDataPath({
+  isPackaged: app.isPackaged,
+  appDataPath: app.getPath('appData'),
+  workspaceId: process.env.SCIFORGE_DEV_WORKSPACE_ID,
+  argv: process.argv
+})
+if (developmentUserDataPath) {
+  mkdirSync(developmentUserDataPath, { recursive: true, mode: 0o700 })
+  app.setPath('userData', developmentUserDataPath)
+}
 configureLinuxWaylandImeSwitches()
 registerCapabilityResourceContentScheme(protocol)
 
@@ -436,10 +451,10 @@ async function captureVisibleContextSurface(request: SurfaceCaptureRequest): Pro
 
   if (surface?.kind === 'browser') {
     const bridge = devBrowserBridgeServer
-    if (!bridge?.hasClient(surface.numericId)) {
+    if (!bridge) {
       return surfaceCaptureUnavailable(
         'capture_surface_unavailable',
-        `Browser surface ${request.windowId} is no longer connected.`,
+        `Browser surface ${request.windowId} is no longer available.`,
         true
       )
     }
@@ -1021,8 +1036,8 @@ app
     traceStartup('settings load:start')
     const initial = await store.load()
     traceStartup('settings load:done')
-    const hostDeviceId = initial.installationId?.trim()
-    if (!hostDeviceId) {
+    const hostExecutionNodeId = initial.installationId?.trim()
+    if (!hostExecutionNodeId) {
       throw new Error('Application settings did not provide a stable Host installation identity.')
     }
     appBehavior = initial.appBehavior
@@ -1112,7 +1127,7 @@ app
     const domainPackageStorage = createDomainPackageStorageFactory({
       userDataDir: app.getPath('userData'),
       encryption: createPlatformPackageEncryption({ safeStorage }),
-      getDeviceId: () => hostDeviceId,
+      getExecutionNodeId: () => hostExecutionNodeId,
       currentPrincipal: () => principalContextForDomainServices?.current(),
       secretRedaction: managedSecretRedaction
     })
@@ -1138,7 +1153,7 @@ app
     hostExternalNavigationForShutdown = hostExternalNavigation
     const catalog = createApplicationDomainCatalog({
       getUserDataDir: () => app.getPath('userData'),
-      getDeviceId: () => hostDeviceId,
+      getDeviceId: () => hostExecutionNodeId,
       getAppVersion: () => app.getVersion(),
       getAppRoot: () => app.getAppPath(),
       getExecutablePath: () => process.execPath,
@@ -1164,16 +1179,19 @@ app
         let scopedInvoker: ReturnType<
           ReturnType<typeof createMainSystemCapabilityInvokerFactory>['forDomain']
         > | null = null
-        return Object.freeze({
-          invoke: (contract, input, options) => {
-            if (!scopedInvoker) {
-              if (!domainSystemCapabilityInvokers) {
-                throw new Error('The Host capability broker is not ready.')
-              }
-              scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
+        const getScopedInvoker = () => {
+          if (!scopedInvoker) {
+            if (!domainSystemCapabilityInvokers) {
+              throw new Error('The Host capability broker is not ready.')
             }
-            return scopedInvoker.invoke(contract, input, options)
+            scopedInvoker = domainSystemCapabilityInvokers.forDomain(owner)
           }
+          return scopedInvoker
+        }
+        return Object.freeze({
+          invoke: (contract, input, options) =>
+            getScopedInvoker().invoke(contract, input, options),
+          createApprovedBatch: (plan) => getScopedInvoker().createApprovedBatch(plan)
         })
       },
       packageStorageFor: (owner) => domainPackageStorage.forOwner(owner),
@@ -1191,6 +1209,12 @@ app
             throw new Error('Portable resource references are not ready.')
           }
           return portableResourceReferences.forOwner(owner).materialize(reference, options)
+        },
+        discard: (input) => {
+          if (!portableResourceReferences) {
+            throw new Error('Portable resource references are not ready.')
+          }
+          return portableResourceReferences.forOwner(owner).discard(input)
         },
         export: (input, options) => {
           if (!portableResourceReferences) {
@@ -1305,7 +1329,10 @@ app
       createApplicationCapabilityRegistry(catalog, appCapabilityDependencies),
       { resolveCurrentPrincipalContext: () => principalContext.snapshot() }
     )
-    installProviderCredentialAcceptance(domainPackageStorage)
+    installProviderCredentialAcceptance(
+      domainPackageStorage,
+      () => principalContext.current()
+    )
     capabilityBrokerForDomainServices = capabilityBroker
     portableResourceReferences = createPortableResourceReferenceService(
       capabilityBroker,
@@ -1544,6 +1571,7 @@ app
       settings: async () => store.load(),
       getPrincipalContext: () => principalContext.snapshot(),
       nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
+      agentRoutingContributions: listMainAgentRoutingContributions(catalog),
       subagentStoreRoot: join(app.getPath('userData'), 'agent-runtime', 'subagents'),
       turnArtifacts: turnArtifactHandoff,
       adapters: [
@@ -1630,7 +1658,8 @@ app
       },
       agentExecution: createDomainAgentExecutionHost({
         runtime: agentRuntimeHost,
-        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load())
+        defaultRuntimeId: async () => getActiveAgentRuntime(await store.load()),
+        runtimeReadiness: async () => resolveDomainAgentRuntimeReadiness(await store.load())
       }),
       remoteCapabilityApprovals: {
         subscribe: (listener) => agentRuntimeHost.subscribeRemoteCapabilityApprovals(listener),
@@ -1881,6 +1910,8 @@ app
               ? capabilityIpcRegistration.invoke(channel, payload, sender)
               : appBridgeDispatcher.invoke(channel, payload, sender)
         },
+        resolveCapabilityTags: (actionId) =>
+          capabilityBroker.registry.get(actionId)?.descriptor.tags,
         resourceContent: capabilityIpcRegistration.resourceContent,
         instanceId: devBrowserBridgeInstanceId
       })

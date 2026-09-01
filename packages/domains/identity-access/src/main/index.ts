@@ -2,6 +2,20 @@ import type {
   DomainMainHost,
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
+import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-execution'
+import { defineDomainMainInternalServiceDescriptor } from '@sciforge/domain-sdk/host'
+import {
+  AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID
+} from '../authenticated-cloud-transport.js'
+import {
+  DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION,
+  DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID
+} from '../device-fact-attestation-signing.js'
+import {
+  AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+  AGENT_CLOUD_RUNTIME_SERVICE_ID
+} from '../agent-cloud-runtime.js'
 import {
   principalDeviceIdSchema,
   type DomainMainPrincipalProvider
@@ -27,16 +41,38 @@ import {
 import {
   IDENTITY_ACCESS_DOMAIN_MODULE_ID,
   IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION,
+  IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT,
+  IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION,
   IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION,
   IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
+  IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT,
+  IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRIBUTION,
+  IDENTITY_AGENT_CLOUD_RUNTIME_CONTRACT,
+  IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import { IdentityService } from './service.js'
 import { CloudIdentityRuntime } from './cloud-runtime.js'
+import { createIdentityAuthenticatedCloudTransport } from './authenticated-cloud-transport.js'
+import { createIdentityDeviceFactAttestationSigningService } from './device-fact-attestation-signing.js'
+import { createIdentityAgentCloudRuntime } from './agent-cloud-runtime.js'
+import { cloudInstallationId } from './device-service.js'
+import { createPlatformIdentityPrivateVault } from './private-vault.js'
 
 export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 
 type IdentityCapabilityEffect = 'read' | 'external-write' | 'destructive'
+type IdentityCloudCapabilityRuntime = Readonly<{
+  snapshot: () => unknown
+  semanticRevision: () => string
+  subscribe: (listener: () => void) => () => void
+  login: () => Promise<unknown>
+  reauthenticate: () => Promise<unknown>
+  logout: () => Promise<unknown>
+  enrollDevice: () => Promise<unknown>
+  refreshDevices: () => Promise<unknown>
+  revokeDevice: (deviceId: string) => Promise<unknown>
+}>
 type IdentityCapabilityContext = Readonly<{
   caller: Readonly<{ audience: 'ui' | 'agent' | 'system' }>
   assertPrincipalCurrent: () => void
@@ -104,12 +140,40 @@ type IdentityMainContribution =
   | IdentityCapabilityFactory
   | DomainMainPrincipalProvider
   | DomainMainRuntimeLifecycleContribution
+  | typeof authenticatedCloudTransportDescriptor
+  | typeof deviceFactAttestationSigningDescriptor
+  | typeof agentCloudRuntimeDescriptor
+
+const authenticatedCloudTransportDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+  contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+  allowedConsumerModuleIds: [
+    'sciforge.collaboration',
+    'sciforge.project-coordinator',
+    'sciforge.opencontent-connector'
+  ]
+})
+
+const deviceFactAttestationSigningDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID,
+  contractVersion: DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION,
+  allowedConsumerModuleIds: ['sciforge.project-coordinator']
+})
+
+const agentCloudRuntimeDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor',
+  serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
+  contractVersion: AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+  allowedConsumerModuleIds: ['sciforge.collaboration']
+})
 
 export function createDomainMainEntry(
   host: DomainMainHost
 ): TrustedDomainProcessEntryInput<IdentityMainContribution> {
-  if (!host.packageSecrets) {
-    throw new Error('Identity requires package-scoped secret storage.')
+  if (!host.internalServices) {
+    throw new Error('Identity requires Host internal-service mediation.')
   }
   let service: IdentityService | undefined
   const getService = (): IdentityService => {
@@ -126,15 +190,63 @@ export function createDomainMainEntry(
   })
   let cloudRuntime: CloudIdentityRuntime | null = null
   let cloudActivation: Promise<CloudIdentityRuntime> | null = null
+  let agentExecutionHost: DomainMainAgentExecutionHost | undefined
+  let invalidateAgentAuthority: (reason: string) => void = () => undefined
   const closedCloudRuntimes = new WeakSet<CloudIdentityRuntime>()
+  const installationId = cloudInstallationId(requireDeviceId(host))
+  const privateVault = createPlatformIdentityPrivateVault({
+    installationId,
+    packageSecrets: host.packageSecrets
+  })
   const getCloudRuntime = (): CloudIdentityRuntime => {
     if (!cloudRuntime) throw new Error('Cloud identity runtime is not active.')
     return cloudRuntime
   }
+  const authenticatedCloudTransport = createIdentityAuthenticatedCloudTransport({
+    getRuntime: () => cloudRuntime
+  })
+  host.internalServices.register({
+    serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
+    contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
+    allowedConsumerModuleIds: authenticatedCloudTransportDescriptor.allowedConsumerModuleIds,
+    service: authenticatedCloudTransport
+  })
+  const deviceFactAttestationSigning = createIdentityDeviceFactAttestationSigningService({
+    getRuntime: () => cloudRuntime
+  })
+  host.internalServices.register({
+    serviceId: DEVICE_FACT_ATTESTATION_SIGNING_SERVICE_ID,
+    contractVersion: DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT_VERSION,
+    allowedConsumerModuleIds: deviceFactAttestationSigningDescriptor.allowedConsumerModuleIds,
+    service: deviceFactAttestationSigning
+  })
+  const agentCloudRuntime = createIdentityAgentCloudRuntime({
+    getRuntime: () => cloudRuntime,
+    vault: privateVault,
+    getRuntimeReadiness: async () => {
+      if (!agentExecutionHost?.runtimeReadiness) {
+        return {
+          state: 'unavailable',
+          reason: 'The canonical Agent execution Host does not publish Runtime readiness.'
+        }
+      }
+      return agentExecutionHost.runtimeReadiness()
+    },
+    bindAuthorityInvalidator: (invalidate) => {
+      invalidateAgentAuthority = invalidate
+    }
+  })
+  host.internalServices.register({
+    serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
+    contractVersion: AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
+    allowedConsumerModuleIds: agentCloudRuntimeDescriptor.allowedConsumerModuleIds,
+    service: agentCloudRuntime
+  })
   const closeCloudRuntime = (runtime: CloudIdentityRuntime | null): void => {
     if (!runtime || closedCloudRuntimes.has(runtime)) return
     closedCloudRuntimes.add(runtime)
     if (cloudRuntime === runtime) cloudRuntime = null
+    agentExecutionHost = undefined
     runtime.close()
   }
   const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
@@ -143,21 +255,25 @@ export function createDomainMainEntry(
         throw new Error('Cloud identity runtime lifecycle is already active.')
       }
       const pending = (async () => {
-        const appVersion = requireAppVersion(host)
-        const runtime = await CloudIdentityRuntime.create({
-          userDataDir: context.userDataDir,
-          appRoot: context.appRoot,
-          appVersion,
-          environment: context.environment,
-          installationId: requireDeviceId(host),
-          packageSecrets: host.packageSecrets!,
-          externalNavigation: host.externalNavigation
-        })
+        agentExecutionHost = context.agentExecution
+        let runtime: CloudIdentityRuntime | undefined
         try {
+          const appVersion = requireAppVersion(host)
+          runtime = await CloudIdentityRuntime.create({
+            userDataDir: context.userDataDir,
+            appRoot: context.appRoot,
+            appVersion,
+            environment: context.environment,
+            installationId: requireDeviceId(host),
+            privateVault,
+            externalNavigation: host.externalNavigation,
+            onAuthorityInvalidated: invalidateAgentAuthority
+          })
           await runtime.initialize()
           return runtime
         } catch (error) {
-          closeCloudRuntime(runtime)
+          if (runtime) closeCloudRuntime(runtime)
+          else agentExecutionHost = undefined
           throw error
         }
       })()
@@ -214,6 +330,21 @@ export function createDomainMainEntry(
         ...IDENTITY_RUNTIME_LIFECYCLE_CONTRIBUTION,
         value: lifecycle,
         onDispose: disposeCloud
+      },
+      {
+        ...IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION,
+        contract: IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT,
+        value: authenticatedCloudTransportDescriptor
+      },
+      {
+        ...IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRIBUTION,
+        contract: IDENTITY_DEVICE_FACT_ATTESTATION_SIGNING_CONTRACT,
+        value: deviceFactAttestationSigningDescriptor
+      },
+      {
+        ...IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION,
+        contract: IDENTITY_AGENT_CLOUD_RUNTIME_CONTRACT,
+        value: agentCloudRuntimeDescriptor
       }
     ]
   }
@@ -222,7 +353,7 @@ export function createDomainMainEntry(
 export function createIdentityCapabilityFactory<CapabilityDefinition>(options: Readonly<{
   defineCapability: (options: IdentityCapabilityOptions) => CapabilityDefinition
   getService: () => IdentityService
-  getCloudRuntime: () => CloudIdentityRuntime
+  getCloudRuntime: () => IdentityCloudCapabilityRuntime
 }>): IdentityCapabilityFactory<CapabilityDefinition> {
   const define = (
     input: Omit<IdentityCapabilityOptions, 'version' | 'audiences' | 'scope' | 'tags'>
@@ -279,7 +410,7 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
   }
   const mutateCloud = async (
     context: IdentityCapabilityContext,
-    operation: (runtime: CloudIdentityRuntime) => Promise<unknown>
+    operation: (runtime: IdentityCloudCapabilityRuntime) => Promise<unknown>
   ): Promise<Readonly<{
     output: unknown
   }>> => {
@@ -451,7 +582,7 @@ function cloudMutationDefinitions<CapabilityDefinition>(
   defineCapability: (options: IdentityCapabilityOptions) => CapabilityDefinition,
   mutate: (
     context: IdentityCapabilityContext,
-    operation: (runtime: CloudIdentityRuntime) => Promise<unknown>
+    operation: (runtime: IdentityCloudCapabilityRuntime) => Promise<unknown>
   ) => Promise<Readonly<{
     output: unknown
   }>>
@@ -461,7 +592,7 @@ function cloudMutationDefinitions<CapabilityDefinition>(
     title: string,
     description: string,
     inputSchema: z.ZodType,
-    operation: (runtime: CloudIdentityRuntime, input: any) => Promise<unknown>
+    operation: (runtime: IdentityCloudCapabilityRuntime, input: any) => Promise<unknown>
   ): CapabilityDefinition => defineCapability({
     id,
     version: '1.0.0',

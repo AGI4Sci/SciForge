@@ -1,22 +1,32 @@
+import { createPublicKey, verify } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { verifiedOidcClaimsSchema, type Device } from '@sciforge/collaboration-contracts'
-import type { CollaborationIdentityClient, IdentityAccessContext } from '@sciforge/collaboration-identity'
-import { InMemoryCollaborationIdentityClient } from '@sciforge/collaboration-identity/testing'
+import {
+  canonicalDeviceFactAttestationBytes,
+  canonicalEnrollmentBytes,
+  type Device,
+  type DeviceCreateRequest
+} from '@sciforge/collaboration-contracts'
 import type { DesktopIdentityStatus } from '../contract.js'
+import type {
+  CloudIdentityAccessContext,
+  CloudIdentityClient
+} from './cloud-identity-client.js'
 import { DesktopDeviceService, cloudInstallationId } from './device-service.js'
 
-function memorySecrets() {
+function memoryVault() {
   const values = new Map<string, string>()
+  const key = (ref: Readonly<{ kind: string; agentId?: string }>) =>
+    `${ref.kind}:${ref.agentId ?? ''}`
   return {
-    has: vi.fn(async (key: string) => values.has(key)),
-    read: vi.fn(async (key: string) => values.get(key) ?? null),
-    write: vi.fn(async (key: string, value: string) => {
-      values.set(key, value)
+    has: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => values.has(key(ref))),
+    read: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null),
+    write: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>, value: string) => {
+      values.set(key(ref), value)
     }),
-    remove: vi.fn(async (key: string) => {
-      values.delete(key)
+    remove: vi.fn(async (ref: Readonly<{ kind: string; agentId?: string }>) => {
+      values.delete(key(ref))
     }),
-    value: (key: string) => values.get(key) ?? null
+    value: (ref: Readonly<{ kind: string; agentId?: string }>) => values.get(key(ref)) ?? null
   }
 }
 
@@ -60,7 +70,7 @@ function identityHarness(initialStatus: DesktopIdentityStatus, initialToken: str
   }
 }
 
-function clientStub(overrides: Record<string, unknown> = {}): CollaborationIdentityClient {
+function clientStub(overrides: Record<string, unknown> = {}): CloudIdentityClient {
   return {
     getCurrentUser: vi.fn(),
     listDevices: vi.fn(async () => ({ devices: [] })),
@@ -68,7 +78,7 @@ function clientStub(overrides: Record<string, unknown> = {}): CollaborationIdent
     createDevice: vi.fn(),
     revokeDevice: vi.fn(),
     ...overrides
-  } as unknown as CollaborationIdentityClient
+  } as unknown as CloudIdentityClient
 }
 
 function cloudDevice(
@@ -99,23 +109,66 @@ function deferred<T>() {
 
 describe('DesktopDeviceService', () => {
   it('registers an Ed25519 Desktop through the owner-scoped secret port and revokes it', async () => {
-    const client = new InMemoryCollaborationIdentityClient()
     const token = 'local-access-token'
-    const current = await client.getCurrentUser({
-      accessToken: token,
-      verifiedClaims: verifiedOidcClaimsSchema.parse({
-        type: 'verified_oidc_claims',
-        issuer: 'https://login.sciforge.example/realms/SciForge',
-        subject: 'keycloak-user-001',
-        audiences: ['sciforge-cloud-api'],
-        issuedAt: '2026-08-19T00:00:00.000Z',
-        expiresAt: '2027-08-19T00:00:00.000Z',
-        email: 'researcher@example.invalid',
-        displayName: 'Researcher One'
+    const userId = 'usr_CloudUser000001'
+    const enrollment = {
+      enrollmentId: 'enr_Enrollment0001',
+      nonce: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8',
+      expiresAt: '2027-08-19T00:05:00.000Z'
+    }
+    let currentDevice: Device | null = null
+    const listDevices = vi.fn(async () => ({ devices: currentDevice ? [currentDevice] : [] }))
+    const createDevice = vi.fn(async (
+      _context: CloudIdentityAccessContext,
+      input: DeviceCreateRequest
+    ) => {
+      const valid = verify(
+        null,
+        canonicalEnrollmentBytes({
+          enrollmentId: enrollment.enrollmentId,
+          nonce: enrollment.nonce,
+          userId,
+          installationId: input.installationId,
+          expiresAt: enrollment.expiresAt
+        }),
+        createPublicKey({ key: input.publicKeyJwk, format: 'jwk' }),
+        Buffer.from(input.signature, 'base64url')
+      )
+      expect(valid).toBe(true)
+      currentDevice = {
+        schemaVersion: 1,
+        type: 'device',
+        deviceId: 'dev_CloudDevice0001',
+        userId,
+        installationId: input.installationId,
+        displayName: input.displayName,
+        platform: input.platform,
+        publicKeyJwk: input.publicKeyJwk,
+        capabilitySummary: input.capabilitySummary,
+        status: 'active',
+        revision: 1,
+        createdAt: '2026-08-19T00:00:00.000Z',
+        updatedAt: '2026-08-19T00:00:00.000Z'
+      } as unknown as Device
+      return currentDevice
+    })
+    const client = clientStub({
+      listDevices,
+      createDeviceEnrollment: vi.fn(async () => enrollment),
+      createDevice,
+      revokeDevice: vi.fn(async () => {
+        currentDevice = {
+          ...currentDevice!,
+          status: 'revoked',
+          revision: 2,
+          updatedAt: '2026-08-19T00:01:00.000Z',
+          revokedAt: '2026-08-19T00:01:00.000Z'
+        }
+        return currentDevice
       })
     })
-    const status = signedInStatus(current.userId, current.oidcIdentityId)
-    const secrets = memorySecrets()
+    const status = signedInStatus(userId, 'oid_CloudIdent0001')
+    const vault = memoryVault()
     const service = new DesktopDeviceService({
       identity: {
         getStatus: () => status,
@@ -124,12 +177,13 @@ describe('DesktopDeviceService', () => {
       },
       client,
       installationSeed: 'sciforge-local-installation',
-      secrets,
+      vault,
       appVersion: '0.2.17',
       platform: 'win32',
       architecture: 'x64',
       osVersion: '11',
-      displayName: 'Lab Desktop'
+      displayName: 'Lab Desktop',
+      now: () => Date.parse('2026-08-19T00:02:00.000Z')
     })
 
     const enrolled = await service.ensureRegistered()
@@ -141,21 +195,71 @@ describe('DesktopDeviceService', () => {
       status: 'active',
       platform: { os: 'windows', arch: 'x64' }
     })
-    expect(secrets.write).toHaveBeenCalledOnce()
+    expect(vault.write).toHaveBeenCalledOnce()
 
-    const registration = client.adapter.getDesktopDeviceRegistration(enrolled.devices[0]!.deviceId)
-    expect(registration.publicKey).toMatchObject({ kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA' })
-    expect(registration.publicKey).not.toHaveProperty('d')
-    expect(JSON.parse(secrets.value('device.key') ?? '{}')).toMatchObject({
+    const createInput = createDevice.mock.calls[0]?.[1]
+    expect(createInput?.publicKeyJwk).toMatchObject({ kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA' })
+    expect(createInput?.publicKeyJwk).not.toHaveProperty('d')
+    expect(JSON.parse(vault.value({ kind: 'device-key' }) ?? '{}')).toMatchObject({
       version: 1,
       publicKey: { kty: 'OKP', crv: 'Ed25519' },
       privateKey: { kty: 'OKP', crv: 'Ed25519' }
     })
 
+    const factDigest = 'a'.repeat(64)
+    const signed = await service.signDeviceFactAttestation({
+      purpose: 'project-content-provisioning-attestation',
+      factDigest,
+      factRevision: 3,
+      observedAt: '2026-08-19T00:01:30.000Z'
+    })
+    expect(signed).toMatchObject({
+      purpose: 'project-content-provisioning-attestation',
+      userId,
+      deviceId: 'dev_CloudDevice0001',
+      deviceKeyId: createInput?.publicKeyJwk.kid,
+      deviceKeyRevision: 1,
+      signatureAlgorithm: 'Ed25519',
+      canonicalPayloadDigest: factDigest,
+      factRevision: 3,
+      observedAt: '2026-08-19T00:01:30.000Z',
+      issuedAt: '2026-08-19T00:02:00.000Z'
+    })
+    expect(listDevices).toHaveBeenCalledTimes(3)
+    expect(verify(
+      null,
+      canonicalDeviceFactAttestationBytes(signed),
+      createPublicKey({ key: createInput!.publicKeyJwk, format: 'jwk' }),
+      Buffer.from(signed.signature, 'base64url')
+    )).toBe(true)
+    expect(signed).not.toHaveProperty('accessToken')
+    expect(signed).not.toHaveProperty('privateKey')
+
+    const enrolledDevice = currentDevice as unknown as Device
+    currentDevice = {
+      ...enrolledDevice,
+      revision: 2,
+      updatedAt: '2026-08-19T00:02:30.000Z',
+      publicKeyJwk: { ...enrolledDevice.publicKeyJwk, kid: 'device-rotated-key' }
+    }
+    await expect(service.signDeviceFactAttestation({
+      purpose: 'project-content-provisioning-attestation',
+      factDigest,
+      factRevision: 4,
+      observedAt: '2026-08-19T00:01:30.000Z'
+    })).rejects.toMatchObject({ code: 'device_key_mismatch' })
+    currentDevice = enrolledDevice
+
     const revoked = await service.revoke(enrolled.devices[0]!.deviceId)
     expect(revoked.ok).toBe(true)
     expect(revoked.status).toMatchObject({ state: 'revoked' })
     expect(revoked.devices[0]?.status).toBe('revoked')
+    await expect(service.signDeviceFactAttestation({
+      purpose: 'project-content-provisioning-attestation',
+      factDigest,
+      factRevision: 5,
+      observedAt: '2026-08-19T00:01:30.000Z'
+    })).rejects.toMatchObject({ code: 'device_revoked' })
     service.close()
   })
 
@@ -166,8 +270,29 @@ describe('DesktopDeviceService', () => {
     expect(cloudInstallationId('sciforge-local-installation')).toMatch(/^ins_[a-f0-9]{32}$/u)
   })
 
+  it('fails closed before Cloud refresh when no OIDC User is current', async () => {
+    const listDevices = vi.fn()
+    const identity = identityHarness({ state: 'signed-out' }, null)
+    const service = new DesktopDeviceService({
+      identity: identity.identity,
+      client: clientStub({ listDevices }),
+      installationSeed: 'sciforge-local-installation',
+      vault: memoryVault(),
+      appVersion: '0.2.17'
+    })
+
+    await expect(service.signDeviceFactAttestation({
+      purpose: 'project-content-provisioning-attestation',
+      factDigest: 'c'.repeat(64),
+      factRevision: 1,
+      observedAt: '2026-08-19T00:00:00.000Z'
+    })).rejects.toMatchObject({ code: 'identity_required' })
+    expect(listDevices).not.toHaveBeenCalled()
+    service.close()
+  })
+
   it('keeps the ACTIVE Device lease stable across a same-User token refresh', async () => {
-    const listDevices = vi.fn(async (_context: IdentityAccessContext) => ({
+    const listDevices = vi.fn(async (_context: CloudIdentityAccessContext) => ({
       devices: [cloudDevice('active')]
     }))
     const identity = identityHarness(
@@ -179,7 +304,7 @@ describe('DesktopDeviceService', () => {
       identity: identity.identity,
       client: clientStub({ listDevices }),
       installationSeed: 'sciforge-local-installation',
-      secrets: memorySecrets(),
+      vault: memoryVault(),
       appVersion: '0.2.17'
     })
     service.subscribe((status) => states.push(status.state))
@@ -215,6 +340,7 @@ describe('DesktopDeviceService', () => {
     const listDevices = vi.fn()
       .mockResolvedValueOnce({ devices: [cloudDevice('active')] })
       .mockResolvedValueOnce({ devices: [cloudDevice('revoked')] })
+      .mockResolvedValue({ devices: [cloudDevice('revoked')] })
     const identity = identityHarness(
       signedInStatus('usr_CloudUser000001', 'oid_CloudIdent0001'),
       'access-token-one'
@@ -224,7 +350,7 @@ describe('DesktopDeviceService', () => {
       identity: identity.identity,
       client: clientStub({ listDevices }),
       installationSeed: 'sciforge-local-installation',
-      secrets: memorySecrets(),
+      vault: memoryVault(),
       appVersion: '0.2.17'
     })
 
@@ -250,6 +376,17 @@ describe('DesktopDeviceService', () => {
     ])
     expect(service.getStatus()).toMatchObject({ state: 'revoked' })
     expect(states).toEqual(['revoked'])
+    await expect(service.signDeviceFactAttestation({
+      purpose: 'project-content-provisioning-attestation',
+      factDigest: 'b'.repeat(64),
+      factRevision: 2,
+      observedAt: '2026-08-19T00:00:00.000Z'
+    })).rejects.toMatchObject({ code: 'device_revoked' })
+    expect(listDevices.mock.calls.map(([context]) => context.accessToken)).toEqual([
+      'access-token-one',
+      'access-token-two',
+      'access-token-two'
+    ])
     disposeRevalidation()
     service.close()
   })
@@ -268,7 +405,7 @@ describe('DesktopDeviceService', () => {
         identity: identity.identity,
         client: clientStub({ listDevices: vi.fn(() => listed.promise) }),
         installationSeed: 'sciforge-local-installation',
-        secrets: memorySecrets(),
+        vault: memoryVault(),
         appVersion: '0.2.17',
         linkDevice
       })
@@ -292,7 +429,7 @@ describe('DesktopDeviceService', () => {
   it('lets a new account proceed without waiting for an old account operation', async () => {
     const firstAccount = deferred<{ devices: Device[] }>()
     const secondAccount = deferred<{ devices: Device[] }>()
-    const listDevices = vi.fn((context: IdentityAccessContext) => (
+    const listDevices = vi.fn((context: CloudIdentityAccessContext) => (
       context.accessToken === 'access-token-one' ? firstAccount.promise : secondAccount.promise
     ))
     const identity = identityHarness(
@@ -305,7 +442,7 @@ describe('DesktopDeviceService', () => {
       identity: identity.identity,
       client: clientStub({ listDevices }),
       installationSeed: 'sciforge-local-installation',
-      secrets: memorySecrets(),
+      vault: memoryVault(),
       appVersion: '0.2.17',
       linkDevice
     })
@@ -344,7 +481,7 @@ describe('DesktopDeviceService', () => {
       identity: identity.identity,
       client: clientStub({ listDevices: vi.fn(() => listed.promise) }),
       installationSeed: 'sciforge-local-installation',
-      secrets: memorySecrets(),
+      vault: memoryVault(),
       appVersion: '0.2.17',
       linkDevice
     })
@@ -375,7 +512,7 @@ describe('DesktopDeviceService', () => {
         revokeDevice: vi.fn(() => revoked.promise)
       }),
       installationSeed: 'sciforge-local-installation',
-      secrets: memorySecrets(),
+      vault: memoryVault(),
       appVersion: '0.2.17',
       linkDevice
     })
@@ -411,7 +548,7 @@ describe('DesktopDeviceService', () => {
           revokeDevice: vi.fn(async () => ({}))
         }),
         installationSeed: 'sciforge-local-installation',
-        secrets: memorySecrets(),
+        vault: memoryVault(),
         appVersion: '0.2.17',
         linkDevice
       })

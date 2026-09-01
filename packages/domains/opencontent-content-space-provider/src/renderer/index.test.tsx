@@ -11,7 +11,6 @@ import {
   type ContentSpaceProviderAccessState
 } from '@sciforge/domain-content-space/renderer'
 import {
-  OPENCONTENT_PROVIDER_INSTANCE_REF,
   type OpenContentConnectionResult
 } from '@sciforge/domain-opencontent-connector/contract'
 
@@ -23,6 +22,8 @@ import {
   createDomainRendererEntry,
   createOpenContentContentSpaceEnrollmentView
 } from './index.js'
+
+const OPENCONTENT_PROVIDER_INSTANCE_REF = 'test-opencontent-provider'
 
 describe('OpenContent Content Space enrollment renderer adapter', () => {
   it('contributes one value that exactly matches the declared renderer extension contract', () => {
@@ -186,13 +187,7 @@ function connectedResult() {
     outcome: 'success',
     status: {
       state: 'connected',
-      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF,
-      externalAccount: {
-        id: 'external-account-id',
-        identityId: 42,
-        account: 'scientist',
-        name: 'Research Library'
-      }
+      providerInstanceRef: OPENCONTENT_PROVIDER_INSTANCE_REF
     }
   } as const satisfies OpenContentConnectionResult
 }

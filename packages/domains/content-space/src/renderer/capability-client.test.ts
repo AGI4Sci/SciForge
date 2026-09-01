@@ -133,9 +133,9 @@ describe('Content Space renderer capability client', () => {
   })
 })
 
-function resourceHandle(token: string) {
+function resourceHandle(suffix: string) {
   return Object.freeze({
-    token,
+    token: `cap_${suffix.padEnd(20, 'x')}`,
     semanticRevision: 'revision-1',
     expiresAt: '2026-08-16T12:00:00.000Z'
   })

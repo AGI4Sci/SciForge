@@ -84,7 +84,7 @@ export function filterThreadsForSidebar(
   const hiddenThreadIds = normalizeHiddenThreadIds(options.hiddenThreadIds)
   return threads.filter((thread) => (
     !shouldHideThreadFromSidebarByDefault(thread) &&
-    thread.hasUserMessage !== false &&
+    (thread.hasUserMessage !== false || sidebarVisibilityDecision(thread) === false) &&
     !hiddenThreadIds.has(thread.id.trim())
   ))
 }

@@ -34,6 +34,7 @@ export function createClaudeCodeAgentRuntimeAdapter(
       displayText: input.displayText,
       workspace: input.workspace,
       reasoningEffort: input.reasoningEffort,
+      ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
       fileReferences: input.fileReferences,
       ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
       ...(requested ? {
@@ -98,7 +99,10 @@ export function createClaudeCodeAgentRuntimeAdapter(
       const result = await service.startThread({
         threadId: input.threadId,
         workspace: input.workspace,
-        title: input.title
+        title: input.title,
+        relation: input.relation,
+        threadSource: input.threadSource,
+        sidebarVisibility: input.sidebarVisibility
       })
       if (!result.ok) throw claudeFailure(result)
       return projectAgentRuntimeThreadSummary(result.thread)

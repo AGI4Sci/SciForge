@@ -6,12 +6,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
   collaborationProjectionViewSchema,
-  collaborationStatusSnapshotSchema
+  collaborationStatusSnapshotSchema,
+  collaborationTaskViewSchema
 } from '../contract.js'
 import {
-  buildAgentRegistrationInput,
   buildEndpointChallengeInput,
   buildProjectionLinkInput,
+  createCollaborationRefreshCoordinator,
   CurrentSessionBindingSummary,
   ExplicitError,
   filterProjectionLocatorsForManagedContainer,
@@ -22,6 +23,7 @@ import {
   PairingCopyFeedback,
   PairingStatus,
   ParticipantSection,
+  PhoneLinkSetup,
   ProjectionLocatorSelector,
   ProjectionCard,
   ProjectionGroup,
@@ -38,6 +40,22 @@ import {
 } from './CollaborationPanel.js'
 
 const NOOP = () => undefined
+
+test('keeps first-time Phone Link setup open and completed setup collapsible', () => {
+  const incomplete = renderToStaticMarkup(
+    <PhoneLinkSetup setupComplete={false}><span>setup-fields</span></PhoneLinkSetup>
+  )
+  assert.match(incomplete, /data-phone-link-setup="incomplete"/u)
+  assert.match(incomplete, /aria-expanded="true"/u)
+  assert.match(incomplete, /setup-fields/u)
+
+  const complete = renderToStaticMarkup(
+    <PhoneLinkSetup setupComplete><span>setup-fields</span></PhoneLinkSetup>
+  )
+  assert.match(complete, /data-phone-link-setup="complete"/u)
+  assert.match(complete, /aria-expanded="false"/u)
+  assert.doesNotMatch(complete, /setup-fields|disabled/u)
+})
 
 test('pairing poll schedule honors server retry and stops locally at expiry after rate-limit errors', () => {
   const now = Date.parse('2026-08-15T04:00:00.000Z')
@@ -65,6 +83,87 @@ test('pairing poll schedule honors server retry and stops locally at expiry afte
   }), null)
 })
 
+test('coalesces full refreshes, applies only the latest response, and stops updates after disposal', async () => {
+  const first = deferred<Readonly<{
+    snapshot: ReturnType<typeof collaborationStatusSnapshotSchema.parse>
+    tasks: readonly []
+  }>>()
+  const second = deferred<Readonly<{
+    snapshot: ReturnType<typeof collaborationStatusSnapshotSchema.parse>
+    tasks: readonly []
+  }>>()
+  const snapshots = [
+    collaborationStatusSnapshotSchema.parse({ ...statusFixture(), revision: 1 }),
+    collaborationStatusSnapshotSchema.parse({ ...statusFixture(), revision: 2 })
+  ]
+  const applied: number[] = []
+  const rejected: unknown[] = []
+  const loading: boolean[] = []
+  let calls = 0
+  const coordinator = createCollaborationRefreshCoordinator({
+    load: () => {
+      calls += 1
+      return calls === 1 ? first.promise : second.promise
+    },
+    apply: ({ snapshot }) => applied.push(snapshot.revision),
+    reject: (error) => rejected.push(error),
+    setLoading: (value) => loading.push(value)
+  })
+
+  const initial = coordinator.request({ showLoading: false })
+  const trailing = coordinator.request()
+  assert.equal(calls, 1)
+  first.resolve({ snapshot: snapshots[0]!, tasks: [] })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(calls, 2)
+  assert.deepEqual(applied, [])
+  second.resolve({ snapshot: snapshots[1]!, tasks: [] })
+  await Promise.all([initial, trailing])
+  assert.deepEqual(applied, [2])
+  assert.deepEqual(rejected, [])
+  assert.deepEqual(loading, [true, false])
+
+  const afterDispose = deferred<Readonly<{
+    snapshot: ReturnType<typeof collaborationStatusSnapshotSchema.parse>
+    tasks: readonly []
+  }>>()
+  const disposedUpdates: number[] = []
+  const disposedRejected: unknown[] = []
+  const disposed = createCollaborationRefreshCoordinator({
+    load: () => afterDispose.promise,
+    apply: ({ snapshot }) => disposedUpdates.push(snapshot.revision),
+    reject: (error) => disposedRejected.push(error),
+    setLoading: () => disposedUpdates.push(-1)
+  })
+  const pending = disposed.request({ showLoading: false })
+  disposed.dispose()
+  afterDispose.resolve({ snapshot: snapshots[1]!, tasks: [] })
+  await pending
+  assert.deepEqual(disposedUpdates, [])
+  assert.deepEqual(disposedRejected, [])
+})
+
+test('Task presentation rejects oversized summaries before they enter the polling hot path', () => {
+  const task = statusFixture().projects[0]!.tasks[0]!
+  assert.throws(() => collaborationTaskViewSchema.parse({
+    ...task,
+    resultSummary: 'x'.repeat(4_001)
+  }))
+})
+
+test('Task presentation exposes only whether a dedicated Session exists', () => {
+  const task = statusFixture().projects[0]!.tasks[0]!
+  assert.equal(collaborationTaskViewSchema.parse(task).hasDedicatedSession, true)
+  assert.throws(() => collaborationTaskViewSchema.parse({
+    ...task,
+    runtimeId: 'codex'
+  }))
+  assert.throws(() => collaborationTaskViewSchema.parse({
+    ...task,
+    threadId: 'worker-private-thread'
+  }))
+})
+
 test('renders phone endpoint and owned Agents as one Participant card', () => {
   const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
   const html = renderToStaticMarkup(
@@ -73,19 +172,14 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      participantDisplayName="Researcher A"
-      agentDisplayName="Laptop A"
+      localAgentId="agent-a"
+      agentAuthorityReady
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      credentialRecoveryAgent={undefined}
-      onRecoverAgentCredential={NOOP}
-      onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
@@ -97,19 +191,22 @@ test('renders phone endpoint and owned Agents as one Participant card', () => {
   assert.match(html, /Laptop A/u)
   assert.match(html, /Server A/u)
   assert.match(html, /data-agent-owner="user-a"/u)
-  assert.match(html, /data-primary-agent="true"/u)
-  assert.match(html, /data-primary-agent="false"/u)
-  assert.match(html, /collaborationSetPrimary/u)
+  assert.match(html, /data-current-device-agent="true"/u)
+  assert.match(html, /data-current-device-agent="false"/u)
+  assert.match(html, /data-worker-acceptance-agent-id="agent-a"/u)
+  assert.match(html, /value="manual" selected=""/u)
+  assert.match(html, /collaborationAgentAutomatic/u)
+  assert.match(html, /collaborationOtherDeviceAgents/u)
+  assert.doesNotMatch(html, /collaborationSetPrimary|collaborationRegisterAgent/u)
 })
 
-test('allows Agent registration after phone verification without any Project', () => {
+test('shows automatic preparation without rendering Agent registration controls', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
     participant: {
       ...fixture.participant,
       agents: [],
-      primaryAgentId: undefined,
       complete: false
     },
     projects: []
@@ -120,66 +217,49 @@ test('allows Agent registration after phone verification without any Project', (
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      participantDisplayName="Researcher A"
-      agentDisplayName="Laptop A"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      credentialRecoveryAgent={undefined}
-      onRecoverAgentCredential={NOOP}
-      onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
-  assert.match(html, /collaborationRegisterAgent/u)
-  assert.match(html, /data-collaboration-agent-name="true"/u)
-  assert.match(html, /value="Laptop A"/u)
-  assert.doesNotMatch(html, /disabled=""[^>]*>[^<]*collaborationRegisterAgent/u)
+  assert.match(html, /data-collaboration-agent-preparing="true"/u)
+  assert.match(html, /collaborationAgentPreparing/u)
+  assert.doesNotMatch(html, /data-collaboration-agent-name|collaborationRegisterAgent/u)
   assert.doesNotMatch(html, /projectId/u)
 })
 
-test('offers credential recovery only for the identified local Agent', () => {
+test('marks an unavailable local authority without exposing manual recovery', () => {
   const fixture = statusFixture()
   const snapshot = collaborationStatusSnapshotSchema.parse({
     ...fixture,
     connection: {
       ...fixture.connection,
       state: 'disconnected',
-      deviceCredentialAvailable: false,
-      localAgentId: 'agent-a'
+      agentAuthorityReady: false
     }
   })
-  const localAgent = snapshot.participant?.agents.find(({ agentId }) => agentId === 'agent-a')
   const html = renderToStaticMarkup(
     <ParticipantSection
       participant={snapshot.participant}
       providerOptions={snapshot.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{}}
-      participantDisplayName="Researcher A"
-      agentDisplayName=""
+      agentAuthorityReady={false}
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      credentialRecoveryAgent={localAgent}
-      onRecoverAgentCredential={NOOP}
-      onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
 
-  assert.match(html, /data-collaboration-agent-credential-recover="true"/u)
-  assert.match(html, /collaborationRecoverAgentCredential/u)
-  assert.doesNotMatch(html, /data-collaboration-agent-name="true"/u)
+  assert.match(html, /collaborationAgentUnavailable/u)
+  assert.doesNotMatch(html, /collaborationRecoverAgentAuthority|collaborationRegisterAgent/u)
 })
 
 test('renders controlled first-binding inputs and builds typed commands without browser dialogs', () => {
@@ -190,44 +270,27 @@ test('renders controlled first-binding inputs and builds typed commands without 
       providerOptions={fixture.providerOptions}
       selectedProviderKey="provider.fixture"
       locator={{ realm: 'realm-cn' }}
-      participantDisplayName="研究员甲"
-      agentDisplayName="桌面 Agent"
       pairing={null}
       busyKey={null}
       onProviderChange={NOOP}
       onLocatorChange={NOOP}
-      onParticipantDisplayNameChange={NOOP}
-      onAgentDisplayNameChange={NOOP}
       onStartPairing={NOOP}
-      onRegisterAgent={NOOP}
-      credentialRecoveryAgent={undefined}
-      onRecoverAgentCredential={NOOP}
-      onSelectPrimary={NOOP}
+      onWorkerAcceptanceModeChange={NOOP}
     />
   )
-  assert.match(pairing, /data-collaboration-user-name="true"/u)
-  assert.match(pairing, /value="研究员甲"/u)
+  assert.doesNotMatch(pairing, /data-collaboration-user-name/u)
 
   assert.deepEqual(buildEndpointChallengeInput({
     providerKey: 'provider.fixture',
-    requestedDisplayName: ' 研究员甲 ',
     locator: { realm: ' realm-cn ' }
   }), {
     providerKey: 'provider.fixture',
-    requestedDisplayName: '研究员甲',
     locator: { realm: 'realm-cn' }
-  })
-  assert.deepEqual(buildAgentRegistrationInput(' 桌面 Agent '), {
-    displayName: '桌面 Agent',
-    nodeType: 'desktop',
-    capabilities: []
   })
   assert.equal(buildEndpointChallengeInput({
-    providerKey: 'provider.fixture',
-    requestedDisplayName: ' ',
+    providerKey: ' ',
     locator: { realm: 'realm-cn' }
   }), undefined)
-  assert.equal(buildAgentRegistrationInput(' '), undefined)
 })
 
 test('copies the complete pairing command only through the renderer Clipboard API', async () => {
@@ -294,13 +357,12 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
   assert.match(html, /data-projection-status="error"/u)
   assert.match(html, /collaborationDesktopSession.*细胞分析/u)
   assert.match(html, /collaborationPersonalControlOnly/u)
-  assert.match(html, /codex\/thread-stable/u)
+  assert.doesNotMatch(html, /codex\/thread-stable/u)
   assert.match(html, /<details/u)
   assert.doesNotMatch(html, /Researcher A|Laptop A|user-b|collaborationSharedExecutionNotice/u)
   assert.doesNotMatch(html, /collaborationRename|collaborationSaveAllowlist|collaborationAdvancedPermissions/u)
   for (const action of [
     'collaborationPause',
-    'collaborationClose',
     'collaborationRetry'
   ]) {
     assert.match(html, new RegExp(action, 'u'))
@@ -316,7 +378,8 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
       onRetry={NOOP}
     />
   )
-  assert.match(paused, /collaborationRelink/u)
+  assert.match(paused, /collaborationResume/u)
+  assert.doesNotMatch(paused, /collaborationRelink|collaborationClose/u)
 
   const closed = renderToStaticMarkup(
     <ProjectionCard
@@ -327,7 +390,7 @@ test('shows a compact personal Topic card with diagnostics folded and no sharing
       onRetry={NOOP}
     />
   )
-  assert.match(closed, /collaborationRestoreToCurrent/u)
+  assert.doesNotMatch(closed, /collaborationRestoreToCurrent|collaborationRelink|collaborationClose/u)
 
   const occupied = renderToStaticMarkup(
     <ProjectionCard
@@ -520,6 +583,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
       managedContainerId: 'mco_123456789012',
       ownerUserId: 'usr_123456789012',
       humanEndpointId: 'hep_123456789012',
+      installationId: 'ins_123456789012',
       provider: 'provider.fixture',
       realmId: 'realm-a',
       stableKey: 'managed-owner-realm-a',
@@ -587,7 +651,7 @@ test('renders managed Channel verification and counts only Sessions in the exact
   assert.match(failedHtml, />\?</u)
 })
 
-test('keeps locator discovery inside the authenticated user managed container', () => {
+test('uses only locators already attested for the authenticated endpoint', () => {
   const owned = {
     type: 'provider_locator' as const,
     provider: 'provider.fixture',
@@ -612,6 +676,7 @@ test('keeps locator discovery inside the authenticated user managed container', 
       managedContainerId: 'mco_123456789012',
       ownerUserId: 'usr_123456789012',
       humanEndpointId: 'hep_123456789012',
+      installationId: 'ins_123456789012',
       provider: 'provider.fixture',
       realmId: 'realm-a',
       stableKey: 'managed-owner-realm-a',
@@ -644,10 +709,10 @@ test('keeps locator discovery inside the authenticated user managed container', 
     managed,
     'hep_123456789012'
   )
-  assert.deepEqual(filtered, [owned])
+  assert.deepEqual(filtered, [owned, crossUser])
   assert.deepEqual(
     filterProjectionLocatorsForManagedContainer([owned, crossUser], [], 'hep_123456789012'),
-    []
+    [owned, crossUser]
   )
   const html = renderToStaticMarkup(
     <ProjectionLocatorSelector locators={filtered} projections={[]}
@@ -655,13 +720,19 @@ test('keeps locator discovery inside the authenticated user managed container', 
       onSelect={NOOP} />
   )
   assert.match(html, /本人 Topic/u)
-  assert.doesNotMatch(html, /其他用户 Topic/u)
+  assert.match(html, /其他用户 Topic/u)
 })
 
 test('renders Project Coordinator, Task assignee state, ordered queue, and explicit recovery errors', () => {
   const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
   const projects = renderToStaticMarkup(
-    <ProjectsSection projects={snapshot.projects} participant={snapshot.participant} />
+    <ProjectsSection
+      projects={snapshot.projects}
+      tasks={snapshot.projects.flatMap((project) => project.tasks)}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
   )
   assert.match(projects, /data-project-id="project-1"/u)
   assert.match(projects, /data-project-status="active"/u)
@@ -669,6 +740,10 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(projects, /data-task-id="task-1"/u)
   assert.match(projects, /data-task-status="needs-human"/u)
   assert.match(projects, /Server A/u)
+  assert.match(projects, /data-task-independent-session="true"/u)
+  assert.match(projects, /data-task-human-question="true"/u)
+  assert.match(projects, /Which assay should be used\?/u)
+  assert.doesNotMatch(projects, /worker-private-thread/u)
 
   const recovery = renderToStaticMarkup(
     <RecoverySection
@@ -688,6 +763,102 @@ test('renders Project Coordinator, Task assignee state, ordered queue, and expli
   assert.match(error, /Typed permission error/u)
 })
 
+test('renders a bounded local Worker result summary without exposing Runtime binding IDs', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const sourceTask = snapshot.projects[0]?.tasks[0]
+  assert.ok(sourceTask)
+  const completedTask = collaborationTaskViewSchema.parse({
+    ...sourceTask,
+    state: 'completed',
+    needsHumanQuestion: undefined,
+    resultSummary: 'The validation criteria are satisfied.'
+  })
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[completedTask]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /data-task-result-summary="true"/u)
+  assert.match(html, /The validation criteria are satisfied\./u)
+  assert.doesNotMatch(html, /worker-private-thread/u)
+})
+
+test('uses a readable Worker placeholder instead of exposing an unmatched User ID', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const sourceTask = snapshot.projects[0]?.tasks[0]
+  assert.ok(sourceTask)
+  const task = collaborationTaskViewSchema.parse({
+    ...sourceTask,
+    workerUserId: 'usr_PrivateWorker0001',
+    assigneeAgentId: 'agt_PrivateWorker0001'
+  })
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[task]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /collaborationUnknownWorkerUser/u)
+  assert.doesNotMatch(html, /usr_PrivateWorker0001|agt_PrivateWorker0001/u)
+})
+
+test('renders a Worker Task offer even before its local Project fact is hydrated', () => {
+  const snapshot = collaborationStatusSnapshotSchema.parse(statusFixture())
+  const task = snapshot.projects[0]?.tasks[0]
+  assert.ok(task)
+
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={[]}
+      tasks={[task]}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+
+  assert.match(html, /data-collaboration-unmatched-tasks="true"/u)
+  assert.match(html, /data-task-id="task-1"/u)
+  assert.doesNotMatch(html, /collaborationNoProjects/u)
+})
+
+test('renders explicit claim, User rejection, and local-dismiss controls only for a manual Worker offer', () => {
+  const fixture = statusFixture()
+  const snapshot = collaborationStatusSnapshotSchema.parse({
+    ...fixture,
+    projects: fixture.projects.map((project) => ({
+      ...project,
+      tasks: project.tasks.map((task) => ({
+        ...task,
+        state: 'awaiting-manual',
+        decisionRequired: true
+      }))
+    }))
+  })
+  const html = renderToStaticMarkup(
+    <ProjectsSection
+      projects={snapshot.projects}
+      tasks={snapshot.projects.flatMap((project) => project.tasks)}
+      participant={snapshot.participant}
+      busy={false}
+      onTaskOfferDecision={NOOP}
+    />
+  )
+  assert.match(html, /data-task-offer-decision="true"/u)
+  assert.match(html, /collaborationTaskAccept/u)
+  assert.match(html, /collaborationTaskReject/u)
+  assert.match(html, /collaborationTaskDismiss/u)
+})
+
 test('keeps the challenge poll handle out of render state and has no provider branch', () => {
   const source = readFileSync(new URL('CollaborationPanel.tsx', import.meta.url), 'utf8')
   const pairingType = source.slice(
@@ -700,6 +871,8 @@ test('keeps the challenge poll handle out of render state and has no provider br
   assert.doesNotMatch(source, /data-[^=]*(?:challenge|secret|token)/iu)
   assert.doesNotMatch(source, /\bzulip\b/iu)
   assert.doesNotMatch(source, /promptValue|confirmAction|(?:globalThis|window)\.(?:prompt|confirm)/u)
+  assert.doesNotMatch(source, /registerAgent|selectPrimaryAgent|primaryAgent/u)
+  assert.match(source, /agentId: localAgent\.agentId/u)
 })
 
 test('renders accessible controlled editors for projection mutations', () => {
@@ -831,6 +1004,8 @@ function statusFixture() {
       configured: true,
       baseUrl: 'https://collaboration.example.com',
       state: 'connected' as const,
+      localAgentId: 'agent-a',
+      agentAuthorityReady: true,
       lastConnectedAt: '2026-08-15T03:50:00.000Z',
       lastInboxSequence: 42,
       pendingOutboxCount: 1
@@ -857,7 +1032,6 @@ function statusFixture() {
       revision: 3,
       complete: true,
       primaryHumanEndpointId: 'endpoint-a',
-      primaryAgentId: 'agent-a',
       endpoints: [{
         humanEndpointId: 'endpoint-a',
         providerKey: 'provider.fixture',
@@ -882,7 +1056,7 @@ function statusFixture() {
         nodeType: 'desktop' as const,
         status: 'online' as const,
         capabilities: ['agent-runtime'],
-        primary: true,
+        workerAcceptanceMode: 'manual' as const,
         lastSeenAt: '2026-08-15T04:00:00.000Z'
       }, {
         agentId: 'agent-b',
@@ -890,8 +1064,7 @@ function statusFixture() {
         displayName: 'Server A',
         nodeType: 'server' as const,
         status: 'offline' as const,
-        capabilities: ['agent-runtime'],
-        primary: false
+        capabilities: ['agent-runtime']
       }]
     },
     projections: [],
@@ -901,14 +1074,21 @@ function statusFixture() {
       state: 'active' as const,
       revision: 5,
       coordinatorAgentId: 'agent-a',
-      memberUserIds: ['user-a', 'user-b'],
       tasks: [{
         taskId: 'task-1',
         projectId: 'project-1',
+        taskOfferId: 'offer-task-1',
+        workerUserId: 'user-a',
+        executionId: 'execution-task-1',
         assigneeAgentId: 'agent-b',
+        hasDedicatedSession: true,
         revision: 2,
         title: 'Validate structure',
         state: 'needs-human' as const,
+        acceptanceMode: 'manual' as const,
+        decisionRequired: false,
+        preflightReasons: [],
+        needsHumanQuestion: 'Which assay should be used?',
         updatedAt: '2026-08-15T04:01:00.000Z'
       }]
     }],
@@ -931,4 +1111,18 @@ function statusFixture() {
       recoverable: true
     }]
   }
+}
+
+function deferred<Value>(): Readonly<{
+  promise: Promise<Value>
+  resolve: (value: Value) => void
+  reject: (error: unknown) => void
+}> {
+  let resolve!: (value: Value) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<Value>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
 }

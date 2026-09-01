@@ -10,7 +10,8 @@ describe('electron main source package bundling', () => {
     )
     expect((config as { main?: { plugins?: Array<{ name?: string } | null> } }).main?.plugins)
       .toEqual(expect.arrayContaining([
-        expect.objectContaining({ name: 'sciforge:main-source-package-bundle-guard' })
+        expect.objectContaining({ name: 'sciforge:main-source-package-bundle-guard' }),
+        expect.objectContaining({ name: 'sciforge:stage-domain-main-native-addons' })
       ]))
   })
 

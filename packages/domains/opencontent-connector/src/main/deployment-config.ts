@@ -15,25 +15,19 @@ import { z } from 'zod'
 
 import packageManifest from '../../package.json' with { type: 'json' }
 
-import { OPENCONTENT_PROVIDER_INSTANCE_REF } from '../contract.js'
-
 const deploymentConfigurationDescriptorSchema = z.object({
   contractVersion: z.literal(1),
   sourceRelativePath: packageRelativePathSchema(),
   packagedResourcesRelativePath: packageRelativePathSchema(),
   maxBytes: z.number().int().min(1).max(64 * 1024),
-  publicRelease: z.literal('forbidden')
+  publicRelease: z.literal('allowed')
 }).strict().readonly()
 
-const openContentDeploymentConfigurationSchema = z.object({
-  contractVersion: z.literal(1),
-  providerInstanceRef: z.literal(OPENCONTENT_PROVIDER_INSTANCE_REF),
-  origin: z.string().min(1).max(2048).refine(isAbsoluteHttpsOrigin)
-}).strict().readonly()
-
-export type OpenContentDeploymentConfiguration = z.infer<
-  typeof openContentDeploymentConfigurationSchema
->
+export type OpenContentDeploymentConfiguration = Readonly<{
+  contractVersion: 1
+  providerInstanceRef: string
+  origin: string
+}>
 
 export const OPENCONTENT_DEPLOYMENT_CONFIGURATION_DESCRIPTOR = Object.freeze(
   deploymentConfigurationDescriptorSchema.parse(
@@ -69,16 +63,20 @@ const deploymentConfigurationFileOperations: DeploymentConfigurationFileOperatio
   })
 
 /**
- * Resolves the package-owned deployment sidecar once during Connector
- * activation. Absence and every invalid filesystem or JSON state are the same
- * bounded outcome: this Provider deployment is unavailable.
+ * Resolves the package-owned public deployment configuration once during
+ * Connector activation. Absence and every invalid filesystem or JSON state
+ * are the same bounded outcome: this Provider deployment is unavailable.
  */
 export function resolveOpenContentDeploymentConfiguration(
   host: Pick<DomainMainHost, 'getAppRoot' | 'isPackaged'>,
+  providerInstanceRef: string,
   fileOperations: DeploymentConfigurationFileOperations =
     deploymentConfigurationFileOperations
 ): OpenContentDeploymentConfiguration | undefined {
   try {
+    const configurationSchema = openContentDeploymentConfigurationSchema(
+      providerInstanceRef
+    )
     const appRoot = host.getAppRoot?.()
     if (!appRoot || !isAbsolute(appRoot)) return undefined
     const packaged = host.isPackaged?.() === true
@@ -140,7 +138,7 @@ export function resolveOpenContentDeploymentConfiguration(
       if (currentPath.isSymbolicLink() || !sameFileSnapshot(after, currentPath)) {
         return undefined
       }
-      const parsed = openContentDeploymentConfigurationSchema.parse(
+      const parsed = configurationSchema.parse(
         JSON.parse(buffer.toString('utf8', 0, bytesRead))
       )
       return Object.freeze(parsed)
@@ -150,6 +148,16 @@ export function resolveOpenContentDeploymentConfiguration(
   } catch {
     return undefined
   }
+}
+
+function openContentDeploymentConfigurationSchema(providerInstanceRef: string) {
+  const installedProviderInstanceRef = z.string().trim().min(3).max(256)
+    .parse(providerInstanceRef)
+  return z.object({
+    contractVersion: z.literal(1),
+    providerInstanceRef: z.literal(installedProviderInstanceRef),
+    origin: z.string().min(1).max(2048).refine(isAbsoluteHttpsOrigin)
+  }).strict().readonly()
 }
 
 function sameFileSnapshot(before: BigIntStats, after: BigIntStats): boolean {
