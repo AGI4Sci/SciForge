@@ -34,7 +34,7 @@ Architecture and canonical call chain: `docs/content-space-architecture.md`
 
 ## Research Artifacts
 
-Owns the shared language for researcher-facing records, scientific figure lineage, and evidence relationships. Research Dossier, Scientific Plot Provenance, Artifact Versions, and Evidence DAG remain separate projections/owners with explicit exact-reference boundaries.
+Owns the shared language for the no-store Research Surface, researcher-facing Artifacts, scientific figure lineage, immutable Evidence records, disposable Evidence/Project views, sealed Evidence and Project baselines, and accountable Decisions. Research Dossier, Scientific Plotting, Artifact Versions, Evidence DAG, and Project DAG remain separate packages and authorities connected only by exact public references.
 
 Glossary: `docs/contexts/research-artifacts/CONTEXT.md`
 

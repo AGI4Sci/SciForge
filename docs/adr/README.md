@@ -33,10 +33,12 @@ This directory preserves architectural decisions together with their lifecycle. 
 | 0039 | accepted | Coordinators select a Worker User; Cloud broadcasts one User-level Offer, and the first eligible Device Agent atomically claims it to create the exact Task Execution. |
 | 0040 | accepted | Non-Owner Project Members begin as invited Memberships and must accept the exact confirmed Plan before launch or Provider provisioning. |
 | 0041 | accepted | The Project Coordinator right panel is an independent Project Workbench target; its `projectId` is routing context only, while every canonical operation re-authorizes the current Principal and Project authority. |
+| 0042 | accepted | Research is a no-store presentation/navigation surface over exact package-owned scientific records; corrections append or supersede rather than rewriting referenced history. |
+| 0043 | accepted | Evidence and Project graphs are disposable derived views; formal Evidence closures and Project Snapshots seal exact baselines only at formal-use boundaries. |
 
 ## Current authority order
 
-The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0041, and `openspec/changes/add-full-multi-user-collaboration-loop/`. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
+The canonical full-collaboration target is `CONTEXT-MAP.md`, the context glossaries, ADR-0031 through ADR-0043, and the applicable active OpenSpec change. `docs/SciForge_New_Cloudcolab.md`, the same-named root document, meeting summaries and donor-branch reports are historical or supporting evidence only; they cannot override the current OpenSpec or delivery gates.
 
 When documents disagree, use this order:
 
