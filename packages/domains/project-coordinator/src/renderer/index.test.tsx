@@ -333,6 +333,7 @@ test('New Project creates only the draft Project before Team/content selection',
 
   assert.match(markup, /projectCoordinatorCreatorRole/u)
   assert.match(markup, /projectCoordinatorMemberSelectionAfterCreate/u)
+  assert.match(markup, /projectCoordinatorTextCollaborationHint/u)
   assert.doesNotMatch(markup, /type="checkbox"|projectCoordinatorContentMode/u)
   assert.doesNotMatch(markup, /type="number"/u)
 })

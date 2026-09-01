@@ -552,6 +552,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       const response = await collaborationCommand(state.oidcAccessToken, {
         type: 'endpoint.locator.list',
         humanEndpointId: state.public.endpointId,
+        agentId: state.public.agentId,
         query: topic,
         limit: 500
       })
@@ -872,6 +873,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
     })).values()]
     const created = await collaborationCommand(coordinatorState.agentCredential, {
       type: 'project.create',
+      createIntentId: opaque('pct'),
       displayName: required(label),
       goal: `Zulip 六用户真实验收 ${runId}`,
       budget: { maxTasks: 20, maxTasksPerRound: 20, maxCoordinationRounds: 5, maxTaskRetries: 1 },
@@ -882,14 +884,19 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
         created.memberships[0]?.userId !== ownerState.public.userId || created.provisioningIntent !== null) {
       fail('COLLABORATION_RESPONSE_INVALID')
     }
+    const workerStates = memberStates.filter((memberState) => (
+      memberState.public.userId !== ownerState.public.userId
+    ))
+    if (workerStates.length === 0) workerStates.push(ownerState)
     const planItems = Array.from({ length: 20 }, (_, index) => ({
-      planItemId: `acceptance_task_${String(index + 1).padStart(2, '0')}`,
+      planItemId: `item_acceptance_task_${String(index + 1).padStart(2, '0')}`,
       title: `Acceptance task ${index + 1}`,
       objective: `Execute bounded real-device collaboration task ${index + 1}.`,
       completionCriteria: ['The exact assigned Worker submits a reviewable result.'],
       dependencyPlanItemIds: [],
       requiredCapabilityTags: ['collaboration.acceptance'],
-      fileIntent: null
+      fileIntent: null,
+      workerUserId: workerStates[index % workerStates.length].public.userId
     }))
     const planFacts = {
       projectId: created.project.projectId,
@@ -1100,7 +1107,6 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
         projectPlanId: projectState.plan.projectPlanId,
         expectedPlanRevision: projectState.plan.revision,
         planItemId: planItem.planItemId,
-        workerUserId: assigneeState.public.userId,
         offerExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
         idempotencyKey: idempotency('task_offer_create')
       })
@@ -1207,7 +1213,7 @@ export function createZulipAcceptanceDriver({ environment, report } = {}) {
       fail('TASK_RESULT_MISMATCH')
     }
     const currentProjectEntity = await currentProject(projectState)
-    const reviewedResponse = await collaborationCommand(state.oidcAccessToken, {
+    const reviewedResponse = await collaborationCommand(state.agentCredential, {
       type: 'task.result.review',
       projectId: currentProjectEntity.projectId,
       taskId: result.task.taskId,

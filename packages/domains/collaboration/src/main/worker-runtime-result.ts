@@ -92,6 +92,24 @@ export type WorkerPromptTask = Readonly<{
 }>
 
 export function workerTaskPrompt(task: WorkerPromptTask): string {
+  const taskText = [task.title, task.objective, ...task.completionCriteria].join('\n')
+  const isDesignAnalysisOnly = task.fileIntent === null &&
+    /design[- ]analysis(?:-only)?|只做设计分析|仅做设计分析/iu.test(taskText) &&
+    /不执行|do not (?:run|execute)|unexecuted/iu.test(taskText)
+  const textReportInstructions = isDesignAnalysisOnly
+    ? [
+        '',
+        'Design-analysis-only collaboration task report:',
+        'You may propose an experiment or validation design, but do not run or claim an experiment, simulation, wet-lab action, or other external side effect; label future work as proposed/unexecuted.',
+        'Put these headings in the JSON "summary" string, using the task language:',
+        '- Expert / Role and Sub-question / 专家（角色）与子问题: identify the assigned role and exact scope.',
+        '- Conclusion / 结论: the answer to this Worker sub-question, with [expert:<role>] attribution.',
+        '- Evidence or basis / 依据（证据）: every material claim gets [expert:<role>] or [source:<label>]; distinguish facts, assumptions, and proposals.',
+        '- Recommendation or next action / 建议（下一步）: one or more bounded actions for the Coordinator.',
+        '- Uncertainty / 不确定性 (optional): assumptions or unresolved disagreement for the Coordinator to reconcile.',
+        'Keep the report concise and bounded; do not claim a source, measurement, or execution that you did not actually observe.'
+      ]
+    : []
   const fileInstructions = task.fileIntent
     ? [
         '',
@@ -109,6 +127,7 @@ export function workerTaskPrompt(task: WorkerPromptTask): string {
     '',
     'Completion criteria:',
     ...task.completionCriteria.map((criterion, index) => `${index + 1}. ${criterion}`),
+    ...textReportInstructions,
     ...fileInstructions,
     '',
     'Return exactly one JSON object and no Markdown fence.',

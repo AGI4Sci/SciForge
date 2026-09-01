@@ -75,4 +75,16 @@ test('acceptance driver uses only the final plan, offer, execution and result co
     assert.ok(source.includes(`type: '${requiredCommand}'`), `missing final command ${requiredCommand}`)
   }
   assert.doesNotMatch(source, /memberUserIds|type: 'task\.create'|type: 'task\.transition'|executionFence/u)
+
+  // Keep this external adapter aligned with the strict Cloud command schemas.
+  assert.match(source, /type: 'endpoint\.locator\.list'[\s\S]{0,180}agentId: state\.public\.agentId/u)
+  assert.match(source, /type: 'project\.create'[\s\S]{0,180}createIntentId: opaque\('pct'\)/u)
+  assert.match(source, /planItemId: `item_acceptance_task_/u)
+  assert.match(source, /workerUserId: workerStates\[index % workerStates\.length\]\.public\.userId/u)
+  assert.match(source, /type: 'task\.offer\.create'[\s\S]{0,700}planItemId: planItem\.planItemId,[\s\S]{0,180}offerExpiresAt/u)
+  assert.doesNotMatch(
+    source.match(/type: 'task\.offer\.create'[\s\S]{0,900}/u)?.[0] ?? '',
+    /workerUserId/u
+  )
+  assert.match(source, /const reviewedResponse = await collaborationCommand\(state\.agentCredential,\s*\{/u)
 })

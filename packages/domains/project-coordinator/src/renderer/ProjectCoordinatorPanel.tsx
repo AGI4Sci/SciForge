@@ -1790,6 +1790,9 @@ export function ProjectCreateForm({
             placeholder={t('projectCoordinatorProjectGoalPlaceholder')}
           />
         </label>
+        <p className="text-[11px] leading-relaxed text-ds-muted">
+          {t('projectCoordinatorTextCollaborationHint')}
+        </p>
         <div className="project-coordinator-create-role">
           <UserRoundCheck aria-hidden="true" />
           <span>
@@ -3626,7 +3629,17 @@ export function ProjectCoordinatorDecisionSection({
                 if (input) onComplete(input)
               }}
             >
-              <textarea required name="summary" aria-label={t('projectCoordinatorFinalSummary')} placeholder={t('projectCoordinatorFinalSummary')} className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs" />
+              <p className="text-[11px] leading-relaxed text-ds-muted">
+                {t('projectCoordinatorFinalSummaryHint')}
+              </p>
+              <textarea
+                required
+                name="summary"
+                rows={8}
+                aria-label={t('projectCoordinatorFinalSummary')}
+                placeholder={t('projectCoordinatorFinalSummaryPlaceholder')}
+                className="w-full rounded border border-ds-border bg-ds-bg px-2 py-1.5 text-xs"
+              />
               <button type="submit" disabled={busy} className="rounded bg-ds-accent px-2 py-1 text-white disabled:opacity-50">{t('projectCoordinatorCompleteProject')}</button>
             </form>
           ) : null}
