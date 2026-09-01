@@ -82,7 +82,7 @@
     "architecture-principles:gate": "node ./scripts/architecture-principles-gate.mjs",
     "stage4:artifact:mac:arm64": "node ./scripts/stage4-artifact-build.mjs --platform mac --architecture arm64",
     "stage4:artifact:mac:x64": "node ./scripts/stage4-artifact-build.mjs --platform mac --architecture x64",
-    "identity:keycloak:check": "node --test ./scripts/identity-access-docs.test.mjs ./scripts/keycloak-realm.test.mjs ./scripts/keycloak-test-deployment.test.mjs ./infra/keycloak/test/scripts/verify-oidc-artifacts.test.mjs ./infra/keycloak/test/scripts/verify-edge-contract.test.mjs",
+    "identity:keycloak:check": "node --test ./scripts/identity-access-docs.test.mjs ./scripts/keycloak-realm.test.mjs ./scripts/keycloak-login-theme.test.mjs ./scripts/keycloak-test-deployment.test.mjs ./infra/keycloak/test/scripts/verify-oidc-artifacts.test.mjs ./infra/keycloak/test/scripts/verify-edge-contract.test.mjs",
     "identity:keycloak:login": "node ./scripts/keycloak-pkce-login.mjs",
     "smoke:domain-packages:tarball": "node --test ./scripts/domain-package-tarball-smoke.test.mjs",
     "package-versions:check": "node ./scripts/publishable-package-version-audit.mjs",
