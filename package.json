@@ -3,7 +3,7 @@
   "productName": "SciForge",
   "version": "0.1.0",
   "private": true,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "description": "Electron workbench for selectable local agent runtimes",
   "main": "./out/main/index.js",
   "type": "module",
@@ -47,7 +47,7 @@
   ],
   "scripts": {
     "prebuild": "node ./scripts/public-release-prebuild.cjs && npm run capability:check",
-    "dev": "node ./scripts/dev-bootstrap.mjs",
+    "dev": "node --env-file-if-exists=.env.local ./scripts/dev-bootstrap.mjs",
     "build": "npm run build:agent-support && npm run build:domain-native-addons && electron-vite build",
     "build:domain-native-addons": "node ./packages/domains/identity-access/src/main/private-vault/native/build-addon.mjs --skip-unsupported",
     "build:execution-governance": "npm --workspace @sciforge/execution-governance run build",

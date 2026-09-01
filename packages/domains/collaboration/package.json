@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-collaboration",
   "version": "6.3.1",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "User, device, Agent, personal Session projection, and Project collaboration domain.",

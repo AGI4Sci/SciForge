@@ -11,6 +11,9 @@ import {
   buildMarkdownWorkspaceViewerModel,
   createMarkdownAnnotationSelection,
   createMarkdownReplaceAllOperation,
+  markdownPreviewScrollPositionKey,
+  markdownPreviewScrollTopForKey,
+  rememberMarkdownPreviewScrollTop,
   proportionalScrollTop
 } from './MarkdownWorkspaceViewer'
 import { createDocumentTextAnchor } from './dom-text-annotations'
@@ -238,6 +241,35 @@ describe('MarkdownWorkspaceViewer', () => {
       targetScrollHeight: 1_000,
       targetClientHeight: 200
     })).toBe(0)
+  })
+
+  it('remembers Markdown preview scroll positions by document identity', () => {
+    const key = markdownPreviewScrollPositionKey({
+      documentContentKey: 'content-1',
+      filePath: '/workspace/lab/notes.md',
+      workspaceRoot: '/workspace/lab'
+    })
+
+    expect(markdownPreviewScrollPositionKey({
+      documentContentKey: 'asset-session-2',
+      filePath: '/workspace/lab/notes.md',
+      workspaceRoot: '/workspace/lab'
+    })).toBe(key)
+    expect(markdownPreviewScrollPositionKey({
+      filePath: 'notes.md',
+      workspaceRoot: '/workspace/lab/'
+    })).not.toBe(markdownPreviewScrollPositionKey({
+      filePath: 'notes.md',
+      workspaceRoot: '/workspace/other'
+    }))
+    expect(markdownPreviewScrollTopForKey(key)).toBeUndefined()
+
+    rememberMarkdownPreviewScrollTop(key, 420)
+    expect(markdownPreviewScrollTopForKey(key)).toBe(420)
+    expect(markdownPreviewScrollTopForKey(key)).toBe(420)
+
+    rememberMarkdownPreviewScrollTop(key, -20)
+    expect(markdownPreviewScrollTopForKey(key)).toBe(0)
   })
 
   it('exposes the shared annotation surface in preview and split modes', () => {

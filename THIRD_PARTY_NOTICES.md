@@ -6,17 +6,17 @@ This file records the third-party license and distribution boundary for the curr
 
 ## SciForge Source Boundary
 
-The SciForge source code in this repository is distributed under the MIT
-License in `LICENSE`, except where a file or package says otherwise.
+The SciForge source code in this repository is distributed under the Apache
+License 2.0 in `LICENSE`, except where a file or package says otherwise.
 
 Package metadata policy:
 
 | Scope | Package metadata | Distribution policy |
 | --- | --- | --- |
-| Root desktop app | `private: true`, `license: MIT` | Not published as a public npm package. Source release follows root `LICENSE`. |
+| Root desktop app | `private: true`, `license: Apache-2.0` | Not published as a public npm package. Source release follows root `LICENSE`. |
 | `packages/full-trace` | package-local license field absent | Project-owned workspace package; source release follows root `LICENSE`. |
-| `packages/domains/*` | `license: MIT` | Independently owned domain packages; backend and optional UI ship at one version. |
-| `packages/workers/*` | `license: MIT` | Project-owned non-domain worker packages. |
+| `packages/domains/*` | `license: Apache-2.0` | Independently owned domain packages; backend and optional UI ship at one version. |
+| `packages/workers/*` | `license: Apache-2.0` | Project-owned non-domain worker packages. |
 
 ## Reference-Only Upstream Inspiration
 

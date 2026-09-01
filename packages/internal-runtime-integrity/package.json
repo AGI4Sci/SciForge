@@ -2,7 +2,7 @@
   "name": "@sciforge/internal-runtime-integrity",
   "version": "0.1.1",
   "private": false,
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"

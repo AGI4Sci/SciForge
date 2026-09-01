@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/workspace-intel",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Read-only SciForge workspace intelligence MCP worker for files, references, and skills.",

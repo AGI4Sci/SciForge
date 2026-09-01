@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-opencontent-content-space-provider",
   "version": "5.0.6",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "OpenContent adapter for the provider-neutral SciForge Content Space contract.",

@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-scientific-plotting",
   "version": "1.0.2",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Governed Scientific Plotting capabilities with reproducible recipes and artifact-version commits.",

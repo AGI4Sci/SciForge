@@ -11,6 +11,11 @@ export const VISIBLE_CONTEXT_MAX_RESOURCES = 64
 export const VISIBLE_CONTEXT_MAX_VISUAL_TARGETS = 64
 export const VISIBLE_CONTEXT_DEFAULT_STALE_AFTER_MS = 5_000
 
+const VISIBLE_CONTEXT_MAX_OBJECT_KEYS = 64
+const VISIBLE_CONTEXT_MAX_ARRAY_ITEMS = 64
+const VISIBLE_CONTEXT_MAX_STRING_CHARS = 4096
+const VISIBLE_CONTEXT_MAX_JSON_DEPTH = 6
+
 const maxPathSchema = z.string().trim().min(1).max(4096)
 const timestampSchema = z.string().datetime({ offset: true })
 const requestIdSchema = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9._-]+$/)
@@ -161,6 +166,75 @@ export type VisibleContextSnapshot = {
 }
 
 export type VisibleContextPublishInput = Omit<VisibleContextSnapshot, 'windowId'>
+
+export function sanitizeVisibleContextPublishInput(
+  snapshot: VisibleContextPublishInput
+): VisibleContextPublishInput {
+  return {
+    ...snapshot,
+    activeThreadId: snapshot.activeThreadId ?? null,
+    components: sanitizeVisibleContextComponents(snapshot.components)
+  }
+}
+
+export function sanitizeVisibleContextSnapshot(
+  snapshot: VisibleContextSnapshot
+): VisibleContextSnapshot {
+  return {
+    ...snapshot,
+    activeThreadId: snapshot.activeThreadId ?? null,
+    components: sanitizeVisibleContextComponents(snapshot.components)
+  }
+}
+
+function sanitizeVisibleContextComponents(
+  components: readonly VisibleContextComponentSnapshot[]
+): VisibleContextComponentSnapshot[] {
+  return components
+    .filter((component) => component.visible)
+    .map((component) => ({
+      ...component,
+      resources: component.resources?.map((resource) => ({
+        ...resource,
+        metadata: sanitizeVisibleContextJsonObject(resource.metadata)
+      })),
+      visualTargets: component.visualTargets?.map((target) => ({
+        ...target,
+        metadata: sanitizeVisibleContextJsonObject(target.metadata)
+      })),
+      state: sanitizeVisibleContextJsonObject(component.state)
+    }))
+}
+
+function sanitizeVisibleContextJsonObject(
+  value: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  const sanitized = sanitizeVisibleContextJsonValue(value, 0)
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+    ? sanitized as Record<string, unknown>
+    : undefined
+}
+
+function sanitizeVisibleContextJsonValue(value: unknown, depth: number): unknown {
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string') return value.slice(0, VISIBLE_CONTEXT_MAX_STRING_CHARS)
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'boolean') return value
+  if (depth >= VISIBLE_CONTEXT_MAX_JSON_DEPTH) return '[truncated]'
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, VISIBLE_CONTEXT_MAX_ARRAY_ITEMS)
+      .map((item) => sanitizeVisibleContextJsonValue(item, depth + 1))
+  }
+  if (typeof value === 'object') {
+    const output: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value).slice(0, VISIBLE_CONTEXT_MAX_OBJECT_KEYS)) {
+      output[key.slice(0, 256)] = sanitizeVisibleContextJsonValue(entry, depth + 1)
+    }
+    return output
+  }
+  return undefined
+}
 
 const visibleContextResourceBaseSchema = z.object({
   kind: z.string().trim().min(1).max(128),
