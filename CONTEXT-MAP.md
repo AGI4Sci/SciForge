@@ -32,6 +32,12 @@ Glossary: `docs/contexts/content-space/CONTEXT.md`
 
 Architecture and canonical call chain: `docs/content-space-architecture.md`
 
+## Research Artifacts
+
+Owns the shared language for researcher-facing records, scientific figure lineage, and evidence relationships. Research Dossier, Scientific Plot Provenance, Artifact Versions, and Evidence DAG remain separate projections/owners with explicit exact-reference boundaries.
+
+Glossary: `docs/contexts/research-artifacts/CONTEXT.md`
+
 ## Provider Integration Infrastructure
 
 This is shared technical integration infrastructure rather than a business bounded context. It owns provider-neutral instance identity, portable-reference authority resolution, trusted Provider contribution contracts, node-local access bindings, and token-free Provider Binding Attestations. A provider-specific Connector owns one vendor's private endpoint/tenant policy, authentication, credentials, Connection/session state, transport, schema validation, operation-time authorization checks, and immediate pre-dispatch re-attestation. Provider integrations consume only Host-authorized narrow Connector facades; business domains consume only their own Provider SPI and never a vendor Connector directly.

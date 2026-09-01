@@ -286,7 +286,7 @@ type CallerCache = {
 const toolDefinitions = Object.freeze([
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.discover,
-    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters; omit scope unless the user explicitly requires one (do not infer it from workspace or UI wording). A workspace-facing operation may legitimately be global-scope. When a user names an external or provider-backed service, search native operations first with the user\'s action and library terms before considering an unrelated managed tool; set providerFamily=managed-mcp only when the user explicitly selected that managed provider or native discovery is unsuitable. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
+    'Discover current SciForge operations with an exact capabilityId or unordered text tokens. Scope, accepted/produced resource kinds, and provider family are independent filters; omit scope unless the user explicitly requires one (do not infer it from workspace or UI wording). A workspace-facing operation may legitimately be global-scope. Package routing guidance may name a managed MCP tool: in that case search the exact tool name with providerFamily=managed-mcp, expand the returned opaque operationRef with includeSchema=true, and invoke it only through sciforge_invoke. Do not search a package-named MCP tool as a native capability or call it directly. For unrelated external/provider-backed requests, search native operations first with the user\'s action and library terms before considering a managed tool. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
     agentDiscoverRequestSchema
   ),
   defineTool(
@@ -1165,6 +1165,18 @@ function emptyDiscoveryDiagnostic(
       limit: request.limit
     })
   }
+  // Tool names commonly use separators such as `_`, `-`, or `.`. When a
+  // native search for that shape misses, prefer the managed-MCP recovery
+  // before shortening the text; otherwise the one-shot recovery hint can
+  // strand the Agent on the wrong provider family.
+  const looksLikeToolName = Boolean(request.text && /[_.-]/u.test(request.text))
+  if (looksLikeToolName && request.text && request.providerFamily !== 'managed-mcp') {
+    suggestions.push({
+      text: request.text,
+      providerFamily: 'managed-mcp',
+      limit: request.limit
+    })
+  }
   const textTokens = request.text?.match(/[\p{L}\p{N}]+/gu) ?? []
   if (textTokens.length > 1) {
     suggestions.push({
@@ -1185,7 +1197,7 @@ function emptyDiscoveryDiagnostic(
     delete relaxed[filter]
     suggestions.push(relaxed)
   }
-  if (request.text && request.providerFamily !== 'managed-mcp') {
+  if (request.text && request.providerFamily !== 'managed-mcp' && !looksLikeToolName) {
     suggestions.push({
       text: request.text,
       providerFamily: 'managed-mcp',

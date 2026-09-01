@@ -68,6 +68,66 @@ test('request hygiene preserves opaque state only for native Responses continuat
   assert.match(String(input[2]?.encrypted_content), /reason=encoded_payload/u);
 });
 
+test('request hygiene preserves a compact route-locked handoff from large structured tool output', () => {
+  const plan = {
+    ok: true,
+    status: 'ready',
+    handoff: {
+      planId: 'visual-plan-model-1234',
+      route: 'model',
+      routeLocked: true,
+      rationale: 'The model owns the visual-expression layer.',
+      sourceArtifacts: [],
+      reproducibleInputs: [],
+      lockedElements: [],
+      modelOwnedElements: ['composition and visual style'],
+      contextStatus: 'ready',
+      contextStopReason: 'sufficient',
+      contextEvidenceIds: [],
+      unresolvedContext: [],
+      releaseCeiling: 'publication_ready',
+      fallbackPolicy: 'fail_closed',
+      structuredData: {
+        rows: Array.from({ length: 200 }, (_, index) => ({ index, value: `value-${index}` }))
+      }
+    },
+    execution: {
+      stages: Array.from({ length: 80 }, (_, index) => ({ id: `stage-${index}`, tool: 'image_generation_render' }))
+    }
+  };
+  const body = {
+    input: [{
+      type: 'function_call_output',
+      call_id: 'call_visual_generate',
+      output: `Visual production plan: ready.\n\n${JSON.stringify(plan, null, 2)}`
+    }]
+  };
+
+  const hygienized = hygienizeModelRequestBody(body);
+  const output = String((hygienized.input as Array<Record<string, unknown>>)[0]?.output ?? '');
+
+  assert.match(output, /reason=large_tool_output/u);
+  assert.match(output, /route_locked_handoff=/u);
+  assert.match(output, /visual-plan-model-1234/u);
+  assert.match(output, /\\"route\\":\\"model\\"/u);
+  assert.match(output, /\\"routeLocked\\":true/u);
+  assert.match(output, /\\"fallbackPolicy\\":\\"fail_closed\\"/u);
+  assert.ok(output.length < 3_000, `expected bounded handoff summary, got ${output.length} chars`);
+});
+
+test('request hygiene leaves large non-handoff output on the ordinary bounded preview path', () => {
+  const output = 'x'.repeat(12_000);
+  const body = {
+    input: [{ type: 'function_call_output', call_id: 'call-plain', output }]
+  };
+  const hygienized = hygienizeModelRequestBody(body);
+  const folded = String((hygienized.input as Array<Record<string, unknown>>)[0]?.output ?? '');
+
+  assert.doesNotMatch(folded, /route_locked_handoff=/u);
+  assert.match(folded, /reason=large_tool_output/u);
+  assert.ok(folded.length < 1_000, `expected ordinary folded output, got ${folded.length} chars`);
+});
+
 function toolCallBody(args: Record<string, unknown>): Record<string, unknown> {
   return {
     messages: [{

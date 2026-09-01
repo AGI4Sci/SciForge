@@ -1071,6 +1071,11 @@ export async function prepareScientificPlottingReference(
 
 type ScientificPlotRerunContext = Readonly<{
   baselineFigureVersionRef: ArtifactVersionRefV1
+  /** Immutable executable source pinned by the baseline Figure version. */
+  codeSnapshot: Readonly<{
+    ref: ArtifactVersionRefV1
+    bytes: Uint8Array
+  }>
 }>
 
 export async function renderScientificPlot(
@@ -1147,6 +1152,11 @@ export async function renderScientificPlot(
     const dataSources = await resolveAndVerifyDataSourceRefs(request, workspaceRoot)
     const autoRepair = normalizeAutoRepairOptions(request.autoRepair)
     let finalMatplotlib = resolveMatplotlibRenderParameters(request, styleSpec)
+    const codeBytes = rerunContext?.codeSnapshot.bytes ?? Buffer.from(PYTHON_RENDERER_SOURCE, 'utf8')
+    const codeSha256 = createHash('sha256').update(codeBytes).digest('hex')
+    if (rerunContext && codeSha256 !== rerunContext.codeSnapshot.ref.contentDigest) {
+      throw new Error('Pinned scientific plot code ArtifactVersion digest does not match its snapshot bytes.')
+    }
     let recipe = buildScientificPlotRecipe({
       request,
       workspaceRoot,
@@ -1156,12 +1166,17 @@ export async function renderScientificPlot(
       outputScale,
       autoRepair,
       environment,
-      dataSources
+      dataSources,
+      rendererCodeSha256: codeSha256
     })
     const plotVersionId = `plot-${hashStableJson({ operationId }).slice(0, 28)}`
     const outputDir = join(outputRoot, figureId, 'versions', plotVersionId)
     await mkdir(outputDir, { recursive: true })
     const recipePath = join(outputDir, `${figureId}.recipe.json`)
+    // Keep the exact executable renderer beside every new version. This makes
+    // the Code route inspectable and replayable after package upgrades.
+    const codePath = join(outputDir, `${figureId}.render.py`)
+    await writeFile(codePath, codeBytes)
     await writeFile(recipePath, `${JSON.stringify(recipe, null, 2)}\n`, 'utf8')
     const baseOutputPath = join(outputDir, `${figureId}.png`)
     const referencePath = request.referencePath ?? request.reviewReferencePath
@@ -1171,7 +1186,8 @@ export async function renderScientificPlot(
       workspaceRoot,
       styleSpec,
       matplotlib: finalMatplotlib,
-      outputPath: baseOutputPath
+      outputPath: baseOutputPath,
+      codePath
     })
     if (!first.ok) return first.error
 
@@ -1226,7 +1242,8 @@ export async function renderScientificPlot(
         workspaceRoot,
         styleSpec,
         matplotlib: finalMatplotlib,
-        outputPath: repairedOutputPath
+        outputPath: repairedOutputPath,
+        codePath
       })
       if (!repair.ok) return repair.error
       const repairedReview = await reviewVisualStyleSimilarity({
@@ -1264,7 +1281,9 @@ export async function renderScientificPlot(
       outputScale,
       autoRepair,
       environment,
-      dataSources
+      dataSources,
+      codePath,
+      rendererCodeSha256: codeSha256
     })
     await writeFile(recipePath, `${JSON.stringify(recipe, null, 2)}\n`, 'utf8')
 
@@ -1293,6 +1312,7 @@ export async function renderScientificPlot(
       plotVersionId,
       requestHash,
       recipePath,
+      codePath,
       recipe,
       outputPath: finalOutputPath,
       outputHash,
@@ -1342,6 +1362,7 @@ export async function renderScientificPlot(
       outputPath: finalOutputPath,
       manifestPath,
       recipePath,
+      codePath,
       recipe,
       request,
       review: finalReview
@@ -1354,6 +1375,7 @@ export async function renderScientificPlot(
       outputPath: finalOutputPath,
       manifestPath,
       recipePath,
+      codePath,
       operationId,
       plotVersionId,
       recipe,
@@ -1389,12 +1411,13 @@ export async function rerunScientificPlot(
     if (!dependencies.artifactVersionReadPort || !dependencies.artifactVersionCommitPort) {
       throw new Error('Exact plot rerun requires Artifact Versions read and commit capabilities.')
     }
-    const recipe = await readVersionedPlotBaseline(
+    const baseline = await readVersionedPlotBaseline(
       request.baselineFigureVersionRef,
       request.recipeVersionRef,
       dependencies
     )
-    await verifyPinnedRecipeInputs(recipe, dependencies)
+    await verifyPinnedRecipeInputs(baseline.recipe, dependencies)
+    const recipe = baseline.recipe
     const render = await renderScientificPlot({
       workspaceRoot,
       operationId: request.operationId,
@@ -1422,7 +1445,10 @@ export async function rerunScientificPlot(
       autoRepair: recipe.render.autoRepair,
       ...(request.runtimeId ? { runtimeId: request.runtimeId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {})
-    }, dependencies, { baselineFigureVersionRef: request.baselineFigureVersionRef })
+    }, dependencies, {
+      baselineFigureVersionRef: request.baselineFigureVersionRef,
+      codeSnapshot: baseline.codeSnapshot
+    })
     if (!render.ok) {
       return {
         ok: false,
@@ -1465,7 +1491,13 @@ async function readVersionedPlotBaseline(
   figureRef: ArtifactVersionRefV1,
   recipeRef: ArtifactVersionRefV1,
   dependencies: ScientificPlottingEngineDependencies
-): Promise<ScientificPlotRecipeV1> {
+): Promise<Readonly<{
+  recipe: ScientificPlotRecipeV1
+  codeSnapshot: Readonly<{
+    ref: ArtifactVersionRefV1
+    bytes: Uint8Array
+  }>
+}>> {
   const figure = await readExactArtifactVersion(figureRef, dependencies)
   if (figure.artifact.kind !== 'scientific-plot') {
     throw new Error(`Expected a scientific-plot ArtifactVersion, received ${figure.artifact.kind}.`)
@@ -1475,6 +1507,19 @@ async function readVersionedPlotBaseline(
   ))
   if (!pinnedRecipe || canonicalJson(pinnedRecipe.target) !== canonicalJson(recipeRef)) {
     throw new Error('The Figure version does not pin the supplied recipe ArtifactVersionRef.')
+  }
+  const codeDependency = figure.version.dependencies.find((dependency) => dependency.role === 'code')
+  if (!codeDependency) {
+    throw new Error('The baseline Figure version does not pin an executable scientific plot code ArtifactVersion.')
+  }
+  const codeVersion = await readExactArtifactVersion(codeDependency.target, dependencies)
+  if (codeVersion.artifact.kind !== 'scientific-plot-code') {
+    throw new Error(`Expected a scientific-plot-code ArtifactVersion, received ${codeVersion.artifact.kind}.`)
+  }
+  const codeBytes = Buffer.from(codeVersion.dataBase64, 'base64')
+  const codeDigest = createHash('sha256').update(codeBytes).digest('hex')
+  if (codeDigest !== codeVersion.ref.contentDigest) {
+    throw new Error('Pinned scientific plot code ArtifactVersion digest does not match its snapshot bytes.')
   }
   const recipeVersion = await readExactArtifactVersion(recipeRef, dependencies)
   if (recipeVersion.artifact.kind !== 'scientific-plot-recipe') {
@@ -1496,7 +1541,13 @@ async function readVersionedPlotBaseline(
   if (recipeId !== `plot-recipe:${hashStableJson(recipeContent)}`) {
     throw new Error('Versioned scientific plot recipe identity mismatch.')
   }
-  return parsed
+  return {
+    recipe: parsed,
+    codeSnapshot: {
+      ref: codeVersion.ref,
+      bytes: codeBytes
+    }
+  }
 }
 
 async function verifyPinnedRecipeInputs(
@@ -1601,6 +1652,24 @@ async function readVersionedScientificPlotManifest(
   if (figureVersion.artifact.kind !== 'scientific-plot') {
     throw new Error(`Expected a scientific-plot ArtifactVersion, received ${figureVersion.artifact.kind}.`)
   }
+  const codeDependency = manifestVersion.version.dependencies.find(({ role }) => role === 'code')
+  if (manifest.codePath && !codeDependency) {
+    throw new Error('Versioned scientific plot manifest with a code copy must pin its code ArtifactVersion.')
+  }
+  if (codeDependency) {
+    const codeVersion = await readExactArtifactVersion(codeDependency.target, dependencies)
+    if (codeVersion.artifact.kind !== 'scientific-plot-code') {
+      throw new Error(`Expected a scientific-plot-code ArtifactVersion, received ${codeVersion.artifact.kind}.`)
+    }
+    const codeBytes = Buffer.from(codeVersion.dataBase64, 'base64')
+    const codeDigest = createHash('sha256').update(codeBytes).digest('hex')
+    if (codeDigest !== codeVersion.ref.contentDigest) {
+      throw new Error('Versioned scientific plot code ArtifactVersion digest does not match its snapshot bytes.')
+    }
+    if (codeDigest !== manifest.recipe.execution.rendererCodeSha256) {
+      throw new Error('Versioned scientific plot code does not match the renderer digest recorded in its recipe.')
+    }
+  }
   if (figureDependency.target.contentDigest !== manifest.outputHash) {
     throw new Error('Versioned scientific plot manifest output identity does not match its pinned Figure version.')
   }
@@ -1649,6 +1718,13 @@ async function readVerifiedScientificPlotManifest(
   }
   if (!isScientificPlotRecipeV1(recipeFile) || hashStableJson(recipeFile) !== hashStableJson(manifest.recipe)) {
     throw new Error(`Scientific plot recipe file does not match the render manifest: ${manifestPath}`)
+  }
+  if (manifest.codePath) {
+    const codePath = await resolveTargetPathWithinWorkspace(manifest.codePath, workspaceRoot)
+    const actualCodeDigest = await hashFile(codePath)
+    if (actualCodeDigest !== manifest.recipe.execution.rendererCodeSha256) {
+      throw new Error(`Scientific plot code copy hash mismatch: ${manifestPath}`)
+    }
   }
   return manifest
 }
@@ -1907,6 +1983,7 @@ async function renderAttempt(input: {
   styleSpec: FigureStyleSpec
   matplotlib: ScientificPlotMatplotlibParametersV1
   outputPath: string
+  codePath: string
 }): Promise<{ ok: true; rendererDiagnostics?: RendererDiagnostics } | { ok: false; error: ScientificPlottingRenderResult }> {
   const payload: RenderPayload = {
     template: input.request.template,
@@ -1922,7 +1999,7 @@ async function renderAttempt(input: {
         ? { heatmapCmapColors: input.matplotlib.heatmapCmap.colors }
         : {})
   }
-  const run = await runPythonRenderer(payload, input.workspaceRoot)
+  const run = await runPythonRenderer(payload, input.workspaceRoot, input.codePath)
   if (!run.ok) {
     return {
       ok: false,
@@ -2091,6 +2168,7 @@ async function writeScientificPlottingArtifactManifest(input: {
   outputPath: string
   manifestPath: string
   recipePath: string
+  codePath?: string
   recipe: ScientificPlotRecipeV1
   request: ScientificPlottingRenderRequest
   review?: ScientificPlottingReviewResult
@@ -2112,6 +2190,7 @@ async function writeScientificPlottingArtifactManifest(input: {
     outputHash: createHash('sha256').update(await readFile(input.outputPath)).digest('hex'),
     manifestPath: input.manifestPath,
     recipePath: input.recipePath,
+    ...(input.codePath ? { codePath: input.codePath } : {}),
     recipe: input.recipe,
     visualPlan: input.request.visualPlan,
     ...(input.versionCommit ? { versionCommit: input.versionCommit } : {}),
@@ -2476,8 +2555,8 @@ function pdftoppmCandidates(): string[] {
   return [...new Set(candidates.filter(Boolean))]
 }
 
-async function runPythonRenderer(payload: RenderPayload, workspaceRoot: string): Promise<PythonRunResult> {
-  return runPython(['-c', PYTHON_RENDERER_SOURCE], JSON.stringify(payload), workspaceRoot, RENDER_TIMEOUT_MS)
+async function runPythonRenderer(payload: RenderPayload, workspaceRoot: string, codePath: string): Promise<PythonRunResult> {
+  return runPython([codePath], JSON.stringify(payload), workspaceRoot, RENDER_TIMEOUT_MS)
 }
 
 async function runCommand(
@@ -5364,6 +5443,8 @@ function buildScientificPlotRecipe(input: {
   autoRepair: ReturnType<typeof normalizeAutoRepairOptions>
   environment: ScientificPlotEnvironmentV1
   dataSources: DataSourceRef[]
+  codePath?: string
+  rendererCodeSha256?: string
 }): ScientificPlotRecipeV1 {
   const dataHash = hashStableJson(input.request.data)
   const transformations = input.request.transformations?.length
@@ -5393,8 +5474,13 @@ function buildScientificPlotRecipe(input: {
     schemaVersion: 1,
     renderer: 'sciforge-scientific-plotting-mcp',
     rendererVersion: RENDERER_VERSION,
-    rendererCodeSha256: createHash('sha256').update(PYTHON_RENDERER_SOURCE).digest('hex'),
-    command: [PYTHON_COMMAND, '-c', '<sciforge-scientific-plotting-renderer>'],
+    rendererCodeSha256: input.rendererCodeSha256
+      ?? createHash('sha256').update(PYTHON_RENDERER_SOURCE).digest('hex'),
+    // Keep the recipe portable across reruns; the exact absolute codePath is
+    // carried by the manifest and code Artifact, not baked into equivalence.
+    command: input.codePath
+      ? [PYTHON_COMMAND, '<sciforge-scientific-plot-code-artifact>']
+      : [PYTHON_COMMAND, '-c', '<sciforge-scientific-plotting-renderer>'],
     cwd: input.workspaceRoot,
     timeoutMs: RENDER_TIMEOUT_MS
   }
@@ -5637,6 +5723,7 @@ async function computeScientificPlotPreparedDigests(
   return {
     derivedData: digest(Buffer.from(canonicalJson(manifest.recipe.data), 'utf8')),
     recipe: digest(Buffer.from(canonicalJson(manifest.recipe), 'utf8')),
+    ...(manifest.codePath ? { code: digest(await readFile(manifest.codePath)) } : {}),
     figure: digest(await readFile(manifest.outputPath)),
     renderManifest: digest(preCommitManifestBytes),
     attemptLog: digest(scientificPlotAttemptLogBytes(
@@ -5671,6 +5758,7 @@ function scientificPlotEvidenceCommitRefs(
   return {
     derivedData: ref(commit.candidateIds.derivedData),
     recipe: ref(commit.candidateIds.recipe),
+    ...(commit.candidateIds.code ? { code: ref(commit.candidateIds.code) } : {}),
     figure: ref(commit.candidateIds.figure),
     renderManifest: ref(commit.candidateIds.renderManifest),
     attemptLog: ref(commit.candidateIds.attemptLog)
@@ -5766,6 +5854,7 @@ function renderResultFromManifest(
     outputPath: manifest.outputPath,
     manifestPath,
     recipePath: manifest.recipePath,
+    ...(manifest.codePath ? { codePath: manifest.codePath } : {}),
     operationId,
     plotVersionId: manifest.plotVersionId,
     recipe: manifest.recipe,
@@ -5794,6 +5883,9 @@ async function finalizePreparedScientificPlotOperation(input: {
 }): Promise<Extract<ScientificPlottingRenderResult, { ok: true }>> {
   const port = input.dependencies.artifactVersionCommitPort
   if (!port) throw new Error('Prepared Scientific Plotting commit requires Artifact Versions commit capability.')
+  if (!input.manifest.codePath) {
+    throw new Error('New Scientific Plotting versions require a persisted executable code artifact.')
+  }
   const operationReceipt = await readScientificPlotOperationReceipt(
     input.workspaceRoot,
     input.operationReceiptPath
@@ -5810,6 +5902,7 @@ async function finalizePreparedScientificPlotOperation(input: {
     plotVersionId: input.manifest.plotVersionId,
     recipe: input.manifest.recipe,
     recipePath: input.manifest.recipePath,
+    codePath: input.manifest.codePath,
     manifestPath: operationReceipt.manifestPath,
     preCommitManifestBytes: input.preCommitManifestBytes,
     attempts: input.manifest.attempts,
@@ -5851,6 +5944,7 @@ async function finalizePreparedScientificPlotOperation(input: {
     outputPath: input.manifest.outputPath,
     manifestPath: operationReceipt.manifestPath,
     recipePath: input.manifest.recipePath,
+    codePath: input.manifest.codePath,
     recipe: input.manifest.recipe,
     request: input.request,
     review: input.manifest.finalReview,
@@ -5953,6 +6047,7 @@ async function commitScientificPlotVersion(input: {
   plotVersionId: string
   recipe: ScientificPlotRecipeV1
   recipePath: string
+  codePath: string
   manifestPath: string
   preCommitManifestBytes: Uint8Array
   attempts: ScientificPlottingAttempt[]
@@ -5968,6 +6063,7 @@ async function commitScientificPlotVersion(input: {
   const candidateIds = {
     derivedData: `derived-data:${candidateStem}`,
     recipe: `plot-recipe:${candidateStem}`,
+    code: `plot-code:${candidateStem}`,
     figure: `plot-figure:${candidateStem}`,
     renderManifest: `render-manifest:${candidateStem}`,
     attemptLog: `render-log:${candidateStem}`
@@ -5990,6 +6086,7 @@ async function commitScientificPlotVersion(input: {
       }
   const derivedDataBytes = Buffer.from(canonicalJson(input.recipe.data), 'utf8')
   const recipeBytes = Buffer.from(canonicalJson(input.recipe), 'utf8')
+  const codeBytes = await readFile(input.codePath)
   const figureBytes = await readFile(input.outputPath)
   const manifestBytes = Buffer.from(input.preCommitManifestBytes)
   const attemptLogBytes = scientificPlotAttemptLogBytes(
@@ -6059,6 +6156,21 @@ async function commitScientificPlotVersion(input: {
         })
       },
       {
+        candidateId: candidateIds.code,
+        expectedCurrentVersionId: null,
+        kind: 'scientific-plot-code',
+        label: `${input.request.labels?.title ?? input.figureId} — executable renderer`,
+        intent,
+        content: snapshotContent(codeBytes, 'text/x-python'),
+        dependencies: [candidateDependency('recipe', candidateIds.recipe)],
+        accessPolicy: generatedAccessPolicy,
+        metadata: canonicalClone({
+          plotVersionId: input.plotVersionId,
+          codePath: input.codePath,
+          codeSha256: createHash('sha256').update(codeBytes).digest('hex')
+        })
+      },
+      {
         candidateId: candidateIds.figure,
         ...(artifactId ? { artifactId } : {}),
         expectedCurrentVersionId: artifactId ? expectedCurrentVersionId : null,
@@ -6066,7 +6178,7 @@ async function commitScientificPlotVersion(input: {
         label: input.request.labels?.title ?? input.figureId,
         intent,
         content: snapshotContent(figureBytes, 'image/png'),
-        dependencies: [candidateDependency('recipe', candidateIds.recipe)],
+        dependencies: [candidateDependency('recipe', candidateIds.recipe), candidateDependency('code', candidateIds.code)],
         accessPolicy: generatedAccessPolicy,
         metadata: canonicalClone({
           plotVersionId: input.plotVersionId,
@@ -6084,7 +6196,8 @@ async function commitScientificPlotVersion(input: {
         content: snapshotContent(manifestBytes, 'application/json'),
         dependencies: [
           candidateDependency('recipe', candidateIds.recipe),
-          candidateDependency('figure', candidateIds.figure)
+          candidateDependency('figure', candidateIds.figure),
+          candidateDependency('code', candidateIds.code)
         ],
         accessPolicy: generatedAccessPolicy,
         metadata: canonicalClone({
@@ -6102,7 +6215,8 @@ async function commitScientificPlotVersion(input: {
         content: snapshotContent(attemptLogBytes, 'application/json'),
         dependencies: [
           candidateDependency('recipe', candidateIds.recipe),
-          candidateDependency('figure', candidateIds.figure)
+          candidateDependency('figure', candidateIds.figure),
+          candidateDependency('code', candidateIds.code)
         ],
         accessPolicy: generatedAccessPolicy,
         metadata: canonicalClone({
@@ -6161,6 +6275,9 @@ function buildScientificPlotEvidenceLineage(
   }))
   const derivedDataId = `plot-output:${commit.candidateIds.derivedData}`
   const recipeId = `plot-output:${commit.candidateIds.recipe}`
+  const codeId = commit.candidateIds.code
+    ? `plot-output:${commit.candidateIds.code}`
+    : undefined
   const figureId = `plot-output:${commit.candidateIds.figure}`
   const manifestId = `plot-output:${commit.candidateIds.renderManifest}`
   const figureCommit = committed.get(commit.candidateIds.figure)
@@ -6228,7 +6345,12 @@ function buildScientificPlotEvidenceLineage(
       type: 'artifact',
       name: 'Scientific plot recipe',
       artifact: artifactForCandidate(commit.candidateIds.recipe)
-    }, {
+    }, ...(commit.candidateIds.code ? [{
+      id: codeId!,
+      type: 'artifact' as const,
+      name: 'Executable scientific plot renderer',
+      artifact: artifactForCandidate(commit.candidateIds.code)
+    }] : []), {
       id: figureId,
       type: 'artifact',
       name: 'Scientific figure',
@@ -6249,7 +6371,12 @@ function buildScientificPlotEvidenceLineage(
         src: figureId,
         dst: recipeId,
         rel: 'derived_from'
-      }
+      },
+      ...(codeId ? [{
+        src: figureId,
+        dst: codeId,
+        rel: 'derived_from' as const
+      }] : [])
     ]
   }
 }
@@ -6305,7 +6432,8 @@ function hashRequest(
     runtimeId: request.runtimeId,
     threadId: request.threadId,
     autoRepair: request.autoRepair,
-    rerunBaselineFigureVersionRef: rerunContext?.baselineFigureVersionRef
+    rerunBaselineFigureVersionRef: rerunContext?.baselineFigureVersionRef,
+    rerunCodeArtifactVersionRef: rerunContext?.codeSnapshot.ref
   })
 }
 

@@ -77,6 +77,7 @@ function createRecordingArtifactPorts(calls: ArtifactVersionCommitInputV1[]): {
   commitPort: ArtifactVersionCommitPortV1
   readPort: ArtifactVersionReadPortV1
   seed(ref: ArtifactVersionRefV1, bytes: Buffer, kind: string): void
+  tamper(ref: ArtifactVersionRefV1, bytes: Buffer): void
 } {
   const versions = new Map<string, ArtifactVersionReadV1>()
   const commitPort: ArtifactVersionCommitPortV1 = {
@@ -205,6 +206,16 @@ function createRecordingArtifactPorts(calls: ArtifactVersionCommitInputV1[]): {
           metadata: {}
         },
         ref,
+        dataBase64: bytes.toString('base64')
+      })
+    },
+    tamper: (ref, bytes) => {
+      const existing = versions.get(ref.versionId)
+      if (!existing) throw new Error(`Missing fixture version ${ref.versionId}`)
+      // Deliberately leave ref/storage.contentDigest untouched: this models
+      // corruption in the immutable store and exercises the read-time guard.
+      versions.set(ref.versionId, {
+        ...existing,
         dataBase64: bytes.toString('base64')
       })
     }
@@ -464,6 +475,7 @@ describe('scientific plotting provenance and versions', () => {
           candidateIds: {
             derivedData: expect.any(String),
             recipe: expect.any(String),
+            code: expect.any(String),
             figure: expect.any(String),
             renderManifest: expect.any(String),
             attemptLog: expect.any(String)
@@ -494,9 +506,11 @@ describe('scientific plotting provenance and versions', () => {
       })
       if (!first.ok || !first.versionCommit) return
       expect(first.outputPath).toContain(`/versioned-line/versions/${first.plotVersionId}/`)
+      expect(first.codePath).toContain(`${first.plotVersionId}/versioned-line.render.py`)
+      expect(await readFile(first.codePath!, 'utf8')).toContain('matplotlib')
       expect(commitCalls).toHaveLength(1)
       const committed = commitCalls[0]!
-      expect(committed.candidates).toHaveLength(5)
+      expect(committed.candidates).toHaveLength(6)
       expect(committed.candidates.every((candidate) => candidate.content.mode === 'snapshot')).toBe(true)
       const derivedCandidate = committed.candidates.find((candidate) => candidate.candidateId === first.versionCommit!.candidateIds.derivedData)!
       expect(derivedCandidate.dependencies?.[0]).toEqual({
@@ -507,6 +521,24 @@ describe('scientific plotting provenance and versions', () => {
       const figureCandidate = committed.candidates.find((candidate) => candidate.candidateId === first.versionCommit!.candidateIds.figure)!
       expect(figureCandidate.artifactId).toBeUndefined()
       expect(figureCandidate.content.mode).toBe('snapshot')
+      expect(figureCandidate.dependencies?.some((dependency) => dependency.role === 'code')).toBe(true)
+      const codeCandidate = committed.candidates.find((candidate) => candidate.candidateId === first.versionCommit!.candidateIds.code)!
+      expect(codeCandidate.kind).toBe('scientific-plot-code')
+      expect(codeCandidate.content.mode).toBe('snapshot')
+      const committedCodeReceipt = first.versionCommit.result.ok
+        ? first.versionCommit.result.value.versions.find((item) => item.candidateId === first.versionCommit!.candidateIds.code)
+        : undefined
+      expect(committedCodeReceipt).toBeDefined()
+      if (codeCandidate.content.mode === 'snapshot') {
+        const codeBytes = Buffer.from(codeCandidate.content.dataBase64, 'base64')
+        expect(codeBytes.toString('utf8')).toContain('matplotlib')
+        expect(committedCodeReceipt?.ref.contentDigest).toBe(createHash('sha256').update(codeBytes).digest('hex'))
+        expect(committedCodeReceipt?.ref.mediaType).toBe('text/x-python')
+        expect(codeCandidate.metadata).toMatchObject({
+          codePath: first.codePath,
+          codeSha256: committedCodeReceipt?.ref.contentDigest
+        })
+      }
       const manifestCandidate = committed.candidates.find((candidate) => candidate.candidateId === first.versionCommit!.candidateIds.renderManifest)!
       if (manifestCandidate.content.mode !== 'snapshot') throw new Error('Expected manifest snapshot.')
       const committedManifest = JSON.parse(Buffer.from(manifestCandidate.content.dataBase64, 'base64').toString('utf8')) as Record<string, unknown>
@@ -524,7 +556,33 @@ describe('scientific plotting provenance and versions', () => {
         : undefined
       expect(firstFigureReceipt).toBeDefined()
       expect(firstRecipeReceipt).toBeDefined()
-      if (!firstFigureReceipt || !firstRecipeReceipt) return
+      const firstCodeReceipt = first.versionCommit.result.ok
+        ? first.versionCommit.result.value.versions.find((item) => item.candidateId === first.versionCommit!.candidateIds.code)
+        : undefined
+      expect(firstCodeReceipt).toBeDefined()
+      if (!firstFigureReceipt || !firstRecipeReceipt || !firstCodeReceipt || !first.codePath) return
+      const immutableCode = await readFile(first.codePath)
+      const tamperedCode = Buffer.from(`${immutableCode.toString('utf8')}\n# tampered immutable snapshot\n`, 'utf8')
+      artifactPorts.tamper(firstCodeReceipt.ref, tamperedCode)
+      const tamperedRerun = await service.rerun({
+        operationId: 'test:provenance:rerun:tampered-code-v1',
+        workspaceRoot: workspace,
+        baselineFigureVersionRef: firstFigureReceipt.ref,
+        recipeVersionRef: firstRecipeReceipt.ref,
+        expectedCurrentVersionId: firstFigureReceipt.ref.versionId
+      })
+      expect(tamperedRerun).toMatchObject({
+        ok: false,
+        status: 'version_read_failed',
+        provenanceBreakpoints: [expect.objectContaining({
+          code: 'artifact-version-digest-mismatch',
+          stage: 'input'
+        })]
+      })
+      // Restore the fixture's immutable bytes so the following assertion
+      // proves local codePath edits do not affect a healthy rerun.
+      artifactPorts.tamper(firstCodeReceipt.ref, immutableCode)
+      await writeFile(first.codePath, '# local edit must not affect an immutable rerun\n', 'utf8')
       await Promise.all([first.outputPath, first.manifestPath, first.recipePath].map(
         (path) => rm(path, { force: true })
       ))
@@ -549,6 +607,8 @@ describe('scientific plotting provenance and versions', () => {
         }
       })
       if (!rerun.ok) return
+      expect(rerun.render.codePath).toBeDefined()
+      expect(await readFile(rerun.render.codePath!)).toEqual(immutableCode)
       expect(rerun.reproductionRelation).toBe(
         rerun.comparison.exactOutput ? 'replicates' : 'fails_to_replicate'
       )

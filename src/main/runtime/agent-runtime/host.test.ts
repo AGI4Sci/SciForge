@@ -52,7 +52,7 @@ import {
 import { CodexRuntimeService } from '../codex'
 import { CodexThreadStore } from '../codex/codex-thread-store'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
-import { createAgentRuntimeHost } from './host'
+import { createAgentRuntimeHost, renderAgentRoutingGuidance } from './host'
 import {
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_VERSION,
@@ -81,6 +81,7 @@ import {
   type SettingsMemoryRecordUpdater
 } from '../../../renderer/src/lib/settings-memory-actions'
 import type { WorkspaceHostPlacement } from '../../../shared/workspace-host-state'
+import { defineDomainMainAgentRoutingContract } from '@sciforge/domain-sdk/agent-routing'
 
 function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
   return {
@@ -403,6 +404,50 @@ function shellWrappedCommandToolEvent(command: string, index: number): AgentRunt
     }
   }
 }
+
+describe('renderAgentRoutingGuidance', () => {
+  it('renders package-owned route contracts without host-specific branching', () => {
+    const contract = defineDomainMainAgentRoutingContract({
+      intent: 'scientific-plot-provenance',
+      title: 'Scientific plot provenance routing',
+      summary: 'Route traceable scientific figures through the governed visual workflow.',
+      triggerHints: ['图表溯源'],
+      allowedRoutes: ['code', 'model', 'hybrid'],
+      workflow: [
+        {
+          id: 'visual-plan',
+          description: 'Call visual_generate before choosing the route.',
+          tool: 'visual_generate'
+        },
+        {
+          id: 'render-code',
+          description: 'Render code and hybrid plots through Scientific Plotting.',
+          tool: 'sciforge_invoke',
+          capabilityId: 'scientific-plotting.render',
+          appliesToRoutes: ['code', 'hybrid']
+        },
+        {
+          id: 'render-model',
+          description: 'Render model-only visuals through image generation with a replay receipt.',
+          tool: 'image_generation_render',
+          appliesToRoutes: ['model']
+        }
+      ],
+      reproducibilityRequirements: [
+        'Persist the selected route and exact model inputs.'
+      ]
+    })
+
+    expect(renderAgentRoutingGuidance([])).toBe('')
+    const guidance = renderAgentRoutingGuidance([contract])
+    expect(guidance).toContain('Package-contributed Agent routing guidance:')
+    expect(guidance).toContain('Intent: scientific-plot-provenance')
+    expect(guidance).toContain('tool=visual_generate')
+    expect(guidance).toContain('capability=scientific-plotting.render')
+    expect(guidance).toContain('routes=model')
+    expect(guidance).toContain('Persist the selected route and exact model inputs.')
+  })
+})
 
 const evidenceQueueRoots: string[] = []
 
@@ -2003,6 +2048,12 @@ describe('AgentRuntimeHost', () => {
     expect(dispatched?.text).toContain('"resourceRef": []')
     expect(dispatched?.text).toContain(
       'When the user explicitly requests an external Provider operation, `sciforge_discover` may search matching global native operations even when no current component resourceRef exists.'
+    )
+    expect(dispatched?.text).toContain(
+      'Package workflow steps may name an MCP tool that is not exposed as a direct provider function.'
+    )
+    expect(dispatched?.text).toContain(
+      'providerFamily: "managed-mcp"'
     )
     expect(dispatched?.text).toContain(
       'This includes authorization operations that establish the initial Broker resource.'

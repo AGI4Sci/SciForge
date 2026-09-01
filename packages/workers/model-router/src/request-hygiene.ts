@@ -6,6 +6,11 @@ const MAX_TOOL_OUTPUT_CHARS = 6_000;
 const MAX_ARGUMENT_STRING_CHARS = 6_000;
 const MAX_ARGUMENT_ARRAY_ITEMS = 32;
 const ARGUMENT_ARRAY_PREVIEW_ITEMS = 6;
+const HANDOFF_STRING_PREVIEW_CHARS = 384;
+const HANDOFF_ARRAY_PREVIEW_ITEMS = 12;
+const HANDOFF_OBJECT_PREVIEW_KEYS = 24;
+const HANDOFF_PREVIEW_DEPTH = 3;
+const HANDOFF_MAX_SERIALIZED_CHARS = 2_400;
 const MARKER_KEY = '__sciforge_request_hygiene__';
 const OMITTED_SHELL_COMMAND =
   'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
@@ -106,11 +111,11 @@ function isShellHistoryPlaceholder(value: string): boolean {
 function hygienizeText(value: string, context: HygieneContext): string {
   const source = sourceForContext(context, context.source);
   if (isToolOutputContext(context) && value.length > MAX_TOOL_OUTPUT_CHARS) {
-    return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaceEncodedPayloads(value, 'tool_message.content')));
+    return markerText('tool_message.content', 'large_tool_output', value, safeToolOutputSummary(value));
   }
   const replaced = replaceEncodedPayloads(value, source);
   if (isToolOutputContext(context) && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
-    return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaced));
+    return markerText('tool_message.content', 'large_tool_output', value, safeToolOutputSummary(replaced));
   }
   return replaced;
 }
@@ -173,6 +178,97 @@ function safeSummary(value: string): string {
     .trim();
   if (normalized.length <= 360) return normalized;
   return `${normalized.slice(0, 220)} ... ${normalized.slice(-120)}`;
+}
+
+/**
+ * Tool output is folded before it is sent back to a model. Keep a compact
+ * route-locked handoff when one is present so the next model turn can carry
+ * on with the declared plan instead of guessing a new route. This is shape
+ * based rather than tied to a particular tool or domain identifier: any
+ * object carrying a plan id, route, and an explicit route lock is eligible.
+ */
+function safeToolOutputSummary(value: string): string {
+  const replaced = replaceEncodedPayloads(value, 'tool_message.content');
+  const parsed = parseStructuredToolOutput(replaced);
+  const handoff = findRouteLockedHandoff(parsed);
+  if (!handoff) return safeSummary(replaced);
+
+  const compact = compactHandoff(handoff);
+  const handoffText = JSON.stringify(compact);
+  return `route_locked_handoff=${handoffText}; text_preview=${safeSummary(replaced)}`;
+}
+
+function parseStructuredToolOutput(value: string): unknown | undefined {
+  const parsed = parseJson(value);
+  if (parsed !== undefined) return parsed;
+
+  // MCP text results commonly prefix a pretty-printed JSON payload with a
+  // short title (for example, "Visual production plan: ready."). Try a small
+  // bounded number of object starts to tolerate a title containing braces,
+  // while avoiding an untrusted brace-heavy output causing quadratic parsing.
+  let attempts = 0;
+  for (let index = value.indexOf('{'); index >= 0 && attempts < 8; index = value.indexOf('{', index + 1)) {
+    attempts += 1;
+    const candidate = parseJson(value.slice(index));
+    if (candidate !== undefined) return candidate;
+  }
+  return undefined;
+}
+
+function findRouteLockedHandoff(value: unknown, depth = 0, visited = { count: 0 }): JsonRecord | undefined {
+  if (!isRecord(value) || depth > HANDOFF_PREVIEW_DEPTH || visited.count >= 256) return undefined;
+  visited.count += 1;
+  if (value.routeLocked === true && typeof value.route === 'string' && typeof value.planId === 'string') {
+    return value;
+  }
+  for (const entry of Object.values(value)) {
+    const found = findRouteLockedHandoff(entry, depth + 1, visited);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function compactHandoff(value: JsonRecord): JsonRecord {
+  // Keep the three routing keys first. Remaining fields are copied in their
+  // original order with bounded values so the summary remains safe to replay.
+  const preferredKeys = ['planId', 'route', 'routeLocked'];
+  const keys = [
+    ...preferredKeys.filter((key) => Object.hasOwn(value, key)),
+    ...Object.keys(value).filter((key) => !preferredKeys.includes(key)).slice(0, HANDOFF_OBJECT_PREVIEW_KEYS)
+  ];
+  const out: JsonRecord = {};
+  for (const key of keys) {
+    const entry = compactHandoffValue(value[key]);
+    if (entry === undefined) continue;
+    const candidate = { ...out, [key]: entry };
+    if (JSON.stringify(candidate).length > HANDOFF_MAX_SERIALIZED_CHARS && !preferredKeys.includes(key)) continue;
+    Object.defineProperty(out, key, {
+      configurable: true,
+      enumerable: true,
+      value: entry,
+      writable: true,
+    });
+  }
+  return out;
+}
+
+function compactHandoffValue(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value.length <= HANDOFF_STRING_PREVIEW_CHARS) return value;
+    return `${value.slice(0, HANDOFF_STRING_PREVIEW_CHARS - 16)} ...[truncated]`;
+  }
+  if (depth >= HANDOFF_PREVIEW_DEPTH) return '[nested value omitted]';
+  if (Array.isArray(value)) {
+    return value.slice(0, HANDOFF_ARRAY_PREVIEW_ITEMS).map((entry) => compactHandoffValue(entry, depth + 1));
+  }
+  if (!isRecord(value)) return undefined;
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, HANDOFF_OBJECT_PREVIEW_KEYS)
+      .map(([key, entry]) => [key, compactHandoffValue(entry, depth + 1)])
+      .filter(([, entry]) => entry !== undefined)
+  );
 }
 
 function sourceForRecordEntry(context: HygieneContext, role: string, key: string): string {

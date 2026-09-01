@@ -63,6 +63,7 @@ export const scientificPlotManifestProjectionSchema = z.object({
   plotVersionId: z.string().trim().min(1),
   requestHash: sha256Schema,
   recipePath: pathSchema,
+  codePath: pathSchema.optional(),
   recipe: scientificPlotRecipeProjectionSchema,
   outputPath: pathSchema,
   outputHash: sha256Schema,
@@ -97,6 +98,7 @@ export type ScientificPlotProvenanceRecord = Readonly<{
   manifestItem: HistoryItem
   manifestRef: ArtifactVersionRefV1
   recipeRef?: ArtifactVersionRefV1
+  codeRef?: ArtifactVersionRefV1
   figureRef?: ArtifactVersionRefV1
   derivedDataRef?: ArtifactVersionRefV1
   logRef?: ArtifactVersionRefV1
@@ -136,6 +138,7 @@ export async function loadScientificPlotProvenance(
     }
 
     const recipeRef = dependencyRef(manifestItem, 'recipe')
+    const codeRef = dependencyRef(manifestItem, 'code')
     const figureRef = dependencyRef(manifestItem, 'figure')
     const recipeItem = recipeRef ? itemByVersionId.get(recipeRef.versionId) : undefined
     const derivedDataRef = recipeItem ? dependencyRef(recipeItem, 'derived-data') : undefined
@@ -160,6 +163,7 @@ export async function loadScientificPlotProvenance(
         manifestItem,
         manifestRef: manifestItem.ref,
         ...(recipeRef ? { recipeRef } : {}),
+        ...(codeRef ? { codeRef } : {}),
         ...(figureRef ? { figureRef } : {}),
         ...(derivedDataRef ? { derivedDataRef } : {}),
         ...(logItem ? { logRef: logItem.ref } : {}),

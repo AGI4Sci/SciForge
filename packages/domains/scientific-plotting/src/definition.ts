@@ -21,6 +21,15 @@ export const SCIENTIFIC_PLOTTING_CAPABILITY_FACTORY_CONTRIBUTION = (() => {
   return contribution
 })()
 
+export const SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRIBUTION = contributionFor(
+  'main',
+  'main.agent-routing'
+)
+export const SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    SCIENTIFIC_PLOTTING_AGENT_ROUTING_CONTRIBUTION.id
+  ]!
+
 export const SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.workbench-right-panel'

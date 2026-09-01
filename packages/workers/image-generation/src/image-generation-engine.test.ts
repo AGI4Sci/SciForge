@@ -443,8 +443,19 @@ describe('image generation engine', () => {
     expect(JSON.parse(readFileSync(result.artifactManifestPath, 'utf8'))).toMatchObject({
       kind: 'sciforge_artifact',
       sourceTool: 'image_generation',
-      artifactKind: 'generated_image'
+      artifactKind: 'generated_image',
+      modelExecution: {
+        provider: 'placeholder',
+        model: { id: 'sciforge-placeholder', version: '0.1.0' },
+        effectivePrompt: 'A clean science illustration with several labeled regions',
+        replay: { supported: true, exactOutputExpected: true }
+      }
     })
+    expect(result.modelExecution.effectivePromptHash).toBe(
+      createHash('sha256')
+        .update('A clean science illustration with several labeled regions')
+        .digest('hex')
+    )
   })
 
   it('records hybrid ownership directly from the unified visual plan', async () => {
@@ -639,6 +650,22 @@ describe('image generation engine', () => {
     expect(result.provider).toBe('image-endpoint')
     expect(existsSync(result.outputPath)).toBe(true)
     expect(readFileSync(result.outputPath).toString('base64')).toBe(pngBase64)
+    expect(result.modelExecution).toMatchObject({
+      provider: 'image-endpoint',
+      model: { id: 'sciforge-router', version: 'sciforge-router' },
+      effectivePrompt: 'A tiny generated image',
+      parameters: {
+        mode: 'text_to_image',
+        size: { width: 512, height: 512 },
+        outputFormat: 'png'
+      },
+      renderer: { id: 'sciforge-image-generation-mcp', version: '0.1.0' },
+      replay: { supported: true, exactOutputExpected: false }
+    })
+    expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toMatchObject({
+      recipe: { prompt: 'A tiny generated image' },
+      modelExecution: result.modelExecution
+    })
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
       'http://localhost:3892/v1/images/generations'
     ])

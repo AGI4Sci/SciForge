@@ -360,7 +360,10 @@ function stopReason(
 
 function selectRoute(requirements: VisualProductionRequirements): VisualProductionRoute {
   const owners = requirements.scene ? visualSceneOwners(requirements.scene) : new Set()
-  const exactnessRequired = requirements.lockedElements.length > 0 || requirements.reproducibleInputs.length > 0 || owners.has('code')
+  // Reproducible inputs do not by themselves imply code ownership. A
+  // model-owned figure can be replayable when its effective prompt, public
+  // model version, and generation parameters are captured as its recipe.
+  const exactnessRequired = requirements.lockedElements.length > 0 || owners.has('code')
   const generativeValue = requirements.modelOwnedElements.length > 0 || owners.has('model')
   if (exactnessRequired && generativeValue) return 'hybrid'
   if (exactnessRequired) return 'code'
@@ -393,8 +396,8 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
   if (route === 'model') {
     return [
       stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer from the locked handoff.', ['task', 'handoff'], ['imageRenderRecipe']),
-      stage('render_model', 'image_generation_render', 'Render the model-owned visual layer without changing route or locked elements.', ['imageRenderRecipe', 'handoff'], ['renderedArtifact', 'renderedManifest']),
-      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
+      stage('render_model', 'image_generation_render', 'Render the model-owned visual layer and persist the effective prompt, public model version, generation parameters, and replay recipe.', ['imageRenderRecipe', 'handoff'], ['renderedArtifact', 'renderedManifest', 'modelExecution']),
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'modelExecution', 'handoff'], ['reviewResult'])
     ]
   }
   return [

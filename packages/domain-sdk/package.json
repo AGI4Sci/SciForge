@@ -7,6 +7,7 @@
   "description": "Pure contracts for compile-time and sandboxed runtime SciForge domain packages.",
   "exports": {
     ".": "./src/index.ts",
+    "./agent-routing": "./src/agent-routing.ts",
     "./agent-execution": "./src/agent-execution.ts",
     "./contract": "./src/contract.ts",
     "./controlled-process": "./src/controlled-process.ts",

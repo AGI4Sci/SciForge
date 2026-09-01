@@ -4,6 +4,7 @@ export const researchDossierMessages = {
   en: {
     rightPanelResearchDossier: 'Research dossier',
     researchDossierTitle: 'Research dossier',
+    researchDossierSubtitle: 'Research-process checkpoints and compute-run records',
     researchDossierCollapse: 'Collapse research dossier',
     researchDossierRefresh: 'Refresh exact record',
     researchDossierOverview: 'Overview',
@@ -143,6 +144,7 @@ export const researchDossierMessages = {
   zh: {
     rightPanelResearchDossier: '科研档案',
     researchDossierTitle: '科研档案',
+    researchDossierSubtitle: '研究过程检查点与计算运行记录',
     researchDossierCollapse: '收起科研档案',
     researchDossierRefresh: '刷新精确记录',
     researchDossierOverview: '概览',

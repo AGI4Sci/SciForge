@@ -5,18 +5,22 @@ import {
 } from '@sciforge/domain-sdk'
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
+  MAIN_AGENT_ROUTING_CONTRIBUTION_KIND,
   MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
   MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+  domainMainAgentRoutingContractSchema,
   domainMainFiniteCapabilityBatchPlanSchema,
   domainMainRuntimeLifecycleContractSchema,
   domainMainExtensionContractSchema,
   isDomainArtifactConsumer,
+  isDomainMainAgentRoutingContract,
   isDomainMainActionGuard,
   isDomainMainRuntimeLifecycleContribution,
   isDomainMainSystemCapabilityGrant,
   type DomainArtifactConsumer,
+  type DomainMainAgentRoutingContract,
   type DomainMainActionGuard,
   type DomainMainActionGuardInput,
   type DomainMainContribution,
@@ -65,6 +69,32 @@ export function listMainArtifactConsumers(
     MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
     (value): value is DomainArtifactConsumer => isDomainArtifactConsumer(value)
   ).map((contribution) => contribution.value))
+}
+
+/**
+ * Projects package-owned Agent routing contracts from the canonical domain
+ * catalog. The Host consumes these as an ordered prompt catalog and does not
+ * recognize any domain-specific intent IDs itself.
+ */
+export function listMainAgentRoutingContributions(
+  catalog: DomainModuleCatalog
+): readonly DomainMainAgentRoutingContract[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_AGENT_ROUTING_CONTRIBUTION_KIND,
+    (_value, metadata): _value is unknown =>
+      isDomainMainAgentRoutingContract(metadata.contract)
+  ).map((contribution) => {
+    if (!contribution.contract) {
+      throw new Error(
+        `Agent routing contribution ${contribution.declaration.id} is missing its canonical contract.`
+      )
+    }
+    return Object.freeze(
+      // The runtime catalog has already validated the package contract. Parse
+      // again here to expose a strongly typed, immutable projection.
+      domainMainAgentRoutingContractSchema.parse(contribution.contract)
+    )
+  }))
 }
 
 export function listMainWorkflowExecutionReceiptProviders(
