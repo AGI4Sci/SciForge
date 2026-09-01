@@ -773,6 +773,7 @@ function assertAnthropicCapabilities(request: ResponsesRequest): void {
 
 function assertNoUnmappedAnthropicOutputConfig(request: ResponsesRequest, target: string): void {
   if (request.output_config === undefined) return;
+  if (isDefaultAnthropicTextOutputConfig(request.output_config)) return;
   if (!isRecord(request.output_config)) {
     throw new UpstreamCapabilityError(`${target} cannot represent Anthropic output_config controls.`);
   }
@@ -780,6 +781,11 @@ function assertNoUnmappedAnthropicOutputConfig(request: ResponsesRequest, target
   if (unsupported.length > 0) {
     throw new UpstreamCapabilityError(`${target} cannot represent Anthropic output_config controls.`);
   }
+}
+
+function isDefaultAnthropicTextOutputConfig(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== 'text') return false;
+  return Object.keys(value).every((key) => key === 'type');
 }
 
 function assertNoUnmappedResponsesTextControls(
