@@ -25,9 +25,9 @@
 | 项目 | 值 |
 |---|---|
 | 分支 | `test_colab` |
-| HEAD / `origin/test_colab` | `91283b80f8253fe7f16b991b8bc9ce52eeb2bdd1` |
-| 提交时间 | 2026-08-31 00:05:09 +08:00 |
-| 提交说明 | `Merge pull request #120 from AGI4Sci/codex/fix-cloud-project-sidebar-refresh` |
+| HEAD / `origin/test_colab` | `66f92764c9982fba2e98dbed642f7f4924a9c50b` |
+| 提交时间 | 2026-09-01 13:48:12 +08:00 |
+| 提交说明 | `Merge pull request #122 into test_colab` |
 | 远程一致性 | `git ls-remote` 与 HEAD 相同 |
 
 同步前原工作分支上已有的 sidebar 本地改动已放入 `stash@{0}`（`pre-collaboration-audit-local-sidebar-change`），没有覆盖或删除。基线审计阶段没有修改产品源码；随后按第 13 节收敛范围加入了最小 MVP 提示、UI 和验收测试改动。
@@ -39,8 +39,8 @@
 | `@sciforge/collaboration-contracts` | 5.1.0 |
 | `@sciforge/collaboration-server` | 0.7.0 |
 | `@sciforge/collaboration-provider-zulip` | 0.2.6 |
-| `@sciforge/domain-sdk` | 0.2.13 |
-| `@sciforge/domain-collaboration` | 6.1.0 |
+| `@sciforge/domain-sdk` | 0.2.14 |
+| `@sciforge/domain-collaboration` | 6.1.1 |
 
 ## 3. 审计边界、方法与证据可信度
 

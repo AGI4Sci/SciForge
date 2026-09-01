@@ -69,9 +69,9 @@ Registered actions: **295**
 | `collaboration.projection.link` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.share` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
-| `collaboration.status.read` | 1.1.0 | ui | read | none | global |
+| `collaboration.status.read` | 1.2.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
-| `collaboration.task.list` | 1.1.0 | ui | read | none | global |
+| `collaboration.task.list` | 1.2.0 | ui | read | none | global |
 | `collaboration.task.offer.decide` | 1.1.0 | ui | external-write | confirmation | global |
 | `collaboration.worker.acceptance-policy.update` | 1.0.0 | ui | external-write | confirmation | global |
 | `content-space.agent-admin-add-member` | 2.0.0 | agent, system | external-write | confirmation | resource |
@@ -218,7 +218,7 @@ Registered actions: **295**
 | `project-coordinator.project.create` | 2.0.0 | ui, agent | external-write | confirmation | global |
 | `project-coordinator.project.delete` | 1.0.0 | ui, agent | destructive | confirmation | global |
 | `project-coordinator.result.review` | 2.0.0 | ui, agent | external-write | confirmation | global |
-| `project-coordinator.session-projection.read` | 2.0.0 | ui, agent | read | none | global |
+| `project-coordinator.session-projection.read` | 3.0.0 | ui, agent | read | none | global |
 | `project-coordinator.task-offer.reassign` | 1.0.0 | ui, agent | external-write | confirmation | global |
 | `project-coordinator.workflow.continue` | 2.0.0 | ui, agent | external-write | confirmation | global |
 | `project-coordinator.workflow.prepare` | 1.0.0 | ui, agent | read | none | global |
@@ -19198,7 +19198,7 @@ Explicitly renames, pauses, or resumes a stable projection.
 
 Reads the non-secret participant, connection, projection, queue, Project, and Task status.
 
-- Version: `1.1.0`
+- Version: `1.2.0`
 - Audiences: ui
 - Effect: `read`
 - Approval: none
@@ -20027,8 +20027,16 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                     "minLength": 1,
                     "type": "string"
                   },
+                  "hasDedicatedSession": {
+                    "type": "boolean"
+                  },
                   "localTurnId": {
                     "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "needsHumanQuestion": {
+                    "maxLength": 4000,
                     "minLength": 1,
                     "type": "string"
                   },
@@ -20043,6 +20051,11 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                   },
                   "projectId": {
                     "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "resultSummary": {
+                    "maxLength": 4000,
                     "minLength": 1,
                     "type": "string"
                   },
@@ -20101,6 +20114,7 @@ Reads the non-secret participant, connection, projection, queue, Project, and Ta
                   "projectId",
                   "taskOfferId",
                   "workerUserId",
+                  "hasDedicatedSession",
                   "revision",
                   "title",
                   "state",
@@ -20456,7 +20470,7 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
 
 Reads local canonical cloud Task projections and restart reconciliation state.
 
-- Version: `1.1.0`
+- Version: `1.2.0`
 - Audiences: ui
 - Effect: `read`
 - Approval: none
@@ -20538,8 +20552,16 @@ Reads local canonical cloud Task projections and restart reconciliation state.
               "minLength": 1,
               "type": "string"
             },
+            "hasDedicatedSession": {
+              "type": "boolean"
+            },
             "localTurnId": {
               "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "needsHumanQuestion": {
+              "maxLength": 4000,
               "minLength": 1,
               "type": "string"
             },
@@ -20554,6 +20576,11 @@ Reads local canonical cloud Task projections and restart reconciliation state.
             },
             "projectId": {
               "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "resultSummary": {
+              "maxLength": 4000,
               "minLength": 1,
               "type": "string"
             },
@@ -20612,6 +20639,7 @@ Reads local canonical cloud Task projections and restart reconciliation state.
             "projectId",
             "taskOfferId",
             "workerUserId",
+            "hasDedicatedSession",
             "revision",
             "title",
             "state",
@@ -76232,6 +76260,10 @@ Fences the unresolved execution permanently from freshly read Cloud CAS facts wi
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -81959,6 +81991,10 @@ Re-reads the current recovery tuple, invokes the canonical Content Space exact o
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -87684,6 +87720,10 @@ Lets the authenticated Project Owner select another exact ready Agent that they 
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {
@@ -93430,6 +93470,10 @@ Submits the exact target Project member User answer through the OIDC User path.
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {
@@ -99189,6 +99233,10 @@ Creates one Project-scoped HumanNeeded for an explicit active member User throug
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -104940,6 +104988,10 @@ Lets only the exact invited OIDC User accept the exact current confirmed Plan be
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {
@@ -110699,6 +110751,10 @@ Creates only an OIDC User invitation; it grants no Task or Team authority before
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -116434,6 +116490,10 @@ Fences Cloud Task Authority first; content-required membership remains removal-p
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {
@@ -124366,6 +124426,10 @@ Confirms the exact immutable Plan; invitations, Team readiness, activation, and 
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -130558,6 +130622,10 @@ Submits the immutable digest through the current Coordinator Agent durable Cloud
                     "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
+                  "localAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
                   "state": {
                     "const": "ready",
                     "type": "string"
@@ -136391,6 +136459,10 @@ Submits the Coordinator final summary and atomically completes the Project.
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -142196,6 +142268,10 @@ Creates one Cloud-authoritative Project and a fresh reviewable Coordinator Sessi
                 "properties": {
                   "deviceId": {
                     "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  "localAgentId": {
+                    "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                     "type": "string"
                   },
                   "state": {
@@ -148278,6 +148354,10 @@ Accepts one immutable result or requests a fresh fenced revision execution.
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
               "state": {
                 "const": "ready",
                 "type": "string"
@@ -153898,7 +153978,7 @@ Accepts one immutable result or requests a fresh fenced revision execution.
 
 Reads current-Principal-filtered ordinary Session bindings derived from durable Coordinator receipts and exact Worker execution journals. This operation takes an empty input object; it is scoped to the calling Session and never accepts projectId.
 
-- Version: `2.0.0`
+- Version: `3.0.0`
 - Audiences: ui, agent
 - Effect: `read`
 - Approval: none
@@ -154195,8 +154275,33 @@ Reads current-Principal-filtered ordinary Session bindings derived from durable 
         "type": "array"
       },
       "schemaVersion": {
-        "const": 1,
+        "const": 2,
         "type": "number"
+      },
+      "suppressedSessions": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "runtimeId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "threadId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "readOnly": true,
+          "required": [
+            "runtimeId",
+            "threadId"
+          ],
+          "type": "object"
+        },
+        "maxItems": 100000,
+        "type": "array"
       }
     },
     "readOnly": true,
@@ -154204,6 +154309,7 @@ Reads current-Principal-filtered ordinary Session bindings derived from durable 
       "schemaVersion",
       "observedAt",
       "bindings",
+      "suppressedSessions",
       "pendingActivations"
     ],
     "type": "object"
@@ -154356,6 +154462,10 @@ Re-reads the current revision-requested Task and creates one successor User-leve
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {
@@ -160362,6 +160472,10 @@ Executes the exact confirmed workflow, including finite Team operations when req
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {
@@ -166428,6 +166542,10 @@ Reads the non-secret Project Plan, User-grouped Worker candidates, Tasks, and co
             "properties": {
               "deviceId": {
                 "pattern": "^dev_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "localAgentId": {
+                "pattern": "^agt_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
                 "type": "string"
               },
               "state": {

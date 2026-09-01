@@ -59,14 +59,17 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
   state: ProjectCoordinatorStateStore
   workspace: ProjectCoordinatorWorkspacePort
   workers: WorkerSessionProjectionService
+  localAgentId: () => string | undefined
   now?: () => Date
 }>): ProjectCoordinatorSessionProjectionPort {
   const now = options.now ?? (() => new Date())
 
   /**
-   * Find a durable binding only when it targets the explicit Project.  A
-   * binding for another Project must not make an otherwise authorized Session
-   * unable to operate the Project currently selected in the workbench.
+   * Prove that the ordinary Session has at most one durable binding before
+   * selecting the explicit Project. A single binding for another Project must
+   * not make an otherwise authorized Session unable to operate the Project
+   * currently selected in the workbench, but multiple bindings for the same
+   * Session are always ambiguous and therefore fail closed.
    */
   const localBindingForProject = (
     session: DomainMainOrdinarySessionIdentity,
@@ -74,18 +77,15 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
   ): ProjectCoordinatorCoordinatorSessionBindingRecord | WorkerSessionExecutionBinding | undefined => {
     const coordinators = coordinatorSnapshot.get()
     const workers = options.workers.listBindings()
-    const matches = [
-      ...coordinators.filter((candidate) => (
-        candidate.projectId === projectId && sameSession(candidate, session)
-      )),
-      ...workers.filter((candidate) => (
-        candidate.projectId === projectId && sameSession(candidate, session)
-      ))
+    const sessionBindings = [
+      ...coordinators.filter((candidate) => sameSession(candidate, session)),
+      ...workers.filter((candidate) => sameSession(candidate, session))
     ]
-    if (matches.length > 1) {
+    if (sessionBindings.length > 1) {
       throw new Error('The ordinary Session has conflicting Project bindings.')
     }
-    return matches[0]
+    const binding = sessionBindings[0]
+    return binding?.projectId === projectId ? binding : undefined
   }
 
   const coordinatorSnapshot = createCoordinatorBindingSnapshot(options.state)
@@ -134,12 +134,14 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
       : ['completed', 'cancelled'].includes(project.project.status)
         ? 'project_terminal' as const
         : null
+    const localAgentId = options.localAgentId()
     return Object.freeze({
       projectId,
       principalUserId,
       access: fenceReason
         ? 'read_only' as const
-        : project.project.ownerUserId === principalUserId
+        : project.project.ownerUserId === principalUserId &&
+            localAgentId === project.project.coordinatorAgentId
           ? 'coordinator' as const
           : 'member' as const,
       fenceReason
@@ -151,8 +153,8 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
     workspace: ProjectCoordinatorWorkspace | undefined
   ): ProjectCoordinatorSessionBinding => (
     isCoordinatorBinding(binding)
-      ? evaluateCoordinatorBinding(binding, workspace)
-      : evaluateWorkerBinding(binding, workspace)
+      ? evaluateCoordinatorBinding(binding, workspace, options.localAgentId())
+      : evaluateWorkerBinding(binding, workspace, options.localAgentId())
   )
 
   const readProjection = async (
@@ -160,33 +162,58 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
   ): Promise<ProjectCoordinatorSessionProjection> => {
     await coordinatorSnapshot.refresh()
     const identityWorkspace = await readProjectWorkspaceForIdentity(options.workspace)
-    if (!identityWorkspace || identityWorkspace.connection.state !== 'ready') {
+    if (identityWorkspace.connection.state !== 'ready') {
       return projectCoordinatorSessionProjectionSchema.parse({
-        schemaVersion: 1,
+        schemaVersion: 2,
         observedAt: now().toISOString(),
         bindings: [],
+        suppressedSessions: [],
         pendingActivations: []
       })
     }
     const currentUserId = identityWorkspace.connection.userId
-    const conflictFree = withoutSessionConflicts([
+    const candidates = [
       ...coordinatorSnapshot.get(),
       ...options.workers.listBindings()
-    ])
-    const local = conflictFree.filter((binding) => (
-      isCoordinatorBinding(binding)
+    ].filter((binding) => !session || sameSession(binding, session))
+    const sessionCounts = new Map<string, number>()
+    for (const binding of candidates) {
+      const key = sessionIdentityKey(binding)
+      sessionCounts.set(key, (sessionCounts.get(key) ?? 0) + 1)
+    }
+    const suppressedSessions = new Map<string, Readonly<{
+      runtimeId: string
+      threadId: string
+    }>>()
+    const suppress = (binding: Readonly<{ runtimeId: string; threadId: string }>) => {
+      suppressedSessions.set(sessionIdentityKey(binding), {
+        runtimeId: binding.runtimeId,
+        threadId: binding.threadId
+      })
+    }
+    const local = candidates.filter((binding) => {
+      if (sessionCounts.get(sessionIdentityKey(binding)) !== 1) {
+        suppress(binding)
+        return false
+      }
+      const principalMatches = isCoordinatorBinding(binding)
         ? binding.principalUserId === currentUserId
         : binding.workerUserId === currentUserId
-    )).filter((binding) => !session || sameSession(binding, session))
+      if (!principalMatches) suppress(binding)
+      return principalMatches
+    })
     const workspaces = new Map<string, ProjectCoordinatorWorkspace | undefined>()
     await Promise.all([...new Set(local.map(({ projectId }) => projectId))].map(
       async (projectId) => {
         workspaces.set(projectId, await readProjectWorkspace(projectId))
       }
     ))
-    const visible = local.map((binding) => (
-      evaluate(binding, workspaces.get(binding.projectId))
-    )).filter(isPubliclyVisibleBinding)
+    const visible: ProjectCoordinatorSessionBinding[] = []
+    for (const binding of local) {
+      const evaluated = evaluate(binding, workspaces.get(binding.projectId))
+      if (isPubliclyVisibleBinding(evaluated)) visible.push(evaluated)
+      else suppress(binding)
+    }
     const visibleSessionKeys = new Set(visible.map(({ projectId, runtimeId, threadId }) => (
       `${projectId}\u0000${runtimeId}\u0000${threadId}`
     )))
@@ -196,9 +223,10 @@ export function createProjectCoordinatorSessionProjectionPort(options: Readonly<
       )
     ))
     return projectCoordinatorSessionProjectionSchema.parse({
-      schemaVersion: 1,
+      schemaVersion: 2,
       observedAt: now().toISOString(),
       bindings: visible,
+      suppressedSessions: [...suppressedSessions.values()],
       pendingActivations
     })
   }
@@ -297,7 +325,8 @@ export function projectCoordinatorCreatedSessionBindingRecord(
 
 function evaluateCoordinatorBinding(
   binding: ProjectCoordinatorCoordinatorSessionBindingRecord,
-  workspace: ProjectCoordinatorWorkspace | undefined
+  workspace: ProjectCoordinatorWorkspace | undefined,
+  localAgentId: string | undefined
 ) {
   if (!workspace || workspace.connection.state !== 'ready') {
     return projectCoordinatorCoordinatorSessionBindingSchema.parse({
@@ -321,7 +350,8 @@ function evaluateCoordinatorBinding(
       ? 'membership_inactive'
       : ['completed', 'cancelled'].includes(project.project.status)
         ? 'project_terminal'
-        : project.project.coordinatorAgentId !== binding.coordinatorAgentId ||
+        : localAgentId !== binding.coordinatorAgentId ||
+            project.project.coordinatorAgentId !== binding.coordinatorAgentId ||
             project.project.coordinatorAuthorityEpoch !== binding.coordinatorAuthorityEpoch
           ? 'authority_changed'
           : null
@@ -334,9 +364,10 @@ function evaluateCoordinatorBinding(
 
 function evaluateWorkerBinding(
   binding: WorkerSessionExecutionBinding,
-  workspace: ProjectCoordinatorWorkspace | undefined
+  workspace: ProjectCoordinatorWorkspace | undefined,
+  localAgentId: string | undefined
 ) {
-  let reason: 'execution_fenced' | 'execution_not_current' | 'membership_inactive' |
+  let reason: 'authority_changed' | 'execution_fenced' | 'execution_not_current' | 'membership_inactive' |
     'principal_changed' | 'project_terminal' | 'project_unavailable' | null = null
   const project = workspace?.projects.find(({ project }) => (
     project.projectId === binding.projectId
@@ -351,6 +382,8 @@ function evaluateWorkerBinding(
     reason = 'membership_inactive'
   } else if (['completed', 'cancelled'].includes(project.project.status)) {
     reason = 'project_terminal'
+  } else if (localAgentId !== binding.assigneeAgentId) {
+    reason = 'authority_changed'
   } else {
     const task = project.tasks.find(({ task }) => task.taskId === binding.taskId)
     const execution = task?.executions.find(({ executionId }) => (
@@ -418,18 +451,11 @@ function sameSession(
   return binding.runtimeId === session.runtimeId && binding.threadId === session.threadId
 }
 
-function withoutSessionConflicts<Binding extends Readonly<{
+function sessionIdentityKey(binding: Readonly<{
   runtimeId: string
   threadId: string
-}>>(bindings: readonly Binding[]): readonly Binding[] {
-  const counts = new Map<string, number>()
-  for (const binding of bindings) {
-    const key = `${binding.runtimeId}\u0000${binding.threadId}`
-    counts.set(key, (counts.get(key) ?? 0) + 1)
-  }
-  return bindings.filter((binding) => (
-    counts.get(`${binding.runtimeId}\u0000${binding.threadId}`) === 1
-  ))
+}>): string {
+  return `${binding.runtimeId}\u0000${binding.threadId}`
 }
 
 function isPubliclyVisibleBinding(
@@ -442,12 +468,8 @@ function isPubliclyVisibleBinding(
 
 async function readProjectWorkspaceForIdentity(
   workspace: ProjectCoordinatorWorkspacePort
-): Promise<ProjectCoordinatorWorkspace | undefined> {
-  try {
-    return await workspace.readWorkspace({})
-  } catch {
-    return undefined
-  }
+): Promise<ProjectCoordinatorWorkspace> {
+  return await workspace.readWorkspace({})
 }
 
 function createCoordinatorBindingSnapshot(state: ProjectCoordinatorStateStore) {

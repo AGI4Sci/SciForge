@@ -254,9 +254,10 @@ function session(
 
 function projection(pending: boolean): ProjectCoordinatorSessionProjection {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     observedAt,
     bindings: [],
+    suppressedSessions: [],
     pendingActivations: pending ? [pendingActivation] : []
   }
 }

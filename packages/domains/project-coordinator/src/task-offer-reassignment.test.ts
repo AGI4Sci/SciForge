@@ -43,6 +43,7 @@ test('the real handler replays one exact reassignment after its first Cloud resp
   let cloudTransitions = 0
   let committed: CoordinatorCloudCommandReplay | undefined
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     execute: async (command) => {
       commands.push(command)
       if (committed) {
@@ -134,6 +135,7 @@ test('the real handler normalizes an omitted text output filename for exact repl
   let cloudWorkspace = current
   let committed: CoordinatorCloudCommandReplay | undefined
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     execute: async (command) => {
       commands.push(command)
       cloudWorkspace = reassigned

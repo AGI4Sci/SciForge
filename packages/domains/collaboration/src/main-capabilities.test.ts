@@ -182,7 +182,7 @@ test('global collaboration mutations satisfy the production broker contract with
     COLLABORATION_CAPABILITY_IDS.statusRead,
     COLLABORATION_CAPABILITY_IDS.taskList
   ]) {
-    assert.equal(definitions.find((definition) => definition.id === id)?.version, '1.1.0')
+    assert.equal(definitions.find((definition) => definition.id === id)?.version, '1.2.0')
   }
   for (const definition of mutations) {
     assert.equal(definition.scope, 'global')
@@ -249,6 +249,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   }
   const runtime = {
     activate: async () => async () => { deactivationCount += 1 },
+    localAgentId: () => TEST_IDS.agentId,
     executeCoordinatorCloudCommand: async (command: unknown) => {
       coordinatorCommand = command
       return fenceResponse
@@ -289,6 +290,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   assert.equal(coordinatorRegistration?.contractVersion, COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION)
   assert.deepEqual(coordinatorRegistration?.allowedConsumerModuleIds, ['sciforge.project-coordinator'])
   const coordinatorService = coordinatorRegistration?.service as CoordinatorCloudCommandService
+  assert.equal(coordinatorService.localAgentId(), undefined)
   const workerRegistration = registrations.find(({ serviceId }) => (
     serviceId === WORKER_SESSION_PROJECTION_SERVICE_ID
   ))
@@ -364,6 +366,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   assert.equal(runtimeOptions?.agentCloudRuntime, agentCloudRuntime)
   assert.equal(runtimeOptions?.statePath, collaborationStatePath(userDataDir))
   assert.equal(typeof runtimeOptions?.coordinatorInboxHandler?.(), 'function')
+  assert.equal(coordinatorService.localAgentId(), TEST_IDS.agentId)
   assert.deepEqual(await coordinatorService.execute(command), fenceResponse)
   assert.deepEqual(coordinatorCommand, command)
   assert.deepEqual(await coordinatorService.resume(command.idempotencyKey, (replayed) => {
@@ -376,6 +379,7 @@ test('the Collaboration entry publishes one Coordinator command service backed b
   assert.equal(typeof deactivate, 'function')
   await deactivate?.()
   assert.equal(deactivationCount, 1)
+  assert.equal(coordinatorService.localAgentId(), undefined)
   disposeCoordinatorInbox()
   assert.equal(runtimeOptions?.coordinatorInboxHandler?.(), null)
   await lifecycleContribution.onDispose?.()

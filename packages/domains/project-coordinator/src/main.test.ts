@@ -114,6 +114,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   }
   let coordinatorInboxSubscribed = false
   const coordinatorService: CoordinatorCloudCommandService = {
+    localAgentId: () => 'agt_ProjectCoordinator1',
     execute: async () => { throw new Error('No Coordinator write is expected.') },
     resume: async () => null,
     subscribe: () => {
@@ -219,6 +220,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
 
 function coordinatorCloudCommandService(): CoordinatorCloudCommandService {
   return Object.freeze({
+    localAgentId: () => 'agt_ProjectCoordinator1',
     execute: async () => {
       throw new Error('No write capability invoked this test service.')
     },
@@ -358,7 +360,6 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   for (const id of [
     PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planDraftEdit,
     PROJECT_COORDINATOR_CAPABILITY_IDS.planSubmit,
@@ -377,6 +378,9 @@ test('governed UI capabilities expose Project create and the local-to-Cloud Plan
   ]) {
     assert.equal(definitions.find((definition) => definition.id === id)?.version, '2.0.0')
   }
+  assert.equal(definitions.find(
+    ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead
+  )?.version, '3.0.0')
   const activation = definitions.find(
     ({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge
   )!
@@ -448,9 +452,10 @@ test('Agent reads target an explicit Project independently of ordinary Session b
     readProjection: async (session) => {
       seenProjectionSessions.push(session)
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         observedAt: '2026-08-28T00:00:00.000Z',
         bindings: [],
+        suppressedSessions: [],
         pendingActivations: []
       }
     },
@@ -898,9 +903,10 @@ function createdProjectView() {
 function sessionProjectionPort(): ProjectCoordinatorSessionProjectionPort {
   const sessions: ProjectCoordinatorSessionProjectionPort = {
     readProjection: async () => ({
-      schemaVersion: 1,
+      schemaVersion: 2,
       observedAt: '2026-08-28T00:00:00.000Z',
       bindings: [],
+      suppressedSessions: [],
       pendingActivations: []
     }),
     scopeWorkspaceRead: async (input) => input,

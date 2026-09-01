@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   agentInboxMessageSchema,
@@ -29,6 +31,7 @@ import {
   humanNeededFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type { DomainMainAgentExecutionHost, DomainMainSystemCapabilityInvoker } from '@sciforge/domain-sdk/host'
+import { collaborationTaskViewSchema } from '../contract.js'
 import {
   CONTENT_SPACE_SYSTEM_DOWNLOAD_CONTRACT,
   CONTENT_SPACE_SYSTEM_TRANSFER_PREFLIGHT_CONTRACT,
@@ -41,7 +44,11 @@ import {
   type CollaborationLocalState,
   type CollaborationStateBackend
 } from './store.js'
-import { CollaborationTaskAdapter } from './task-adapter.js'
+import {
+  CollaborationTaskAdapter,
+  collaborationWorkerSessionTitle
+} from './task-adapter.js'
+import { collaborationTaskViewForRun } from './runtime.js'
 import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
 
 const OFFER_ID = 'ofr_Offer0000001'
@@ -70,6 +77,23 @@ const DELETED_PROJECT_FENCE = {
   kind: 'permanent',
   reason: 'Cloud deleted this Project; local execution was fenced.'
 } as const
+
+function workerWorkspaceRoot(executionId: string): string {
+  return join(tmpdir(), `sciforge-worker-${executionId}`)
+}
+
+test('Worker Session titles are single-line and bounded before crossing the Host contract', () => {
+  assert.equal(
+    collaborationWorkerSessionTitle('Analyze\r\nsamples\u0085with\u2028all\u2029controls'),
+    'Analyze samples with all controls'
+  )
+  assert.equal(collaborationWorkerSessionTitle('x'.repeat(250)).length, 200)
+  const unicodeBoundary = collaborationWorkerSessionTitle(`${'x'.repeat(198)}😀z`)
+  assert.equal(unicodeBoundary, `${'x'.repeat(198)}😀`)
+  assert.equal(unicodeBoundary.length, 200)
+  const splitBoundary = collaborationWorkerSessionTitle(`${'x'.repeat(199)}😀`)
+  assert.equal(splitBoundary, 'x'.repeat(199))
+})
 
 test('duplicate User offers persist once and a Device dismissal remains local', async () => {
   const cloud = new FakeWorkerCloud()
@@ -198,8 +222,13 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   const cloud = new FakeWorkerCloud()
   let store!: CollaborationLocalStore
   const directives: string[] = []
+  const sessionTitles: string[] = []
   const agentExecution: DomainMainAgentExecutionHost = {
     runtimeReadiness: readyRuntimeReadiness,
+    prepareSession: async (request) => {
+      sessionTitles.push(request.title ?? '')
+      return { runtimeId: 'codex', threadId: 'worker-thread-stable' }
+    },
     run: async (request) => {
       directives.push(request.clientDirectiveId ?? '')
       const run = store.snapshot().taskRuns[0]
@@ -244,8 +273,23 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   ])
   assert.equal(cloud.commands.includes('task.transition'), false)
   assert.equal(directives.length, 1)
+  assert.deepEqual(sessionTitles, [cloud.task.title])
   assert.equal(store.snapshot().taskRuns[0]?.state, 'completed')
   assert.equal(store.snapshot().taskRuns[0]?.resultSummary, 'Result ready.')
+  const completed = store.snapshot().taskRuns[0]
+  assert.ok(completed)
+  const boundedView = collaborationTaskViewForRun({
+    ...completed,
+    resultSummary: 'x'.repeat(5_000)
+  }, 'automatic')
+  assert.equal([...boundedView.resultSummary!].length, 4_000)
+  assert.match(boundedView.resultSummary!, /…$/u)
+  const boundedAstralView = collaborationTaskViewForRun({
+    ...completed,
+    resultSummary: '😀'.repeat(3_000)
+  }, 'automatic')
+  assert.ok(boundedAstralView.resultSummary!.length <= 4_000)
+  assert.doesNotThrow(() => collaborationTaskViewSchema.parse(boundedAstralView))
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
@@ -313,6 +357,25 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
   assert.equal(pending?.execution?.state, 'needs_human')
   assert.equal(pending?.expectedTaskRevision, cloud.task.revision)
   assert.equal(pending?.expectedExecutionRevision, cloud.execution.revision)
+  assert.ok(pending)
+  assert.deepEqual(collaborationTaskViewForRun(pending, 'automatic'), {
+    taskId: TEST_IDS.taskId,
+    projectId: TEST_IDS.projectId,
+    taskOfferId: OFFER_ID,
+    workerUserId: TEST_IDS.userId,
+    executionId: TEST_IDS.executionId,
+    assigneeAgentId: TEST_IDS.agentId,
+    hasDedicatedSession: true,
+    revision: cloud.task.revision,
+    title: cloud.task.title,
+    state: 'needs-human',
+    acceptanceMode: 'automatic',
+    decisionRequired: false,
+    preflightReasons: [],
+    localTurnId: 'worker-human-question-turn',
+    needsHumanQuestion: 'Should the ambiguous samples remain in the analysis?',
+    updatedAt: TEST_TIMESTAMP
+  })
   const humanRequest = cloud.requests.find((request) => request.type === 'human.needed.create')
   assert.equal(humanRequest?.type, 'human.needed.create')
   if (humanRequest?.type !== 'human.needed.create') throw new Error('Missing Worker HumanNeeded command.')
@@ -366,6 +429,12 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
   const completed = created.store.snapshot().taskRuns[0]
   assert.equal(completed?.state, 'completed')
   assert.equal(completed?.resultSummary, 'The Worker-User-confirmed analysis is complete.')
+  assert.ok(completed)
+  assert.equal(
+    collaborationTaskViewForRun(completed, 'automatic').resultSummary,
+    'The Worker-User-confirmed analysis is complete.'
+  )
+  assert.equal(collaborationTaskViewForRun(completed, 'automatic').needsHumanQuestion, undefined)
   assert.equal(runtimeRequests.length, 2)
   assert.notEqual(runtimeRequests[0]?.clientDirectiveId, runtimeRequests[1]?.clientDirectiveId)
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
@@ -852,7 +921,7 @@ test('file execution journals Cloud and local dispatch before one real generic d
       systemExecutionContext?: unknown
       signal?: AbortSignal
     }> | undefined
-    assert.equal(options?.workspaceId, `/tmp/sciforge-worker-${TEST_IDS.executionId}`)
+    assert.equal(options?.workspaceId, workerWorkspaceRoot(TEST_IDS.executionId))
     assert.match(options?.idempotencyKey ?? '', /^content_[a-f0-9]{48}$/u)
     assert.deepEqual(options?.systemExecutionContext, {
       contractVersion: 1,
@@ -2440,7 +2509,7 @@ async function createRunner(
     },
     capabilities,
     localAgentId: () => TEST_IDS.agentId,
-    workspaceRootForExecution: (executionId) => `/tmp/sciforge-worker-${executionId}`,
+    workspaceRootForExecution: workerWorkspaceRoot,
     now
   })
   return { adapter, store, outbox }
@@ -2674,7 +2743,7 @@ function durableTaskRun(
     expectedTaskRevision: cloud.task.revision,
     expectedExecutionRevision: cloud.execution.revision,
     state: 'running',
-    workspaceRoot: `/tmp/sciforge-worker-${TEST_IDS.executionId}`,
+    workspaceRoot: workerWorkspaceRoot(TEST_IDS.executionId),
     runtimeId: null,
     threadId: null,
     humanRequestId: null,

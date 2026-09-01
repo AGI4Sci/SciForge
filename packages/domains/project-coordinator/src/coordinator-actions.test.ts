@@ -849,6 +849,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
     answeredByUserId: projectFixture.ownerUserId
   }
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     resume: async () => null,
     execute: async (command) => {
       coordinatorCommands.push(command)
@@ -930,6 +931,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
 test('Coordinator accepts or requests revision through the exact immutable result submission', async () => {
   const commands: RestRequest[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     resume: async () => null,
     execute: async (command) => {
       commands.push(command)
@@ -1094,6 +1096,7 @@ test('Coordinator final summary atomically completes the Project through accepte
   })
   const commands: RestRequest[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     resume: async () => null,
     execute: async (command) => {
       commands.push(command)
@@ -1189,6 +1192,7 @@ test('durable Coordinator Inbox turns the exact target member HumanAnswer into o
   })
   const commands: RestRequest[] = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     resume: async () => null,
     execute: async (command) => {
       commands.push(command)
@@ -1430,6 +1434,7 @@ function entityResponse(requestId: string, entity: unknown): RestResponse {
 
 function unusedCoordinatorCloudCommands(): CoordinatorCloudCommandService {
   return {
+    localAgentId: () => undefined,
     execute: async () => { throw new Error('Coordinator Cloud commands are unused.') },
     resume: async () => null,
     subscribe: () => () => undefined

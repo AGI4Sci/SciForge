@@ -573,7 +573,7 @@ test('ordinary Session aliases require an exact canonical binding projection', (
 
 test('sidebar projection strips Principal and authority facts before presentation', () => {
   assert.deepEqual(projectCoordinatorSidebarBindings({
-    schemaVersion: 1,
+    schemaVersion: 2,
     observedAt: '2026-08-28T00:00:00.000Z',
     bindings: [{
       schemaVersion: 1,
@@ -588,6 +588,7 @@ test('sidebar projection strips Principal and authority facts before presentatio
       access: 'coordinator',
       fenceReason: null
     }],
+    suppressedSessions: [],
     pendingActivations: []
   }), [{
     projectId: 'prj_CurrentProject1',

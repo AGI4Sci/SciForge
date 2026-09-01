@@ -20,6 +20,13 @@ export const domainMainAgentExecutionOutputSchemaSchema = z.record(
 export const domainMainAgentExecutionSessionRequestSchema = z.object({
   runtimeId: z.string().trim().min(1).max(128).optional(),
   workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
+  /** Optional human-facing title for a newly created reviewable Session. */
+  title: z.string()
+    .regex(/^[^\r\n\u0085\u2028\u2029]*$/u, 'A Session title must be a single line.')
+    .trim()
+    .min(1)
+    .max(200)
+    .optional(),
   model: z.string().trim().min(1).max(256).optional(),
   reasoningEffort: z.string().trim().min(1).max(64).optional(),
   allowedTools: z.array(

@@ -281,9 +281,10 @@ test('Collaboration Center keeps package-owned HCI behind one ordered workspace 
       deleteProject: async () => { throw new Error('unused') },
       acknowledgeProjectActivation: async () => { throw new Error('unused') },
       readSessionProjection: async () => ({
-        schemaVersion: 1 as const,
+        schemaVersion: 2 as const,
         observedAt: '2026-08-24T09:00:00.000Z',
         bindings: [],
+        suppressedSessions: [],
         pendingActivations: []
       }),
       readPlanDraft: async () => null,
@@ -510,6 +511,7 @@ test('workflow signal and attention derive only from canonical Project facts', (
   assert.deepEqual(projectCoordinatorAttentionSummary(
     project,
     project.project.ownerUserId,
+    project.project.coordinatorAgentId,
     coordinatorBinding
   ), {
     planConfirmation: 1,
@@ -522,6 +524,7 @@ test('workflow signal and attention derive only from canonical Project facts', (
   assert.deepEqual(projectCoordinatorAttentionSummary(
     project,
     'usr_ProjectMember01',
+    project.project.coordinatorAgentId,
     decisionSessionBinding(project, 'worker')
   ), {
     planConfirmation: 0,
@@ -550,10 +553,14 @@ test('review affordances use the exact ordinary Session binding', () => {
   const project = decisionProjectFixture('review')
   const coordinatorBinding = decisionSessionBinding(project, 'coordinator')
   const workerBinding = decisionSessionBinding(project, 'worker')
+  if (coordinatorBinding.role !== 'coordinator') {
+    throw new Error('Expected a Coordinator binding fixture.')
+  }
   const projection = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     observedAt: project.project.updatedAt,
     bindings: [coordinatorBinding, workerBinding],
+    suppressedSessions: [],
     pendingActivations: []
   }
 
@@ -563,17 +570,94 @@ test('review affordances use the exact ordinary Session binding', () => {
   }), coordinatorBinding)
   assert.equal(projectCoordinatorCurrentSessionBinding(projection, {
     id: coordinatorBinding.threadId
-  }), null)
+  }), undefined)
+  assert.equal(projectCoordinatorCurrentSessionBinding({
+    ...projection,
+    bindings: [],
+    suppressedSessions: [{
+      runtimeId: coordinatorBinding.runtimeId,
+      threadId: coordinatorBinding.threadId
+    }]
+  }, {
+    id: coordinatorBinding.threadId,
+    runtimeId: coordinatorBinding.runtimeId
+  }), undefined)
   assert.equal(projectCoordinatorEffectiveSessionAccess(
     project,
     project.project.ownerUserId,
+    project.project.coordinatorAgentId,
     coordinatorBinding
   ), 'coordinator')
   assert.equal(projectCoordinatorEffectiveSessionAccess(
     project,
     'usr_ProjectMember01',
+    project.project.coordinatorAgentId,
     coordinatorBinding
   ), 'read_only')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    'agt_NotCurrentCoordinator01',
+    coordinatorBinding
+  ), 'read_only')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    project.project.coordinatorAgentId,
+    null
+  ), 'coordinator')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    project.project.coordinatorAgentId,
+    undefined
+  ), 'read_only')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    'agt_NotCurrentCoordinator01',
+    null
+  ), 'member')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    'usr_ProjectMember01',
+    project.project.coordinatorAgentId,
+    null
+  ), 'member')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    'usr_ProjectMember01',
+    project.project.coordinatorAgentId,
+    workerBinding
+  ), 'read_only')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    project.project.coordinatorAgentId,
+    {
+      ...coordinatorBinding,
+      access: 'read_only',
+      fenceReason: 'authority_changed'
+    }
+  ), 'read_only')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    project.project.coordinatorAgentId,
+    {
+      ...coordinatorBinding,
+      coordinatorAuthorityEpoch: coordinatorBinding.coordinatorAuthorityEpoch + 1
+    }
+  ), 'read_only')
+  assert.equal(projectCoordinatorEffectiveSessionAccess(
+    project,
+    project.project.ownerUserId,
+    project.project.coordinatorAgentId,
+    {
+      ...coordinatorBinding,
+      projectId: 'prj_OtherProject01'
+    }
+  ), 'coordinator')
 })
 
 test('local deadline input converts to canonical ISO without losing local wall time', () => {
@@ -1727,6 +1811,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const pendingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: pendingProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: pendingProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(pendingProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1742,6 +1827,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const waitingMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: pendingProject,
     currentUserId: 'usr_ProjectMember01',
+    localAgentId: 'agt_Worker0000001',
     sessionBinding: decisionSessionBinding(pendingProject, 'worker'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1757,6 +1843,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const reviewMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: reviewProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: reviewProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(reviewProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1777,6 +1864,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const workerReviewMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: reviewProject,
     currentUserId: 'usr_ProjectMember01',
+    localAgentId: reviewProject.tasks[0]!.executions[0]!.assigneeAgentId,
     sessionBinding: decisionSessionBinding(reviewProject, 'worker'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1809,6 +1897,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const artifactMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: artifactProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: artifactProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(artifactProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1827,6 +1916,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const askMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: askProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: askProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(askProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1843,6 +1933,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const workerAskMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: askProject,
     currentUserId: 'usr_ProjectMember01',
+    localAgentId: askProject.tasks[0]!.executions[0]!.assigneeAgentId,
     sessionBinding: decisionSessionBinding(askProject, 'worker'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1856,6 +1947,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const completionMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: completionProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: completionProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(completionProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1873,6 +1965,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const supersededHistoryMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: supersededHistoryProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: supersededHistoryProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(supersededHistoryProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1886,6 +1979,7 @@ test('pending HumanNeeded, result review, and eligible completion are default-vi
   const incompletePlanMarkup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: incompletePlanProject,
     currentUserId: 'usr_Owner0000001',
+    localAgentId: incompletePlanProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(incompletePlanProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,
@@ -1935,6 +2029,7 @@ test('revision review history identifies the next Worker and offer deadline', ()
   const markup = renderToStaticMarkup(createElement(ProjectCoordinatorDecisionSection, {
     project: revisionProject,
     currentUserId: project.project.ownerUserId,
+    localAgentId: revisionProject.project.coordinatorAgentId,
     sessionBinding: decisionSessionBinding(revisionProject, 'coordinator'),
     busy: false,
     onCreateHumanNeeded: () => undefined,

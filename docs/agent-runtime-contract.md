@@ -129,6 +129,21 @@ type AgentRuntimeAdapter = {
 必填方法；由 capability 声明决定 UI 是否展示入口。`usage` 是必填方法，但
 不支持时必须返回 `supported: false`。
 
+## Domain execution Session 请求
+
+Domain package 通过 Host 所有的 `DomainMainAgentExecutionHost` 进入同一条
+runtime-neutral 执行链。需要在派发 turn 前持久化 Session 绑定的调用方使用
+`prepareSession(request)`；Host 再把该请求映射到所选 adapter 的 canonical
+`startThread`，不得为后台任务建立第二条 runtime 或 IPC 路径。
+
+`DomainMainAgentExecutionSessionRequest.title` 是可选的人类可读 Session 标题。
+它在 trim 后必须为单行、长度为 1–200，只能在 Host 新建 Session 时传给
+adapter。继续已有 `runtimeId + threadId` 时，`title` 不得重命名、重绑定或
+重新路由该 Session。标题不是身份、安全或恢复字段；路由、授权、持久恢复和
+幂等仍只能使用 canonical runtime/thread/turn 与 client directive 标识。调用方
+若从外部文本生成标题，必须先归一换行，并确保截断不会产生孤立 UTF-16
+surrogate。
+
 ## 工作区文件引用契约
 
 `AgentRuntimeTurnStartInput.fileReferences` 只携带工作区相对定位元数据：

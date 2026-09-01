@@ -274,6 +274,69 @@ const PRIMARY_BUTTON =
 const INPUT =
   'w-full rounded-md border border-ds-border bg-ds-card px-2.5 py-2 text-xs text-ds-ink outline-none placeholder:text-ds-faint focus:border-ds-muted'
 
+type CollaborationRefreshValue = Readonly<{
+  snapshot: CollaborationStatusSnapshot
+  tasks: readonly CollaborationTaskView[]
+}>
+
+export function createCollaborationRefreshCoordinator(input: Readonly<{
+  load: () => Promise<CollaborationRefreshValue>
+  apply: (value: CollaborationRefreshValue) => void
+  reject: (error: unknown) => void
+  setLoading: (loading: boolean) => void
+}>): Readonly<{
+  request: (options?: Readonly<{ showLoading?: boolean }>) => Promise<void>
+  dispose: () => void
+}> {
+  let active = true
+  let pending = false
+  let loadingRequested = false
+  let inFlight: Promise<void> | null = null
+
+  const run = async (): Promise<void> => {
+    try {
+      while (active) {
+        pending = false
+        let value: CollaborationRefreshValue
+        try {
+          value = await input.load()
+        } catch (error) {
+          if (!active) return
+          if (pending) continue
+          input.reject(error)
+          return
+        }
+        if (!active) return
+        if (pending) continue
+        input.apply(value)
+        return
+      }
+    } finally {
+      const stopLoading = loadingRequested
+      loadingRequested = false
+      inFlight = null
+      if (active && stopLoading) input.setLoading(false)
+    }
+  }
+
+  return Object.freeze({
+    request: (options = {}) => {
+      if (!active) return Promise.resolve()
+      pending = true
+      if (options.showLoading !== false && !loadingRequested) {
+        loadingRequested = true
+        input.setLoading(true)
+      }
+      inFlight ??= run()
+      return inFlight
+    },
+    dispose: () => {
+      active = false
+      pending = false
+    }
+  })
+}
+
 export function CollaborationPanel({
   client,
   session,
@@ -301,32 +364,34 @@ export function CollaborationPanel({
   const challengeExpiresAtRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const refreshTasks = useCallback(async (): Promise<void> => {
-    const taskList = await client.listTasks()
-    setTasks(taskList.tasks)
-  }, [client])
-
-  const refresh = useCallback(async (): Promise<void> => {
-    setLoading(true)
-    try {
-      const [next] = await Promise.all([
+  const refreshCoordinator = useMemo(() => createCollaborationRefreshCoordinator({
+    load: async () => {
+      const [nextSnapshot, taskList] = await Promise.all([
         client.readStatus(),
-        refreshTasks()
+        client.listTasks()
       ])
-      setSnapshot(next)
-      setBaseUrl((current) => current || next.connection.baseUrl || '')
-      setSelectedProviderKey((current) => current || next.providerOptions[0]?.providerKey || '')
+      return { snapshot: nextSnapshot, tasks: taskList.tasks }
+    },
+    apply: ({ snapshot: nextSnapshot, tasks: nextTasks }) => {
+      setSnapshot(nextSnapshot)
+      setTasks(nextTasks)
+      setBaseUrl((current) => current || nextSnapshot.connection.baseUrl || '')
+      setSelectedProviderKey((current) => current || nextSnapshot.providerOptions[0]?.providerKey || '')
       setActionError(null)
-    } catch (error) {
-      setActionError(errorMessage(error, t('collaborationUnavailable')))
-    } finally {
-      setLoading(false)
-    }
-  }, [client, refreshTasks, t])
+    },
+    reject: (error) => setActionError(errorMessage(error, t('collaborationUnavailable'))),
+    setLoading
+  }), [client, t])
+
+  const refresh = useCallback(
+    (options?: Readonly<{ showLoading?: boolean }>) => refreshCoordinator.request(options),
+    [refreshCoordinator]
+  )
 
   useEffect(() => {
     void refresh()
-  }, [refresh])
+    return () => refreshCoordinator.dispose()
+  }, [refresh, refreshCoordinator])
 
   useEffect(() => {
     if (view === 'settings') return
@@ -334,7 +399,7 @@ export function CollaborationPanel({
     let timer: ReturnType<typeof setTimeout> | undefined
     const poll = async (): Promise<void> => {
       try {
-        await refreshTasks()
+        await refresh({ showLoading: false })
       } catch {
         // Initial refresh reports capability errors; background polling is best-effort.
       }
@@ -345,7 +410,7 @@ export function CollaborationPanel({
       active = false
       if (timer) clearTimeout(timer)
     }
-  }, [refreshTasks, view])
+  }, [refresh, view])
 
   useEffect(() => () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
@@ -1888,7 +1953,9 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
 }>): ReactElement {
   const { t } = useTranslation('common')
   const agent = participant?.agents.find(({ agentId }) => agentId === task.assigneeAgentId)
-  const workerUser = participant?.userId === task.workerUserId ? participant.displayName : task.workerUserId
+  const workerUser = participant?.userId === task.workerUserId
+    ? participant.displayName
+    : t('collaborationUnknownWorkerUser')
   return (
     <div
       className="rounded bg-ds-hover p-2"
@@ -1911,6 +1978,23 @@ function TaskRow({ task, participant, busy, onOfferDecision }: Readonly<{
       {task.preflightReasons.length ? (
         <div className="mt-1 text-ds-muted" data-task-preflight-reasons="true">
           {t('collaborationTaskPreflightBlocked')}: {task.preflightReasons.join(', ')}
+        </div>
+      ) : null}
+      {task.hasDedicatedSession ? (
+        <div className="mt-1 text-ds-muted" data-task-independent-session="true">
+          {t('collaborationTaskIndependentSession')}
+        </div>
+      ) : null}
+      {task.needsHumanQuestion ? (
+        <div className="mt-2 whitespace-pre-wrap rounded border border-ds-border bg-ds-card p-2" data-task-human-question="true">
+          <span className="font-medium">{t('collaborationTaskNeedsHumanQuestion')}:</span>{' '}
+          {task.needsHumanQuestion}
+        </div>
+      ) : null}
+      {task.resultSummary ? (
+        <div className="mt-2 whitespace-pre-wrap rounded border border-ds-border bg-ds-card p-2" data-task-result-summary="true">
+          <span className="font-medium">{t('collaborationTaskResultSummary')}:</span>{' '}
+          {task.resultSummary}
         </div>
       ) : null}
       {task.decisionRequired ? (

@@ -272,6 +272,7 @@ function memorySettings(): DomainMainPackageSettingsHost {
 
 function unusedCoordinatorCommands(): CoordinatorCloudCommandService {
   return {
+    localAgentId: () => undefined,
     execute: async () => { throw new Error('Transfer must use the OIDC Owner transport.') },
     resume: async () => null,
     subscribe: () => () => undefined

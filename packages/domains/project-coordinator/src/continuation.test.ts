@@ -124,6 +124,7 @@ test('concurrent and replayed reconciliation serializes one canonical offer per 
   let workspace = continuationWorkspace(parallelPlan)
   const commands: Array<Extract<RestRequest, { type: 'task.offer.create' }>> = []
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
+    localAgentId: () => undefined,
     resume: async () => null,
     execute: async (command) => {
       if (command.type !== 'task.offer.create') throw new Error(`Unexpected ${command.type}.`)
