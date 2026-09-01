@@ -232,9 +232,11 @@ test('membership-filtered Session projection clears composer context before Proj
   let workspaceReads = 0
   const provider = createProjectCoordinatorComposerContextProvider({
     readSessionProjection: async () => ({
-      schemaVersion: 1,
+      schemaVersion: 2,
       observedAt: at,
-      bindings: []
+      bindings: [],
+      suppressedSessions: [],
+      pendingActivations: []
     }),
     readWorkspace: async () => {
       workspaceReads += 1
@@ -264,7 +266,7 @@ function requestFixture(overrides: Readonly<{
 
 function projectionFixture() {
   return projectCoordinatorSessionProjectionSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     observedAt: at,
     bindings: [{
       schemaVersion: 1,
@@ -278,7 +280,9 @@ function projectionFixture() {
       boundAt: at,
       access: 'coordinator',
       fenceReason: null
-    }]
+    }],
+    suppressedSessions: [],
+    pendingActivations: []
   })
 }
 

@@ -65,6 +65,7 @@ import {
   type CollaborationStateBackend
 } from './store.js'
 import { CollaborationTaskAdapter } from './task-adapter.js'
+import { parseWorkerRuntimeResult } from './worker-runtime-result.js'
 
 export type CollaborationRuntimeOptions = Readonly<{
   statePath: string
@@ -439,6 +440,11 @@ export class CollaborationRuntime {
     }
   }
 
+  /** Current exact Agent identity owned by this local runtime, if active. */
+  localAgentId(): string | undefined {
+    return this.localAgentIdentity
+  }
+
   async configureConnection(baseUrl: string): Promise<CollaborationStatusSnapshot['connection']> {
     await this.requireConnection().configure(baseUrl)
     this.localAgentIdentity = await this.requireConnection().localAgentId()
@@ -720,7 +726,10 @@ export class CollaborationRuntime {
         .filter((run) => (
           projectIds.has(run.offer.projectId) && (!input.projectId || run.offer.projectId === input.projectId)
         ))
-        .map((run) => mapTaskView(run, this.requireTasks().acceptanceMode(run.offer.recipientAgentId)))
+        .map((run) => collaborationTaskViewForRun(
+          run,
+          this.requireTasks().acceptanceMode(run.offer.recipientAgentId)
+        ))
     ]
       .filter((task) => states.size === 0 || states.has(task.state))
   }
@@ -1099,11 +1108,12 @@ function mapProjectState(status: Project['status']): 'active' | 'paused' | 'comp
   return status === 'draft' ? 'paused' : status
 }
 
-function mapTaskView(
+export function collaborationTaskViewForRun(
   run: CollaborationTaskRun,
   acceptanceMode: 'manual' | 'automatic'
 ): CollaborationTaskView {
   const latestTurn = [...run.agentJournal].reverse().find((entry) => entry.turnId)?.turnId
+  const humanQuestion = needsHumanQuestion(run)
   if (!run.execution) {
     throw new Error('A claimed local Task run is missing its immutable Worker execution.')
   }
@@ -1114,6 +1124,7 @@ function mapTaskView(
     workerUserId: run.execution.assigneeUserId,
     executionId: run.offer.executionId,
     assigneeAgentId: run.offer.recipientAgentId,
+    hasDedicatedSession: Boolean(run.runtimeId && run.threadId),
     revision: run.task?.revision ?? run.expectedTaskRevision,
     title: run.task?.title ?? 'Pending Task offer',
     state: run.state,
@@ -1121,8 +1132,36 @@ function mapTaskView(
     decisionRequired: false,
     preflightReasons: run.latestPreflight?.reasons ?? [],
     ...(latestTurn ? { localTurnId: latestTurn } : {}),
+    ...(run.resultSummary
+      ? { resultSummary: boundedTaskPresentationText(run.resultSummary, 4_000) }
+      : {}),
+    ...(humanQuestion ? { needsHumanQuestion: humanQuestion } : {}),
     updatedAt: run.updatedAt,
     ...(run.error ? { error: run.error } : {})
+  }
+}
+
+function boundedTaskPresentationText(value: string, maxCodeUnits: number): string {
+  if (value.length <= maxCodeUnits) return value
+  let truncated = ''
+  for (const character of value) {
+    if (truncated.length + character.length > maxCodeUnits - 1) break
+    truncated += character
+  }
+  return `${truncated.trimEnd()}…`
+}
+
+function needsHumanQuestion(run: CollaborationTaskRun): string | undefined {
+  if (run.state !== 'needs-human') return undefined
+  const resultText = [...run.agentJournal].reverse().find((entry) => (
+    entry.state === 'observed_success' && entry.safeResultText
+  ))?.safeResultText
+  if (!resultText) return undefined
+  try {
+    const result = parseWorkerRuntimeResult(resultText)
+    return result.outcome === 'needs_human' ? result.question : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -1145,6 +1184,7 @@ function mapPendingTaskOfferView(
     projectId: offer.projectId,
     taskOfferId: offer.taskOfferId,
     workerUserId: offer.workerUserId,
+    hasDedicatedSession: false,
     revision: task?.revision ?? offer.currentTaskRevision,
     title: task?.title ?? 'Pending Task offer',
     state,

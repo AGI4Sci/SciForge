@@ -22,12 +22,14 @@ describe('agent execution host contract', () => {
     }
 
     assert.deepEqual(await host.prepareSession!({
-      workspaceRoot: '/workspace/execution', interaction: 'reviewable', mode: 'agent'
+      workspaceRoot: '/workspace/execution', title: 'Review Worker result',
+      interaction: 'reviewable', mode: 'agent'
     }), { runtimeId: 'codex', threadId: 'thread-worker-stable' })
     assert.deepEqual(domainMainAgentExecutionSessionRequestSchema.parse({
-      runtimeId: 'codex', workspaceRoot: '/workspace/execution'
+      runtimeId: 'codex', workspaceRoot: '/workspace/execution', title: 'Review Worker result'
     }), {
       runtimeId: 'codex', workspaceRoot: '/workspace/execution',
+      title: 'Review Worker result',
       interaction: 'background', mode: 'agent'
     })
     assert.deepEqual(domainMainAgentExecutionSessionSchema.parse({
@@ -39,6 +41,18 @@ describe('agent execution host contract', () => {
     assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
       workspaceRoot: '/workspace/execution', providerCredential: 'must-not-cross-host-contract'
     }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
+      title: 'x'.repeat(201)
+    }), z.ZodError)
+    for (const separator of ['\r', '\n', '\u0085', '\u2028', '\u2029']) {
+      for (const title of [
+        `${separator}Worker task`,
+        `Worker task${separator}control text`,
+        `Worker task${separator}`
+      ]) {
+        assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({ title }), z.ZodError)
+      }
+    }
   })
 
   it('accepts bounded process-neutral execution options and cancellation', async () => {

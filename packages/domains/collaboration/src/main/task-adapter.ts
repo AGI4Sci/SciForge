@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import { chmod, mkdir } from 'node:fs/promises'
 import {
   cloudResourceRefSchema,
   externalOperationRecoveryJournalEntrySchema,
@@ -35,9 +34,11 @@ import type {
   DomainMainAgentExecutionHost,
   DomainMainSystemCapabilityInvoker
 } from '@sciforge/domain-sdk/host'
+import { truncateWellFormedUnicode } from '@sciforge/domain-sdk/unicode'
 import { collaborationRequestId } from './request-id.js'
 import type { CollaborationConnection } from './connection.js'
 import { DurableCloudOutbox } from './outbox.js'
+import { ensurePrivateWorkspaceRoot } from './private-workspace-root.js'
 import {
   CollaborationLocalStore,
   type CollaborationExternalOperationJournal,
@@ -104,6 +105,10 @@ const TERMINAL_EXECUTION_EVENT_STATES = new Set<TaskExecution['state']>([
   'revoked',
   'superseded'
 ])
+
+export function collaborationWorkerSessionTitle(title: string): string {
+  return truncateWellFormedUnicode(title.replace(/[\r\n\u0085\u2028\u2029]+/gu, ' ').trim(), 200)
+}
 
 /** Canonical durable Worker runner for inbox, HCI, Runtime, transfer, and Cloud state. */
 export class CollaborationTaskAdapter {
@@ -907,8 +912,7 @@ export class CollaborationTaskAdapter {
 
       const root = contentSpacePortableContainerReferenceEnvelopeSchema.parse(binding.rootLocator)
       const workspaceRoot = this.options.workspaceRootForExecution(offer.taskOfferId)
-      await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
-      await chmod(workspaceRoot, 0o700)
+      await ensurePrivateWorkspaceRoot(workspaceRoot)
       const intents = [
         ...task.fileIntent.inputs.map((input) => ({
           operation: 'download' as const,
@@ -1051,8 +1055,7 @@ export class CollaborationTaskAdapter {
     const workspaceRoot = this.options.workspaceRootForExecution(execution.executionId)
     const acceptedAt = this.now().toISOString()
     try {
-      await mkdir(workspaceRoot, { recursive: true, mode: 0o700 })
-      await chmod(workspaceRoot, 0o700)
+      await ensurePrivateWorkspaceRoot(workspaceRoot)
       await this.options.store.transact((draft) => {
         const current = draft.pendingTaskOffers.find((candidate) => candidate.taskOfferId === pending.taskOfferId)
         if (!current || current.state !== 'claiming') {
@@ -1264,6 +1267,7 @@ export class CollaborationTaskAdapter {
       }
       session = await this.options.agentExecution.prepareSession({
         workspaceRoot: run.workspaceRoot,
+        title: collaborationWorkerSessionTitle(requireTask(run).title),
         interaction: 'reviewable',
         mode: 'agent'
       })

@@ -14,6 +14,7 @@ import {
   projectCoordinatorPlanDraftGenerateResultSchema,
   projectCoordinatorProjectCreateResultSchema,
   projectCoordinatorProjectDeleteInputSchema,
+  projectCoordinatorSessionProjectionSchema,
   projectCoordinatorTaskOfferReassignInputSchema,
   projectCoordinatorWorkflowContinueInputSchema,
   projectCoordinatorTransferInputSchema,
@@ -22,6 +23,45 @@ import {
 
 const createdAt = '2026-08-24T08:00:00.000Z'
 const updatedAt = '2026-08-24T09:00:00.000Z'
+
+test('Session projection v2 requires an explicit suppression fence set', () => {
+  const session = {
+    runtimeId: 'runtime-contract-session',
+    threadId: 'thread-contract-session'
+  }
+  const projection = {
+    schemaVersion: 2,
+    observedAt: updatedAt,
+    bindings: [],
+    suppressedSessions: [],
+    pendingActivations: []
+  }
+  assert.equal(projectCoordinatorSessionProjectionSchema.safeParse(projection).success, true)
+  assert.equal(projectCoordinatorSessionProjectionSchema.safeParse({
+    ...projection,
+    schemaVersion: 1
+  }).success, false)
+  const { suppressedSessions: _omitted, ...withoutSuppressionFenceSet } = projection
+  assert.equal(projectCoordinatorSessionProjectionSchema.safeParse(
+    withoutSuppressionFenceSet
+  ).success, false)
+  assert.equal(projectCoordinatorSessionProjectionSchema.safeParse({
+    ...projection,
+    bindings: [{
+      schemaVersion: 1,
+      role: 'coordinator',
+      projectId: 'prj_Project000001',
+      principalUserId: 'usr_Owner0000001',
+      coordinatorAgentId: 'agt_Coordinator01',
+      coordinatorAuthorityEpoch: 2,
+      ...session,
+      boundAt: updatedAt,
+      access: 'coordinator',
+      fenceReason: null
+    }],
+    suppressedSessions: [session]
+  }).success, false)
+})
 
 test('Plan draft generation failures expose only bounded package-owned reasons', () => {
   assert.deepEqual(projectCoordinatorPlanDraftGenerateResultSchema.parse({
@@ -42,7 +82,8 @@ const fixture = {
   connection: {
     state: 'ready' as const,
     userId: 'usr_Owner0000001',
-    deviceId: 'dev_Device0000001'
+    deviceId: 'dev_Device0000001',
+    localAgentId: 'agt_Coordinator01'
   },
   observedAt: updatedAt,
   focusedProjectId: 'prj_Project000001',
@@ -207,6 +248,8 @@ const fixture = {
 
 test('workspace composes canonical Cloud facts while selecting a Worker User from grouped runtime evidence', () => {
   const parsed = projectCoordinatorWorkspaceSchema.parse(fixture)
+  assert.equal(parsed.connection.state === 'ready' && parsed.connection.localAgentId,
+    'agt_Coordinator01')
   assert.equal(parsed.projects[0]?.workerGroups[0]?.agents.length, 2)
   assert.equal(
     parsed.projects[0]?.plan?.plan.tasks[0]?.workerUserId,

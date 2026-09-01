@@ -227,6 +227,9 @@ operation:
   on the Agent Runtime invocation route, and is part of the invocation fingerprint. It carries no
   domain scope or authority; each package must join it to its own durable facts and reauthorize the
   current Principal inside its canonical handler.
+- Host API `1.11.0` adds an optional bounded human-facing title for a newly created Domain execution
+  Session. The title is presentation only; continuing an existing runtime/thread pair ignores it,
+  and routing, authorization, recovery, and idempotency remain bound to canonical identifiers.
 - `@sciforge/domain-sdk/workflow-template` defines the versioned workflow-template bundle and the
   package-owned execution-receipt adapter used by workflow engines. Engines consume these generic
   contracts instead of another domain's private artifact directories or receipt layout.

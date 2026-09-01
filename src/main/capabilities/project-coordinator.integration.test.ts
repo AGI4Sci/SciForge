@@ -224,6 +224,7 @@ describe('Project Coordinator Host capability integration', () => {
       }
     )
     const coordinatorCommands: CoordinatorCloudCommandService = Object.freeze({
+      localAgentId: () => TEST_IDS.agentId,
       execute: coordinatorExecute,
       resume: async () => null,
       subscribe: () => () => undefined

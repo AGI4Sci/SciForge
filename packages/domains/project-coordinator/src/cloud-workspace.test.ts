@@ -81,6 +81,7 @@ test('current Device Agent Project create returns a workspace focused on the exa
   const port = createProjectCoordinatorCloudWorkspacePort({
     transport,
     coordinatorCloudCommands: {
+      localAgentId: () => TEST_IDS.agentId,
       resume: async () => null,
       execute: async (command) => {
         coordinatorRequests.push(command)
@@ -111,6 +112,13 @@ test('current Device Agent Project create returns a workspace focused on the exa
   })
 
   assert.equal(result.createdProjectId, project.projectId)
+  assert.equal(result.workspace.connection.state, 'ready')
+  assert.equal(
+    result.workspace.connection.state === 'ready'
+      ? result.workspace.connection.localAgentId
+      : undefined,
+    TEST_IDS.agentId
+  )
   assert.equal(result.workspace.focusedProjectId, project.projectId)
   assert.deepEqual(result.workspace.projects[1]?.memberUsers.map(({ userId }) => userId), [
     'usr_Owner0000001'
@@ -177,6 +185,7 @@ test('Agent-authored Project create rejects a Cloud response that changes the cr
     createProjectCoordinatorCloudWorkspacePort({
       transport,
       coordinatorCloudCommands: {
+        localAgentId: () => TEST_IDS.agentId,
         resume: async () => null,
         execute: async (command) => response(200, {
           protocolVersion: '1.0',

@@ -107,6 +107,8 @@ import type { ProjectCoordinatorRecoveryPort } from './recovery.js'
 import type { ProjectCoordinatorArtifactReviewPort } from './artifact-review.js'
 import type { ProjectCoordinatorContinuationPort } from './continuation.js'
 
+type CoordinatorCloudCommandClient = Omit<CoordinatorCloudCommandService, 'localAgentId'>
+
 const PROJECT_COORDINATOR_PROJECT_FACT_COLLECTIONS = PROJECT_COORDINATION_COLLECTIONS.filter(
   (collection) => collection !== 'agent_label_facts' &&
     collection !== 'worker_availability'
@@ -272,8 +274,14 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       }
       return view
     }))
+    const localAgentId = options.coordinatorCloudCommands?.localAgentId()
     return projectCoordinatorWorkspaceSchema.parse({
-      connection: { state: 'ready', userId: status.userId, deviceId: status.deviceId },
+      connection: {
+        state: 'ready',
+        userId: status.userId,
+        deviceId: status.deviceId,
+        ...(localAgentId ? { localAgentId } : {})
+      },
       observedAt: facts?.observedAt ?? workerDirectory.observedAt ?? listed.observedAt,
       ...(focusedProject ? { focusedProjectId: focusedProject.projectId } : {}),
       availableWorkerUsers: availableWorkerUsers(workerDirectory),
@@ -479,7 +487,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
   workspace: ProjectCoordinatorWorkspacePort
   getAgentExecution(): DomainMainAgentExecutionHost | undefined
   continuation: ProjectCoordinatorContinuationPort
-  coordinatorCloudCommands?: CoordinatorCloudCommandService
+  coordinatorCloudCommands?: CoordinatorCloudCommandClient
   transport?: AuthenticatedCloudTransport
   now?: () => Date
   draftId?: () => `draft_${string}`
@@ -935,7 +943,7 @@ export function createProjectCoordinatorPlanPort(options: Readonly<{
 
 export function createProjectCoordinatorActionPort(options: Readonly<{
   workspace: ProjectCoordinatorWorkspacePort
-  coordinatorCloudCommands: CoordinatorCloudCommandService
+  coordinatorCloudCommands: CoordinatorCloudCommandClient
   transport: AuthenticatedCloudTransport
   state: ProjectCoordinatorStateStore
   continuation: Pick<ProjectCoordinatorContinuationPort, 'reconcileProject'>

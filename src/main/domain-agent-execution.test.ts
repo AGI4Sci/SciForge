@@ -33,7 +33,8 @@ describe('domain Agent execution Host', () => {
     })
 
     const session = await execution.prepareSession!({
-      workspaceRoot: '/workspace/project', interaction: 'reviewable', mode: 'agent'
+      workspaceRoot: '/workspace/project', title: 'Review Worker result',
+      interaction: 'reviewable', mode: 'agent'
     })
     expect(session).toEqual({ runtimeId: 'codex', threadId: 'thread-fixed' })
     await expect(execution.run({
@@ -54,6 +55,7 @@ describe('domain Agent execution Host', () => {
     expect(runtime.startThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       workspace: '/workspace/project',
+      title: 'Review Worker result',
       mode: 'agent',
       relation: 'side',
       threadSource: 'domain-runtime',
@@ -153,12 +155,18 @@ describe('domain Agent execution Host', () => {
       })
     })
 
-    await expect(execution.run({ prompt: 'Run once.' })).resolves.toMatchObject({
+    await expect(execution.run({
+      title: 'One-shot Worker task',
+      prompt: 'Run once.'
+    })).resolves.toMatchObject({
       runtimeId: 'codex',
       threadId: 'thread-fixed',
       turnId: 'turn-1',
       state: 'failed'
     })
+    expect(runtime.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'One-shot Worker task'
+    }))
   })
 
   it('projects only the exact configured runtime policy and capability tags', async () => {

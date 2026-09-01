@@ -126,7 +126,7 @@ export async function generateCollaborationProviderComposition(root, { check = f
   const target = path.join(root, GENERATED_PATH)
   if (check) {
     const current = await readFile(target, 'utf8').catch(() => '')
-    if (current !== content) {
+    if (current.replaceAll('\r\n', '\n') !== content.replaceAll('\r\n', '\n')) {
       throw new Error(
         `Generated collaboration provider composition is stale: ${GENERATED_PATH}. ` +
         'Run node scripts/collaboration-providers.mjs --generate.'

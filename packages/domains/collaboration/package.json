@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-collaboration",
-  "version": "6.1.0",
+  "version": "6.1.1",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -27,7 +27,7 @@
     "@sciforge/collaboration-contracts": "5.1.0",
     "@sciforge/domain-content-space": "^5.0.0",
     "@sciforge/domain-identity-access": "^4.0.1",
-    "@sciforge/domain-sdk": "^0.2.3",
+    "@sciforge/domain-sdk": "^0.2.14",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
