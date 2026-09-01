@@ -3940,6 +3940,73 @@ describe('vNext Cloud application service', () => {
     expect(plan.runtimeProvenance.generatedByCoordinatorAgentId).toBe(successor.agentId)
   })
 
+  it('extends only the current pending offer and preserves Task revision', async () => {
+    const fixture = await activeTextOfferFixture('offer-extend')
+    const extended = await fixture.service.extendTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.extend',
+      requestId: 'req_offer_extend',
+      idempotencyKey: 'idem_offer_extend',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      offerExpiresAt: new Date(at.getTime() + 120_000).toISOString()
+    })
+    expect(extended.task.revision).toBe(fixture.offered.task.revision)
+    expect(extended.task.status).toBe('offered')
+    expect(extended.offer.revision).toBe(fixture.offered.offer.revision + 1)
+    expect(extended.offer.expiresAt).toBe(new Date(at.getTime() + 120_000).toISOString())
+    for (const agent of [fixture.firstWorkerAgent, fixture.secondWorkerAgent]) {
+      const inbox = await fixture.service.pullInbox(agent, { afterSequence: 0, limit: 100 })
+      const extendedOffers = inbox.messages.filter(({ payload }) => (
+        payload.type === 'task.offered' &&
+        payload.taskOfferId === extended.offer.taskOfferId &&
+        payload.offerRevision === extended.offer.revision
+      ))
+      expect(extendedOffers).toHaveLength(1)
+    }
+    await expect(fixture.service.extendTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.extend',
+      requestId: 'req_offer_extend_stale',
+      idempotencyKey: 'idem_offer_extend_stale',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      offerExpiresAt: new Date(at.getTime() + 180_000).toISOString()
+    })).rejects.toMatchObject({ code: 'revision_conflict' })
+  })
+
+  it('does not revive an already expired pending offer when extending its deadline', async () => {
+    const fixture = await activeTextOfferFixture('offer-extend-expired')
+    await fixture.repository.transaction(async (tx) => {
+      const offer = await tx.getTaskOfferForUpdate(fixture.offered.offer.taskOfferId)
+      if (!offer) throw new Error('Task offer was not found.')
+      await tx.updateTaskOffer({
+        ...offer,
+        revision: offer.revision + 1,
+        expiresAt: new Date(at.getTime() - 1).toISOString(),
+        updatedAt: new Date(at.getTime() - 1).toISOString()
+      }, offer.revision)
+    })
+    await expect(fixture.service.extendTaskOffer(fixture.coordinator, {
+      protocolVersion: '1.0',
+      type: 'task.offer.extend',
+      requestId: 'req_offer_extend_expired',
+      idempotencyKey: 'idem_offer_extend_expired',
+      taskOfferId: fixture.offered.offer.taskOfferId,
+      taskId: fixture.offered.task.taskId,
+      expectedTaskRevision: fixture.offered.task.revision,
+      expectedOfferRevision: fixture.offered.offer.revision + 1,
+      expectedCoordinatorAuthorityEpoch: fixture.activeProject.coordinatorAuthorityEpoch,
+      offerExpiresAt: new Date(at.getTime() + 180_000).toISOString()
+    })).rejects.toMatchObject({ code: 'request_expired' })
+  })
+
   it('reassigns only from the caller-observed Project and execution authority epochs after transfer', async () => {
     const fixture = await activeTextOfferFixture('reassign-fence')
     const withdrawn = await fixture.service.withdrawTaskOffer(fixture.coordinator, {

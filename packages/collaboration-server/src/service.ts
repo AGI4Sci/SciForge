@@ -4914,6 +4914,68 @@ export class CollaborationService {
     }).then(taskOfferResponse)
   }
 
+  async extendTaskOffer(
+    actor: AgentActor,
+    input: CloudCommand<'task.offer.extend'>
+  ): Promise<Readonly<{ task: StoredTask; offer: StoredTaskOffer }>> {
+    return this.commit(actor, 'task.offer.extend', input.idempotencyKey, input, async (tx, at) => {
+      const { project, task, offer } = await requireTaskOfferClaim(tx, input)
+      requireCoordinatorCommand(project, actor, project.revision, input.expectedCoordinatorAuthorityEpoch)
+      if (project.status !== 'active' || offer.state !== 'pending' || offer.executionId !== null ||
+          task.status !== 'offered' || task.currentExecutionId !== null) {
+        fail('invalid_state_transition', 'Only the current pending Task offer may be extended.')
+      }
+      const nextExpiry = Date.parse(input.offerExpiresAt)
+      const currentExpiry = Date.parse(offer.expiresAt)
+      if (!Number.isFinite(nextExpiry) || nextExpiry <= Date.parse(at)) {
+        fail('request_expired', 'The extended Task offer expiry must be in the future.')
+      }
+      if (!Number.isFinite(currentExpiry) || currentExpiry <= Date.parse(at)) {
+        fail('request_expired', 'The current Task offer has already expired.')
+      }
+      if (nextExpiry <= currentExpiry) {
+        fail('validation_failed', 'The extended Task offer expiry must be later than its current deadline.')
+      }
+      const eligibility = await requireEligibleWorkerUser({
+        tx,
+        project,
+        workerUserId: offer.workerUserId,
+        fileIntent: task.fileIntent,
+        requiredCapabilityTags: task.requiredCapabilityTags,
+        at
+      })
+      const updatedOffer: StoredTaskOffer = {
+        ...offer,
+        expiresAt: input.offerExpiresAt,
+        revision: offer.revision + 1,
+        updatedAt: at
+      }
+      await tx.updateTaskOffer(updatedOffer, offer.revision)
+      // Re-send the canonical offer notification so every eligible Worker
+      // Agent observes the new deadline through its normal inbox path.
+      const notifications: Array<{ recipient: InboxRecipient; sequence: number }> = []
+      for (const agentId of eligibility.recipientAgentIds) {
+        const message = await this.appendInbox(tx, { kind: 'agent', id: agentId }, 'task.offered', {
+          protocolVersion: '1.0', type: 'task.offered', projectId: project.projectId,
+          taskId: task.taskId, taskOfferId: offer.taskOfferId, workerUserId: offer.workerUserId,
+          currentTaskRevision: task.revision, offerRevision: updatedOffer.revision
+        }, at)
+        notifications.push({ recipient: message.recipient, sequence: message.sequence })
+      }
+      return {
+        response: {
+          protocolVersion: '1.0',
+          type: 'task.offer.extended',
+          task,
+          offer: updatedOffer
+        },
+        resourceKind: 'task_offer',
+        resourceId: offer.taskOfferId,
+        notifications
+      }
+    }).then(taskOfferResponse)
+  }
+
   async reassignTaskOffer(
     actor: AgentActor,
     input: CloudCommand<'task.offer.reassign'>

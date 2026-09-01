@@ -95,6 +95,17 @@ const commands = [
   },
   {
     ...envelope,
+    idempotencyKey: 'idem_task.offer.extend-01',
+    type: 'task.offer.extend' as const,
+    taskOfferId: TEST_IDS.taskOfferId,
+    taskId: TEST_IDS.taskId,
+    expectedTaskRevision: 1,
+    expectedOfferRevision: 1,
+    expectedCoordinatorAuthorityEpoch: 1,
+    offerExpiresAt: TEST_TIMESTAMP
+  },
+  {
+    ...envelope,
     idempotencyKey: 'idem_task.offer.reassign-01',
     type: 'task.offer.reassign' as const,
     taskId: TEST_IDS.taskId,
@@ -112,12 +123,13 @@ const commands = [
 
 test('Coordinator Cloud command service exposes one closed Agent-command allowlist', () => {
   assert.equal(COORDINATOR_CLOUD_COMMAND_SERVICE_ID, 'sciforge.collaboration.coordinator-cloud-command')
-  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '6.2.0')
+  assert.equal(COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION, '6.3.0')
   assert.deepEqual(commands.map((command) => coordinatorCloudCommandSchema.parse(command).type), [
     'project.create',
     'project.plan.submit',
     'task.offer.create',
     'task.offer.withdraw',
+    'task.offer.extend',
     'task.offer.reassign'
   ])
 

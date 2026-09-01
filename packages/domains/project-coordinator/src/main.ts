@@ -66,7 +66,9 @@ import {
   projectCoordinatorProjectDeleteResultSchema,
   projectCoordinatorSessionProjectionReadInputSchema,
   projectCoordinatorSessionProjectionSchema,
+  projectCoordinatorTaskOfferExtendInputSchema,
   projectCoordinatorTaskOfferReassignInputSchema,
+  projectCoordinatorTaskOfferWithdrawInputSchema,
   projectCoordinatorResultReviewInputSchema,
   projectCoordinatorTransferInputSchema,
   projectCoordinatorWorkspaceReadInputSchema,
@@ -101,6 +103,9 @@ import { ProjectCreationOrchestrator } from './project-creation-orchestrator.js'
 import {
   createProjectCoordinatorTaskOfferReassignmentPort
 } from './task-offer-reassignment.js'
+import {
+  createProjectCoordinatorTaskOfferControlsPort
+} from './task-offer-controls.js'
 
 export type ProjectCoordinatorCapabilityOptions = Readonly<{
   id: string
@@ -148,6 +153,10 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
 }>): ProjectCoordinatorCapabilityFactory<CapabilityDefinition> {
   const agentAudiences = Object.freeze(['ui', 'agent'] as const)
   const taskOfferReassignment = createProjectCoordinatorTaskOfferReassignmentPort({
+    workspace: options.ports.workspace,
+    coordinatorCloudCommands: options.ports.coordinatorCloudCommands
+  })
+  const taskOfferControls = createProjectCoordinatorTaskOfferControlsPort({
     workspace: options.ports.workspace,
     coordinatorCloudCommands: options.ports.coordinatorCloudCommands
   })
@@ -454,6 +463,60 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
               input,
               capabilityIdempotencyKey(
                 PROJECT_COORDINATOR_CAPABILITY_IDS.workflowContinue,
+                context
+              )
+            )
+          }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferWithdraw,
+        version: '1.0.0',
+        title: 'Withdraw pending Task offer',
+        description: 'Closes the exact current pending Task offer and returns the Task to revision requested state.',
+        audiences: agentAudiences,
+        scope: 'global',
+        effect: 'destructive',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'task', 'offer', 'withdraw'],
+        inputSchema: projectCoordinatorTaskOfferWithdrawInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          const input = projectCoordinatorTaskOfferWithdrawInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await taskOfferControls.withdraw(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferWithdraw,
+                context
+              )
+            )
+          }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferExtend,
+        version: '1.0.0',
+        title: 'Extend pending Task offer',
+        description: 'Extends the acceptance deadline of the exact current pending Task offer.',
+        audiences: agentAudiences,
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['project', 'task', 'offer', 'deadline'],
+        inputSchema: projectCoordinatorTaskOfferExtendInputSchema,
+        outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          const input = projectCoordinatorTaskOfferExtendInputSchema.parse(raw)
+          await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          return {
+            output: await taskOfferControls.extend(
+              input,
+              capabilityIdempotencyKey(
+                PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferExtend,
                 context
               )
             )

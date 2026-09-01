@@ -512,6 +512,19 @@ export const taskOfferWithdrawCommandSchema = z.object({
   reason: z.string().trim().min(1).max(500)
 }).strict()
 
+/** Extend the acceptance window of the current unclaimed Task offer. */
+export const taskOfferExtendCommandSchema = z.object({
+  ...writeCommandShape,
+  type: z.literal('task.offer.extend'),
+  taskOfferId: taskOfferIdSchema,
+  taskId: taskIdSchema,
+  expectedTaskRevision: revisionSchema,
+  expectedOfferRevision: revisionSchema,
+  expectedCoordinatorAuthorityEpoch: revisionSchema,
+  offerExpiresAt: timestampSchema
+}).strict()
+export type TaskOfferExtendCommand = z.infer<typeof taskOfferExtendCommandSchema>
+
 export const taskOfferReassignCommandSchema = z.object({
   ...writeCommandShape,
   type: z.literal('task.offer.reassign'),
@@ -723,6 +736,7 @@ export const cloudStateCommandSchemas = [
   taskOfferAcceptCommandSchema,
   taskOfferRejectCommandSchema,
   taskOfferWithdrawCommandSchema,
+  taskOfferExtendCommandSchema,
   taskOfferReassignCommandSchema,
   taskExecutionStartCommandSchema,
   taskExecutionFailCommandSchema,

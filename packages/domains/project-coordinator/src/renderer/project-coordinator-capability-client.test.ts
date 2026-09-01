@@ -46,6 +46,8 @@ test('renderer invocation approvals stay aligned with the main capability defini
   await client.confirmPlan(undefined as never)
   await client.prepareWorkflow(undefined as never)
   await client.continueWorkflow(undefined as never)
+  await client.withdrawTaskOffer(undefined as never)
+  await client.extendTaskOffer(undefined as never)
   await client.reassignTaskOffer(undefined as never)
   await client.observeAndLinkRecovery(undefined as never)
   await client.abandonRecovery(undefined as never)

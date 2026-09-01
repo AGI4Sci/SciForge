@@ -10,6 +10,7 @@ import {
   projectPlanSubmitCommandSchema,
   restResponseSchema,
   taskOfferCreateCommandSchema,
+  taskOfferExtendCommandSchema,
   taskOfferReassignCommandSchema,
   taskOfferWithdrawCommandSchema,
   taskResultReviewCommandSchema,
@@ -19,7 +20,7 @@ import {
 
 export const COORDINATOR_CLOUD_COMMAND_SERVICE_ID =
   'sciforge.collaboration.coordinator-cloud-command' as const
-export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '6.2.0' as const
+export const COORDINATOR_CLOUD_COMMAND_CONTRACT_VERSION = '6.3.0' as const
 
 /**
  * Agent-authored Project creation and Coordinator writes only. The current
@@ -30,6 +31,7 @@ export const coordinatorCloudCommandSchema = z.discriminatedUnion('type', [
   projectCreateCommandSchema,
   projectPlanSubmitCommandSchema,
   taskOfferCreateCommandSchema,
+  taskOfferExtendCommandSchema,
   taskOfferWithdrawCommandSchema,
   taskOfferReassignCommandSchema,
   humanNeededCreateCommandSchema,
