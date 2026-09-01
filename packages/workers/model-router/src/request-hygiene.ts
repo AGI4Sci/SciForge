@@ -45,6 +45,15 @@ function collectVisualGenerateCallIdsFromValue(value: unknown, ids: Set<string>,
     const callId = stringField(record.call_id);
     if (callId) ids.add(callId);
   }
+  if (record.role === 'assistant' && Array.isArray(record.tool_calls)) {
+    for (const toolCall of record.tool_calls) {
+      if (!isRecord(toolCall)) continue;
+      const functionCall = isRecord(toolCall.function) ? toolCall.function : toolCall;
+      if (functionCall.name !== 'visual_generate') continue;
+      const callId = stringField(toolCall.id) || stringField(toolCall.call_id);
+      if (callId) ids.add(callId);
+    }
+  }
   for (const entry of Object.values(record)) {
     collectVisualGenerateCallIdsFromValue(entry, ids, depth + 1);
   }
@@ -68,8 +77,8 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
 
   const role = stringField(value.role);
   const recordType = stringField(value.type) || context.recordType;
-  const callId = stringField(value.call_id);
-  const routeHandoffAllowed = recordType === 'function_call_output'
+  const callId = stringField(value.call_id) || stringField(value.tool_call_id);
+  const routeHandoffAllowed = (recordType === 'function_call_output' || role === 'tool')
     && Boolean(callId)
     && context.visualGenerateCallIds?.has(callId);
   const out: JsonRecord = {};

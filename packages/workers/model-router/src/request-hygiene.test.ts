@@ -149,6 +149,7 @@ test('request hygiene does not trust route-shaped output from an unrelated tool'
       crossRouteFallback: false,
       routeChangeRequiresNewPlan: true,
     },
+    trace: 'x'.repeat(12_000),
   };
   const body = {
     input: [{
@@ -168,6 +169,48 @@ test('request hygiene does not trust route-shaped output from an unrelated tool'
 
   assert.doesNotMatch(output, /route_locked_handoff=/u);
   assert.match(output, /reason=large_tool_output/u);
+});
+
+test('request hygiene recognizes the canonical visual planner in chat tool messages', () => {
+  const plan = {
+    ok: true,
+    status: 'ready',
+    routeLocked: true,
+    handoff: {
+      planId: 'chat-visual-plan',
+      route: 'model',
+      routeLocked: true,
+      fallbackPolicy: 'fail_closed',
+    },
+    execution: {
+      route: 'model',
+      stages: [],
+      nextCall: { tool: 'image_generation_prepare' },
+    },
+    failPolicy: {
+      mode: 'fail_closed',
+      crossRouteFallback: false,
+      routeChangeRequiresNewPlan: true,
+    },
+    trace: 'x'.repeat(12_000),
+  };
+  const body = {
+    messages: [{
+      role: 'assistant',
+      tool_calls: [{ id: 'chat_visual_1', type: 'function', function: { name: 'visual_generate', arguments: '{}' } }],
+    }, {
+      role: 'tool',
+      tool_call_id: 'chat_visual_1',
+      name: 'visual_generate',
+      content: JSON.stringify(plan),
+    }],
+  };
+
+  const hygienized = hygienizeModelRequestBody(body);
+  const output = String((hygienized.messages as Array<Record<string, unknown>>)[1]?.content ?? '');
+
+  assert.match(output, /route_locked_handoff=/u);
+  assert.match(output, /chat-visual-plan/u);
 });
 
 test('request hygiene leaves large non-handoff output on the ordinary bounded preview path', () => {
