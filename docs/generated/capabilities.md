@@ -207990,6 +207990,11 @@ Renders a versioned PNG with exact data, statistics, recipe, environment, manife
             "minItems": 1,
             "type": "array"
           },
+          "codePath": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "type": "string"
+          },
           "evidenceDelivery": {
             "additionalProperties": false,
             "properties": {
@@ -212457,6 +212462,9 @@ Renders a versioned PNG with exact data, statistics, recipe, environment, manife
                   "attemptLog": {
                     "type": "string"
                   },
+                  "code": {
+                    "type": "string"
+                  },
                   "derivedData": {
                     "type": "string"
                   },
@@ -215386,6 +215394,11 @@ Reruns exact historical inputs and reports replication or divergence without rea
                 "maxItems": 2,
                 "minItems": 1,
                 "type": "array"
+              },
+              "codePath": {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
               },
               "evidenceDelivery": {
                 "additionalProperties": false,
@@ -219852,6 +219865,9 @@ Reruns exact historical inputs and reports replication or divergence without rea
                     "additionalProperties": false,
                     "properties": {
                       "attemptLog": {
+                        "type": "string"
+                      },
+                      "code": {
                         "type": "string"
                       },
                       "derivedData": {

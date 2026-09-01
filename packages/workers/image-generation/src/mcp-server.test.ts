@@ -19,6 +19,12 @@ describe('image generation MCP', () => {
       expect(toolNames).toContain('visual_generate')
       expect(toolNames).toContain('image_generation_review_candidate')
       expect(toolNames).not.toContain('visual_artifact_review')
+      expect(tools.tools.find((tool) => tool.name === 'visual_generate')?.description).toContain(
+        'traceable, reproducible, or provenance-recorded scientific figure'
+      )
+      expect(tools.tools.find((tool) => tool.name === 'image_generation_render')?.description).toContain(
+        'exact effective prompt, public model identity/version'
+      )
 
       const baseArguments = {
         task: 'Create a standards-aligned visual.',

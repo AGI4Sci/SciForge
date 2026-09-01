@@ -29,6 +29,7 @@ import type {
   ImageGenerationEditFromVisualReviewPacketRequest,
   ImageGenerationEditFromVisualReviewPacketResult,
   ImageGenerationManifest,
+  ImageGenerationModelExecutionV1,
   ImageGenerationPlanRequest,
   ImageGenerationPlanResult,
   ImageGenerationProvider,
@@ -79,6 +80,7 @@ type JsonRecord = Record<string, unknown>
 type ProviderRenderResult = {
   provider: ImageGenerationProvider
   placeholder: boolean
+  modelExecution?: ImageGenerationModelExecutionV1
   warnings: string[]
 }
 
@@ -249,6 +251,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     await mkdir(outputDir, { recursive: true })
     const outputPath = join(outputDir, imageId + '.' + (recipe.outputFormat ?? 'png'))
     const providerResult = await renderWithProvider({ workspaceRoot, outputPath, recipe })
+    const modelExecution = requireModelExecution(providerResult)
     warnings.push(...providerResult.warnings)
     const outputHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
     const manifestPath = join(outputDir, imageId + '.manifest.json')
@@ -325,6 +328,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
       visualPlan: recipe.visualPlan,
       provider: providerResult.provider,
+      modelExecution,
       warnings
     }
     await writeJson(manifestPath, manifest)
@@ -351,9 +355,13 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       componentBasePath: componentArtifacts?.componentBasePath,
       componentAssetPaths: componentArtifacts?.componentAssetPaths,
       promptProfile: recipe.promptProfile,
+      modelExecution,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
+      ...(recipe.referencePath ? {
+        referenceHash: await hashWorkspaceFileIfAvailable(workspaceRoot, recipe.referencePath)
+      } : {}),
       visualPlan: recipe.visualPlan
     })
     return {
@@ -376,6 +384,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(componentArtifacts?.componentBasePath ? { componentBasePath: componentArtifacts.componentBasePath } : {}),
       ...(componentArtifacts?.componentAssetPaths?.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
       provider: providerResult.provider,
+      modelExecution,
       warnings
     }
   } catch (error) {
@@ -1037,6 +1046,7 @@ export async function editFrameworkComponentsWithImage2(
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
       visualPlan: request.visualPlan,
       provider: providerResult.provider,
+      ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {}),
       warnings
     }
     await writeJson(manifestPath, manifestRecord)
@@ -1052,11 +1062,14 @@ export async function editFrameworkComponentsWithImage2(
       frameworkComponentManifestPath: componentManifestPath,
       componentBasePath: manifest.componentBasePath,
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
+      referencePath: sourceImagePath,
+      referenceHash: createHash('sha256').update(await readFile(sourceImagePath)).digest('hex'),
       title: request.instruction.slice(0, 90) || imageId,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
-      visualPlan: request.visualPlan
+      visualPlan: request.visualPlan,
+      ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {})
     })
     return {
       ok: true,
@@ -2293,6 +2306,7 @@ export async function editImageFromVisualReviewPacket(
         editIntent: intent,
         visualPlan: request.visualPlan,
         provider: providerResult.provider,
+        ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {}),
         warnings
       }
       await writeJson(manifestPath, manifest)
@@ -2305,10 +2319,15 @@ export async function editImageFromVisualReviewPacket(
         outputHash,
         manifestPath,
         sourcePath: intent.sourcePath,
+        ...(intent.sourcePath ? {
+          referencePath: intent.sourcePath,
+          referenceHash: await hashWorkspaceFileIfAvailable(workspaceRoot, intent.sourcePath)
+        } : {}),
         title: intent.instruction.slice(0, 90) || imageId,
         ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
-        visualPlan: request.visualPlan
+        visualPlan: request.visualPlan,
+        ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {})
       })
       outputs.push({ workspaceRoot, outputPath, manifestPath, artifactManifestPath, provider: providerResult.provider })
     }
@@ -2626,7 +2645,14 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
   if (providerKind() === 'image-endpoint') {
     try {
       await renderWithConfiguredImageEndpoint(input)
-      return { provider: 'image-endpoint', placeholder: false, warnings: [] }
+      return {
+        provider: 'image-endpoint',
+        placeholder: false,
+        ...(input.recipe
+          ? { modelExecution: imageModelExecution(input.recipe, 'image-endpoint') }
+          : {}),
+        warnings: []
+      }
     } catch (error) {
       throw new ProviderError(error instanceof Error ? error.message : String(error))
     }
@@ -2645,7 +2671,53 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
   return {
     provider: 'placeholder',
     placeholder: true,
+    ...(input.recipe
+      ? { modelExecution: imageModelExecution(input.recipe, 'placeholder') }
+      : {}),
     warnings: ['Rendered with placeholder provider because SCIFORGE_IMAGE_ALLOW_PLACEHOLDER=1 is set and no Model Router image endpoint is configured.']
+  }
+}
+
+function requireModelExecution(result: ProviderRenderResult): ImageGenerationModelExecutionV1 {
+  if (result.modelExecution) return result.modelExecution
+  throw new Error('Generated image render did not capture its model execution recipe.')
+}
+
+function imageModelExecution(
+  recipe: ImageGenerationRecipe,
+  provider: ImageGenerationProvider
+): ImageGenerationModelExecutionV1 {
+  const effectivePrompt = providerPromptForRecipe(recipe)
+  const modelId = provider === 'placeholder' ? 'sciforge-placeholder' : modelRouterAlias()
+  return {
+    schemaVersion: 1,
+    provider,
+    model: {
+      id: modelId,
+      // SciForge exposes a versioned public Model Router identity rather than
+      // leaking the private provider/model split into workspace artifacts.
+      version: provider === 'placeholder' ? RENDERER_VERSION : modelId
+    },
+    effectivePrompt,
+    effectivePromptHash: createHash('sha256').update(effectivePrompt).digest('hex'),
+    parameters: {
+      mode: recipe.mode,
+      size: structuredClone(recipe.size),
+      outputFormat: recipe.outputFormat ?? 'png',
+      ...(recipe.negativePrompt ? { negativePrompt: recipe.negativePrompt } : {}),
+      ...(recipe.stylePreset ? { stylePreset: recipe.stylePreset } : {}),
+      ...(recipe.referencePath ? { referencePath: recipe.referencePath } : {}),
+      ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {})
+    },
+    renderer: {
+      id: 'sciforge-image-generation-mcp',
+      version: RENDERER_VERSION
+    },
+    replay: {
+      supported: true,
+      recipeHash: hashValue(recipe),
+      exactOutputExpected: provider === 'placeholder'
+    }
   }
 }
 
@@ -3279,6 +3351,7 @@ async function writeImageArtifactManifest(input: {
   manifestPath: string
   sourcePath?: string
   referencePath?: string
+  referenceHash?: string
   visualDocumentId?: string
   threadId?: string
   stageForVisualReview?: boolean
@@ -3297,6 +3370,7 @@ async function writeImageArtifactManifest(input: {
   componentAssetPaths?: string[]
   promptProfile?: ImageGenerationRecipe['promptProfile']
   visualPlan?: ImageGenerationRecipe['visualPlan']
+  modelExecution?: ImageGenerationModelExecutionV1
 }): Promise<string> {
   const artifactsDir = join(input.workspaceRoot, ARTIFACT_DIR)
   await mkdir(artifactsDir, { recursive: true })
@@ -3317,6 +3391,7 @@ async function writeImageArtifactManifest(input: {
     ...(input.stageForVisualReview !== undefined ? { stageForVisualReview: input.stageForVisualReview } : {}),
     ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
     ...(input.referencePath ? { referencePath: input.referencePath } : {}),
+    ...(input.referenceHash ? { referenceHash: input.referenceHash } : {}),
     ...(input.intent ? { intent: input.intent } : {}),
     ...(input.diagramSpecPath ? { diagramSpecPath: input.diagramSpecPath } : {}),
     ...(input.frameworkDesignPlanPath ? { frameworkDesignPlanPath: input.frameworkDesignPlanPath } : {}),
@@ -3331,6 +3406,7 @@ async function writeImageArtifactManifest(input: {
     ...(input.componentAssetPaths?.length ? { componentAssetPaths: input.componentAssetPaths } : {}),
     ...(input.promptProfile ? { promptProfile: input.promptProfile } : {}),
     ...(input.visualPlan ? { visualPlan: input.visualPlan } : {}),
+    ...(input.modelExecution ? { modelExecution: input.modelExecution } : {}),
     title: input.title,
     ...(input.visualPlan ? { releaseCeiling: input.visualPlan.releaseCeiling } : {})
   })
@@ -3340,6 +3416,17 @@ async function writeImageArtifactManifest(input: {
 async function writeJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   await writeFile(path, JSON.stringify(value, null, 2) + '\n', 'utf8')
+}
+
+async function hashWorkspaceFileIfAvailable(workspaceRoot: string, rawPath: string): Promise<string | undefined> {
+  try {
+    const path = await resolveWorkspacePath(workspaceRoot, rawPath)
+    return createHash('sha256').update(await readFile(path)).digest('hex')
+  } catch {
+    // A reference may be an externally-resolved locator that is not present in
+    // the local workspace. Preserve the locator but do not fabricate a digest.
+    return undefined
+  }
 }
 
 async function loadReviewPacket(request: ImageGenerationEditFromVisualReviewPacketRequest, workspaceRoot: string): Promise<unknown> {

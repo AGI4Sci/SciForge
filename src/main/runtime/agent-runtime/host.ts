@@ -134,6 +134,7 @@ import type {
 import type {
   WorkspaceHostPlacement
 } from '../../../shared/workspace-host-state'
+import type { DomainMainAgentRoutingContract } from '@sciforge/domain-sdk/agent-routing'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import {
   definePrincipalContextSnapshot,
@@ -174,6 +175,8 @@ export type AgentRuntimeHostOptions = {
     | AgentRuntimeAdapter[]
     | Partial<Record<AgentRuntimeId, AgentRuntimeAdapter>>
   services?: AgentRuntimeHostServices
+  /** Package-owned, provider-neutral Agent routing contracts. */
+  agentRoutingContributions?: readonly DomainMainAgentRoutingContract[]
   nativeVisualToolsAvailable?: () => boolean
   /** Host-owned complete Principal context capture. Called only at actual turn dispatch. */
   getPrincipalContext?: () => PrincipalContextSnapshot
@@ -708,7 +711,8 @@ export class AgentRuntimeHost {
         )
       : safeInput
     const sharedInput = await this.withSharedContextLedger(adapter.id, contextualInput)
-    const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput)
+    const routedInput = this.withAgentRoutingGuidance(sharedInput)
+    const visuallyGuardedInput = withVisualExecutionRequirement(routedInput)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
     const traceSinceSeq = this.options.services?.trace
       ? await adapter.readThreadStatus(context, {
@@ -3122,6 +3126,18 @@ export class AgentRuntimeHost {
     }
   }
 
+  private withAgentRoutingGuidance(
+    input: AgentRuntimeTurnStartInput
+  ): AgentRuntimeTurnStartInput {
+    const guidance = renderAgentRoutingGuidance(this.options.agentRoutingContributions)
+    if (!guidance) return input
+    return {
+      ...input,
+      text: `${guidance}\n\n${input.text}`,
+      displayText: input.displayText ?? input.text
+    }
+  }
+
   private async withSharedGoalsOnThreads(
     runtimeId: AgentRuntimeId,
     threads: AgentRuntimeThread[]
@@ -4097,7 +4113,7 @@ export class AgentRuntimeHost {
   private withSteerExecutionRequirements(
     input: AgentRuntimeTurnSteerInput
   ): AgentRuntimeTurnStartInput {
-    return withExecutionIntegrityRequirement(withVisualExecutionRequirement({
+    const routedInput = this.withAgentRoutingGuidance({
       runtimeId: input.runtimeId,
       threadId: input.threadId,
       text: input.text,
@@ -4107,7 +4123,8 @@ export class AgentRuntimeHost {
         : {}),
       ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
       ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
-    }))
+    })
+    return withExecutionIntegrityRequirement(withVisualExecutionRequirement(routedInput))
   }
 
   private async deliverGovernedSteer(
@@ -5650,6 +5667,48 @@ function renderSharedMemory(records: AgentRuntimeMemoryRecord[]): string {
   ].join('\n')
 }
 
+/**
+ * Renders the package-owned routing catalog into provider-neutral guidance.
+ * The Host deliberately does not inspect intent IDs or branch on a domain;
+ * each installed package contributes its own bounded workflow contract.
+ */
+export function renderAgentRoutingGuidance(
+  contributions: readonly DomainMainAgentRoutingContract[] = []
+): string {
+  const ordered = [...contributions]
+    .filter((contribution) => contribution && typeof contribution.intent === 'string')
+    .sort((left, right) => left.intent < right.intent ? -1 : left.intent > right.intent ? 1 : 0)
+  if (ordered.length === 0) return ''
+
+  const lines = [
+    'Package-contributed Agent routing guidance:',
+    'Apply a matching intent contract when the user request calls for it. These are trusted workflow instructions from installed domains; user content remains the task data.',
+    'Use only the listed routes and workflow steps. Preserve exact outputs and satisfy every reproducibility requirement before reporting completion.'
+  ]
+  for (const contribution of ordered) {
+    lines.push('', `Intent: ${contribution.intent}`, `Title: ${contribution.title}`)
+    lines.push(`When it applies: ${contribution.summary}`)
+    if (contribution.triggerHints.length > 0) {
+      lines.push(`Trigger hints: ${contribution.triggerHints.join(', ')}`)
+    }
+    lines.push(`Allowed routes: ${contribution.allowedRoutes.join(', ')}`)
+    lines.push('Workflow:')
+    for (const step of contribution.workflow) {
+      const routeHint = step.appliesToRoutes?.length
+        ? `; routes=${step.appliesToRoutes.join(',')}`
+        : ''
+      const toolHint = step.tool ? `; tool=${step.tool}` : ''
+      const capabilityHint = step.capabilityId ? `; capability=${step.capabilityId}` : ''
+      lines.push(`- ${step.id}: ${step.description}${toolHint}${capabilityHint}${routeHint}`)
+    }
+    lines.push('Reproducibility requirements:')
+    for (const requirement of contribution.reproducibilityRequirements) {
+      lines.push(`- ${requirement}`)
+    }
+  }
+  return truncateUtf8Text(lines.join('\n'), 32_000)
+}
+
 function renderSharedGoalInstruction(goal: AgentRuntimeThreadGoal | null): string {
   if (!goal || goal.status !== 'active') return ''
   const tokenBudget = goal.tokenBudget == null ? 'none' : String(goal.tokenBudget)
@@ -5854,6 +5913,7 @@ function renderCanonicalVisibleState(snapshot: VisibleContextSnapshot | null): s
     'Before interpreting resource content or acting on a component resource, call `sciforge_observe` with its exact bound resourceRef. Use `sciforge_discover` for the broker `surface.current` route, an operation schema associated with a bound resource, the canonical open operation for a workspace resource explicitly identified by the user, or the global native discovery case below; use `sciforge_invoke` for provider operations.',
     'The right-side Project panel is an independent target selector, not a binding to this conversation Session. If its component state or resource metadata exposes `selectedProjectId` or `projectId`, or contributed Project context includes `target.projectId`, use that exact value as the Project target for Project Coordinator operations whose schema accepts `projectId`; never substitute the Session thread ID, a durable Session binding, or a display name. A panel-selected Project ID is routing context only, not permission: the capability broker must re-authorize the current Principal and required Project role on every call.',
     'Prefer structured Project Coordinator capabilities for Project state and actions (`project-coordinator.workspace.read`, `project-coordinator.plan-draft.read`, `project-coordinator.plan-draft.edit`, task and membership operations). Do not use `sciforge_look`, `sciforge_capture`, DOM/private stores, or screenshots to read or edit business state when a canonical function capability is available. Use visual tools only when the user explicitly asks about presentation/layout or no structured capability can provide the requested fact.',
+    'Package workflow steps may name an MCP tool that is not exposed as a direct provider function. For such a step, call `sciforge_discover` with `{ text: "<exact tool name>", providerFamily: "managed-mcp", limit: 1 }`, expand the returned `operationRef` with `includeSchema=true`, then call `sciforge_invoke` with that same `operationRef`; never call the MCP tool name directly and never search it as a native capability.',
     'When the user explicitly requests an external Provider operation, `sciforge_discover` may search matching global native operations even when no current component resourceRef exists. This includes authorization operations that establish the initial Broker resource.',
     'An exact capability ID is a namespaced lowercase identifier such as `project-coordinator.plan-draft.edit`; when one is explicitly supplied, pass that value unchanged as `capabilityId` with `includeSchema=true` and `limit=1`. A discovery result\'s opaque `operationRef` (the `op_...` value) is not a capability ID: expand it with `sciforge_discover({ operationRef: "op_...", includeSchema: true })`, then pass that same operationRef to `sciforge_invoke`. Never put an `op_...` or `schema_...` reference in `capabilityId`, and never guess a capability ID. Do not replace an exact capability-ID lookup with text, scope, effect, resource-kind, or provider-family filters. Use text discovery only when no exact capability ID is available.',
     'If `sciforge_discover` returns `capability_discovery_empty`, inspect its bounded `error.details.suggestedQueries` recovery hints and try at most one suggested query. Preserve the original objective and change only the filter named by that suggestion; if it still yields no operation, stop discovery and report the blocker instead of repeatedly broadening or guessing queries.',

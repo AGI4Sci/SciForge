@@ -166,7 +166,7 @@ const visualSceneSchema = z.object({
   }).strict()).min(1).max(64)
 }).strict() as z.ZodType<VisualScene>
 
-const IMAGE_GENERATION_EXECUTION_DESCRIPTION = 'Prepare and render model-owned visual layers after visual_generate has locked one code, model, or hybrid production route. Execution tools never reclassify prompts or switch routes.'
+const IMAGE_GENERATION_EXECUTION_DESCRIPTION = 'Prepare and render model-owned visual layers after visual_generate has locked one code, model, or hybrid production route. Execution tools never reclassify prompts or switch routes. Model-owned renders persist the exact effective prompt, public model identity/version, generation parameters, renderer version, and replay recipe; replay repeats the same governed request but stochastic providers do not promise byte-identical pixels.'
 
 const visualPlanSchema = z.object({
   planId: z.string().trim().min(1).max(128),
@@ -230,7 +230,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
 
   server.registerTool('visual_generate', {
     title: 'Plan Visual Generation',
-    description: 'Use the single visual-production control path: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Budget exhaustion still produces a draft-only route that must pass through image_generation_review_candidate.',
+    description: 'Use the single visual-production control path, including whenever the user explicitly asks for a traceable, reproducible, or provenance-recorded scientific figure: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Code and hybrid truth layers continue through Scientific Plotting capabilities; model-only work remains allowed and must retain its prompt/model replay receipt. Budget exhaustion still produces a draft-only route that must pass through image_generation_review_candidate.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(16000),

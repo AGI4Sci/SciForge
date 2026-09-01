@@ -756,6 +756,9 @@ export function ResearchDossierPanel({
             <div className="min-w-0">
               <div className="text-[13px] font-semibold text-ds-ink">{t('researchDossierTitle')}</div>
               <div className="truncate text-[9.5px] text-ds-faint">
+                {t('researchDossierSubtitle')}
+              </div>
+              <div className="truncate text-[9.5px] text-ds-faint/80">
                 {targetLabel(
                   parsedActivation,
                   t('researchDossierRecentRecords'),

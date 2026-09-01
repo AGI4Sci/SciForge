@@ -637,6 +637,8 @@ const versionCommitReceiptSchema = z.object({
   candidateIds: z.object({
     derivedData: z.string(),
     recipe: z.string(),
+    // Optional for legacy receipts; new code renders always persist this candidate.
+    code: z.string().optional(),
     figure: z.string(),
     renderManifest: z.string(),
     attemptLog: z.string()
@@ -811,6 +813,8 @@ export const scientificPlotEvidenceLineageV1Schema = z.object({
 export const scientificPlotEvidenceCommitRefsV1Schema = z.object({
   derivedData: artifactVersionRefV1Schema,
   recipe: artifactVersionRefV1Schema,
+  // Legacy outbox receipts predate executable code artifacts.
+  code: artifactVersionRefV1Schema.optional(),
   figure: artifactVersionRefV1Schema,
   renderManifest: artifactVersionRefV1Schema,
   attemptLog: artifactVersionRefV1Schema
@@ -841,6 +845,8 @@ export const scientificPlottingOperationReceiptV1Schema = z.object({
   preparedDigests: z.object({
     derivedData: sha256Schema,
     recipe: sha256Schema,
+    // Optional for prepared receipts created before executable code artifacts existed.
+    code: sha256Schema.optional(),
     figure: sha256Schema,
     renderManifest: sha256Schema,
     attemptLog: sha256Schema
@@ -891,6 +897,7 @@ const scientificPlottingRenderSuccessSchema = z.object({
   outputPath: pathSchema,
   manifestPath: pathSchema,
   recipePath: pathSchema,
+  codePath: pathSchema.optional(),
   operationId: scientificPlottingOperationIdSchema,
   plotVersionId: identifierSchema,
   recipe: scientificPlotRecipeV1Schema,

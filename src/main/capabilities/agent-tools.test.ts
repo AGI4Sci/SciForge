@@ -390,6 +390,36 @@ describe('CapabilityAgentToolSurface', () => {
     })
   })
 
+  it('suggests managed MCP first when a failed native search looks like a tool name', async () => {
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry()),
+      resolveCaller: () => caller
+    })
+
+    const error = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        text: 'visual_generate scientific plotting route',
+        limit: 5
+      },
+      context
+    }).catch((value: unknown) => value)
+    expect(error).toMatchObject({ code: 'capability_discovery_empty' })
+    const suggestions = (error as CapabilityAgentToolError).details as {
+      suggestedQueries?: unknown
+    }
+    expect(suggestions.suggestedQueries).toEqual(expect.arrayContaining([{
+      text: 'visual_generate scientific plotting route',
+      providerFamily: 'managed-mcp',
+      limit: 5
+    }]))
+    expect((suggestions.suggestedQueries as unknown[])[0]).toEqual({
+      text: 'visual_generate scientific plotting route',
+      providerFamily: 'managed-mcp',
+      limit: 5
+    })
+  })
+
   it('matches conservative English inflections without relaxing explicit scope filters', () => {
     const planEdit = defineCapability({
       id: 'project-coordinator.plan-draft.edit',

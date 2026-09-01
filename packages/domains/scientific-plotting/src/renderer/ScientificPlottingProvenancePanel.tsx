@@ -2,13 +2,20 @@ import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  Code2,
   Database,
+  FileText,
   GitCompareArrows,
   History,
+  Image as ImageIcon,
   Loader2,
+  Maximize2,
   PanelRightClose,
   Play,
-  RefreshCw
+  RefreshCw,
+  RotateCcw,
+  SlidersHorizontal,
+  Wand2
 } from 'lucide-react'
 import {
   useCallback,
@@ -61,6 +68,10 @@ export function ScientificPlottingProvenancePanel({
   const [busy, setBusy] = useState<'rerun' | 'compare' | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [comparison, setComparison] = useState<ScientificPlottingCompareResult | null>(null)
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewIssue, setPreviewIssue] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'image' | 'evidence' | 'data' | 'review'>('image')
 
   const load = useCallback(async () => {
     if (!workspaceRoot.trim()) {
@@ -102,6 +113,42 @@ export function ScientificPlottingProvenancePanel({
   const compareRecord = records.find(
     (record) => record.manifestRef.versionId === compareVersionId
   )
+
+  useEffect(() => {
+    let cancelled = false
+    const figureRef = activeRecord?.figureRef
+    if (!figureRef) {
+      // Clear the in-flight state when the selected record has no figure. Without
+      // this reset, a previous record's request can leave the preview spinner
+      // visible indefinitely after switching to a manifest-only/model record.
+      setPreviewLoading(false)
+      setPreviewSrc(null)
+      setPreviewIssue(t('scientificPlottingPreviewUnavailable'))
+      return () => { cancelled = true }
+    }
+    setPreviewLoading(true)
+    setPreviewIssue(null)
+    void client.readArtifactVersion(workspaceRoot, {
+      versionId: figureRef.versionId,
+      maxBytes: 16 * 1024 * 1024
+    }).then((result) => {
+      if (cancelled) return
+      if (!result.ok) {
+        setPreviewSrc(null)
+        setPreviewIssue(result.issue.message)
+        return
+      }
+      setPreviewSrc(`data:image/png;base64,${result.value.dataBase64}`)
+    }).catch((error) => {
+      if (!cancelled) {
+        setPreviewSrc(null)
+        setPreviewIssue(errorMessage(error))
+      }
+    }).finally(() => {
+      if (!cancelled) setPreviewLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [activeRecord?.figureRef?.versionId, client, t, workspaceRoot])
 
   useEffect(() => {
     if (!activeRecord || compareVersionId !== activeRecord.manifestRef.versionId) return
@@ -162,7 +209,12 @@ export function ScientificPlottingProvenancePanel({
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
         <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-ds-ink">
           <BarChart3 className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
-          <span>{t('scientificPlottingPanelTitle')}</span>
+          <div className="min-w-0">
+            <div>{t('scientificPlottingPanelTitle')}</div>
+            <div className="mt-0.5 text-[10px] font-normal leading-snug text-ds-faint">
+              {t('scientificPlottingPanelSubtitle')}
+            </div>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button
@@ -211,6 +263,12 @@ export function ScientificPlottingProvenancePanel({
           <EmptyState text={t('scientificPlottingEmpty')} />
         ) : (
           <>
+            <PlotPreviewCard
+              record={activeRecord}
+              previewSrc={previewSrc}
+              loading={previewLoading}
+              issue={previewIssue}
+            />
             <div className="grid gap-2 rounded-xl border border-ds-border-muted bg-ds-main/30 p-3">
               <label className="grid gap-1 text-[11px] text-ds-muted">
                 {t('scientificPlottingExactManifest')}
@@ -299,7 +357,35 @@ export function ScientificPlottingProvenancePanel({
               }} />
             ) : null}
 
-            <ProvenanceSections record={activeRecord} />
+            <div className="grid grid-cols-4 gap-1 rounded-xl border border-ds-border-muted bg-ds-main/30 p-1">
+              {([
+                ['image', t('scientificPlottingTabImage'), ImageIcon],
+                ['evidence', t('scientificPlottingTabEvidence'), FileText],
+                ['data', t('scientificPlottingTabData'), Database],
+                ['review', t('scientificPlottingTabReview'), CheckCircle2]
+              ] as const).map(([tab, label, Icon]) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`flex items-center justify-center gap-1 rounded-lg px-1.5 py-2 text-[10px] font-medium transition ${
+                    activeTab === tab ? 'bg-ds-main text-ds-ink shadow-sm' : 'text-ds-muted hover:bg-ds-hover'
+                  }`}
+                >
+                  <Icon className="h-3 w-3" />
+                  {label}
+                </button>
+              ))}
+            </div>
+            {activeTab === 'image' ? (
+              <ImageTab record={activeRecord} previewSrc={previewSrc} />
+            ) : activeTab === 'evidence' ? (
+              <CodeGenerationEvidence record={activeRecord} client={client} workspaceRoot={workspaceRoot} />
+            ) : activeTab === 'data' ? (
+              <ProvenanceSections record={activeRecord} section="data" />
+            ) : (
+              <ProvenanceSections record={activeRecord} section="review" />
+            )}
           </>
         )}
       </div>
@@ -307,8 +393,309 @@ export function ScientificPlottingProvenancePanel({
   )
 }
 
-function ProvenanceSections({ record }: Readonly<{
+function PlotPreviewCard({
+  record,
+  previewSrc,
+  loading,
+  issue
+}: Readonly<{
   record: ScientificPlotProvenanceRecord
+  previewSrc: string | null
+  loading: boolean
+  issue: string | null
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const route = routeOf(record.manifest.recipe.visualPlan)
+  const review = reviewState(record.manifest.finalReview)
+  return (
+    <section className="grid gap-2 rounded-xl border border-ds-border-muted bg-ds-main/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-semibold text-ds-ink">
+          <ImageIcon className="h-3.5 w-3.5 text-ds-accent" />
+          <span className="truncate">{record.manifest.recipe.labels.title ?? record.manifest.recipe.figureId}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Badge label={routeLabel(route)} tone={route === 'hybrid' ? 'violet' : 'blue'} />
+          <Badge
+            label={review === 'verified' ? t('scientificPlottingVerified') : review === 'failed' ? t('scientificPlottingFailed') : t('scientificPlottingNotReviewed')}
+            tone={review === 'verified' ? 'green' : review === 'failed' ? 'red' : 'gray'}
+          />
+        </div>
+      </div>
+      <div className="relative flex min-h-[180px] items-center justify-center overflow-hidden rounded-lg border border-ds-border-muted bg-white/80 dark:bg-black/20">
+        {loading ? <Loader2 className="h-5 w-5 animate-spin text-ds-muted" /> : previewSrc ? (
+          <img src={previewSrc} alt={record.manifest.recipe.labels.title ?? record.manifest.recipe.figureId} className="max-h-[300px] w-full object-contain" />
+        ) : <div className="px-4 text-center text-[11px] text-ds-muted">{issue ?? t('scientificPlottingPreviewUnavailable')}</div>}
+        {previewSrc ? (
+          <button
+            type="button"
+            onClick={() => window.open(previewSrc, '_blank', 'noopener,noreferrer')}
+            className="absolute right-2 top-2 rounded-md border border-ds-border bg-ds-main/90 p-1.5 text-ds-muted shadow-sm transition hover:text-ds-ink"
+            title={t('scientificPlottingOpenPreview')}
+            aria-label={t('scientificPlottingOpenPreview')}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-ds-muted">
+        <span>{record.manifest.recipe.template}</span>
+        <span>{record.manifest.recipe.dataSources.length} {t('scientificPlottingDataSources')}</span>
+        <span>{formatTime(record.manifest.createdAt)}</span>
+        <span className="font-mono">{shortDigest(record.manifest.outputHash)}</span>
+      </div>
+    </section>
+  )
+}
+
+function ImageTab({ record, previewSrc }: Readonly<{
+  record: ScientificPlotProvenanceRecord
+  previewSrc: string | null
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div className="grid gap-2">
+      <div className="rounded-xl border border-ds-border-muted bg-ds-main/25 p-3 text-[11px] text-ds-muted">
+        <div className="mb-2 flex items-center gap-2 font-semibold text-ds-ink"><SlidersHorizontal className="h-3.5 w-3.5" />{t('scientificPlottingImageSummary')}</div>
+        <KeyValue label={t('scientificPlottingRoute')} value={routeLabel(routeOf(record.manifest.recipe.visualPlan))} />
+        <KeyValue label={t('scientificPlottingOutputPath')} value={record.manifest.outputPath} mono />
+        <KeyValue label={t('scientificPlottingOutputHash')} value={record.manifest.outputHash} mono />
+      </div>
+      {previewSrc ? <a href={previewSrc} download={`${record.manifest.recipe.figureId}.png`} className="text-center text-[11px] text-ds-accent hover:underline">{t('scientificPlottingDownloadPreview')}</a> : null}
+    </div>
+  )
+}
+
+function CodeGenerationEvidence({ record, client, workspaceRoot }: Readonly<{
+  record: ScientificPlotProvenanceRecord
+  client: ScientificPlottingCapabilityClient
+  workspaceRoot: string
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const { recipe } = record.manifest
+  const route = routeOf(recipe.visualPlan)
+  const [code, setCode] = useState<string | null>(null)
+  const [codeLoading, setCodeLoading] = useState(false)
+  const [codeIssue, setCodeIssue] = useState<string | null>(null)
+  const [showCode, setShowCode] = useState(false)
+  const [copyState, setCopyState] = useState<'checking' | 'verified' | 'unknown' | 'restored' | 'mismatch' | 'missing'>('unknown')
+  const [copyIssue, setCopyIssue] = useState<string | null>(null)
+  const [restoreLoading, setRestoreLoading] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    // A single panel instance is reused while the active record changes. Reset
+    // code evidence immediately so a previously loaded source cannot be shown
+    // under the newly selected record until its own artifact is loaded.
+    setCode(null)
+    setShowCode(false)
+    setCodeIssue(null)
+    if (!record.codeRef) {
+      setCopyState('missing')
+      setCopyIssue(null)
+      return () => { cancelled = true }
+    }
+    setCopyState('checking')
+    setCopyIssue(null)
+    void client.readArtifactVersion(workspaceRoot, {
+      versionId: record.codeRef.versionId,
+      maxBytes: 4 * 1024 * 1024
+    }).then((result) => {
+      if (cancelled) return
+      if (!result.ok) {
+        setCopyState('mismatch')
+        setCopyIssue(result.issue.message)
+        return
+      }
+      setCopyState(result.value.ref.contentDigest === record.codeRef!.contentDigest ? 'verified' : 'mismatch')
+      if (result.value.ref.contentDigest !== record.codeRef!.contentDigest) {
+        setCopyIssue(t('scientificPlottingCodeDigestMismatch'))
+      }
+    }).catch((error) => {
+      if (!cancelled) {
+        setCopyState('mismatch')
+        setCopyIssue(errorMessage(error))
+      }
+    })
+    return () => { cancelled = true }
+  }, [client, record.codeRef?.contentDigest, record.codeRef?.versionId, t, workspaceRoot])
+
+  const loadCode = async () => {
+    if (!record.codeRef) return
+    setCodeLoading(true)
+    setCodeIssue(null)
+    try {
+      const result = await client.readArtifactVersion(workspaceRoot, {
+        versionId: record.codeRef.versionId,
+        maxBytes: 4 * 1024 * 1024
+      })
+      if (!result.ok) {
+        setCodeIssue(result.issue.message)
+      } else {
+        setCode(decodeBase64Text(result.value.dataBase64))
+        setShowCode(true)
+      }
+    } catch (error) {
+      setCodeIssue(errorMessage(error))
+    } finally {
+      setCodeLoading(false)
+    }
+  }
+  const restoreCodeCopy = async () => {
+    if (!record.codeRef || !record.manifest.codePath) return
+    if (!window.confirm(t('scientificPlottingRestoreCodeConfirm'))) return
+    setRestoreLoading(true)
+    setCopyIssue(null)
+    try {
+      const result = await client.materializeArtifactVersion(workspaceRoot, {
+        idempotencyKey: `scientific-plot-code-restore:${record.codeRef.versionId}:${record.manifest.codePath}`,
+        versionId: record.codeRef.versionId,
+        destinationPath: record.manifest.codePath,
+        overwrite: true
+      })
+      if (!result.ok) {
+        setCopyState('mismatch')
+        setCopyIssue(result.issue.message)
+        return
+      }
+      setCopyState('restored')
+      setCopyIssue(null)
+    } catch (error) {
+      setCopyState('mismatch')
+      setCopyIssue(errorMessage(error))
+    } finally {
+      setRestoreLoading(false)
+    }
+  }
+  return (
+    <div className="grid gap-2">
+      <div className="rounded-xl border border-ds-border-muted bg-ds-main/25 p-3">
+        <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-ds-ink">
+          {route === 'code' ? <Code2 className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
+          {route === 'code' ? t('scientificPlottingCodeEvidence') : t('scientificPlottingHybridEvidence')}
+        </div>
+        <KeyValue label={t('scientificPlottingRoute')} value={routeLabel(route)} />
+        <KeyValue label={t('scientificPlottingRenderer')} value={`${recipe.execution.renderer} · ${recipe.execution.rendererVersion}`} />
+        <KeyValue label={t('scientificPlottingRendererCode')} value={recipe.execution.rendererCodeSha256} mono />
+        <KeyValue label={t('scientificPlottingCommand')} value={recipe.execution.command.join(' ')} mono />
+        {record.codeRef ? <>
+          <ExactReference label={t('scientificPlottingExactCode')} refValue={record.codeRef} compact />
+          <CodeCopyIntegrity
+            codePath={record.manifest.codePath}
+            digest={record.codeRef.contentDigest}
+            state={copyState}
+            issue={copyIssue}
+            loading={restoreLoading}
+            onRestore={() => void restoreCodeCopy()}
+          />
+          <button type="button" onClick={() => void loadCode()} disabled={codeLoading} className="flex items-center justify-center gap-1.5 rounded-lg bg-ds-accent px-2.5 py-2 text-[11px] font-semibold text-white disabled:opacity-50">
+            {codeLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Code2 className="h-3.5 w-3.5" />}
+            {t('scientificPlottingViewCode')}
+          </button>
+          {codeIssue ? <div className="text-[10px] text-red-700 dark:text-red-300">{codeIssue}</div> : null}
+          {showCode && code !== null ? <div className="relative">
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(code)} className="absolute right-2 top-2 rounded-md bg-ds-main/80 px-2 py-1 text-[10px] text-ds-muted hover:text-ds-ink">{t('scientificPlottingCopyCode')}</button>
+            <pre className="max-h-[360px] overflow-auto rounded-lg border border-ds-border-muted bg-slate-950 p-3 pt-9 text-[9px] leading-relaxed text-slate-100">{code}</pre>
+          </div> : null}
+        </> : (
+          <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-2 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">{t('scientificPlottingCodeUnavailable')}</div>
+        )}
+      </div>
+      <JsonDetails label={t('scientificPlottingRecipe')} value={recipe} />
+      <JsonDetails label={t('scientificPlottingVisualPlan')} value={recipe.visualPlan} />
+    </div>
+  )
+}
+
+function CodeCopyIntegrity({
+  codePath,
+  digest,
+  state,
+  issue,
+  loading,
+  onRestore
+}: Readonly<{
+  codePath?: string
+  digest: string
+  state: 'checking' | 'verified' | 'unknown' | 'restored' | 'mismatch' | 'missing'
+  issue: string | null
+  loading: boolean
+  onRestore: () => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const status = state === 'checking'
+    ? t('scientificPlottingCodeIntegrityChecking')
+    : state === 'verified'
+      ? t('scientificPlottingCodeArtifactVerified')
+      : state === 'restored'
+        ? t('scientificPlottingCodeCopyRestored')
+        : state === 'mismatch'
+          ? t('scientificPlottingCodeIntegrityFailed')
+          : state === 'missing'
+            ? t('scientificPlottingCodeCopyUnavailable')
+            : t('scientificPlottingCodeCopyUnknown')
+  const tone = state === 'verified' || state === 'restored'
+    ? 'text-emerald-700 dark:text-emerald-300'
+    : state === 'mismatch'
+      ? 'text-red-700 dark:text-red-300'
+      : 'text-ds-muted'
+  return (
+    <div className="grid gap-1.5 rounded-lg border border-ds-border-muted bg-ds-main/40 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className={`flex min-w-0 items-center gap-1.5 text-[10px] font-medium ${tone}`}>
+          {state === 'checking' ? <Loader2 className="h-3 w-3 animate-spin" /> : state === 'verified' || state === 'restored' ? <CheckCircle2 className="h-3 w-3" /> : state === 'mismatch' ? <AlertTriangle className="h-3 w-3" /> : <Code2 className="h-3 w-3" />}
+          <span>{status}</span>
+        </div>
+        {codePath && state !== 'missing' ? (
+          <button
+            type="button"
+            onClick={onRestore}
+            disabled={loading || state === 'checking'}
+            className="flex shrink-0 items-center gap-1 rounded-md border border-ds-border px-2 py-1 text-[10px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+            {loading ? t('scientificPlottingBusy') : t('scientificPlottingRestoreCodeCopy')}
+          </button>
+        ) : null}
+      </div>
+      {codePath ? <KeyValue label={t('scientificPlottingCodeCopyPath')} value={codePath} mono /> : <div className="text-[10px] text-ds-muted">{t('scientificPlottingCodeCopyUnavailable')}</div>}
+      <KeyValue label={t('scientificPlottingCodeDigest')} value={digest} mono />
+      <div className="text-[9px] leading-relaxed text-ds-muted">
+        {state === 'verified' || state === 'restored'
+          ? t('scientificPlottingCodeArtifactTrustNote')
+          : t('scientificPlottingCodeCopyTrustNote')}
+      </div>
+      {issue ? <div className="break-words text-[10px] text-red-700 dark:text-red-300">{issue}</div> : null}
+    </div>
+  )
+}
+
+function Badge({ label, tone }: Readonly<{ label: string; tone: 'blue' | 'violet' | 'green' | 'red' | 'gray' }>): ReactElement {
+  const styles = {
+    blue: 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
+    violet: 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
+    green: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    red: 'bg-red-500/10 text-red-700 dark:text-red-300',
+    gray: 'bg-ds-hover text-ds-muted'
+  }[tone]
+  return <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium ${styles}`}>{label}</span>
+}
+
+function routeLabel(route: string): string {
+  return route === 'hybrid' ? 'Hybrid' : 'Code'
+}
+
+function routeOf(value: unknown): 'code' | 'hybrid' {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const route = (value as { route?: unknown }).route
+    if (route === 'hybrid') return route
+  }
+  return 'code'
+}
+
+function ProvenanceSections({ record, section: _section }: Readonly<{
+  record: ScientificPlotProvenanceRecord
+  section?: 'data' | 'review'
 }>): ReactElement {
   const { t } = useTranslation('common')
   const { recipe } = record.manifest
@@ -316,7 +703,7 @@ function ProvenanceSections({ record }: Readonly<{
   const review = reviewState(record.manifest.finalReview)
   return (
     <div className="grid gap-2">
-      <ProvenanceSection title={t('scientificPlottingData')} icon={<Database className="h-3.5 w-3.5" />} open>
+      <ProvenanceSection activeSection={_section} title={t('scientificPlottingData')} section="data" icon={<Database className="h-3.5 w-3.5" />} open>
         <KeyValue label={t('scientificPlottingDataHash')} value={recipe.dataHash} mono />
         {record.derivedDataRef ? (
           <ExactReference label={t('scientificPlottingDerivedTable')} refValue={record.derivedDataRef} compact />
@@ -346,7 +733,7 @@ function ProvenanceSections({ record }: Readonly<{
         ))}
       </ProvenanceSection>
 
-      <ProvenanceSection title={t('scientificPlottingStatistics')}>
+      <ProvenanceSection activeSection={_section} title={t('scientificPlottingStatistics')} section="data">
         {!statistics ? (
           <MutedText>{t('scientificPlottingNoStatistics')}</MutedText>
         ) : (
@@ -376,7 +763,7 @@ function ProvenanceSections({ record }: Readonly<{
         )}
       </ProvenanceSection>
 
-      <ProvenanceSection title={t('scientificPlottingTransformations')}>
+      <ProvenanceSection activeSection={_section} title={t('scientificPlottingTransformations')} section="data">
         {recipe.transformations.map((transformation, index) => (
           <div key={transformation.transformationId} className="rounded-lg border border-ds-border-muted p-2">
             <div className="text-[11px] font-semibold text-ds-ink">
@@ -391,7 +778,7 @@ function ProvenanceSections({ record }: Readonly<{
         ))}
       </ProvenanceSection>
 
-      <ProvenanceSection title={t('scientificPlottingParameters')}>
+      <ProvenanceSection activeSection={_section} section="evidence" title={t('scientificPlottingParameters')}>
         <KeyValue label={t('scientificPlottingTemplate')} value={recipe.template} />
         <JsonDetails label={t('scientificPlottingLabels')} value={recipe.labels} />
         <KeyValue label={t('scientificPlottingStyle')} value={recipe.style.resolvedSpecHash} mono />
@@ -402,7 +789,7 @@ function ProvenanceSections({ record }: Readonly<{
         <KeyValue label={t('scientificPlottingReproducibility')} value={recipe.reproducibilityMode} />
       </ProvenanceSection>
 
-      <ProvenanceSection title={t('scientificPlottingEnvironment')}>
+      <ProvenanceSection activeSection={_section} section="evidence" title={t('scientificPlottingEnvironment')}>
         <KeyValue
           label={t('scientificPlottingPython')}
           value={`${recipe.environment.pythonVersion} · ${recipe.environment.pythonExecutable}`}
@@ -412,7 +799,7 @@ function ProvenanceSections({ record }: Readonly<{
         <JsonDetails label={t('scientificPlottingPackages')} value={recipe.environment.packages} />
       </ProvenanceSection>
 
-      <ProvenanceSection title={t('scientificPlottingExecution')}>
+      <ProvenanceSection activeSection={_section} section="evidence" title={t('scientificPlottingExecution')}>
         <KeyValue
           label={t('scientificPlottingRenderer')}
           value={`${recipe.execution.renderer} · ${recipe.execution.rendererVersion}`}
@@ -426,7 +813,7 @@ function ProvenanceSections({ record }: Readonly<{
         {record.logRef ? <ExactReference label={t('scientificPlottingAttempts')} refValue={record.logRef} compact /> : null}
       </ProvenanceSection>
 
-      <ProvenanceSection title={t('scientificPlottingReview')}>
+      <ProvenanceSection activeSection={_section} title={t('scientificPlottingReview')} section="review">
         <div className={`flex items-center gap-2 text-[11px] font-medium ${
           review === 'verified'
             ? 'text-emerald-700 dark:text-emerald-300'
@@ -461,18 +848,23 @@ function ProvenanceSections({ record }: Readonly<{
 }
 
 function ProvenanceSection({
+  activeSection,
   title,
   icon,
   open = false,
+  section,
   children
 }: Readonly<{
   title: string
+  activeSection?: 'data' | 'review'
   icon?: ReactNode
   open?: boolean
+  section?: 'data' | 'review' | 'evidence'
   children: ReactNode
-}>): ReactElement {
+}>): ReactElement | null {
+  if (activeSection && section !== activeSection) return null
   return (
-    <details open={open} className="overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/25">
+    <details data-provenance-section={section} open={open} className="overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/25">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[12px] font-semibold text-ds-ink">
         {icon}
         {title}
@@ -579,4 +971,11 @@ function formatTime(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function decodeBase64Text(value: string): string {
+  const binary = globalThis.atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return new TextDecoder().decode(bytes)
 }

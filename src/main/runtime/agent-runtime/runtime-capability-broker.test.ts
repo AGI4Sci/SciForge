@@ -196,7 +196,11 @@ describe('RuntimeCapabilityBroker', () => {
         type: 'object',
         properties: {
           workspaceRoot: { type: 'string', required: false },
-          recipe: { type: 'object', required: true }
+          recipe: expect.objectContaining({
+            type: 'object',
+            required: true,
+            properties: expect.any(Object)
+          })
         }
       }
     })])

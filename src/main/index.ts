@@ -163,6 +163,7 @@ import {
   createApplicationDomainCatalog,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvokerFactory,
+  listMainAgentRoutingContributions,
   listMainArtifactConsumers,
   listMainExtensionContributions,
   listMainMcpTrustedInvocationMetadataContributions,
@@ -1570,6 +1571,7 @@ app
       settings: async () => store.load(),
       getPrincipalContext: () => principalContext.snapshot(),
       nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
+      agentRoutingContributions: listMainAgentRoutingContributions(catalog),
       subagentStoreRoot: join(app.getPath('userData'), 'agent-runtime', 'subagents'),
       turnArtifacts: turnArtifactHandoff,
       adapters: [

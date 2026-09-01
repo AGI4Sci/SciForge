@@ -174,6 +174,35 @@ describe('visual production planner', () => {
     expect(result.execution.stages.at(-1)?.tool).toBe('image_generation_review_candidate')
   })
 
+  it('keeps model-owned figures on the model route when reproducibility comes from a pinned prompt recipe', () => {
+    const result = planVisualProduction(request({
+      requirements: {
+        lockedElements: [],
+        modelOwnedElements: ['the complete illustrative composition'],
+        reproducibleInputs: ['prompt:cell-cycle-v2', 'model:sciforge-router']
+      }
+    }))
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'ready',
+      handoff: { route: 'model', routeLocked: true },
+      execution: {
+        stages: [
+          { id: 'prepare_model' },
+          {
+            id: 'render_model',
+            produces: expect.arrayContaining(['renderedManifest', 'modelExecution'])
+          },
+          {
+            id: 'review_visual',
+            consumes: expect.arrayContaining(['modelExecution'])
+          }
+        ]
+      }
+    })
+  })
+
   it('treats a self-contained exact brief as an inline reproducible specification', () => {
     const structuredData = {
       categories: ['A', 'B'],

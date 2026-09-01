@@ -120,6 +120,11 @@ const MAX_LIFECYCLE_EVENTS_PER_SERVER = 50
 const MAX_UNAVAILABLE_TOOL_DIAGNOSTICS_PER_SERVER = 50
 const MAX_CATALOG_PAGES_PER_SERVER = 100
 const MAX_CATALOG_TOOLS_PER_SERVER = 2_000
+// Preserve enough nested structure for an Agent to satisfy MCP tool contracts
+// (for example requirements.lockedElements) while bounding provider-controlled
+// schemas before they enter the model context.
+const MAX_COMPACT_SCHEMA_DEPTH = 3
+const MAX_COMPACT_SCHEMA_PROPERTIES = 64
 
 class RuntimeMcpInvocationError extends Error {
   constructor(
@@ -996,21 +1001,36 @@ function validateSchemaNodes(root: Record<string, unknown>): RuntimeMcpSchemaDia
 
 function compactCatalogSchema(value: unknown): Record<string, unknown> {
   const root = asRecord(value) ?? {}
-  const properties = asRecord(root.properties) ?? {}
-  const compactProperties = Object.fromEntries(Object.entries(properties).map(([name, property]) => [
-    name,
-    compactCatalogProperty(asRecord(property) ?? {})
-  ]))
-  const required = arrayValue(root.required)
-    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
-  return {
-    type: 'object',
-    properties: compactProperties,
-    ...(required.length ? { required: [...new Set(required)] } : {})
-  }
+  const output = compactCatalogObject({ type: 'object', ...root }, 0)
+  if (!output.properties) output.properties = {}
+  return output
 }
 
-function compactCatalogProperty(schema: Record<string, unknown>): Record<string, unknown> {
+function compactCatalogObject(
+  schema: Record<string, unknown>,
+  depth: number
+): Record<string, unknown> {
+  const output = compactCatalogProperty(schema, depth)
+  const properties = asRecord(schema.properties)
+  if (!properties || depth >= MAX_COMPACT_SCHEMA_DEPTH) return output
+  output.properties = Object.fromEntries(
+    Object.entries(properties)
+      .slice(0, MAX_COMPACT_SCHEMA_PROPERTIES)
+      .map(([name, property]) => [
+        name,
+        compactCatalogObject(asRecord(property) ?? {}, depth + 1)
+      ])
+  )
+  const required = arrayValue(schema.required)
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+  if (required.length) output.required = [...new Set(required)]
+  return output
+}
+
+function compactCatalogProperty(
+  schema: Record<string, unknown>,
+  depth: number
+): Record<string, unknown> {
   const type = typeof schema.type === 'string'
     ? schema.type
     : asRecord(schema.properties)
@@ -1024,11 +1044,16 @@ function compactCatalogProperty(schema: Record<string, unknown>): Record<string,
   const enumValues = Array.isArray(schema.enum)
     ? schema.enum.filter(isJsonPrimitive).slice(0, 64)
     : []
-  return {
+  const output: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(description ? { description } : {}),
     ...(enumValues.length ? { enum: enumValues } : {})
   }
+  if (depth >= MAX_COMPACT_SCHEMA_DEPTH) return output
+  if (asRecord(schema.items)) {
+    output.items = compactCatalogObject(asRecord(schema.items)!, depth + 1)
+  }
+  return output
 }
 
 function isJsonPrimitive(value: unknown): value is string | number | boolean | null {

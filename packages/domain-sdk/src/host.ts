@@ -49,6 +49,7 @@ import type {
   WorkspaceHostOpenRemoteSessionInput
 } from './workspace-host.js'
 export * from './agent-execution.js'
+export * from './agent-routing.js'
 export * from './external-navigation.js'
 export * from './file-transfer.js'
 export * from './power.js'

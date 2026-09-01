@@ -6,6 +6,7 @@ import {
 } from '@sciforge/domain-sdk'
 import {
   MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
+  MAIN_AGENT_ROUTING_CONTRIBUTION_KIND,
   MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
   MAIN_EXTENSION_CONTRIBUTION_KIND,
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
@@ -17,6 +18,7 @@ import {
   type DomainArtifactConsumer,
   type DomainMainRuntimeLifecycleContext
 } from '@sciforge/domain-sdk/host'
+import { defineDomainMainAgentRoutingContract } from '@sciforge/domain-sdk/agent-routing'
 import {
   MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
   defineDomainWorkflowExecutionReceiptProvider
@@ -30,6 +32,7 @@ import {
   activateMainRuntimeContributions,
   createMainActionGuardEvaluator,
   createMainSystemCapabilityInvokerFactory,
+  listMainAgentRoutingContributions,
   listMainArtifactConsumers,
   listMainExtensionContributions
 } from './runtime-contributions'
@@ -224,6 +227,35 @@ describe('main runtime contributions', () => {
 
     expect(activated.artifactConsumers).toEqual([consumer])
     expect(Object.isFrozen(activated.artifactConsumers)).toBe(true)
+  })
+
+  it('projects package-owned Agent routing contracts from contribution metadata', () => {
+    const contract = defineDomainMainAgentRoutingContract({
+      intent: 'fixture-routing',
+      title: 'Fixture routing',
+      summary: 'A bounded fixture route.',
+      triggerHints: ['fixture'],
+      allowedRoutes: ['code'],
+      workflow: [{
+        id: 'render',
+        description: 'Render through the fixture capability.',
+        capabilityId: 'fixture.render',
+        appliesToRoutes: ['code']
+      }],
+      reproducibilityRequirements: ['Persist the fixture recipe.']
+    })
+    const catalog = new DomainModuleCatalog()
+    catalog.registerModule(fixtureEntry('fixture.routing', '@fixture/routing', 100, [{
+      id: 'fixture.routing.contract',
+      kind: MAIN_AGENT_ROUTING_CONTRIBUTION_KIND,
+      contract: contract as unknown as DomainPackageJsonValue,
+      value: null
+    }]))
+
+    const projected = listMainAgentRoutingContributions(catalog)
+    expect(projected).toEqual([contract])
+    expect(Object.isFrozen(projected)).toBe(true)
+    expect(Object.isFrozen(projected[0])).toBe(true)
   })
 
   it('evaluates matching action guards in catalog order and stops on the first rejection', async () => {
