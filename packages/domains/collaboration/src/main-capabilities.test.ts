@@ -314,6 +314,32 @@ test('Agent Task interaction capabilities fail closed without a Principal, Sessi
   })
   assert.deepEqual(submittedInput, { ...input, origin: 'agent' })
   assert.equal((result.output as { interaction: { origin: string } }).interaction.origin, 'agent')
+
+  const checkpoint = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend)!
+  await assert.rejects(
+    checkpoint.handler({
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      executionId: TEST_IDS.executionId,
+      kind: 'progress',
+      source: 'human',
+      summary: 'forbidden source'
+    }, {
+      caller: {
+        audience: 'agent',
+        principal: {
+          authority: 'test',
+          subject: TEST_IDS.userId,
+          assurance: 'cloud-authenticated',
+          deviceId: 'device-test',
+          identityVersion: 1
+        }
+      },
+      ordinarySession: { runtimeId: 'runtime-test', threadId: 'thread-test' },
+      assertPrincipalCurrent
+    }),
+    /agent source/
+  )
 })
 
 test('the Collaboration entry publishes one Coordinator command service backed by its active runtime', async () => {

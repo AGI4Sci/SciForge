@@ -718,6 +718,9 @@ function authorizeAgentTaskInteraction(
   if (!context.ordinarySession) {
     throw new Error('This Agent operation requires a Host-authenticated ordinary Session.')
   }
+  if (!input.executionId) {
+    throw new Error('Agent Task operations require an exact executionId.')
+  }
   runtime.authorizeTaskInteraction(
     input,
     context.ordinarySession,
