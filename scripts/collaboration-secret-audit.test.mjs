@@ -289,6 +289,16 @@ test('rejects secret-shaped Git material, sensitive files, and production litera
   assert.ok(kinds.has('literal-secret-assignment'))
 })
 
+test('does not treat task path fragments as model credentials', () => {
+  const root = cleanFixture()
+  write(root, 'packages/domains/collaboration/src/main/task-interaction-controller.ts', `
+    export const path = './main/task-interaction-controller.js'
+  `)
+
+  const findings = auditFixture(root).findings
+  assert.equal(findings.some(({ kind }) => kind === 'model-credential-shaped-value'), false)
+})
+
 test('the current meeting-loop security boundary passes the enhanced gate', () => {
   const result = auditRoot({ root: repositoryRoot })
 
