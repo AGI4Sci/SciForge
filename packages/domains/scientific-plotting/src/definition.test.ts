@@ -54,6 +54,10 @@ test('manifest publishes a package-owned Agent routing contract for plot provena
       ?.appliesToRoutes?.includes('hybrid'),
     true
   )
+  const modelStep = contract.workflow.find((step) => step.id === 'render-model')
+  assert.match(modelStep?.description ?? '', /Image Generation/u)
+  assert.match(modelStep?.description ?? '', /Visual Review/u)
+  assert.match(modelStep?.description ?? '', /sole human-gated path/u)
   assert.ok(
     contract.reproducibilityRequirements.some((requirement) => requirement.includes('model-only'))
   )

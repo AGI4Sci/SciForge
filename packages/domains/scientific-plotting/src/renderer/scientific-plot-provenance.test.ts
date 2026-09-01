@@ -104,6 +104,18 @@ test('rejects malformed bytes instead of presenting incomplete provenance as rea
   })
 })
 
+test('rejects model-only receipts from the Scientific Plotting projection', () => {
+  const manifest = plotManifest() as Record<string, unknown>
+  const recipe = manifest.recipe as Record<string, unknown>
+  recipe.visualPlan = { route: 'model' }
+  const encoded = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64')
+
+  assert.deepEqual(parseScientificPlotManifest(encoded), {
+    ok: false,
+    message: 'snapshot is a model-only image receipt; inspect it through Image Generation and Visual Review.'
+  })
+})
+
 function historyItem(
   kind: string,
   stem: string,

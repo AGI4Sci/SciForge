@@ -21,11 +21,18 @@ delivery receipt after durable queueing. `pending` and `enqueued` describe only
 handoff state; neither claims an Evidence Snapshot or L4 reproducibility.
 Formal reproducible saves accept only pinned `ArtifactVersionRefV1` inputs.
 
-The renderer entry contributes a governed Plot Provenance right panel. It reads
-immutable `scientific-plot-render-manifest` snapshots through
-`artifact-versions.list/read`, displays the pinned Data, Statistics,
-Transformations, Parameters, Environment, Execution, and Review sections, and
-invokes rerun/compare only through public capability contracts. Exact reruns use
-the historical Figure and Recipe `ArtifactVersionRefV1` values plus an explicit
-current-version compare-and-swap base; the panel never treats a workspace path
-or `latest` pointer as version truth.
+The renderer entry contributes a governed Plot Provenance right panel for
+formal code and hybrid plots. It reads immutable
+`scientific-plot-render-manifest` snapshots through `artifact-versions.list/read`,
+displays the pinned Data, Statistics, Transformations, Parameters, Environment,
+Execution, and Review sections, and invokes rerun/compare only through public
+capability contracts. Exact reruns use the historical Figure and Recipe
+`ArtifactVersionRefV1` values plus an explicit current-version compare-and-swap
+base; the panel never treats a workspace path or `latest` pointer as version
+truth.
+
+Model-only visuals are intentionally outside this panel's ownership boundary.
+The Image Generation worker owns their model replay receipt, and Visual Review
+owns the human-gated acceptance that can create an Artifact Version. The
+Scientific Plotting panel does not reinterpret an image receipt as a formal
+plot manifest or offer a second versioning path.

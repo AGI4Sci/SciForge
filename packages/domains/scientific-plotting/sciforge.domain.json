@@ -20,7 +20,7 @@
     "scientific-plotting.agent-routing": {
       "intent": "scientific-plot-provenance",
       "title": "Scientific plot provenance routing",
-      "summary": "When the user asks to generate, reproduce, save, or audit a traceable scientific chart, default to a code or hybrid route through Scientific Plotting render; use model-only only when the user explicitly requests a model-owned or illustrative visual, and preserve the selected route and exact inputs so the result can be replayed.",
+      "summary": "When the user asks to generate, reproduce, save, or audit a traceable scientific chart, default to a code or hybrid route through Scientific Plotting render; use model-only only when the user explicitly requests a model-owned or illustrative visual, and preserve the selected route and exact inputs so the result can be replayed by its owning worker.",
       "triggerHints": [
         "图表溯源",
         "科学图表数据溯源",
@@ -61,7 +61,7 @@
         },
         {
           "id": "render-model",
-          "description": "For model-only routes, execute the model-owned layer through the controlled image-generation path; do not silently convert it to an untracked file.",
+          "description": "For model-only routes, hand off the model-owned layer to the controlled Image Generation path; its worker-owned replay receipt remains outside this panel, and Visual Review is the sole human-gated path that can accept it into Artifact Versions.",
           "tool": "image_generation_render",
           "appliesToRoutes": [
             "model"
@@ -76,8 +76,8 @@
       "reproducibilityRequirements": [
         "Persist the exact route decision (code, model, or hybrid).",
         "For code or hybrid, persist versioned data, recipe, manifest, renderer environment, and execution log.",
-        "For model-only, persist the exact provider, model and version, prompt and negative prompt, generation parameters, seed when available, reference inputs, and review result.",
-        "When a render is accepted/versioned, attach its ArtifactVersionRef values to the current research dossier instead of copying technical metadata."
+        "For model-only, persist the exact provider, model and version, prompt and negative prompt, generation parameters, seed when available, reference inputs, and review result in the Image Generation receipt.",
+        "Model-only output is not a formal Scientific Plot manifest; Visual Review is the sole acceptance path that may create its ArtifactVersion, whose exact ref can then be attached to the current research dossier instead of copying technical metadata."
       ]
     },
     "scientific-plotting.workbench-right-panel": {

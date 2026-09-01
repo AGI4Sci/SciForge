@@ -380,7 +380,7 @@ export function ScientificPlottingProvenancePanel({
             {activeTab === 'image' ? (
               <ImageTab record={activeRecord} previewSrc={previewSrc} />
             ) : activeTab === 'evidence' ? (
-              <GenerationEvidence record={activeRecord} client={client} workspaceRoot={workspaceRoot} />
+              <CodeGenerationEvidence record={activeRecord} client={client} workspaceRoot={workspaceRoot} />
             ) : activeTab === 'data' ? (
               <ProvenanceSections record={activeRecord} section="data" />
             ) : (
@@ -466,7 +466,7 @@ function ImageTab({ record, previewSrc }: Readonly<{
   )
 }
 
-function GenerationEvidence({ record, client, workspaceRoot }: Readonly<{
+function CodeGenerationEvidence({ record, client, workspaceRoot }: Readonly<{
   record: ScientificPlotProvenanceRecord
   client: ScientificPlottingCapabilityClient
   workspaceRoot: string
@@ -474,7 +474,6 @@ function GenerationEvidence({ record, client, workspaceRoot }: Readonly<{
   const { t } = useTranslation('common')
   const { recipe } = record.manifest
   const route = routeOf(recipe.visualPlan)
-  const modelExecution = modelExecutionOf(record.manifest)
   const [code, setCode] = useState<string | null>(null)
   const [codeLoading, setCodeLoading] = useState(false)
   const [codeIssue, setCodeIssue] = useState<string | null>(null)
@@ -567,20 +566,6 @@ function GenerationEvidence({ record, client, workspaceRoot }: Readonly<{
     } finally {
       setRestoreLoading(false)
     }
-  }
-  if (route === 'model' && modelExecution) {
-    return (
-      <div className="grid gap-2">
-        <div className="rounded-xl border border-ds-border-muted bg-ds-main/25 p-3">
-          <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-ds-ink"><Wand2 className="h-3.5 w-3.5" />{t('scientificPlottingModelEvidence')}</div>
-          <KeyValue label={t('scientificPlottingModel')} value={`${modelExecution.model.id} · ${modelExecution.model.version}`} />
-          <JsonDetails label={t('scientificPlottingPrompt')} value={modelExecution.effectivePrompt} />
-          <JsonDetails label={t('scientificPlottingModelParameters')} value={modelExecution.parameters} />
-          <KeyValue label={t('scientificPlottingReplay')} value={`${modelExecution.replay.recipeHash} · ${modelExecution.replay.exactOutputExpected ? t('scientificPlottingExactReplay') : t('scientificPlottingStochasticReplay')}`} mono />
-        </div>
-        <JsonDetails label={t('scientificPlottingVisualPlan')} value={recipe.visualPlan} />
-      </div>
-    )
   }
   return (
     <div className="grid gap-2">
@@ -697,39 +682,15 @@ function Badge({ label, tone }: Readonly<{ label: string; tone: 'blue' | 'violet
 }
 
 function routeLabel(route: string): string {
-  return route === 'hybrid' ? 'Hybrid' : route === 'model' ? 'Model-only' : 'Code'
+  return route === 'hybrid' ? 'Hybrid' : 'Code'
 }
 
-function routeOf(value: unknown): 'code' | 'model' | 'hybrid' {
+function routeOf(value: unknown): 'code' | 'hybrid' {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const route = (value as { route?: unknown }).route
-    if (route === 'model' || route === 'hybrid') return route
+    if (route === 'hybrid') return route
   }
   return 'code'
-}
-
-function modelExecutionOf(value: unknown): {
-  model: { id: string; version: string }
-  effectivePrompt: string
-  parameters: unknown
-  replay: { recipeHash: string; exactOutputExpected: boolean }
-} | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const execution = (value as { modelExecution?: unknown }).modelExecution
-  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null
-  const candidate = execution as Record<string, unknown>
-  const model = candidate.model
-  const replay = candidate.replay
-  if (!model || typeof model !== 'object' || Array.isArray(model) || !replay || typeof replay !== 'object' || Array.isArray(replay)) return null
-  const modelRecord = model as Record<string, unknown>
-  const replayRecord = replay as Record<string, unknown>
-  if (typeof modelRecord.id !== 'string' || typeof modelRecord.version !== 'string' || typeof candidate.effectivePrompt !== 'string' || typeof replayRecord.recipeHash !== 'string') return null
-  return {
-    model: { id: modelRecord.id, version: modelRecord.version },
-    effectivePrompt: candidate.effectivePrompt,
-    parameters: candidate.parameters,
-    replay: { recipeHash: replayRecord.recipeHash, exactOutputExpected: replayRecord.exactOutputExpected === true }
-  }
 }
 
 function ProvenanceSections({ record, section: _section }: Readonly<{
