@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.collaboration",
     "displayName": "Collaboration",
-    "version": "6.3.0",
+    "version": "6.3.1",
     "hostApi": {
       "minimum": "1.11.0",
       "maximumExclusive": "2.0.0"

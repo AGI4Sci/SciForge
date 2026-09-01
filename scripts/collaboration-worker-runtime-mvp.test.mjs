@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import test from 'node:test'
 
-import { createCollaborationHttpServer } from '../packages/collaboration-server/src/api.ts'
+import { restRequestSchema } from '../packages/collaboration-contracts/src/index.ts'
+import {
+  DEFAULT_MAX_BODY_BYTES,
+  createCollaborationHttpServer
+} from '../packages/collaboration-server/src/api.ts'
 import { stableDigest } from '../packages/collaboration-server/src/crypto.ts'
 import { CollaborationService } from '../packages/collaboration-server/src/service.ts'
 import { createAgentCredentialBootstrap, seedOidcUserDevice } from '../packages/collaboration-server/src/test-fixtures/collaboration-identity.ts'
@@ -15,12 +19,49 @@ import { CollaborationTaskAdapter } from '../packages/domains/collaboration/src/
 import { DurableCloudOutbox } from '../packages/domains/collaboration/src/main/outbox.ts'
 import { createTestAgentCloudRuntime } from '../packages/domains/collaboration/src/main/test-agent-cloud-runtime.ts'
 import { CollaborationSettingsService } from '../packages/domains/collaboration/src/main/settings.ts'
+import { WORKER_RESULT_SUMMARY_MAX_CODE_POINTS } from '../packages/domains/collaboration/src/main/worker-runtime-result.ts'
 import {
   FakeClock,
   FakeCollaborationRepository,
   FakeCollaborationRequestActorResolver,
   FakeCollaborationStateBackend
 } from '../test-fixtures/collaboration/fake-adapters.mjs'
+
+test('maximum escaped text-only Worker result fits the default Cloud command body', () => {
+  const worstEscapedCodePoint = '\u0001'
+  const maxOpaqueId = (prefix) => `${prefix}_${'a'.repeat(64)}`
+  const summary = worstEscapedCodePoint.repeat(WORKER_RESULT_SUMMARY_MAX_CODE_POINTS)
+  assert.equal(
+    Buffer.byteLength(JSON.stringify(summary)),
+    WORKER_RESULT_SUMMARY_MAX_CODE_POINTS * 6 + 2
+  )
+
+  const command = restRequestSchema.parse({
+    protocolVersion: '1.0',
+    requestId: maxOpaqueId('req'),
+    type: 'task.result.submit',
+    idempotencyKey: `idem_${'a'.repeat(123)}`,
+    taskId: maxOpaqueId('tsk'),
+    executionId: maxOpaqueId('exe'),
+    expectedTaskRevision: Number.MAX_SAFE_INTEGER,
+    expectedExecutionRevision: Number.MAX_SAFE_INTEGER,
+    summary,
+    runtimeProvenance: {
+      runtimeId: worstEscapedCodePoint.repeat(128),
+      modelId: null,
+      startedAt: '9999-12-31T23:59:59.999Z',
+      completedAt: '9999-12-31T23:59:59.999Z'
+    },
+    outputs: [],
+    recoveryJournalEntryIds: [],
+    submissionDigest: 'f'.repeat(64)
+  })
+  const bodyBytes = Buffer.byteLength(JSON.stringify(command))
+  assert.ok(
+    bodyBytes <= DEFAULT_MAX_BODY_BYTES,
+    `${bodyBytes} bytes exceeds ${DEFAULT_MAX_BODY_BYTES}`
+  )
+})
 
 /**
  * This is the smallest Worker-side integration slice. The Coordinator setup
@@ -278,9 +319,11 @@ test('text-only Worker runtime completes through Adapter → Outbox → HTTP Clo
             turnId: 'runtime-mvp-worker-turn',
             state: 'completed',
             text: JSON.stringify({
-              schemaVersion: 1,
-              outcome: 'completed',
-              summary: `## Expert / Role and Sub-question\n- [expert:design analyst] [worker:${worker.userId}]\n## Conclusion\n- [expert:design analyst] The design analysis is complete.\n## Evidence or basis\n- [source:task-brief] Runtime path was exercised; no experiment was executed.\n## Recommendation or next action\n- [expert:design analyst] Coordinator should review this design input.`
+              result: {
+                schemaVersion: 1,
+                outcome: 'completed',
+                summary: `## Expert / Role and Sub-question\n- [expert:design analyst] [worker:${worker.userId}]\n## Conclusion\n- [expert:design analyst] The design analysis is complete.\n## Evidence or basis\n- [source:task-brief] Runtime path was exercised; no experiment was executed.\n## Recommendation or next action\n- [expert:design analyst] Coordinator should review this design input.`
+              }
             })
           }
         }

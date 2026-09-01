@@ -55,6 +55,7 @@ import {
   workerGuidancePrompt,
   workerHumanAnswerPrompt,
   workerTaskPrompt,
+  workerRuntimeResultOutputSchema,
   type WorkerRuntimeResult
 } from './worker-runtime-result.js'
 import {
@@ -1560,6 +1561,7 @@ export class CollaborationTaskAdapter {
         workspaceRoot: run.workspaceRoot,
         clientDirectiveId,
         prompt,
+        outputSchema: workerRuntimeResultOutputSchema,
         metadata: {
           source: 'collaboration.worker-task',
           projectId: run.offer.projectId,
@@ -1637,11 +1639,11 @@ export class CollaborationTaskAdapter {
     try {
       return parseWorkerRuntimeResult(result.text)
     } catch (error) {
+      await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
+        state: 'observed_failure',
+        safeError: safeError(error, this.options.sanitizeText)
+      })
       if (!repairAttempt) {
-        await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
-          state: 'observed_failure',
-          safeError: safeError(error, this.options.sanitizeText)
-        })
         return this.runAgent(
           this.requireRun(run.offer.executionId),
           signal,
