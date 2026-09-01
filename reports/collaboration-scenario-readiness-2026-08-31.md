@@ -7,9 +7,9 @@
 
 ## 1. 先给结论
 
-初版报告把“设计评审”和“实验执行/反馈循环”混在一起，现按你的定义纠正：本次目标是让 Coordinator 组织 4/5 个 Worker 分析设计子课题，收回带专家/资料归属的结论、依据和建议，再形成一份设计决策包；Worker 不执行实验、模拟或湿实验。
+初版报告把“设计评审”和“实验执行/反馈循环”混在一起，现按你的定义纠正：本次目标是让 Coordinator 组织两个案例中由 Human 在 Plan Draft 选定的 Worker 子课题（验收目标分别为 4/5 个），收回带专家/资料归属的结论、依据和建议，再形成一份设计决策包；Worker 不执行实验、模拟或湿实验。4/5 是案例验收规模，不是生成器或 Cloud 的全局任务数规则。
 
-按这个范围，SciForge 的现有状态机**可以承载基础文本设计协作闭环**：`Project.goal → 独立 Task → Worker summary → Coordinator review → final summary`。本轮补充了设计分析提示、归属标记约定、Coordinator 设计包模板和 4/5 Worker HTTP 验收夹具。夹具会回读 `project.coordination.read`，核对每个 Result 的真实 `submittedByUserId/AgentId`，并检查两场景设计包栏目；它仍是协议/模板验收，不是 4/5 个真实 Desktop runtime 或真实科学结论的证明。
+按这个范围，SciForge 的现有状态机**可以承载基础文本设计协作闭环**：`Project.goal → 独立 Task → Worker summary → Coordinator review → final summary`。本轮补充了设计分析提示、归属标记约定、Coordinator 设计包模板和 4/5 Worker HTTP 验收夹具。夹具会回读 `project.coordination.read`，核对每个 Result 的真实 `submittedByUserId/AgentId`，并检查两场景设计包栏目；它仍是协议/模板验收，不是 4/5 个真实 Desktop runtime 或真实科学结论的证明。生成器只提供初始拆分建议，最终任务数量和边界由 Human 在 Plan Draft 中确认。
 
 - **场景一（深海生物制造产业创新中心）：** 可作为 4 Worker 的纯文本设计评审。四个角色分别提交产业/能力、产品/市场、天然产物/药物、技术投资/伙伴风险子题，Coordinator 汇总首个落地任务、整体方案、指标、约束、风险、人工确认点和行动项。
 - **场景二（蛋白设计方案）：** 可作为 5 Worker 的设计方案评审，不执行蛋白设计、模拟或实验。首个任务、结构/生信、Agent/ML、指标基准、风险治理分别由 Worker 提供设计输入；若纪要需要写“设计—模拟—实验—反馈—再设计”，只能写成拟议、未运行的验证流程。
@@ -153,7 +153,7 @@
 
 | 需求 | 当前能否做 | 具体边界 |
 |---|---|---|
-| 建 Project、写主题/最终问题、提交 4 个 Task | **可做（需人工核对）** | `Project.goal`、Task `title/objective/completionCriteria` 足以承载文本设计题；需要已 provision 的身份、在线 Worker、串行 revision。当前 schema 不强制“恰好 4 个”或每个 Worker 唯一，Coordinator 在提交前必须核对。 |
+| 建 Project、写主题/最终问题、提交 4 个 Task（本次案例目标） | **可做（需人工核对）** | `Project.goal`、Task `title/objective/completionCriteria` 足以承载文本设计题；需要已 provision 的身份、在线 Worker、串行 revision。4 个是本次案例的 Human 选择，不是生成器或 schema 的固定约束；Coordinator 在提交前核对任务边界和 Worker 分工。 |
 | 四个 Worker 各自承担一个明确职责 | **可做（文本层）** | role/子议题写入 Task 标题和 objective，并在后续 `workerUserId` 绑定；当前没有独立 role/domain 字段，不能做机器级角色查询。 |
 | Worker 分析并返回结论、依据、建议 | **可做（文本层）** | 无文件任务使用 `fileIntent: null`；Worker summary 约定 `Expert/Role`、`Conclusion`、`Evidence or basis`、`Recommendation`，Cloud 同时记录提交者、Task、Execution、Result ID。来源标签是文本约定，当前不读取或校验 Content locator；若要求专家打开附件并逐条引用，必须把相关摘要/事实手工写入 Task objective/criteria，不能把标签当作真实 citation。 |
 | Coordinator 审阅每位专家并形成整体方案 | **可做（协议已验证，UI 人审未完成）** | 现有 `project.coordination.read` 可拉取全部 result submissions，`task.result.review` 可逐项接受；本轮文本夹具通过 Cloud HTTP 读取/整合并提交 final summary，未完成真实 Desktop 人审 E2E。Agent turn 具备读取/提交合约但没有自动触发；UI 最终提交仍是人工 textarea。 |
@@ -169,7 +169,7 @@
 | 需求 | 当前能否做 | 具体边界 |
 |---|---|---|
 | 明确首个蛋白工程 Agent 任务和 1–2 个 pilot 设计 | **契约可承载（文本层）** | 可写入 Project goal、Task objective 和 Coordinator final summary；本轮夹具仅检查场景文本占位描述，未断言两个候选任务或选择理由，也没有独立 target/constraint 数据实体。 |
-| 五类 Worker 分工并各自回报 | **可做（需人工核对）** | 5 个独立 Task、5 个不同 Worker User、每个 Task 一个子问题；role/domain 仍靠标题、objective 和 summary 标记。当前 schema 不强制任务数或 Worker 唯一，提交前需由 Coordinator 核对。 |
+| 五类 Worker 分工并各自回报（本次案例目标为 5 个） | **可做（需人工核对）** | 由 Human 在 Plan Draft 选择 5 个独立 Task 和 5 个 Worker User；每个 Task 的 role/domain 仍靠标题、objective 和 summary 标记。当前 schema 不强制任务数或 Worker 唯一，提交前需由 Coordinator 核对。 |
 | 形成整体设计、量化指标/阈值/基准、硬约束、风险和人工确认点 | **可做（Coordinator 汇总）** | 由最终 summary 按固定标题记录；指标是“拟定目标与测量方法”，不得写成已测结果。 |
 | 追溯每条关键结论的专家和资料 | **部分可做** | `[expert:*]`、`[source:*]` 加上 Worker/Task/Result ID 可在文本和 Cloud 记录中追溯；没有 citations/sourceRefs 的机器字段，Worker 也不会自动读取附件。必要的附件摘要/事实必须放进 Task objective/criteria 并由 Coordinator 人工核对。 |
 | 提出未来的设计→模拟→实验→反馈→再设计流程 | **可做（文本层，需标 proposed/未运行）** | Coordinator 写明每一步的设计意图、输入/输出和确认门；这是一项方案设计，不是本轮执行。 |
@@ -182,7 +182,7 @@
 
 ```text
 Project 主题/最终问题/约束（纯文本 brief）
-  └─> Coordinator 生成并人工核对 4/5 个带角色+子问题的 Task
+  └─> Coordinator 生成初始拆分 → Human 在 Plan Draft 决定并核对案例所需的 4/5 个带角色+子问题 Task
        └─> Cloud 确认 Plan、成员按顺序接受 invitation、Project active
             └─> Coordinator 创建 offer（fileIntent=null、无业务 capability tag）
                  └─> Worker 接受 offer → 只做 design analysis
@@ -300,7 +300,7 @@ offer.create driver FAIL: workerUserId unrecognized     fixed PASS
 
 1. **对齐 Cloud 与本地版本。** Edge、Cloud app、contracts、provider 必须锁定同一兼容 release/schema，并能追溯到一致的构建 provenance；不要求字面上每个部署组件 commit 相同，但不能存在未声明的 schema 漂移，否则本地测试通过也不能作为线上闭环证据（当前版本漂移见 P0-6）。
 2. **准备参与者。** Cloud 中准备 1 个 Coordinator User/Agent 和 4 个（场景一）或 5 个（场景二）不同 Worker User/Agent/Device，并让每个 Worker 的 Agent heartbeat、availability 和 runtime readiness 都有效。
-3. **建立纯文本计划。** Coordinator 创建 Project，写入主题、最终问题和硬约束；多专家 design-review 请求生成 3–5 个（不超过 5 个）独立 Task，并在提交前人工核对任务数量、角色覆盖和每个 Worker 唯一分工（当前 schema 只承载这些文本/assignment，不强制这些约束）。Coordinator 生成提示现在明确要求“明确列出的 Worker role 恰好一角色一 Task”，并禁止为交付物、指标、风险、行动、阶段或报告章节另建 Task；没有明确角色时只生成一个有界 Task。每个 Task 的 title/objective 必须包含角色和子问题；由于 Worker 不会自动读取附件，若结论必须依据附件，须把相关摘要/事实与 `[source:*]` 标签一并写进 objective/criteria；`fileIntent: null`、`requiredCapabilityTags: []`。数量规则是模型提示而非硬校验，当前表单没有单独角色列表，因此要得到 S1=4/S2=5 需在 brief/Goal 中明确列出角色与子问题。
+3. **建立纯文本计划。** Coordinator 创建 Project，写入主题、最终问题和硬约束；Plan Runtime 根据 brief 中明确列出的 Worker role/sub-question 给出可审阅的初始 Task 拆分建议，优先让每个独立子问题有清晰的 Task，并把不需要独立负责人的交付物、指标、风险、行动、阶段或报告章节放入 `completionCriteria`/`rationale`。这里不设 3–5 或其他固定专家/任务 cardinality 规则（Budget 仍是 Cloud 的硬上限，不应被填满）；Human Coordinator 在 Plan Draft 阶段决定最终任务边界和数量，可增删、合并、拆分、排序、改派后再提交。两个案例的 S1=4/S2=5 只是本次验收目标，不是模型或 schema 规则。若 brief 没有明确角色/子问题，生成有界初稿供 Human 审阅，不凭空创建专家。每个 Task 的 title/objective 应清楚表达角色和子问题；由于 Worker 不会自动读取附件，若结论必须依据附件，须把相关摘要/事实与 `[source:*]` 标签一并写进 objective/criteria；`fileIntent: null`、`requiredCapabilityTags: []`。
 4. **按 Cloud 状态顺序回传报告。** `plan.confirm → membership.accept（逐个刷新 revision）→ project.active → offer → Worker accept/start 文本分析 runtime → result.submit`。每位 Worker 只返回 `Expert/Role + Sub-question`、`Conclusion`、带 `[expert:*]`/`[source:*]` 的 `Evidence or basis` 和 `Recommendation`；不执行或声称执行实验。
 5. **Coordinator 审阅并汇总。** Coordinator 通过 workspace read 拉取所有报告，逐项 `task.result.review(accept)`，再提交 `project.final_summary.submit`。最终设计包必须写明：首个 Agent 落地任务、每位专家结论及归属、整体方案、量化指标（目标值/阈值/测量方法，标注 proposed 而非 measured）、硬约束、风险与人工确认点、下一步行动项（owner/due）和资料索引；若场景要求未来的设计—模拟—实验—反馈—再设计路径，也要写成 proposed/future、明确本轮未运行。
 
@@ -360,7 +360,7 @@ Coordinator 的“汇总”目前有两种合法用法：
 ### 13.2 已加入源码的最小改动
 
 1. `worker-runtime-result.ts`：对带 `design-analysis-only` + “不执行”标记的无文件任务注入文本报告格式和不虚构证据的约束；普通无文件任务不受此设计-only提示影响。
-2. `project-coordinator/ports.ts`：要求把 Budget 只当作 Cloud 上限；对多专家 design-review 请求把总数收敛到 3–5 个且不超过 5，按明确列出的 Worker role/sub-question 恰好一角色一 Task，禁止再为交付物、指标、风险、行动、阶段或报告章节另建 Task；仅在 design-analysis-only 请求没有明确角色时才生成一个有界 Task，普通请求保留正常分解行为，并将上述报告字段写入完成标准。该数量规则是生成提示约束（不是硬校验），通用 schema 仍保持可变任务数；要稳定得到 S1=4/S2=5，brief 中须明确列出对应角色/子问题并在草稿确认时人工核对。
+2. `project-coordinator/ports.ts`：要求把 Budget 只当作 Cloud 上限；对 expert-team/design-review 请求按明确列出的 Worker role/sub-question 提供建议性、可审阅的拆分，优先保持每个子问题边界清楚，并将无需独立负责人的交付物、指标、风险、行动、阶段或报告章节放入完成标准/总结。提示不设固定专家数或任务数 cardinality，也不把一角色一 Task 作为不变量；Human Coordinator 在 Plan Draft 中决定最终数量、合并/拆分/增删和分配，普通请求保留正常分解行为。没有明确角色时只要求生成有界初稿供 Human 审阅，不凭空创建专家，并将上述报告字段写入完成标准。通用 schema 仍保持可变任务数；本次 S1=4/S2=5 只是案例验收目标。当前可见 Plan Draft 表单能编辑已有条目和 assignment，尚未提供独立的 Add/Remove 控件；若需要在 UI 中改变任务数量，应补充该入口或使用同一编辑 capability 传入调整后的任务数组。
 3. `ProjectCoordinatorPanel.tsx` 与 `messages.ts`：创建 Project 时提示主题/最终问题/约束/决策；完成时提示完整设计包结构和归属格式。
 4. `scripts/collaboration-text-report-mvp.test.mjs`：使用本地 Cloud HTTP server、真实 `/v1/commands`、独立 OIDC User/Device/Agent fixture，跑通两条无 Content 场景。
 5. `scripts/collaboration-worker-runtime-mvp.test.mjs`：让一个 Worker 的实际 `CollaborationTaskAdapter`、`DurableCloudOutbox` 和严格 JSON runtime 经 HTTP Cloud 完成 offer→文本分析 runtime→result，并验证 Coordinator Agent 收到 `task.result.submitted`。
@@ -371,7 +371,7 @@ Coordinator 的“汇总”目前有两种合法用法：
 1. **准备身份：** Cloud 中准备 1 个 Coordinator User + Coordinator Agent、4/5 个不同 Worker User + Worker Agent；每个 Worker 使用自己的设备和有效 OIDC 会话。当前代码不会从零自动注册这些账号，验收环境必须先完成 provisioning。
 2. **确认在线：** 每个 Agent 先通过 `agent.heartbeat`，再发布 `worker.availability.publish`（`online`、`runtimeReadiness: ready`、接受新 offer）。每个 Worker 的 capability tags 必须是生产 readiness 实际发布的 `agent-runtime.<runtime>` / `model-access.<mode>`；本 MVP 没有领域能力契约，任务应使用 `requiredCapabilityTags: []`。Coordinator 和 Worker 两端都要保持 Cloud connection 与 runtime ready。
 3. **按状态机执行：** `project.create → project.plan.submit → project.plan.confirm(initialTeam) → 每个 Worker membership.accept → project.transition(active) → task.offer.create → Worker task.offer.accept → task.execution.start（按 design-only prompt 启动文本分析 runtime）→ task.result.submit(summary) → Coordinator task.result.review(accept) → project.final_summary.submit`。不执行外部实验是本轮操作约定；服务端尚未提供通用 textOnly/tool-allowlist 强制。
-4. **分工要求：** 计划中显式放 4/5 个 `workerUserId`，每个 Task 只对应一个子议题；Coordinator 人工检查每个 Worker 是否唯一。不要用一个 Agent 冒充多个专家，也不要把多个子议题合并成一个 Task；Cloud 当前不会替你强制“恰好 4/5 + 唯一”。
+4. **分工要求：** 本次案例以 S1=4、S2=5 个 Worker/Task 作为验收目标，由 Human 在 Plan Draft 检查角色覆盖、子议题独立性和 `workerUserId` 分配。通常建议一个 Task 聚焦一个可独立审阅的子议题，但 Human 可按实际需要增删、合并或拆分；“4/5”“唯一一角色一 Task”都不是 Cloud 或 schema 不变量。不要用一个 Agent 冒充多个已声明专家；若分工需要调整，以 Plan Draft 的人工决定为准。
 5. **锁定纯文本：** 生成草案后逐项检查并保持 `fileIntent: null`；当前模型提示会引导这一点，但没有独立的 `textOnly` 硬开关。若模型生成非空 `fileIntent`，先在 Plan 编辑器清除再提交；`initialTeam.mode='none'` 不会接受文件任务。
 6. **传输验收：** 每一次 offer/result 都要在 Cloud Agent inbox 看到对应消息和 revision；收到 `task.result.submitted` 或 `project.final_summary.created` 后，再调用 coordination read 取得报告/纪要正文（通知本身主要是 ID）。当前 Desktop 对 User inbox 没有自动消费，因此 Worker 需要手动打开/刷新 Project 来接受邀请；这是 UX/操作步骤，不是报告协议不存在。多个 Worker 不要并行基于同一 revision 接受邀请：每次接受都会推进 Project revision，冲突后必须刷新并按最新 revision 重试。
 7. **版本门槛：** 先把 Cloud app、edge、contracts、provider 对齐到同一兼容 release/schema，并保留可核验 provenance。当前只读采样显示 Cloud 与本地版本漂移（本地 contracts/server/provider 为 5.1.0/0.7.0/0.2.6；Cloud 可见部署存在多套历史 bundle，app/provider 另有 5.1.1/0.6.2/0.2.7 采样），所以本地绿灯不能替代线上验收。
@@ -398,4 +398,4 @@ Coordinator 的“汇总”目前有两种合法用法：
 - Desktop User inbox 自动推送、自动创建 Worker session、邀请 badge/toast；这些是下一阶段 UI/传输工作。
 - 多 Worker 并行接受邀请的 Project revision CAS 重试与明确 UI 提示；当前最小验收按串行人工操作规避。
 
-**更新后的最终判断：** 以“无 Content 的文本设计报告”为验收定义，且由 Coordinator 人工核对任务数/唯一分工和内容的前提下，SciForge 可以承载两条最小 Coordinator–Cloud–Worker 设计评审线：场景一 4 个、场景二 5 个独立子课题，均可完成“报告回传→逐项审核→设计决策包”。真实多设备 Cloud 验收仍必须完成上面的 provisioning、版本对齐和按 revision 的人工操作；Coordinator 自动综合、结构化证据、动态迭代实际运行、实验执行和安全闸门不应在本 MVP 中被暗示为已解决。
+**更新后的最终判断：** 以“无 Content 的文本设计报告”为验收定义，且由 Coordinator Human 在 Plan Draft 决定任务数、边界和分工，SciForge 可以承载两条最小 Coordinator–Cloud–Worker 设计评审线；本次案例目标分别是场景一 4 个、场景二 5 个独立子课题，但这不是生成器或 Cloud 的固定 cardinality 规则。两条线均可完成“报告回传→逐项审核→设计决策包”。真实多设备 Cloud 验收仍必须完成上面的 provisioning、版本对齐和按 revision 的人工操作；Coordinator 自动综合、结构化证据、动态迭代实际运行、实验执行和安全闸门不应在本 MVP 中被暗示为已解决。
