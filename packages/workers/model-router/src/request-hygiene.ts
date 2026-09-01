@@ -16,7 +16,38 @@ const OMITTED_SHELL_COMMAND =
   'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
 
 export function hygienizeModelRequestBody(body: Record<string, unknown>): Record<string, unknown> {
-  return hygienizeValue(body, { source: 'model_request' }) as Record<string, unknown>;
+  return hygienizeValue(body, {
+    source: 'model_request',
+    visualGenerateCallIds: collectVisualGenerateCallIds(body),
+  }) as Record<string, unknown>;
+}
+
+/**
+ * Route handoffs are only meaningful when the corresponding tool call was the
+ * canonical image-generation planner.  Keep the call ids in the request
+ * envelope so an unrelated tool result cannot smuggle a routeLocked object
+ * into the compact model history summary.
+ */
+function collectVisualGenerateCallIds(body: Record<string, unknown>): ReadonlySet<string> {
+  const ids = new Set<string>();
+  collectVisualGenerateCallIdsFromValue(body, ids, 0);
+  return ids;
+}
+
+function collectVisualGenerateCallIdsFromValue(value: unknown, ids: Set<string>, depth: number): void {
+  if (depth > 8 || value === null || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectVisualGenerateCallIdsFromValue(entry, ids, depth + 1);
+    return;
+  }
+  const record = value as JsonRecord;
+  if (record.type === 'function_call' && record.name === 'visual_generate') {
+    const callId = stringField(record.call_id);
+    if (callId) ids.add(callId);
+  }
+  for (const entry of Object.values(record)) {
+    collectVisualGenerateCallIdsFromValue(entry, ids, depth + 1);
+  }
 }
 
 function hygienizeValue(value: unknown, context: HygieneContext): unknown {
@@ -37,12 +68,18 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
 
   const role = stringField(value.role);
   const recordType = stringField(value.type) || context.recordType;
+  const callId = stringField(value.call_id);
+  const routeHandoffAllowed = recordType === 'function_call_output'
+    && Boolean(callId)
+    && context.visualGenerateCallIds?.has(callId);
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
     const hygienized = hygienizeValue(entry, {
       key,
       role,
       recordType,
+      routeHandoffAllowed,
+      visualGenerateCallIds: context.visualGenerateCallIds,
       source: sourceForRecordEntry(context, role, key),
     });
     Object.defineProperty(out, key, {
@@ -111,11 +148,21 @@ function isShellHistoryPlaceholder(value: string): boolean {
 function hygienizeText(value: string, context: HygieneContext): string {
   const source = sourceForContext(context, context.source);
   if (isToolOutputContext(context) && value.length > MAX_TOOL_OUTPUT_CHARS) {
-    return markerText('tool_message.content', 'large_tool_output', value, safeToolOutputSummary(value));
+    return markerText(
+      'tool_message.content',
+      'large_tool_output',
+      value,
+      safeToolOutputSummary(value, context.routeHandoffAllowed === true),
+    );
   }
   const replaced = replaceEncodedPayloads(value, source);
   if (isToolOutputContext(context) && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
-    return markerText('tool_message.content', 'large_tool_output', value, safeToolOutputSummary(replaced));
+    return markerText(
+      'tool_message.content',
+      'large_tool_output',
+      value,
+      safeToolOutputSummary(replaced, context.routeHandoffAllowed === true),
+    );
   }
   return replaced;
 }
@@ -187,10 +234,10 @@ function safeSummary(value: string): string {
  * based rather than tied to a particular tool or domain identifier: any
  * object carrying a plan id, route, and an explicit route lock is eligible.
  */
-function safeToolOutputSummary(value: string): string {
+function safeToolOutputSummary(value: string, allowRouteHandoff: boolean): string {
   const replaced = replaceEncodedPayloads(value, 'tool_message.content');
   const parsed = parseStructuredToolOutput(replaced);
-  const handoff = findRouteLockedHandoff(parsed);
+  const handoff = allowRouteHandoff ? findRouteLockedHandoff(parsed) : undefined;
   if (!handoff) return safeSummary(replaced);
 
   const compact = compactHandoff(handoff);
@@ -218,14 +265,35 @@ function parseStructuredToolOutput(value: string): unknown | undefined {
 function findRouteLockedHandoff(value: unknown, depth = 0, visited = { count: 0 }): JsonRecord | undefined {
   if (!isRecord(value) || depth > HANDOFF_PREVIEW_DEPTH || visited.count >= 256) return undefined;
   visited.count += 1;
-  if (value.routeLocked === true && typeof value.route === 'string' && typeof value.planId === 'string') {
-    return value;
+  if (isVisualGenerateResult(value)) {
+    return value.handoff as JsonRecord;
   }
   for (const entry of Object.values(value)) {
     const found = findRouteLockedHandoff(entry, depth + 1, visited);
     if (found) return found;
   }
   return undefined;
+}
+
+function isVisualGenerateResult(value: JsonRecord): boolean {
+  if (value.ok !== true || (value.status !== 'ready' && value.status !== 'budget_exhausted')) return false;
+  if (value.routeLocked !== true || !isRecord(value.handoff) || !isRecord(value.execution) || !isRecord(value.failPolicy)) return false;
+  const handoff = value.handoff;
+  if (
+    typeof handoff.planId !== 'string'
+    || !handoff.planId.trim()
+    || handoff.routeLocked !== true
+    || !['code', 'model', 'hybrid'].includes(handoff.route as string)
+    || handoff.fallbackPolicy !== 'fail_closed'
+  ) return false;
+  const execution = value.execution;
+  const failPolicy = value.failPolicy;
+  return execution.route === handoff.route
+    && Array.isArray(execution.stages)
+    && isRecord(execution.nextCall)
+    && failPolicy.mode === 'fail_closed'
+    && failPolicy.crossRouteFallback === false
+    && failPolicy.routeChangeRequiresNewPlan === true;
 }
 
 function compactHandoff(value: JsonRecord): JsonRecord {
@@ -317,5 +385,7 @@ type HygieneContext = {
   key?: string;
   role?: string;
   recordType?: string;
+  routeHandoffAllowed?: boolean;
+  visualGenerateCallIds?: ReadonlySet<string>;
   source: string;
 };
