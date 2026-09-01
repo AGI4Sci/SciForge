@@ -102,7 +102,6 @@ const transitions: Readonly<{
     'execution-completed': 'completed'
   }
 }
-
 /**
  * Apply one local control-plane event.  Replayed events that already describe
  * the current state are intentionally idempotent; every other invalid edge
@@ -122,4 +121,3 @@ export function transitionLocalTaskInteractionState(
   }
   return next
 }
-
