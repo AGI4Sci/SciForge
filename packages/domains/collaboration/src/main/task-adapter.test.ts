@@ -296,6 +296,140 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   assert.equal(directives.length, 1, 'duplicate offer must not replay a completed execution')
 })
 
+test('a malformed Worker result gets one same-Session repair turn before fencing', async () => {
+  const cloud = new FakeWorkerCloud()
+  const directives: string[] = []
+  let store!: CollaborationLocalStore
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      directives.push(request.clientDirectiveId ?? '')
+      if (directives.length === 1) {
+        return {
+          runtimeId: 'codex',
+          threadId: 'worker-thread-stable',
+          turnId: 'worker-invalid-turn',
+          state: 'completed',
+          text: 'The research is complete, but this is not the Worker result protocol.'
+        }
+      }
+      assert.equal(request.runtimeId, 'codex')
+      assert.equal(request.threadId, 'worker-thread-stable')
+      assert.match(request.prompt, /previous Worker response did not match/u)
+      assert.match(request.prompt, /exactly one JSON object/u)
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-thread-stable',
+        turnId: 'worker-repaired-turn',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'Repaired Worker result.'
+        })
+      }
+    }
+  })
+  store = created.store
+  await store.transact((draft) => {
+    draft.workerAcceptancePolicies = [{
+      agentId: TEST_IDS.agentId,
+      mode: 'automatic',
+      updatedAt: TEST_TIMESTAMP
+    }]
+  })
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+
+  assert.equal(directives.length, 2)
+  assert.notEqual(directives[0], directives[1])
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.equal(created.store.snapshot().taskRuns[0]?.resultSummary, 'Repaired Worker result.')
+  assert.deepEqual(created.store.snapshot().taskRuns[0]?.agentJournal.map(({ state }) => state), [
+    'observed_failure',
+    'observed_success'
+  ])
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
+test('human guidance queued during a Worker turn is consumed on the same Runtime Session before result submission', async () => {
+  const cloud = new FakeWorkerCloud()
+  const initial = emptyState()
+  initial.workerAcceptancePolicies = [{
+    agentId: TEST_IDS.agentId,
+    mode: 'automatic',
+    updatedAt: TEST_TIMESTAMP
+  }]
+  let adapter!: CollaborationTaskAdapter
+  const runtimeRequests: Array<Readonly<{
+    runtimeId?: string
+    threadId?: string
+    clientDirectiveId?: string
+    prompt: string
+  }>> = []
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (request) => {
+      runtimeRequests.push(request)
+      if (runtimeRequests.length === 1) {
+        const queued = await adapter.submitTaskInteraction({
+          projectId: TEST_IDS.projectId,
+          taskId: TEST_IDS.taskId,
+          executionId: TEST_IDS.executionId,
+          kind: 'guidance',
+          text: '请把最终摘要压缩成三点，并保留证据来源。'
+        })
+        assert.equal(queued.state, 'queued')
+        return {
+          runtimeId: 'codex',
+          threadId: 'worker-interactive-thread',
+          turnId: 'worker-initial-turn',
+          state: 'completed',
+          text: JSON.stringify({
+            schemaVersion: 1,
+            outcome: 'completed',
+            summary: 'Initial result before human guidance.'
+          })
+        }
+      }
+      assert.equal(request.runtimeId, 'codex')
+      assert.equal(request.threadId, 'worker-interactive-thread')
+      assert.match(request.prompt, /三点/u)
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-interactive-thread',
+        turnId: 'worker-guided-turn',
+        state: 'completed',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          outcome: 'completed',
+          summary: 'Human-guided result.'
+        })
+      }
+    }
+  }, initial)
+  adapter = created.adapter
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+
+  assert.equal(runtimeRequests.length, 2)
+  assert.notEqual(runtimeRequests[0]?.clientDirectiveId, runtimeRequests[1]?.clientDirectiveId)
+  assert.equal(created.store.snapshot().taskInteractions[0]?.state, 'applied')
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.equal(created.store.snapshot().taskRuns[0]?.resultSummary, 'Human-guided result.')
+  assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
+    'task.offer.accept',
+    'task.execution.start',
+    'task.result.submit'
+  ])
+})
+
 test('Worker HumanNeeded targets its Worker User and resumes the same execution and Runtime Session', async () => {
   const cloud = new FakeWorkerCloud()
   const initial = emptyState()
@@ -3717,6 +3851,8 @@ function emptyState(): CollaborationLocalState {
     projectUnavailableFences: [],
     tasks: [],
     taskRuns: [],
+    taskInteractions: [],
+    taskCheckpoints: [],
     pendingTaskOffers: [],
     workerAcceptancePolicies: [],
     queue: [],

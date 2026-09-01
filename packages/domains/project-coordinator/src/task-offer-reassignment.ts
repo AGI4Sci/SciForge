@@ -21,6 +21,10 @@ import {
   type ProjectCoordinatorTaskOfferReassignInput,
   type ProjectCoordinatorWorkspace
 } from './contract.js'
+import {
+  deriveTaskRecoveryDecision,
+  observationFromTaskView
+} from './task-recovery.js'
 
 type WorkspaceReader = Readonly<{
   readWorkspace(input: Readonly<{ projectId?: string }>): Promise<ProjectCoordinatorWorkspace>
@@ -184,6 +188,11 @@ function requireReassignmentTuple(
         previousExecution.fence.status !== 'fenced') {
       throw new Error('The previous offer is not bound to the current terminal fenced execution.')
     }
+  }
+
+  const recovery = deriveTaskRecoveryDecision(observationFromTaskView(project, taskView))
+  if (recovery.action !== 'reassign_successor') {
+    throw new Error(recovery.reason)
   }
 
   let nextFileIntent: ReassignmentTuple['nextFileIntent']

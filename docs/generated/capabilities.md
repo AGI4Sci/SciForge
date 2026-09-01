@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **295**
+Registered actions: **298**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -71,6 +71,9 @@ Registered actions: **295**
 | `collaboration.projection.update` | 1.0.0 | ui | external-write | confirmation | global |
 | `collaboration.status.read` | 1.2.0 | ui | read | none | global |
 | `collaboration.sync.retry` | 1.0.0 | ui | external-write | confirmation | global |
+| `collaboration.task.checkpoint.append` | 1.0.0 | ui, agent | workspace-write | confirmation | global |
+| `collaboration.task.interaction.read` | 1.0.0 | ui, agent | read | none | global |
+| `collaboration.task.interaction.submit` | 1.0.0 | ui, agent | workspace-write | confirmation | global |
 | `collaboration.task.list` | 1.2.0 | ui | read | none | global |
 | `collaboration.task.offer.decide` | 1.1.0 | ui | external-write | confirmation | global |
 | `collaboration.worker.acceptance-policy.update` | 1.0.0 | ui | external-write | confirmation | global |
@@ -20463,6 +20466,2491 @@ Explicitly reconciles durable connection, inbox, outbox, projection, or Task sta
     "project"
   ],
   "title": "Retry collaboration synchronization"
+}
+```
+
+## `collaboration.task.checkpoint.append`
+
+Appends a durable local progress checkpoint without changing Cloud Task or Execution state.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `workspace-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "maxLength": 32000,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "executionId": {
+        "anyOf": [
+          {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "idempotencyKey": {
+        "maxLength": 128,
+        "minLength": 16,
+        "pattern": "^idem_[A-Za-z0-9._:-]+$",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "progress",
+          "partial-result",
+          "human-note",
+          "status"
+        ],
+        "type": "string"
+      },
+      "projectId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "source": {
+        "enum": [
+          "human",
+          "agent",
+          "system"
+        ],
+        "type": "string"
+      },
+      "summary": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "taskId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "taskId",
+      "executionId",
+      "kind",
+      "source",
+      "summary"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "checkpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpointId": {
+            "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 32000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executionId": {
+            "anyOf": [
+              {
+                "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idempotencyKey": {
+            "maxLength": 128,
+            "minLength": 16,
+            "pattern": "^idem_[A-Za-z0-9._:-]+$",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "progress",
+              "partial-result",
+              "human-note",
+              "status"
+            ],
+            "type": "string"
+          },
+          "projectId": {
+            "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "sequence": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "human",
+              "agent",
+              "system"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "taskId": {
+            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checkpointId",
+          "idempotencyKey",
+          "projectId",
+          "taskId",
+          "executionId",
+          "sequence",
+          "kind",
+          "source",
+          "summary",
+          "detail",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "view": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoints": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "checkpointId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "detail": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "progress",
+                    "partial-result",
+                    "human-note",
+                    "status"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "source": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checkpointId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "sequence",
+                "kind",
+                "source",
+                "summary",
+                "detail",
+                "createdAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20000,
+            "type": "array"
+          },
+          "cloudExecutionState": {
+            "enum": [
+              "accepted",
+              "running",
+              "needs_human",
+              "result_submitted",
+              "manual_recovery_required",
+              "completed",
+              "failed",
+              "cancelled",
+              "revoked",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "cloudTaskRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "interactions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clientDirectiveId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "dispatchedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "interactionId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "guidance",
+                    "pause",
+                    "resume",
+                    "cancel",
+                    "retry"
+                  ],
+                  "type": "string"
+                },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "queued",
+                    "dispatching",
+                    "awaiting_cloud",
+                    "applied",
+                    "rejected",
+                    "failed",
+                    "superseded"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interactionId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "kind",
+                "origin",
+                "text",
+                "clientDirectiveId",
+                "state",
+                "attempts",
+                "createdAt",
+                "updatedAt",
+                "dispatchedAt",
+                "completedAt",
+                "error"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100000,
+            "type": "array"
+          },
+          "latestInteraction": {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "clientDirectiveId": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "completedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "dispatchedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "executionId": {
+                "anyOf": [
+                  {
+                    "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "idempotencyKey": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              "interactionId": {
+                "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "guidance",
+                  "pause",
+                  "resume",
+                  "cancel",
+                  "retry"
+                ],
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "system"
+                ],
+                "type": "string"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "queued",
+                  "dispatching",
+                  "awaiting_cloud",
+                  "applied",
+                  "rejected",
+                  "failed",
+                  "superseded"
+                ],
+                "type": "string"
+              },
+              "taskId": {
+                "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "text": {
+                "anyOf": [
+                  {
+                    "maxLength": 32000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "interactionId",
+              "idempotencyKey",
+              "projectId",
+              "taskId",
+              "executionId",
+              "kind",
+              "origin",
+              "text",
+              "clientDirectiveId",
+              "state",
+              "attempts",
+              "createdAt",
+              "updatedAt",
+              "dispatchedAt",
+              "completedAt",
+              "error"
+            ],
+            "type": "object"
+          },
+          "localUpdatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "pending": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clientDirectiveId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "dispatchedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "interactionId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "guidance",
+                    "pause",
+                    "resume",
+                    "cancel",
+                    "retry"
+                  ],
+                  "type": "string"
+                },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "queued",
+                    "dispatching",
+                    "awaiting_cloud",
+                    "applied",
+                    "rejected",
+                    "failed",
+                    "superseded"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interactionId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "kind",
+                "origin",
+                "text",
+                "clientDirectiveId",
+                "state",
+                "attempts",
+                "createdAt",
+                "updatedAt",
+                "dispatchedAt",
+                "completedAt",
+                "error"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "projectId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_human",
+              "intervention_queued",
+              "paused_local",
+              "awaiting_cloud",
+              "blocked_cloud",
+              "completed"
+            ],
+            "type": "string"
+          },
+          "taskId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "taskId",
+          "state",
+          "pending",
+          "interactions",
+          "checkpoints"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "checkpoint",
+      "view"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Append a local Task checkpoint"
+}
+```
+
+## `collaboration.task.interaction.read`
+
+Reads durable local human interventions and checkpoints together with the observed Cloud execution state.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "executionId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "taskId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "taskId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "view": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoints": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "checkpointId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "detail": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "progress",
+                    "partial-result",
+                    "human-note",
+                    "status"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "source": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checkpointId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "sequence",
+                "kind",
+                "source",
+                "summary",
+                "detail",
+                "createdAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20000,
+            "type": "array"
+          },
+          "cloudExecutionState": {
+            "enum": [
+              "accepted",
+              "running",
+              "needs_human",
+              "result_submitted",
+              "manual_recovery_required",
+              "completed",
+              "failed",
+              "cancelled",
+              "revoked",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "cloudTaskRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "interactions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clientDirectiveId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "dispatchedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "interactionId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "guidance",
+                    "pause",
+                    "resume",
+                    "cancel",
+                    "retry"
+                  ],
+                  "type": "string"
+                },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "queued",
+                    "dispatching",
+                    "awaiting_cloud",
+                    "applied",
+                    "rejected",
+                    "failed",
+                    "superseded"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interactionId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "kind",
+                "origin",
+                "text",
+                "clientDirectiveId",
+                "state",
+                "attempts",
+                "createdAt",
+                "updatedAt",
+                "dispatchedAt",
+                "completedAt",
+                "error"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100000,
+            "type": "array"
+          },
+          "latestInteraction": {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "clientDirectiveId": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "completedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "dispatchedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "executionId": {
+                "anyOf": [
+                  {
+                    "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "idempotencyKey": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              "interactionId": {
+                "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "guidance",
+                  "pause",
+                  "resume",
+                  "cancel",
+                  "retry"
+                ],
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "system"
+                ],
+                "type": "string"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "queued",
+                  "dispatching",
+                  "awaiting_cloud",
+                  "applied",
+                  "rejected",
+                  "failed",
+                  "superseded"
+                ],
+                "type": "string"
+              },
+              "taskId": {
+                "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "text": {
+                "anyOf": [
+                  {
+                    "maxLength": 32000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "interactionId",
+              "idempotencyKey",
+              "projectId",
+              "taskId",
+              "executionId",
+              "kind",
+              "origin",
+              "text",
+              "clientDirectiveId",
+              "state",
+              "attempts",
+              "createdAt",
+              "updatedAt",
+              "dispatchedAt",
+              "completedAt",
+              "error"
+            ],
+            "type": "object"
+          },
+          "localUpdatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "pending": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clientDirectiveId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "dispatchedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "interactionId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "guidance",
+                    "pause",
+                    "resume",
+                    "cancel",
+                    "retry"
+                  ],
+                  "type": "string"
+                },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "queued",
+                    "dispatching",
+                    "awaiting_cloud",
+                    "applied",
+                    "rejected",
+                    "failed",
+                    "superseded"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interactionId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "kind",
+                "origin",
+                "text",
+                "clientDirectiveId",
+                "state",
+                "attempts",
+                "createdAt",
+                "updatedAt",
+                "dispatchedAt",
+                "completedAt",
+                "error"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "projectId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_human",
+              "intervention_queued",
+              "paused_local",
+              "awaiting_cloud",
+              "blocked_cloud",
+              "completed"
+            ],
+            "type": "string"
+          },
+          "taskId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "taskId",
+          "state",
+          "pending",
+          "interactions",
+          "checkpoints"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "view"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Read local Task interactions"
+}
+```
+
+## `collaboration.task.interaction.submit`
+
+Queues a durable local intervention for the exact Worker Runtime Session without changing Cloud Task facts.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `workspace-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "clientDirectiveId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "type": "string"
+      },
+      "executionId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "idempotencyKey": {
+        "maxLength": 128,
+        "minLength": 16,
+        "pattern": "^idem_[A-Za-z0-9._:-]+$",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "guidance",
+          "pause",
+          "resume",
+          "cancel",
+          "retry"
+        ],
+        "type": "string"
+      },
+      "origin": {
+        "enum": [
+          "human",
+          "agent",
+          "system"
+        ],
+        "type": "string"
+      },
+      "projectId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "taskId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 32000,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "projectId",
+      "taskId",
+      "kind"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "interaction": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "clientDirectiveId": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "dispatchedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "executionId": {
+            "anyOf": [
+              {
+                "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idempotencyKey": {
+            "maxLength": 128,
+            "minLength": 16,
+            "pattern": "^idem_[A-Za-z0-9._:-]+$",
+            "type": "string"
+          },
+          "interactionId": {
+            "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "guidance",
+              "pause",
+              "resume",
+              "cancel",
+              "retry"
+            ],
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "human",
+              "agent",
+              "system"
+            ],
+            "type": "string"
+          },
+          "projectId": {
+            "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "dispatching",
+              "awaiting_cloud",
+              "applied",
+              "rejected",
+              "failed",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "taskId": {
+            "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 32000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interactionId",
+          "idempotencyKey",
+          "projectId",
+          "taskId",
+          "executionId",
+          "kind",
+          "origin",
+          "text",
+          "clientDirectiveId",
+          "state",
+          "attempts",
+          "createdAt",
+          "updatedAt",
+          "dispatchedAt",
+          "completedAt",
+          "error"
+        ],
+        "type": "object"
+      },
+      "view": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoints": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "checkpointId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "detail": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "progress",
+                    "partial-result",
+                    "human-note",
+                    "status"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "sequence": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991,
+                  "type": "integer"
+                },
+                "source": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "summary": {
+                  "maxLength": 4000,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checkpointId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "sequence",
+                "kind",
+                "source",
+                "summary",
+                "detail",
+                "createdAt"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20000,
+            "type": "array"
+          },
+          "cloudExecutionState": {
+            "enum": [
+              "accepted",
+              "running",
+              "needs_human",
+              "result_submitted",
+              "manual_recovery_required",
+              "completed",
+              "failed",
+              "cancelled",
+              "revoked",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "cloudTaskRevision": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "executionId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "interactions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clientDirectiveId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "dispatchedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "interactionId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "guidance",
+                    "pause",
+                    "resume",
+                    "cancel",
+                    "retry"
+                  ],
+                  "type": "string"
+                },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "queued",
+                    "dispatching",
+                    "awaiting_cloud",
+                    "applied",
+                    "rejected",
+                    "failed",
+                    "superseded"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interactionId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "kind",
+                "origin",
+                "text",
+                "clientDirectiveId",
+                "state",
+                "attempts",
+                "createdAt",
+                "updatedAt",
+                "dispatchedAt",
+                "completedAt",
+                "error"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100000,
+            "type": "array"
+          },
+          "latestInteraction": {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "maximum": 1000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "clientDirectiveId": {
+                "anyOf": [
+                  {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "completedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "dispatchedAt": {
+                "anyOf": [
+                  {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "executionId": {
+                "anyOf": [
+                  {
+                    "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "idempotencyKey": {
+                "maxLength": 128,
+                "minLength": 16,
+                "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              "interactionId": {
+                "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "guidance",
+                  "pause",
+                  "resume",
+                  "cancel",
+                  "retry"
+                ],
+                "type": "string"
+              },
+              "origin": {
+                "enum": [
+                  "human",
+                  "agent",
+                  "system"
+                ],
+                "type": "string"
+              },
+              "projectId": {
+                "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "queued",
+                  "dispatching",
+                  "awaiting_cloud",
+                  "applied",
+                  "rejected",
+                  "failed",
+                  "superseded"
+                ],
+                "type": "string"
+              },
+              "taskId": {
+                "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                "type": "string"
+              },
+              "text": {
+                "anyOf": [
+                  {
+                    "maxLength": 32000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "interactionId",
+              "idempotencyKey",
+              "projectId",
+              "taskId",
+              "executionId",
+              "kind",
+              "origin",
+              "text",
+              "clientDirectiveId",
+              "state",
+              "attempts",
+              "createdAt",
+              "updatedAt",
+              "dispatchedAt",
+              "completedAt",
+              "error"
+            ],
+            "type": "object"
+          },
+          "localUpdatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "pending": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "attempts": {
+                  "maximum": 1000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "clientDirectiveId": {
+                  "anyOf": [
+                    {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "completedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "dispatchedAt": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "error": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "executionId": {
+                  "anyOf": [
+                    {
+                      "pattern": "^exe_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "idempotencyKey": {
+                  "maxLength": 128,
+                  "minLength": 16,
+                  "pattern": "^idem_[A-Za-z0-9._:-]+$",
+                  "type": "string"
+                },
+                "interactionId": {
+                  "pattern": "^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "guidance",
+                    "pause",
+                    "resume",
+                    "cancel",
+                    "retry"
+                  ],
+                  "type": "string"
+                },
+                "origin": {
+                  "enum": [
+                    "human",
+                    "agent",
+                    "system"
+                  ],
+                  "type": "string"
+                },
+                "projectId": {
+                  "pattern": "^prj_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "state": {
+                  "enum": [
+                    "queued",
+                    "dispatching",
+                    "awaiting_cloud",
+                    "applied",
+                    "rejected",
+                    "failed",
+                    "superseded"
+                  ],
+                  "type": "string"
+                },
+                "taskId": {
+                  "pattern": "^tsk_[A-Za-z0-9](?:[A-Za-z0-9_]{10,62}[A-Za-z0-9])$",
+                  "type": "string"
+                },
+                "text": {
+                  "anyOf": [
+                    {
+                      "maxLength": 32000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "updatedAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "interactionId",
+                "idempotencyKey",
+                "projectId",
+                "taskId",
+                "executionId",
+                "kind",
+                "origin",
+                "text",
+                "clientDirectiveId",
+                "state",
+                "attempts",
+                "createdAt",
+                "updatedAt",
+                "dispatchedAt",
+                "completedAt",
+                "error"
+              ],
+              "type": "object"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "projectId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "waiting_human",
+              "intervention_queued",
+              "paused_local",
+              "awaiting_cloud",
+              "blocked_cloud",
+              "completed"
+            ],
+            "type": "string"
+          },
+          "taskId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "taskId",
+          "state",
+          "pending",
+          "interactions",
+          "checkpoints"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "interaction",
+      "view"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "collaboration",
+    "user",
+    "device",
+    "session",
+    "project"
+  ],
+  "title": "Queue a local Task interaction"
 }
 ```
 

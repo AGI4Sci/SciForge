@@ -87,6 +87,8 @@ test('restart recovery only rewinds safely replayable local and outbox work', as
     projectUnavailableFences: [],
     tasks: [],
     taskRuns: [],
+    taskInteractions: [],
+    taskCheckpoints: [],
     pendingTaskOffers: [],
     workerAcceptancePolicies: [],
     queue: [{

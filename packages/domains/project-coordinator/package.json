@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-coordinator",
-  "version": "4.1.3",
+  "version": "4.2.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -9,6 +9,7 @@
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
+    "./task-recovery": "./src/task-recovery.ts",
     "./renderer": "./src/renderer/index.tsx"
   },
   "files": [
@@ -23,7 +24,7 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "5.1.0",
-    "@sciforge/domain-collaboration": "^6.1.1",
+    "@sciforge/domain-collaboration": "^6.2.0",
     "@sciforge/domain-content-space": "^5.0.0",
     "@sciforge/domain-identity-access": "^4.0.1",
     "@sciforge/domain-sdk": "^0.2.11",

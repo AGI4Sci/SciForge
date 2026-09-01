@@ -1,6 +1,7 @@
 import type { z } from 'zod'
 import {
   defineDomainMainInternalServiceDescriptor,
+  type DomainMainCapabilityInvocationContext,
   type DomainMainInternalServiceDescriptor,
   type DomainMainHost,
   type DomainMainRuntimeDisposer,
@@ -45,6 +46,12 @@ import {
   collaborationSynchronizationRetryResultSchema,
   collaborationTaskListInputSchema,
   collaborationTaskListResultSchema,
+  collaborationTaskInteractionSubmitInputSchema,
+  collaborationTaskInteractionSubmitResultSchema,
+  collaborationTaskInteractionReadInputSchema,
+  collaborationTaskInteractionReadResultSchema,
+  collaborationTaskCheckpointAppendInputSchema,
+  collaborationTaskCheckpointAppendResultSchema,
   collaborationTaskOfferDecisionInputSchema,
   collaborationTaskOfferDecisionResultSchema,
   collaborationWorkerAcceptanceUpdateInputSchema,
@@ -60,6 +67,9 @@ import {
   type CollaborationProjectionUpdateInput,
   type CollaborationSynchronizationRetryInput,
   type CollaborationTaskListInput,
+  type CollaborationTaskInteractionSubmitInput,
+  type CollaborationTaskInteractionReadInput,
+  type CollaborationTaskCheckpointAppendInput,
   type CollaborationTaskOfferDecisionInput,
   type CollaborationWorkerAcceptanceUpdateInput
 } from './contract.js'
@@ -99,9 +109,45 @@ export {
   CollaborationLocalStore,
   FileCollaborationStateBackend
 } from './main/store.js'
-export type { CollaborationStateBackend } from './main/store.js'
+export type {
+  CollaborationStateBackend
+} from './main/store.js'
+export {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema
+} from './task-interaction.js'
+export type {
+  CollaborationTaskCheckpoint,
+  CollaborationTaskInteraction
+} from './task-interaction.js'
+export {
+  TaskInteractionJournal
+} from './main/task-interaction-journal.js'
+export type {
+  TaskCheckpointCreate,
+  TaskInteractionCreate,
+  TaskInteractionTransition
+} from './main/task-interaction-journal.js'
+export {
+  TaskInteractionController
+} from './main/task-interaction-controller.js'
+export type {
+  LocalTaskInteractionView,
+  TaskInteractionDispatchRequest,
+  TaskInteractionDispatchResult,
+  TaskInteractionSubmit
+} from './main/task-interaction-controller.js'
+export {
+  localTaskInteractionEventSchema,
+  localTaskInteractionStateSchema,
+  transitionLocalTaskInteractionState
+} from './main/task-interaction-contract.js'
+export type {
+  LocalTaskInteractionEvent,
+  LocalTaskInteractionState
+} from './main/task-interaction-contract.js'
 
-type CapabilityEffect = 'read' | 'external-write' | 'destructive'
+type CapabilityEffect = 'read' | 'workspace-write' | 'external-write' | 'destructive'
 
 export type CollaborationCapabilityOptions = Readonly<{
   id: string
@@ -119,7 +165,10 @@ export type CollaborationCapabilityOptions = Readonly<{
   tags: readonly string[]
   inputSchema: z.ZodType
   outputSchema: z.ZodType
-  handler: (input: unknown) => Promise<Readonly<{ output: unknown; changed?: boolean }>>
+  handler: (
+    input: unknown,
+    context?: DomainMainCapabilityInvocationContext
+  ) => Promise<Readonly<{ output: unknown; changed?: boolean }>>
 }>
 
 export type CollaborationCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
@@ -306,10 +355,10 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
   const define = (input: Omit<
     CollaborationCapabilityOptions,
     'version' | 'audiences' | 'scope' | 'tags'
-  >, version = '1.0.0'): CapabilityDefinition => options.defineCapability({
+  >, version = '1.0.0', audiences: readonly ('ui' | 'agent' | 'system')[] = ['ui']): CapabilityDefinition => options.defineCapability({
     ...input,
     version,
-    audiences: ['ui'],
+    audiences,
     scope: 'global',
     tags: ['collaboration', 'user', 'device', 'session', 'project']
   })
@@ -321,7 +370,8 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     inputSchema: z.ZodType,
     outputSchema: z.ZodType,
     handler: CollaborationCapabilityOptions['handler'],
-    version = '1.0.0'
+    version = '1.0.0',
+    audiences: readonly ('ui' | 'agent' | 'system')[] = ['ui']
   ): CapabilityDefinition => define({
     id,
     title,
@@ -335,7 +385,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
     inputSchema,
     outputSchema,
     handler
-  }, version)
+  }, version, audiences)
 
   return Object.freeze({
     moduleId: COLLABORATION_DOMAIN_MODULE_ID,
@@ -494,6 +544,85 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         '1.2.0'
       ),
       capability(
+        COLLABORATION_CAPABILITY_IDS.taskInteractionRead,
+        'Read local Task interactions',
+        'Reads durable local human interventions and checkpoints together with the observed Cloud execution state.',
+        'read',
+        collaborationTaskInteractionReadInputSchema,
+        collaborationTaskInteractionReadResultSchema,
+        async (raw, context) => {
+          const input = collaborationTaskInteractionReadInputSchema.parse(raw) as CollaborationTaskInteractionReadInput
+          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
+          return {
+            output: {
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId
+              )
+            }
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit,
+        'Queue a local Task interaction',
+        'Queues a durable local intervention for the exact Worker Runtime Session without changing Cloud Task facts.',
+        'workspace-write',
+        collaborationTaskInteractionSubmitInputSchema,
+        collaborationTaskInteractionSubmitResultSchema,
+        async (raw, context) => {
+          const input = collaborationTaskInteractionSubmitInputSchema.parse(raw) as CollaborationTaskInteractionSubmitInput
+          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
+          const interaction = await options.getRuntime().submitTaskInteraction(
+            context?.caller.audience === 'agent' ? { ...input, origin: 'agent' } : input
+          )
+          return {
+            output: {
+              interaction,
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId
+              )
+            },
+            changed: true
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend,
+        'Append a local Task checkpoint',
+        'Appends a durable local progress checkpoint without changing Cloud Task or Execution state.',
+        'workspace-write',
+        collaborationTaskCheckpointAppendInputSchema,
+        collaborationTaskCheckpointAppendResultSchema,
+        async (raw, context) => {
+          const input = collaborationTaskCheckpointAppendInputSchema.parse(raw) as CollaborationTaskCheckpointAppendInput
+          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
+          const checkpoint = await options.getRuntime().appendTaskCheckpoint(
+            context?.caller.audience === 'agent' ? { ...input, source: 'agent' } : input
+          )
+          return {
+            output: {
+              checkpoint,
+              view: options.getRuntime().taskInteractionView(
+                input.projectId,
+                input.taskId,
+                input.executionId ?? undefined
+              )
+            },
+            changed: true
+          }
+        },
+        '1.0.0',
+        ['ui', 'agent']
+      ),
+      capability(
         COLLABORATION_CAPABILITY_IDS.workerAcceptanceUpdate,
         'Update local Worker acceptance policy',
         'Stores manual or automatic Task offer handling for this exact local Agent Device.',
@@ -562,4 +691,40 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       )
     ]
   })
+}
+
+function authorizeAgentTaskInteraction(
+  runtime: CollaborationRuntime,
+  input: Readonly<{
+    projectId: string
+    taskId: string
+    executionId?: string | null
+    origin?: string
+    source?: string
+  }>,
+  context: DomainMainCapabilityInvocationContext | undefined
+): void {
+  if (context?.caller.audience !== 'agent') return
+  context.assertPrincipalCurrent()
+  if (!context.caller.principal) {
+    throw new Error('This Agent operation requires a current Host Principal.')
+  }
+  if (input.origin !== undefined && input.origin !== 'agent') {
+    throw new Error('Agent Task interactions must use the agent origin.')
+  }
+  if (input.source !== undefined && input.source !== 'agent') {
+    throw new Error('Agent Task checkpoints must use the agent source.')
+  }
+  if (!context.ordinarySession) {
+    throw new Error('This Agent operation requires a Host-authenticated ordinary Session.')
+  }
+  if (!input.executionId) {
+    throw new Error('Agent Task operations require an exact executionId.')
+  }
+  runtime.authorizeTaskInteraction(
+    input,
+    context.ordinarySession,
+    context.caller.principal.subject
+  )
+  context.assertPrincipalCurrent()
 }

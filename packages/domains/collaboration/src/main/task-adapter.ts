@@ -44,14 +44,27 @@ import {
   type CollaborationExternalOperationJournal,
   type CollaborationPendingTaskOffer,
   type CollaborationProjectUnavailableFence,
+  type CollaborationTaskCheckpoint,
+  type CollaborationTaskInteraction,
   type CollaborationTaskRun
 } from './store.js'
 import { WorkerAcceptancePolicyService } from './worker-acceptance-policy.js'
 import {
   parseWorkerRuntimeResult,
+  workerResultRepairPrompt,
+  workerGuidancePrompt,
   workerHumanAnswerPrompt,
-  workerTaskPrompt
+  workerTaskPrompt,
+  type WorkerRuntimeResult
 } from './worker-runtime-result.js'
+import {
+  TaskInteractionController,
+  type LocalTaskInteractionView,
+  type TaskInteractionSubmit,
+  type TaskInteractionDispatchRequest,
+  type TaskInteractionDispatchResult
+} from './task-interaction-controller.js'
+import type { TaskCheckpointCreate } from './task-interaction-journal.js'
 
 type CollaborationWorkerPreflight = NonNullable<CollaborationTaskRun['latestPreflight']>
 type ContentTransferPreflightObservation = CollaborationWorkerPreflight[
@@ -116,11 +129,25 @@ export class CollaborationTaskAdapter {
   private readonly policies: WorkerAcceptancePolicyService
   private readonly running = new Map<string, Promise<void>>()
   private readonly controllers = new Map<string, AbortController>()
+  private readonly activeAgentTurns = new Set<string>()
+  private readonly interactionDispatchWindows = new Set<string>()
+  private readonly finalizingExecutions = new Set<string>()
+  private readonly interactions: TaskInteractionController
   private stopped = false
 
   constructor(private readonly options: CollaborationTaskAdapterOptions) {
     this.now = options.now ?? (() => new Date())
     this.policies = new WorkerAcceptancePolicyService(options.store, this.now)
+    this.interactions = new TaskInteractionController({
+      store: options.store,
+      now: this.now,
+      canDispatch: (executionId) => (
+        this.interactionDispatchWindows.has(executionId) &&
+        !this.activeAgentTurns.has(executionId)
+      ),
+      canSubmit: (executionId) => !this.finalizingExecutions.has(executionId),
+      dispatch: (request) => this.dispatchTaskInteraction(request)
+    })
   }
 
   async recover(): Promise<void> {
@@ -137,11 +164,13 @@ export class CollaborationTaskAdapter {
         this.schedule(run.offer.executionId)
       }
     }
+    await this.interactions.recover()
   }
 
   stop(): void {
     this.stopped = true
     for (const controller of this.controllers.values()) controller.abort()
+    this.interactions.stop()
   }
 
   async waitForIdle(executionId?: string): Promise<void> {
@@ -149,6 +178,35 @@ export class CollaborationTaskAdapter {
     else {
       while (this.running.size > 0) await Promise.all([...this.running.values()])
     }
+  }
+
+  /** Local control-plane APIs consumed by the Collaboration Runtime. */
+  async submitTaskInteraction(input: TaskInteractionSubmit): Promise<CollaborationTaskInteraction> {
+    const interaction = await this.interactions.submit(input)
+    // A local resume is the explicit human signal that a paused run may be
+    // scheduled again.  The Cloud execution remains the same and will still
+    // pass the normal preflight before the next Worker turn.
+    if (input.kind === 'resume' && interaction.state === 'queued') {
+      const run = this.findRun(input.executionId, input.taskId)
+      if (run) this.schedule(run.offer.executionId)
+    }
+    return interaction
+  }
+
+  appendTaskCheckpoint(input: TaskCheckpointCreate): Promise<CollaborationTaskCheckpoint> {
+    return this.interactions.appendCheckpoint(input)
+  }
+
+  taskInteractionView(projectId: string, taskId: string, executionId?: string): LocalTaskInteractionView {
+    return this.interactions.view(projectId, taskId, executionId)
+  }
+
+  listTaskInteractions(projectId: string, taskId?: string): readonly CollaborationTaskInteraction[] {
+    return this.interactions.listInteractions(projectId, taskId)
+  }
+
+  listTaskCheckpoints(projectId: string, taskId?: string): readonly CollaborationTaskCheckpoint[] {
+    return this.interactions.listCheckpoints(projectId, taskId)
   }
 
   acceptanceMode(agentId: string): 'manual' | 'automatic' {
@@ -1189,8 +1247,33 @@ export class CollaborationTaskAdapter {
         run = this.requireRun(run.offer.executionId)
         if (TERMINAL_RUN_STATES.has(run.state)) return
       }
-      const runtimeResult = await this.runAgent(run, controller.signal)
-      if (!runtimeResult) return
+      const initialRuntimeResult = await this.runAgent(run, controller.signal)
+      if (!initialRuntimeResult) return
+      // Human guidance submitted while the Worker turn was in flight remains
+      // queued locally.  Consume it now, before any result is submitted, so
+      // every follow-up uses the same Runtime Session and Cloud execution.
+      this.interactionDispatchWindows.add(run.offer.executionId)
+      try {
+        await this.interactions.flush(run.offer.executionId)
+      } finally {
+        this.interactionDispatchWindows.delete(run.offer.executionId)
+      }
+      this.finalizingExecutions.add(run.offer.executionId)
+      run = this.requireRun(run.offer.executionId)
+      if (run.state === 'needs-human') return
+      const interactionView = this.interactions.view(
+        run.offer.projectId,
+        run.offer.taskId,
+        run.offer.executionId
+      )
+      if (
+        interactionView.state === 'paused_local' ||
+        (interactionView.latestInteraction?.kind === 'cancel' &&
+          interactionView.latestInteraction.state === 'applied')
+      ) return
+      const runtimeResult: WorkerRuntimeResult = run.resultSummary
+        ? { schemaVersion: 1, outcome: 'completed', summary: run.resultSummary }
+        : initialRuntimeResult
       run = this.requireRun(run.offer.executionId)
       if (runtimeResult.outcome === 'needs_human') {
         await this.createHumanNeeded(
@@ -1214,13 +1297,133 @@ export class CollaborationTaskAdapter {
       }
       await this.submitResult(run, controller.signal)
     } finally {
+      this.finalizingExecutions.delete(run.offer.executionId)
       if (this.controllers.get(run.offer.executionId) === controller) {
         this.controllers.delete(run.offer.executionId)
       }
     }
   }
 
-  private async runAgent(run: CollaborationTaskRun, signal: AbortSignal) {
+  /**
+   * Dispatches one local human guidance turn through the same Worker Runtime
+   * Session as the active execution.  This is deliberately separate from the
+   * Cloud result submission: a guidance turn can update the local result
+   * summary or request HumanNeeded, but it never fences or revives an
+   * immutable Cloud execution on a formatting/runtime error.
+   */
+  private async dispatchTaskInteraction(
+    request: TaskInteractionDispatchRequest
+  ): Promise<TaskInteractionDispatchResult> {
+    const run = this.requireRun(request.run.offer.executionId)
+    if (
+      run.offer.projectId !== request.interaction.projectId ||
+      run.offer.taskId !== request.interaction.taskId ||
+      request.interaction.executionId !== run.offer.executionId ||
+      run.runtimeId !== request.session.runtimeId ||
+      run.threadId !== request.session.threadId
+    ) {
+      return { outcome: 'rejected', error: 'Task interaction does not match the exact Worker Session binding.' }
+    }
+    if (TERMINAL_RUN_STATES.has(run.state) || requireExecution(run).fence.status !== 'open') {
+      return {
+        outcome: 'rejected',
+        error: 'Cloud execution is terminal or fenced; use the existing Task reassign/retry operation.'
+      }
+    }
+    if (run.state === 'needs-human') {
+      return {
+        outcome: 'rejected',
+        error: 'This execution is waiting for its canonical HumanNeeded answer; answer that request instead.'
+      }
+    }
+    if (run.state === 'submitting') {
+      return {
+        outcome: 'rejected',
+        error: 'Cloud result submission is already in progress; this execution cannot accept another intervention.'
+      }
+    }
+    if (request.interaction.kind === 'retry') {
+      return {
+        outcome: 'rejected',
+        error: 'Task retry must use the existing Coordinator reassign operation.'
+      }
+    }
+    // Pause/resume/cancel are local control intents.  They are marked applied
+    // locally by the controller and intentionally do not claim a Cloud state
+    // transition that the current protocol does not expose.
+    if (request.interaction.kind !== 'guidance') return { outcome: 'applied' }
+    if (!request.interaction.text) {
+      return { outcome: 'rejected', error: 'Worker guidance is empty.' }
+    }
+
+    const logicalInvocationId = `agent.${run.offer.executionId}.interaction.${request.interaction.interactionId}`
+    const clientDirectiveId = request.interaction.clientDirectiveId ??
+      `collab-intervention-${digest(request.interaction.idempotencyKey).slice(0, 48)}`
+    const existingJournal = run.agentJournal.find((entry) => (
+      entry.logicalInvocationId === logicalInvocationId
+    ))
+    if (!existingJournal) {
+      const preparedAt = this.now().toISOString()
+      await this.options.store.transact((draft) => {
+        const current = requireDraftRun(draft.taskRuns, run.offer.executionId)
+        current.agentJournal.push({
+          logicalInvocationId,
+          clientDirectiveId,
+          state: 'prepared',
+          preparedAt,
+          dispatchedAt: null,
+          observedAt: null,
+          runtimeId: null,
+          threadId: null,
+          turnId: null,
+          runtimeState: null,
+          safeResultText: null,
+          safeError: null
+        })
+        current.updatedAt = preparedAt
+      })
+    }
+    const result = await this.runAgent(
+      this.requireRun(run.offer.executionId),
+      request.signal,
+      false,
+      workerGuidancePrompt(request.interaction.text),
+      'keep'
+    )
+    if (!result) {
+      const latest = this.requireRun(run.offer.executionId)
+      const journal = [...latest.agentJournal].reverse().find((entry) => (
+        entry.logicalInvocationId === logicalInvocationId
+      ))
+      return {
+        outcome: 'rejected',
+        error: journal?.safeError ?? 'Worker guidance Runtime turn failed.'
+      }
+    }
+    if (result.outcome === 'needs_human') {
+      await this.createHumanNeeded(
+        this.requireRun(run.offer.executionId),
+        result.question,
+        result.requiredAssurance,
+        request.signal
+      )
+    } else {
+      await this.updateRun(run.offer.executionId, {
+        resultSummary: result.summary,
+        humanAnswer: null,
+        humanRequestId: null
+      })
+    }
+    return { outcome: 'applied', clientDirectiveId }
+  }
+
+  private async runAgent(
+    run: CollaborationTaskRun,
+    signal: AbortSignal,
+    repairAttempt = false,
+    promptOverride?: string,
+    cloudFailurePolicy: 'fail' | 'keep' = 'fail'
+  ): Promise<WorkerRuntimeResult | null> {
     const existing = [...run.agentJournal].reverse().find((entry) => (
       entry.state === 'prepared' || entry.state === 'dispatched'
     ))
@@ -1297,7 +1500,9 @@ export class CollaborationTaskAdapter {
     run = this.requireRun(run.offer.executionId)
     const execution = requireExecution(run)
     const task = requireTask(run)
-    const prompt = run.humanAnswer
+    const prompt = promptOverride ?? (repairAttempt
+      ? workerResultRepairPrompt()
+      : run.humanAnswer
       ? workerHumanAnswerPrompt(run.humanAnswer.answer)
       : workerTaskPrompt({
           title: task.title,
@@ -1307,6 +1512,8 @@ export class CollaborationTaskAdapter {
             ? { inputs: execution.fileIntent.inputs, output: execution.fileIntent.output }
             : null
         })
+    )
+    this.activeAgentTurns.add(run.offer.executionId)
     let result
     try {
       result = await this.options.agentExecution.run({
@@ -1326,6 +1533,7 @@ export class CollaborationTaskAdapter {
         interaction: 'reviewable', mode: 'agent', signal
       })
     } catch (error) {
+      this.activeAgentTurns.delete(run.offer.executionId)
       if (this.requireRun(run.offer.executionId).state === 'fenced') {
         const observedAt = this.now().toISOString()
         await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
@@ -1346,9 +1554,12 @@ export class CollaborationTaskAdapter {
         state: 'observed_failure', observedAt: this.now().toISOString(),
         runtimeState: 'failed', safeError: safeError(error, this.options.sanitizeText)
       })
-      await this.failExecution(this.requireRun(run.offer.executionId), 'runtime_failed', 'Agent Runtime invocation failed.')
+      if (cloudFailurePolicy === 'fail') {
+        await this.failExecution(this.requireRun(run.offer.executionId), 'runtime_failed', 'Agent Runtime invocation failed.')
+      }
       return null
     }
+    this.activeAgentTurns.delete(run.offer.executionId)
     const safeText = result.text.slice(0, 32_000)
     const observedAt = this.now().toISOString()
     const postflight = await this.refreshPreflight(
@@ -1379,15 +1590,32 @@ export class CollaborationTaskAdapter {
       runtimeId: result.runtimeId, threadId: result.threadId, humanAnswer: null
     })
     if (result.state !== 'completed') {
-      await this.failExecution(this.requireRun(run.offer.executionId),
-        `runtime_${result.state}`, `Agent turn ended in ${result.state}.`)
+      if (cloudFailurePolicy === 'fail') {
+        await this.failExecution(this.requireRun(run.offer.executionId),
+          `runtime_${result.state}`, `Agent turn ended in ${result.state}.`)
+      }
       return null
     }
     try {
       return parseWorkerRuntimeResult(result.text)
-    } catch {
-      await this.failExecution(this.requireRun(run.offer.executionId),
-        'invalid_runtime_result', 'Agent Runtime returned an invalid Worker result.')
+    } catch (error) {
+      if (!repairAttempt) {
+        await this.updateAgentJournal(run.offer.executionId, logicalInvocationId, {
+          state: 'observed_failure',
+          safeError: safeError(error, this.options.sanitizeText)
+        })
+        return this.runAgent(
+          this.requireRun(run.offer.executionId),
+          signal,
+          true,
+          undefined,
+          cloudFailurePolicy
+        )
+      }
+      if (cloudFailurePolicy === 'fail') {
+        await this.failExecution(this.requireRun(run.offer.executionId),
+          'invalid_runtime_result', 'Agent Runtime returned an invalid Worker result.')
+      }
       return null
     }
   }
@@ -2473,8 +2701,14 @@ export class CollaborationTaskAdapter {
     return response.entity
   }
 
-  private findRun(executionId: string): CollaborationTaskRun | undefined {
-    return this.options.store.snapshot().taskRuns.find((run) => run.offer.executionId === executionId)
+  private findRun(executionId: string | undefined, taskId?: string): CollaborationTaskRun | undefined {
+    const candidates = this.options.store.snapshot().taskRuns.filter((run) => (
+      (!executionId || run.offer.executionId === executionId) &&
+      (!taskId || run.offer.taskId === taskId)
+    ))
+    if (executionId) return candidates.find((run) => run.offer.executionId === executionId)
+    return candidates.find((run) => run.task?.currentExecutionId === run.offer.executionId) ??
+      [...candidates].sort((left, right) => left.updatedAt.localeCompare(right.updatedAt)).at(-1)
   }
 
   private findPendingOffer(taskOfferId: string): CollaborationPendingTaskOffer | undefined {

@@ -68,7 +68,7 @@ const STRONG_MATERIAL_DETECTORS = Object.freeze([
     'u'
   )],
   ['model-credential-shaped-value', new RegExp(
-    `${fragments.model}[A-Za-z0-9_-]{20,}`,
+    `(?<![A-Za-z0-9])${fragments.model}(?:proj-)?[A-Za-z0-9]{20,}`,
     'u'
   )]
 ])

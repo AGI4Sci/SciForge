@@ -21,6 +21,17 @@ import {
   type RemoteSessionProjection,
   userPrincipalSchema
 } from '@sciforge/collaboration-contracts'
+import {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema,
+  type CollaborationTaskCheckpoint,
+  type CollaborationTaskInteraction
+} from '../task-interaction.js'
+
+export {
+  collaborationTaskCheckpointSchema,
+  collaborationTaskInteractionSchema
+} from '../task-interaction.js'
 
 const timestampSchema = z.iso.datetime({ offset: true })
 const opaqueLocalIdSchema = z.string().regex(/^[a-z][a-z0-9-]{2,31}_[A-Za-z0-9]{12,64}$/)
@@ -471,6 +482,8 @@ const collaborationLocalStateShape = {
     }),
   tasks: z.array(taskSchema).max(100_000),
   taskRuns: z.array(collaborationTaskRunSchema).max(100_000),
+  taskInteractions: z.array(collaborationTaskInteractionSchema).max(100_000).default([]),
+  taskCheckpoints: z.array(collaborationTaskCheckpointSchema).max(200_000).default([]),
   pendingTaskOffers: z.array(collaborationPendingTaskOfferSchema).max(100_000).default([]),
   workerAcceptancePolicies: z.array(collaborationWorkerAcceptancePolicySchema)
     .max(64)
@@ -506,6 +519,7 @@ export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
+export type { CollaborationTaskInteraction, CollaborationTaskCheckpoint }
 export type CollaborationPendingTaskOffer = z.infer<typeof collaborationPendingTaskOfferSchema>
 export type CollaborationExternalOperationJournal = z.infer<
   typeof collaborationExternalOperationJournalSchema
@@ -535,6 +549,8 @@ export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.f
   projectUnavailableFences: [],
   tasks: [],
   taskRuns: [],
+  taskInteractions: [],
+  taskCheckpoints: [],
   pendingTaskOffers: [],
   workerAcceptancePolicies: [],
   queue: [],
@@ -692,6 +708,16 @@ export class CollaborationLocalStore {
       if (entry.state !== 'sending') continue
       entry.state = 'reconciling'
       entry.updatedAt = recoveredAt
+      changed = true
+    }
+    for (const interaction of draft.taskInteractions) {
+      if (interaction.state !== 'dispatching') continue
+      // A directive may already have reached the local Agent Runtime when
+      // Desktop stopped. Keep its idempotent identity and wait for the
+      // controller to reconcile the outcome instead of dispatching a second
+      // turn automatically.
+      interaction.state = 'awaiting_cloud'
+      interaction.updatedAt = recoveredAt
       changed = true
     }
     if (!changed) return
