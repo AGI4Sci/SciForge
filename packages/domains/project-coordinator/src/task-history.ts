@@ -53,10 +53,8 @@ export function projectCoordinatorTaskHistory(
     canExtendPendingOffer: taskView.task.status === 'offered' && pendingOffer !== undefined
   })
 }
-
 function compareOfferHistory(left: TaskOffer, right: TaskOffer): number {
   return left.createdAt.localeCompare(right.createdAt) ||
     left.revision - right.revision ||
     left.taskOfferId.localeCompare(right.taskOfferId)
 }
-

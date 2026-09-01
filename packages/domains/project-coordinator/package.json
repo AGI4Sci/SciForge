@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-coordinator",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "5.1.0",
-    "@sciforge/domain-collaboration": "^6.2.0",
+    "@sciforge/domain-collaboration": "^6.3.0",
     "@sciforge/domain-content-space": "^5.0.0",
     "@sciforge/domain-identity-access": "^4.0.1",
     "@sciforge/domain-sdk": "^0.2.11",

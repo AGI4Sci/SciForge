@@ -54,4 +54,3 @@ test('task history exposes immutable attempts, offers, and remaining retry budge
   assert.deepEqual(history.lineage.pendingOfferIds, ['ofr_pending'])
   assert.deepEqual(history.offers.map(({ taskOfferId }) => taskOfferId), ['ofr_old', 'ofr_pending'])
 })
-
