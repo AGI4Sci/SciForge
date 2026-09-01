@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
-import { createCollaborationHttpServer } from '../packages/collaboration-server/src/api.ts'
+import { restRequestSchema } from '../packages/collaboration-contracts/src/index.ts'
+import {
+  DEFAULT_MAX_BODY_BYTES,
+  createCollaborationHttpServer
+} from '../packages/collaboration-server/src/api.ts'
+import { startModelRouterServer } from '@sciforge/model-router'
 import { stableDigest } from '../packages/collaboration-server/src/crypto.ts'
 import { CollaborationService } from '../packages/collaboration-server/src/service.ts'
 import { createAgentCredentialBootstrap, seedOidcUserDevice } from '../packages/collaboration-server/src/test-fixtures/collaboration-identity.ts'
@@ -16,11 +24,196 @@ import { DurableCloudOutbox } from '../packages/domains/collaboration/src/main/o
 import { createTestAgentCloudRuntime } from '../packages/domains/collaboration/src/main/test-agent-cloud-runtime.ts'
 import { CollaborationSettingsService } from '../packages/domains/collaboration/src/main/settings.ts'
 import {
+  WORKER_RESULT_SUMMARY_MAX_CODE_POINTS,
+  parseWorkerRuntimeResult,
+  workerRuntimeResultOutputSchema
+} from '../packages/domains/collaboration/src/main/worker-runtime-result.ts'
+import {
   FakeClock,
   FakeCollaborationRepository,
   FakeCollaborationRequestActorResolver,
   FakeCollaborationStateBackend
 } from '../test-fixtures/collaboration/fake-adapters.mjs'
+
+test('maximum escaped text-only Worker result fits the default Cloud command body', () => {
+  const worstEscapedCodePoint = '\u0001'
+  const maxOpaqueId = (prefix) => `${prefix}_${'a'.repeat(64)}`
+  const summary = worstEscapedCodePoint.repeat(WORKER_RESULT_SUMMARY_MAX_CODE_POINTS)
+  assert.equal(
+    Buffer.byteLength(JSON.stringify(summary)),
+    WORKER_RESULT_SUMMARY_MAX_CODE_POINTS * 6 + 2
+  )
+
+  const command = restRequestSchema.parse({
+    protocolVersion: '1.0',
+    requestId: maxOpaqueId('req'),
+    type: 'task.result.submit',
+    idempotencyKey: `idem_${'a'.repeat(123)}`,
+    taskId: maxOpaqueId('tsk'),
+    executionId: maxOpaqueId('exe'),
+    expectedTaskRevision: Number.MAX_SAFE_INTEGER,
+    expectedExecutionRevision: Number.MAX_SAFE_INTEGER,
+    summary,
+    runtimeProvenance: {
+      runtimeId: worstEscapedCodePoint.repeat(128),
+      modelId: null,
+      startedAt: '9999-12-31T23:59:59.999Z',
+      completedAt: '9999-12-31T23:59:59.999Z'
+    },
+    outputs: [],
+    recoveryJournalEntryIds: [],
+    submissionDigest: 'f'.repeat(64)
+  })
+  const bodyBytes = Buffer.byteLength(JSON.stringify(command))
+  assert.ok(
+    bodyBytes <= DEFAULT_MAX_BODY_BYTES,
+    `${bodyBytes} bytes exceeds ${DEFAULT_MAX_BODY_BYTES}`
+  )
+})
+
+test('protein Worker schema survives scientific evidence and Model Router Responses-to-Chat fallback', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-worker-router-protein-'))
+  const uploadDirectory = join(workspaceRoot, '.sciforge', 'uploads', 'worker-protein')
+  await mkdir(uploadDirectory, { recursive: true })
+  await writeFile(
+    join(uploadDirectory, 'protein.fasta'),
+    '>protein\nMQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQR\n'
+  )
+  const calls = []
+  const completedText = JSON.stringify({
+    result: {
+      schemaVersion: 1,
+      outcome: 'completed',
+      summary: 'Structured Worker result is ready for Coordinator review.'
+    }
+  })
+  const nativeResponsesFormat = {
+    type: 'json_schema',
+    name: 'sciforge_output',
+    strict: true,
+    schema: workerRuntimeResultOutputSchema
+  }
+  const server = await startModelRouterServer({
+    port: 0,
+    workspaceRoot,
+    config: {
+      defaultProfile: 'default',
+      publicModelAlias: 'sciforge-router',
+      profiles: {
+        default: {
+          textReasoner: {
+            baseUrl: 'https://models.example/v1',
+            apiKeyEnv: 'SCIFORGE_TEXT_API_KEY',
+            model: 'configured-model',
+            compatibility: {
+              preferredProtocol: 'responses',
+              allowedProtocols: ['responses', 'chat-completions']
+            }
+          },
+          translators: {
+            scientific: {
+              baseUrl: 'http://scientific.example:3898',
+              tokenEnv: 'SCIFORGE_SCIENTIFIC_TOKEN',
+              model: 'protein-expert'
+            }
+          }
+        }
+      }
+    },
+    env: {
+      SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-key',
+      SCIFORGE_TEXT_API_KEY: 'opaque-test-key',
+      SCIFORGE_SCIENTIFIC_TOKEN: 'scientific-test-key'
+    },
+    fetchImpl: async (url, init) => {
+      const path = new URL(String(url)).pathname
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      calls.push({
+        path,
+        body
+      })
+      if (path.endsWith('/modality/translate')) {
+        return Response.json({
+          ok: true,
+          summary: 'Protein evidence.',
+          data: {
+            modality: 'protein',
+            model: 'protein-expert',
+            summary: 'A translated protein observation for the Worker.'
+          },
+          provenance: {}
+        })
+      }
+      if (path.endsWith('/responses')) {
+        return Response.json({ error: { message: 'unsupported endpoint' } }, { status: 404 })
+      }
+      assert.equal(path.endsWith('/chat/completions'), true)
+      return Response.json({
+        id: 'chatcmpl-worker-result',
+        object: 'chat.completion',
+        model: 'configured-model',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: completedText },
+          finish_reason: 'stop'
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
+      })
+    }
+  })
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer router-runtime-key',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Complete the protein Collaboration Worker task.' },
+            {
+              type: 'input_object',
+              ref: '.sciforge/uploads/worker-protein/protein.fasta',
+              mimeType: 'text/plain',
+              title: 'protein.fasta'
+            }
+          ]
+        }],
+        text: { format: nativeResponsesFormat }
+      })
+    })
+    const body = await response.json()
+
+    assert.equal(response.status, 200, JSON.stringify(body))
+    assert.deepEqual(calls.map(({ path }) => path), [
+      '/modality/translate',
+      '/v1/responses',
+      '/v1/chat/completions'
+    ])
+    assert.deepEqual(calls[2]?.body.response_format, {
+      type: 'json_schema',
+      json_schema: {
+        name: nativeResponsesFormat.name,
+        strict: nativeResponsesFormat.strict,
+        schema: workerRuntimeResultOutputSchema
+      }
+    })
+    const textReasonerBody = JSON.stringify(calls[2]?.body)
+    assert.match(textReasonerBody, /translated protein observation/u)
+    assert.doesNotMatch(textReasonerBody, /final_answer|need_more_visual_info/u)
+    assert.deepEqual(parseWorkerRuntimeResult(body.output_text), {
+      schemaVersion: 1,
+      outcome: 'completed',
+      summary: 'Structured Worker result is ready for Coordinator review.'
+    })
+  } finally {
+    await server.close()
+  }
+})
 
 /**
  * This is the smallest Worker-side integration slice. The Coordinator setup
@@ -278,9 +471,11 @@ test('text-only Worker runtime completes through Adapter → Outbox → HTTP Clo
             turnId: 'runtime-mvp-worker-turn',
             state: 'completed',
             text: JSON.stringify({
-              schemaVersion: 1,
-              outcome: 'completed',
-              summary: `## Expert / Role and Sub-question\n- [expert:design analyst] [worker:${worker.userId}]\n## Conclusion\n- [expert:design analyst] The design analysis is complete.\n## Evidence or basis\n- [source:task-brief] Runtime path was exercised; no experiment was executed.\n## Recommendation or next action\n- [expert:design analyst] Coordinator should review this design input.`
+              result: {
+                schemaVersion: 1,
+                outcome: 'completed',
+                summary: `## Expert / Role and Sub-question\n- [expert:design analyst] [worker:${worker.userId}]\n## Conclusion\n- [expert:design analyst] The design analysis is complete.\n## Evidence or basis\n- [source:task-brief] Runtime path was exercised; no experiment was executed.\n## Recommendation or next action\n- [expert:design analyst] Coordinator should review this design input.`
+              }
             })
           }
         }

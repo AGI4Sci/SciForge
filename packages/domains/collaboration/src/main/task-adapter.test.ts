@@ -50,6 +50,10 @@ import {
 } from './task-adapter.js'
 import { collaborationTaskViewForRun } from './runtime.js'
 import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
+import {
+  WORKER_RESULT_SUMMARY_MAX_CODE_POINTS,
+  workerRuntimeResultOutputSchema
+} from './worker-runtime-result.js'
 
 const OFFER_ID = 'ofr_Offer0000001'
 const SUPERSEDING_EXECUTION_ID = 'exe_Exec00000002'
@@ -80,6 +84,23 @@ const DELETED_PROJECT_FENCE = {
 
 function workerWorkspaceRoot(executionId: string): string {
   return join(tmpdir(), `sciforge-worker-${executionId}`)
+}
+
+function completedWorkerResultText(summary: string): string {
+  return JSON.stringify({
+    result: { schemaVersion: 1, outcome: 'completed', summary }
+  })
+}
+
+function needsHumanWorkerResultText(question: string): string {
+  return JSON.stringify({
+    result: {
+      schemaVersion: 1,
+      outcome: 'needs_human',
+      question,
+      requiredAssurance: 'verified'
+    }
+  })
 }
 
 test('Worker Session titles are single-line and bounded before crossing the Host contract', () => {
@@ -130,7 +151,7 @@ test('an extended offer updates an awaiting-manual Device before it claims', asy
       threadId: 'offer-extension-thread',
       turnId: 'offer-extension-turn',
       state: 'completed',
-      text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Claimed.' })
+      text: completedWorkerResultText('Claimed.')
     })
   })
 
@@ -194,7 +215,7 @@ test('a stale claim is retried when an offer extension wins the Cloud CAS', asyn
       threadId: 'offer-extension-retry-thread',
       turnId: 'offer-extension-retry-turn',
       state: 'completed',
-      text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Claimed after retry.' })
+      text: completedWorkerResultText('Claimed after retry.')
     })
   })
 
@@ -327,6 +348,7 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   let store!: CollaborationLocalStore
   const directives: string[] = []
   const sessionTitles: string[] = []
+  let outputSchema: unknown
   const agentExecution: DomainMainAgentExecutionHost = {
     runtimeReadiness: readyRuntimeReadiness,
     prepareSession: async (request) => {
@@ -335,6 +357,7 @@ test('automatic text execution journals before Agent and uses explicit vNext com
     },
     run: async (request) => {
       directives.push(request.clientDirectiveId ?? '')
+      outputSchema = request.outputSchema
       const run = store.snapshot().taskRuns[0]
       assert.equal(run?.agentJournal[0]?.state, 'dispatched', 'Agent effect must follow durable dispatch journal')
       assert.deepEqual({
@@ -353,7 +376,7 @@ test('automatic text execution journals before Agent and uses explicit vNext com
         threadId: 'worker-thread-stable',
         turnId: 'worker-turn-stable',
         state: 'completed',
-        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Result ready.' })
+        text: completedWorkerResultText('Result ready.')
       }
     }
   }
@@ -378,6 +401,7 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   assert.equal(cloud.commands.includes('task.transition'), false)
   assert.equal(directives.length, 1)
   assert.deepEqual(sessionTitles, [cloud.task.title])
+  assert.deepEqual(outputSchema, workerRuntimeResultOutputSchema)
   assert.equal(store.snapshot().taskRuns[0]?.state, 'completed')
   assert.equal(store.snapshot().taskRuns[0]?.resultSummary, 'Result ready.')
   const completed = store.snapshot().taskRuns[0]
@@ -398,6 +422,39 @@ test('automatic text execution journals before Agent and uses explicit vNext com
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
   assert.equal(directives.length, 1, 'duplicate offer must not replay a completed execution')
+})
+
+test('a maximum-length Unicode Worker summary reaches local state and Cloud unchanged', async () => {
+  const cloud = new FakeWorkerCloud()
+  const summary = '🧬'.repeat(WORKER_RESULT_SUMMARY_MAX_CODE_POINTS)
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => ({
+      runtimeId: 'codex',
+      threadId: 'worker-unicode-summary-thread',
+      turnId: 'worker-unicode-summary-turn',
+      state: 'completed',
+      text: completedWorkerResultText(summary)
+    })
+  })
+  await created.store.transact((draft) => {
+    draft.workerAcceptancePolicies = [{
+      agentId: TEST_IDS.agentId,
+      mode: 'automatic',
+      updatedAt: TEST_TIMESTAMP
+    }]
+  })
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+
+  assert.equal(created.store.snapshot().taskRuns[0]?.state, 'completed')
+  assert.equal(created.store.snapshot().taskRuns[0]?.resultSummary, summary)
+  const submission = cloud.requests.find((request) => request.type === 'task.result.submit')
+  assert.equal(
+    submission?.type === 'task.result.submit' ? submission.summary : null,
+    summary
+  )
 })
 
 test('a malformed Worker result gets one same-Session repair turn before fencing', async () => {
@@ -426,11 +483,7 @@ test('a malformed Worker result gets one same-Session repair turn before fencing
         threadId: 'worker-thread-stable',
         turnId: 'worker-repaired-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'Repaired Worker result.'
-        })
+        text: completedWorkerResultText('Repaired Worker result.')
       }
     }
   })
@@ -459,6 +512,58 @@ test('a malformed Worker result gets one same-Session repair turn before fencing
     'task.execution.start',
     'task.result.submit'
   ])
+})
+
+test('overlong and malformed Worker results journal both failures and fail Cloud exactly once', async () => {
+  const cloud = new FakeWorkerCloud()
+  let runtimeRuns = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => {
+      runtimeRuns += 1
+      return {
+        runtimeId: 'codex',
+        threadId: 'worker-invalid-thread',
+        turnId: `worker-invalid-turn-${runtimeRuns}`,
+        state: 'completed',
+        text: runtimeRuns === 1
+          ? completedWorkerResultText('🧬'.repeat(WORKER_RESULT_SUMMARY_MAX_CODE_POINTS + 1))
+          : JSON.stringify({
+              schemaVersion: 1,
+              outcome: 'completed',
+              summary: 'Legacy flat Worker result.'
+            })
+      }
+    }
+  })
+  await created.store.transact((draft) => {
+    draft.workerAcceptancePolicies = [{
+      agentId: TEST_IDS.agentId,
+      mode: 'automatic',
+      updatedAt: TEST_TIMESTAMP
+    }]
+  })
+
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+
+  const run = created.store.snapshot().taskRuns[0]
+  assert.equal(runtimeRuns, 2)
+  assert.equal(run?.state, 'failed')
+  assert.deepEqual(run?.agentJournal.map(({ state }) => state), [
+    'observed_failure',
+    'observed_failure'
+  ])
+  assert.equal(run?.agentJournal.every(({ safeError }) => (
+    safeError?.includes('strict Worker JSON result') === true
+  )), true)
+  assert.equal(cloud.commands.filter((type) => type === 'task.execution.fail').length, 1)
+  assert.equal(cloud.commands.includes('task.result.submit'), false)
+  const failure = cloud.requests.find((request) => request.type === 'task.execution.fail')
+  assert.equal(
+    failure?.type === 'task.execution.fail' ? failure.safeFailureCode : null,
+    'invalid_runtime_result'
+  )
 })
 
 test('human guidance queued during a Worker turn is consumed on the same Runtime Session before result submission', async () => {
@@ -494,11 +599,7 @@ test('human guidance queued during a Worker turn is consumed on the same Runtime
           threadId: 'worker-interactive-thread',
           turnId: 'worker-initial-turn',
           state: 'completed',
-          text: JSON.stringify({
-            schemaVersion: 1,
-            outcome: 'completed',
-            summary: 'Initial result before human guidance.'
-          })
+          text: completedWorkerResultText('Initial result before human guidance.')
         }
       }
       assert.equal(request.runtimeId, 'codex')
@@ -509,11 +610,7 @@ test('human guidance queued during a Worker turn is consumed on the same Runtime
         threadId: 'worker-interactive-thread',
         turnId: 'worker-guided-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'Human-guided result.'
-        })
+        text: completedWorkerResultText('Human-guided result.')
       }
     }
   }, initial)
@@ -547,6 +644,7 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
     threadId?: string
     clientDirectiveId?: string
     prompt: string
+    outputSchema?: unknown
   }>> = []
   const created = await createRunner(cloud, {
     runtimeReadiness: readyRuntimeReadiness,
@@ -558,12 +656,7 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
           threadId: 'worker-human-thread',
           turnId: 'worker-human-question-turn',
           state: 'completed',
-          text: JSON.stringify({
-            schemaVersion: 1,
-            outcome: 'needs_human',
-            question: 'Should the ambiguous samples remain in the analysis?',
-            requiredAssurance: 'verified'
-          })
+          text: needsHumanWorkerResultText('Should the ambiguous samples remain in the analysis?')
         }
       }
       assert.equal(request.runtimeId, 'codex')
@@ -575,11 +668,7 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
         threadId: 'worker-human-thread',
         turnId: 'worker-human-answer-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-        summary: 'The Worker-User-confirmed analysis is complete.'
-        })
+        text: completedWorkerResultText('The Worker-User-confirmed analysis is complete.')
       }
     }
   }, initial)
@@ -674,6 +763,10 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
   )
   assert.equal(collaborationTaskViewForRun(completed, 'automatic').needsHumanQuestion, undefined)
   assert.equal(runtimeRequests.length, 2)
+  assert.deepEqual(
+    runtimeRequests.map((request) => request.outputSchema),
+    [workerRuntimeResultOutputSchema, workerRuntimeResultOutputSchema]
+  )
   assert.notEqual(runtimeRequests[0]?.clientDirectiveId, runtimeRequests[1]?.clientDirectiveId)
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
     'task.offer.accept',
@@ -724,12 +817,7 @@ test('Worker HumanNeeded preserves an answer received while its Cloud revisions 
           threadId: 'worker-human-race-thread',
           turnId: 'worker-human-race-question',
           state: 'completed',
-          text: JSON.stringify({
-            schemaVersion: 1,
-            outcome: 'needs_human',
-            question: 'Continue after the revision refresh?',
-            requiredAssurance: 'verified'
-          })
+          text: needsHumanWorkerResultText('Continue after the revision refresh?')
         }
       }
       return {
@@ -737,11 +825,7 @@ test('Worker HumanNeeded preserves an answer received while its Cloud revisions 
         threadId: 'worker-human-race-thread',
         turnId: 'worker-human-race-answer',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'The concurrent HumanNeeded answer resumed the Worker.'
-        })
+        text: completedWorkerResultText('The concurrent HumanNeeded answer resumed the Worker.')
       }
     }
   }, initial)
@@ -1119,6 +1203,7 @@ test('file execution journals Cloud and local dispatch before one real generic d
       assert.equal(request.mode, 'agent')
       assert.equal(request.runtimeId, 'codex')
       assert.equal(request.threadId, 'worker-thread-stable')
+      assert.deepEqual(request.outputSchema, workerRuntimeResultOutputSchema)
       assert.deepEqual(request.metadata, {
         source: 'collaboration.worker-task',
         projectId: TEST_IDS.projectId,
@@ -1134,11 +1219,7 @@ test('file execution journals Cloud and local dispatch before one real generic d
         threadId: request.threadId!,
         turnId: 'worker-file-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'File analysis is ready.'
-        })
+        text: completedWorkerResultText('File analysis is ready.')
       }
     }
   }, initial, capabilities)
@@ -1277,11 +1358,7 @@ test('a late Provider upload success after Device fencing remains journal-only a
       threadId: 'worker-late-upload-thread',
       turnId: 'worker-late-upload-turn',
       state: 'completed',
-      text: JSON.stringify({
-        schemaVersion: 1,
-        outcome: 'completed',
-        summary: 'The upload can begin.'
-      })
+      text: completedWorkerResultText('The upload can begin.')
     })
   }, initial, capabilities)
 
@@ -1614,7 +1691,7 @@ test('restart after accept starts and completes the same execution without accep
         threadId: 'worker-accepted-restart-thread',
         turnId: 'worker-accepted-restart-turn',
         state: 'completed',
-        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Recovered.' })
+        text: completedWorkerResultText('Recovered.')
       }
     }
   }, initial)
@@ -1726,11 +1803,7 @@ test('a response lost after the Cloud offer claim resumes its durable receipt in
         threadId: 'worker-claim-response-loss-thread',
         turnId: 'worker-claim-response-loss-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'Recovered the original accepted execution.'
-        })
+        text: completedWorkerResultText('Recovered the original accepted execution.')
       }
     }
   }, initial, noContentCapabilities(), backend, outboxFactory)
@@ -1931,7 +2004,7 @@ test('restart after a durable offer claim receipt persists and runs the same Clo
         threadId: 'worker-claim-crash-thread',
         turnId: 'worker-claim-crash-turn',
         state: 'completed',
-        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Recovered claim.' })
+        text: completedWorkerResultText('Recovered claim.')
       }
     }
   }, initial, noContentCapabilities(), backend)
@@ -2015,11 +2088,7 @@ test('restart after the delivered execution start restores its Cloud timestamp b
         threadId: 'worker-start-checkpoint-thread',
         turnId: 'worker-start-checkpoint-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'Completed after restoring the Cloud start provenance.'
-        })
+        text: completedWorkerResultText('Completed after restoring the Cloud start provenance.')
       }
     }
   }, initial, noContentCapabilities(), backend, outboxFactory)
@@ -2130,11 +2199,7 @@ test('a lost execution-start response replays one receipt and resumes with the o
         threadId: 'worker-start-response-loss-thread',
         turnId: 'worker-start-response-loss-turn',
         state: 'completed',
-        text: JSON.stringify({
-          schemaVersion: 1,
-          outcome: 'completed',
-          summary: 'Completed after the execution-start response was recovered.'
-        })
+        text: completedWorkerResultText('Completed after the execution-start response was recovered.')
       }
     }
   }, initial, noContentCapabilities(), backend, outboxFactory)
@@ -2189,7 +2254,7 @@ test('a terminal execution event aborts the active Runtime and journals its fenc
         threadId: 'worker-fenced-thread',
         turnId: 'worker-fenced-turn',
         state: 'completed',
-        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Too late.' })
+        text: completedWorkerResultText('Too late.')
       }
     }
   }, initial)
@@ -2412,12 +2477,7 @@ test('Project deletion while HumanNeeded is in flight cannot restore a fenced ru
       threadId: 'worker-delete-human-thread',
       turnId: 'worker-delete-human-turn',
       state: 'completed',
-      text: JSON.stringify({
-        schemaVersion: 1,
-        outcome: 'needs_human',
-        question: 'Should this deleted Project continue?',
-        requiredAssurance: 'verified'
-      })
+      text: needsHumanWorkerResultText('Should this deleted Project continue?')
     })
   }, initial, noContentCapabilities(), new MemoryBackend(initial), () => ({
     enqueue: baseOutbox.enqueue.bind(baseOutbox),
@@ -2464,11 +2524,7 @@ test('Project deletion while result submission is in flight cannot complete a fe
       threadId: 'worker-delete-submit-thread',
       turnId: 'worker-delete-submit-turn',
       state: 'completed',
-      text: JSON.stringify({
-        schemaVersion: 1,
-        outcome: 'completed',
-        summary: 'This result raced with Project deletion.'
-      })
+      text: completedWorkerResultText('This result raced with Project deletion.')
     })
   }, initial, noContentCapabilities(), new MemoryBackend(initial), () => ({
     enqueue: baseOutbox.enqueue.bind(baseOutbox),
@@ -2609,7 +2665,7 @@ test('restart resumes the same dispatched Agent directive instead of creating an
         threadId: 'worker-thread-stable',
         turnId: 'worker-turn-recovered',
         state: 'completed',
-        text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Recovered.' })
+        text: completedWorkerResultText('Recovered.')
       }
     }
   }, initial)
@@ -2646,7 +2702,7 @@ test('Desktop restart reconciles one persisted Session/directive without a secon
     threadId: 'worker-shutdown-recovery-thread',
     turnId: 'worker-shutdown-recovery-turn',
     state: 'completed' as const,
-    text: JSON.stringify({ schemaVersion: 1, outcome: 'completed', summary: 'Reconciled.' })
+    text: completedWorkerResultText('Reconciled.')
   }
   const first = await createRunner(cloud, {
     runtimeReadiness: readyRuntimeReadiness,
@@ -2877,11 +2933,7 @@ function manualRecoveryFixture(cloud: FakeWorkerCloud) {
       threadId: 'worker-recovery-thread',
       turnId: 'worker-recovery-turn',
       runtimeState: 'completed',
-      safeResultText: JSON.stringify({
-        schemaVersion: 1,
-        outcome: 'completed',
-        summary: 'Recovered file analysis is ready.'
-      }),
+      safeResultText: completedWorkerResultText('Recovered file analysis is ready.'),
       safeError: null
     }],
     externalJournal: [{

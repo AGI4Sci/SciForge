@@ -1,80 +1,118 @@
+import { domainMainAgentExecutionOutputSchemaSchema } from '@sciforge/domain-sdk/agent-execution'
 import { z } from 'zod'
 
-const safeSummarySchema = z.string().trim().min(1).max(32_000)
+// A worst-case JSON-escaped summary at this limit still leaves more than
+// 15 KiB in the default 64 KiB text-task task.result.submit body.
+export const WORKER_RESULT_SUMMARY_MAX_CODE_POINTS = 8_000
+
+// JSON Schema maxLength counts Unicode code points, while Zod's built-in max
+// check counts UTF-16 code units. Keep separate but equivalent validators so a
+// provider-valid emoji-heavy result remains valid at the local boundary.
+function semanticBoundedString(maxCodePoints: number): z.ZodString {
+  return z.string()
+    .refine(
+      (value) => Array.from(value).length <= maxCodePoints,
+      `Value must contain at most ${maxCodePoints} Unicode code points.`
+    )
+    .trim()
+    .min(1)
+    .regex(/\S/u)
+}
+
+function providerBoundedString(maxCodePoints: number): z.ZodString {
+  return z.string().min(1).max(maxCodePoints).regex(/\S/u)
+}
+
+const safeQuestionSchema = semanticBoundedString(4_000)
+
+const completedWorkerRuntimeResultSchema = z.object({
+  schemaVersion: z.literal(1),
+  outcome: z.literal('completed'),
+  summary: semanticBoundedString(WORKER_RESULT_SUMMARY_MAX_CODE_POINTS)
+}).strict()
+
+const needsHumanWorkerRuntimeResultSchema = z.object({
+  schemaVersion: z.literal(1),
+  outcome: z.literal('needs_human'),
+  question: safeQuestionSchema,
+  requiredAssurance: z.enum(['verified', 'strong'])
+}).strict()
 
 export const workerRuntimeResultSchema = z.discriminatedUnion('outcome', [
-  z.object({
-    schemaVersion: z.literal(1),
-    outcome: z.literal('completed'),
-    summary: safeSummarySchema
-  }).strict(),
-  z.object({
-    schemaVersion: z.literal(1),
-    outcome: z.literal('needs_human'),
-    question: z.string().trim().min(1).max(4_000),
-    requiredAssurance: z.enum(['verified', 'strong']).default('verified')
-  }).strict()
+  completedWorkerRuntimeResultSchema,
+  needsHumanWorkerRuntimeResultSchema
 ])
 
 export type WorkerRuntimeResult = z.infer<typeof workerRuntimeResultSchema>
 
-function balancedJsonObjects(text: string): string[] {
-  const candidates: string[] = []
-  for (let start = 0; start < text.length; start += 1) {
-    if (text[start] !== '{') continue
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let index = start; index < text.length; index += 1) {
-      const character = text[index]
-      if (inString) {
-        if (escaped) escaped = false
-        else if (character === '\\') escaped = true
-        else if (character === '"') inString = false
-        continue
-      }
-      if (character === '"') {
-        inString = true
-        continue
-      }
-      if (character === '{') depth += 1
-      else if (character === '}' && --depth === 0) {
-        candidates.push(text.slice(start, index + 1))
-        break
-      }
-    }
-  }
-  return candidates
-}
+/**
+ * Provider-facing wire schema for the final Worker turn.
+ *
+ * Structured-output providers require one root object and all fields in each
+ * object branch to be required. The root therefore contains one required
+ * `result` property whose value is the semantic union. This keeps the provider
+ * wire contract isomorphic to `WorkerRuntimeResult` without putting a union at
+ * the schema root or introducing nullable inactive fields that the provider
+ * could legally combine in a shape rejected by the parser.
+ */
+const workerRuntimeResultStructuredSchema = z.object({
+  // A regular union emits nested `anyOf`, which is supported by structured
+  // output providers while retaining a root object. The discriminated union
+  // above remains the canonical semantic validator.
+  result: z.union([
+    completedWorkerRuntimeResultSchema,
+    needsHumanWorkerRuntimeResultSchema
+  ])
+}).strict()
+
+const workerRuntimeResultProviderSchema = z.object({
+  result: z.union([
+    z.object({
+      schemaVersion: z.literal(1),
+      outcome: z.literal('completed'),
+      summary: providerBoundedString(WORKER_RESULT_SUMMARY_MAX_CODE_POINTS)
+    }).strict(),
+    z.object({
+      schemaVersion: z.literal(1),
+      outcome: z.literal('needs_human'),
+      question: providerBoundedString(4_000),
+      requiredAssurance: z.enum(['verified', 'strong'])
+    }).strict()
+  ])
+}).strict()
+
+export const workerRuntimeResultOutputSchema = Object.freeze(
+  domainMainAgentExecutionOutputSchemaSchema.parse(
+    z.toJSONSchema(workerRuntimeResultProviderSchema, {
+      target: 'draft-07',
+      unrepresentable: 'throw'
+    })
+  )
+)
+
+const WORKER_RESULT_FORMAT_INSTRUCTION = [
+  'The Worker result envelope is closed and always contains exactly one top-level key: result.',
+  'The result value must match exactly one closed shape: completed or needs_human.',
+  'For completed, result contains exactly schemaVersion, outcome, and summary; summary must be one JSON string containing non-whitespace content, and every task-specific table, matrix, recommendation, or design specification belongs inside that string.',
+  'For needs_human, result contains exactly schemaVersion, outcome, question, and requiredAssurance; question must be one non-whitespace bounded string and requiredAssurance must be verified or strong.',
+  'Never omit result, emit an object-valued summary, add another root key, add an inactive branch field, or use a Markdown fence.'
+].join(' ')
+
+const WORKER_RESULT_RESPONSE_INSTRUCTIONS = Object.freeze([
+  'Return exactly one JSON object and no Markdown fence.',
+  WORKER_RESULT_FORMAT_INSTRUCTION,
+  'If the task is complete: {"result":{"schemaVersion":1,"outcome":"completed","summary":"bounded result summary"}}',
+  'If the authenticated Worker User input is required: {"result":{"schemaVersion":1,"outcome":"needs_human","question":"one bounded question","requiredAssurance":"verified"}}'
+])
 
 export function parseWorkerRuntimeResult(text: string): WorkerRuntimeResult {
-  const source = text.trim()
-  if (source.includes('```')) {
-    throw new Error('Agent Runtime did not return the required strict Worker JSON result.')
-  }
-  const parseCandidate = (candidate: string): WorkerRuntimeResult | undefined => {
-    try {
-      return workerRuntimeResultSchema.parse(JSON.parse(candidate))
-    } catch {
-      return undefined
-    }
-  }
   try {
-    const exact = parseCandidate(source)
-    if (exact) return exact
+    return workerRuntimeResultStructuredSchema.parse(JSON.parse(text)).result
   } catch (error) {
     throw new Error('Agent Runtime did not return the required strict Worker JSON result.', {
       cause: error
     })
   }
-  const validCandidates = balancedJsonObjects(source)
-    .map(parseCandidate)
-    .filter((candidate): candidate is WorkerRuntimeResult => candidate !== undefined)
-  if (validCandidates.length === 1) return validCandidates[0]
-  if (validCandidates.length > 1) {
-    throw new Error('Agent Runtime returned multiple Worker JSON results.')
-  }
-  throw new Error('Agent Runtime did not return the required strict Worker JSON result.')
 }
 
 export type WorkerPromptTask = Readonly<{
@@ -130,9 +168,7 @@ export function workerTaskPrompt(task: WorkerPromptTask): string {
     ...textReportInstructions,
     ...fileInstructions,
     '',
-    'Return exactly one JSON object and no Markdown fence.',
-    'If the task is complete: {"schemaVersion":1,"outcome":"completed","summary":"bounded result summary"}',
-    'If the authenticated Worker User input is required: {"schemaVersion":1,"outcome":"needs_human","question":"one bounded question","requiredAssurance":"verified"}'
+    ...WORKER_RESULT_RESPONSE_INSTRUCTIONS
   ].join('\n')
 }
 
@@ -145,7 +181,7 @@ export function workerHumanAnswerPrompt(answer: string): string {
     bounded,
     '',
     'Continue the same Project Task in the same Workspace and Agent Session.',
-    'Return exactly one strict JSON object using the previously specified completed or needs_human shape.'
+    ...WORKER_RESULT_RESPONSE_INSTRUCTIONS
   ].join('\n')
 }
 
@@ -164,7 +200,7 @@ export function workerGuidancePrompt(guidance: string): string {
     bounded,
     '',
     'Continue the same Project Task in this exact Agent Session and apply the guidance.',
-    'Return exactly one strict JSON object using the previously specified completed or needs_human shape.'
+    ...WORKER_RESULT_RESPONSE_INSTRUCTIONS
   ].join('\n')
 }
 
@@ -179,9 +215,6 @@ export function workerResultRepairPrompt(): string {
   return [
     'Your previous Worker response did not match the required result protocol.',
     'Continue the same Project Task; do not repeat the full explanation.',
-    'Return exactly one JSON object and no Markdown fence:',
-    '{"schemaVersion":1,"outcome":"completed","summary":"bounded result summary"}',
-    'or, if authenticated Worker User input is required:',
-    '{"schemaVersion":1,"outcome":"needs_human","question":"one bounded question","requiredAssurance":"verified"}'
+    ...WORKER_RESULT_RESPONSE_INSTRUCTIONS
   ].join('\n')
 }

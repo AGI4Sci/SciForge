@@ -295,6 +295,9 @@ test('never resubmits a prompt after auth, quota, rate-limit, timeout, 5xx, or a
     { name: 'rate limit', response: Response.json({ error: { message: 'too many requests' } }, { status: 429 }), expectedCode: 'upstream_http_429' },
     { name: 'server failure', response: Response.json({ error: { message: 'temporary failure' } }, { status: 503 }), expectedCode: 'upstream_http_503' },
     { name: 'ordinary bad parameter', response: Response.json({ error: { message: 'invalid parameter temperature' } }, { status: 400 }), expectedCode: 'upstream_http_400' },
+    { name: 'structured schema validation', response: Response.json({ error: { message: 'invalid request schema: additionalProperties must be false' } }, { status: 400 }), expectedCode: 'upstream_http_400' },
+    { name: 'structured schema field path', response: Response.json({ error: { message: 'invalid value at path response_format.json_schema.schema.additionalProperties' } }, { status: 400 }), expectedCode: 'upstream_http_400' },
+    { name: 'structured content media type', response: Response.json({ error: { message: 'unsupported media type in JSON Schema contentMediaType' } }, { status: 422 }), expectedCode: 'upstream_http_422' },
     { name: 'timeout', error: new Error('request timed out'), expectedCode: 'upstream_timeout' },
   ];
 
@@ -329,6 +332,15 @@ test('classifies protocol rejection from status and structured conversion errors
   assert.equal(isDefinitiveProtocolRejection(415), true);
   assert.equal(isDefinitiveProtocolRejection(400), false);
   assert.equal(isDefinitiveProtocolRejection(422), false);
+  assert.equal(isDefinitiveProtocolRejection(400, JSON.stringify({
+    error: { message: 'invalid request schema: additionalProperties must be false' },
+  })), false);
+  assert.equal(isDefinitiveProtocolRejection(422, JSON.stringify({
+    error: { message: 'request body invalid at path text.format.schema' },
+  })), false);
+  assert.equal(isDefinitiveProtocolRejection(422, JSON.stringify({
+    error: { message: 'unsupported media type in JSON Schema contentMediaType' },
+  })), false);
   assert.equal(isDefinitiveProtocolRejection(500), false);
   assert.equal(isDefinitiveProtocolRejection(500, JSON.stringify({
     error: {
@@ -508,6 +520,318 @@ test('native Responses output schemas are transmitted on every supported upstrea
     },
   });
   assert.equal(calls[2]?.body.outputSchema, undefined);
+});
+
+test('invalid provider-neutral outputSchema never degrades to an unconstrained request', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+
+  await assert.rejects(
+    negotiator.request({
+      request: { ...request, outputSchema: [] },
+      baseUrl: 'https://models.example/v1',
+      apiKey: 'secret',
+      model: 'neutral-model',
+      compatibility: {
+        preferredProtocol: 'responses',
+        allowedProtocols: ['responses'],
+      },
+      fetchImpl: captureFetch(calls, [responsesResult('must-not-run')]),
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => (
+      error instanceof UpstreamRequestError
+      && error.code === 'upstream_protocol_capability_unsupported'
+      && /outputSchema JSON Schema must be an object/u.test(error.message)
+    ),
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('json_object mode is preserved in both directions across OpenAI upstream wires', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const jsonObjectRequest = {
+    ...request,
+    text: { format: { type: 'json_object' } },
+  };
+
+  await negotiator.request({
+    request: jsonObjectRequest,
+    baseUrl: 'https://responses.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'responses',
+      allowedProtocols: ['responses'],
+    },
+    fetchImpl: captureFetch(calls, [responsesResult('{}')]),
+    preferredProtocol: 'responses',
+  });
+  await negotiator.request({
+    request: jsonObjectRequest,
+    baseUrl: 'https://chat.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'chat-completions',
+      allowedProtocols: ['chat-completions'],
+    },
+    fetchImpl: captureFetch(calls, [chatResult('{}')]),
+    preferredProtocol: 'chat-completions',
+  });
+  await negotiator.request({
+    request: {
+      ...request,
+      response_format: { type: 'json_object' },
+    },
+    baseUrl: 'https://chat-ingress.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'responses',
+      allowedProtocols: ['responses'],
+    },
+    fetchImpl: captureFetch(calls, [responsesResult('{}')]),
+    preferredProtocol: 'responses',
+  });
+
+  assert.deepEqual(calls[0]?.body.text, { format: { type: 'json_object' } });
+  assert.deepEqual(calls[1]?.body.response_format, { type: 'json_object' });
+  assert.deepEqual(calls[2]?.body.text, { format: { type: 'json_object' } });
+});
+
+test('Responses text controls map only to protocols that can represent them', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const text = {
+    verbosity: 'low',
+    format: { type: 'json_object' },
+  };
+
+  await negotiator.request({
+    request: { ...request, text },
+    baseUrl: 'https://responses.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'responses',
+      allowedProtocols: ['responses'],
+    },
+    fetchImpl: captureFetch(calls, [responsesResult('{}')]),
+    preferredProtocol: 'responses',
+  });
+  await negotiator.request({
+    request: { ...request, text },
+    baseUrl: 'https://chat.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'chat-completions',
+      allowedProtocols: ['chat-completions'],
+    },
+    fetchImpl: captureFetch(calls, [chatResult('{}')]),
+    preferredProtocol: 'chat-completions',
+  });
+  await assert.rejects(
+    negotiator.request({
+      request: { ...request, text },
+      baseUrl: 'https://anthropic.example/v1',
+      apiKey: 'secret',
+      model: 'neutral-model',
+      compatibility: {
+        preferredProtocol: 'anthropic-messages',
+        allowedProtocols: ['anthropic-messages'],
+      },
+      fetchImpl: captureFetch(calls, []),
+      preferredProtocol: 'anthropic-messages',
+    }),
+    (error: unknown) => (
+      error instanceof UpstreamRequestError
+      && error.code === 'upstream_protocol_capability_unsupported'
+      && /Responses text controls/u.test(error.message)
+    ),
+  );
+
+  assert.deepEqual(calls[0]?.body.text, text);
+  assert.deepEqual(calls[1]?.body.response_format, { type: 'json_object' });
+  assert.equal(calls[1]?.body.verbosity, 'low');
+  assert.equal(calls.length, 2);
+});
+
+test('Chat-only optional JSON Schema fields survive the real negotiation path', async () => {
+  const calls: CapturedCall[] = [];
+  await new UpstreamProtocolNegotiator().request({
+    request: {
+      ...request,
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'answer', strict: null },
+      },
+    },
+    baseUrl: 'https://chat.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'chat-completions',
+      allowedProtocols: ['chat-completions'],
+    },
+    fetchImpl: captureFetch(calls, [chatResult('{}')]),
+    preferredProtocol: 'chat-completions',
+  });
+
+  assert.deepEqual(calls[0]?.body.response_format, {
+    type: 'json_schema',
+    json_schema: { name: 'answer', strict: false },
+  });
+});
+
+test('structured-output descriptions survive request hygiene and OpenAI fallback', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const description = 'AbCd0123_+'.repeat(60);
+  const schema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+  };
+
+  await negotiator.request({
+    request: {
+      ...request,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'answer_contract',
+          description,
+          strict: true,
+          schema,
+        },
+      },
+    },
+    baseUrl: 'https://chat.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'chat-completions',
+      allowedProtocols: ['chat-completions'],
+    },
+    fetchImpl: captureFetch(calls, [chatResult('{"answer":"ok"}')]),
+    preferredProtocol: 'chat-completions',
+  });
+
+  const responseFormat = calls[0]?.body.response_format as Record<string, unknown>;
+  const jsonSchema = responseFormat.json_schema as Record<string, unknown>;
+  assert.equal(jsonSchema.description, description);
+});
+
+test('non-JSON schema values fail closed instead of deleting constraints', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+
+  await assert.rejects(
+    negotiator.request({
+      request: {
+        ...request,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'bounded_number',
+            strict: true,
+            schema: { type: 'number', maximum: Number.POSITIVE_INFINITY },
+          },
+        },
+      },
+      baseUrl: 'https://models.example/v1',
+      apiKey: 'secret',
+      model: 'neutral-model',
+      compatibility: {
+        preferredProtocol: 'responses',
+        allowedProtocols: ['responses'],
+      },
+      fetchImpl: captureFetch(calls, [responsesResult('must-not-run')]),
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => (
+      error instanceof UpstreamRequestError
+      && error.code === 'upstream_protocol_capability_unsupported'
+      && /finite JSON numbers/u.test(error.message)
+    ),
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('Anthropic explicit plain-text defaults remain native and can fall back to OpenAI wires', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const result = await negotiator.request({
+    request: {
+      ...request,
+      output_config: { type: 'text' },
+    },
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    fetchImpl: captureFetch(calls, [
+      Response.json({ error: { message: 'Messages endpoint is unsupported.' } }, { status: 404 }),
+      Response.json({ error: { message: 'Responses endpoint is unsupported.' } }, { status: 404 }),
+      chatResult('plain-text-fallback'),
+    ]),
+    preferredProtocol: 'anthropic-messages',
+  });
+
+  assert.equal(result.protocol, 'chat-completions');
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+    '/v1/messages',
+    '/v1/responses',
+    '/v1/chat/completions',
+  ]);
+  assert.deepEqual(calls[0]?.body.output_config, { type: 'text' });
+  assert.equal(calls[1]?.body.output_config, undefined);
+  assert.equal(calls[2]?.body.output_config, undefined);
+});
+
+test('Anthropic output_config controls never disappear into an OpenAI fallback', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const outputSchema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+  };
+
+  for (const outputConfig of [
+    {
+      effort: 'high',
+      format: { type: 'json_schema', schema: outputSchema },
+    },
+    {
+      type: 'text',
+      effort: 'high',
+    },
+  ]) {
+    await assert.rejects(
+      negotiator.request({
+        request: {
+          ...request,
+          output_config: outputConfig,
+        },
+        baseUrl: 'https://models.example/v1',
+        apiKey: 'secret',
+        model: 'neutral-model',
+        compatibility: {
+          preferredProtocol: 'responses',
+          allowedProtocols: ['responses', 'chat-completions'],
+        },
+        fetchImpl: captureFetch(calls, []),
+        preferredProtocol: 'responses',
+      }),
+      (error: unknown) => (
+        error instanceof UpstreamRequestError
+        && error.code === 'upstream_protocol_capability_unsupported'
+        && /output_config controls/u.test(error.message)
+      ),
+    );
+  }
+  assert.equal(calls.length, 0);
 });
 
 test('structured 2xx Responses errors fall back only before any output or ambiguous data', async () => {

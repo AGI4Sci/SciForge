@@ -1543,9 +1543,11 @@ async function createFullPathWorkerHarness({
           turnId: `turn-${metadata.executionId}`,
           state: 'completed',
           text: JSON.stringify({
-            schemaVersion: 1,
-            outcome: 'completed',
-            summary: `Worker completed ${metadata.taskId}.`
+            result: {
+              schemaVersion: 1,
+              outcome: 'completed',
+              summary: `Worker completed ${metadata.taskId}.`
+            }
           })
         }
       }

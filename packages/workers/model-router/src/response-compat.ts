@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import { normalizeProviderJsonSchema } from './provider-compat';
 
@@ -61,6 +62,7 @@ export type AnthropicMessagesRequest = {
   thinking?: unknown;
   stop_sequences?: unknown;
   stream?: unknown;
+  output_config?: unknown;
 };
 
 export type CanonicalTerminalDetails = {
@@ -117,8 +119,9 @@ export function responsesToChatCompletions(
 ): JsonObject {
   const toolAliases = chatToolNameAliasesFromResponsesTools(request.tools);
   const reasoning = isRecord(request.reasoning) ? request.reasoning : undefined;
+  const text = isRecord(request.text) ? request.text : undefined;
   const reasoningEffort = stringValue(request.reasoning_effort) || (reasoning ? stringValue(reasoning.effort) : '');
-  const structuredOutput = chatStructuredOutputFormat(request.outputSchema);
+  const structuredOutput = chatStructuredOutputFormat(request);
   return compactJsonObject({
     model: stringValue(request.model) || options.defaultModel || '',
     messages: responsesInputToMessages(request, toolAliases),
@@ -132,6 +135,7 @@ export function responsesToChatCompletions(
     asr_options: request.asr_options,
     reasoning_effort: reasoningEffort || undefined,
     stop: request.stop,
+    verbosity: text?.verbosity,
     response_format: structuredOutput ?? request.response_format,
   });
 }
@@ -196,6 +200,7 @@ export function anthropicMessagesToResponses(
     thinking: request.thinking,
     stop: request.stop_sequences,
     stream: request.stream,
+    output_config: request.output_config,
   }) as ResponsesRequest;
 }
 
@@ -257,7 +262,8 @@ export function responsesToAnthropicMessages(
   }
   const maxTokens = numberValue(request.max_output_tokens) || numberValue(request.max_tokens);
   const effectiveMaxTokens = maxTokens && maxTokens > 0 ? maxTokens : 4096;
-  const structuredOutput = anthropicStructuredOutputFormat(request.outputSchema);
+  const structuredOutput = anthropicStructuredOutputFormat(request);
+  const outputConfig = isRecord(request.output_config) ? request.output_config : {};
   return compactJsonObject({
     model: stringValue(request.model) || options.defaultModel || '',
     system: system.length > 0 ? system : undefined,
@@ -271,48 +277,366 @@ export function responsesToAnthropicMessages(
     thinking: responsesReasoningToAnthropicThinking(request, effectiveMaxTokens),
     stop_sequences: request.stop,
     stream: request.stream,
-    output_config: structuredOutput ?? request.output_config,
+    output_config: structuredOutput ? { ...outputConfig, ...structuredOutput } : request.output_config,
   });
 }
 
 /**
- * Converts the Host-owned schema into the native structured-output envelope
- * understood by provider APIs. Keeping this conversion at the wire boundary
- * prevents protocol negotiation from silently dropping output constraints.
+ * Resolves every supported structured-output representation into one
+ * descriptor. Keeping this precedence and conversion at the wire boundary
+ * prevents protocol negotiation from silently dropping or changing output
+ * constraints.
  */
-function structuredOutputFormat(schema: unknown): JsonObject | undefined {
-  const normalized = jsonValue(schema);
-  if (!isRecord(normalized)) return undefined;
+function structuredOutputContract(request: ResponsesRequest): StructuredOutputContract | undefined {
+  const contracts: StructuredOutputContract[] = [];
+  if (request.outputSchema !== undefined) {
+    contracts.push({
+      source: 'outputSchema',
+      type: 'json_schema',
+      name: 'sciforge_output',
+      strict: true,
+      schema: structuredOutputSchema(request.outputSchema, 'outputSchema'),
+    });
+  }
+
+  const text = optionalRecord(request.text, 'Responses text');
+  const responsesFormat = structuredOutputFormatRecord(
+    text?.format,
+    'Responses text.format',
+    ['text', 'json_object', 'json_schema'],
+  );
+  if (responsesFormat?.type === 'json_schema') {
+    assertOnlyKeys(
+      responsesFormat,
+      ['type', 'name', 'description', 'strict', 'schema'],
+      'Responses text.format',
+    );
+    contracts.push({
+      source: 'text.format',
+      type: 'json_schema',
+      name: structuredOutputName(responsesFormat, 'Responses text.format'),
+      description: structuredOutputDescription(responsesFormat, 'Responses text.format'),
+      strict: structuredOutputStrict(responsesFormat, 'Responses text.format'),
+      schema: structuredOutputSchema(responsesFormat.schema, 'Responses text.format'),
+    });
+  } else if (responsesFormat?.type === 'json_object') {
+    assertOnlyKeys(responsesFormat, ['type'], 'Responses text.format');
+    contracts.push({ source: 'text.format', type: 'json_object' });
+  } else if (responsesFormat?.type === 'text') {
+    assertOnlyKeys(responsesFormat, ['type'], 'Responses text.format');
+    contracts.push({ source: 'text.format', type: 'text' });
+  }
+
+  const responseFormat = structuredOutputFormatRecord(
+    request.response_format,
+    'Chat response_format',
+    ['text', 'json_object', 'json_schema'],
+  );
+  if (responseFormat?.type === 'json_schema') {
+    assertOnlyKeys(responseFormat, ['type', 'json_schema'], 'Chat response_format');
+    const chatFormat = isRecord(responseFormat.json_schema) ? responseFormat.json_schema : undefined;
+    if (!chatFormat) {
+      throw new RangeError('Chat response_format.json_schema must be an object.');
+    }
+    assertOnlyKeys(
+      chatFormat,
+      ['name', 'description', 'strict', 'schema'],
+      'Chat response_format.json_schema',
+    );
+    contracts.push({
+      source: 'response_format',
+      type: 'json_schema',
+      name: structuredOutputName(chatFormat, 'Chat response_format'),
+      description: structuredOutputDescription(chatFormat, 'Chat response_format'),
+      strict: structuredOutputStrict(chatFormat, 'Chat response_format'),
+      schema: Object.hasOwn(chatFormat, 'schema')
+        ? structuredOutputSchema(chatFormat.schema, 'Chat response_format')
+        : undefined,
+    });
+  } else if (responseFormat?.type === 'json_object') {
+    assertOnlyKeys(responseFormat, ['type'], 'Chat response_format');
+    contracts.push({ source: 'response_format', type: 'json_object' });
+  } else if (responseFormat?.type === 'text') {
+    assertOnlyKeys(responseFormat, ['type'], 'Chat response_format');
+    contracts.push({ source: 'response_format', type: 'text' });
+  }
+
+  const outputConfig = optionalRecord(request.output_config, 'Anthropic output_config');
+  const anthropicFormat = outputConfig?.format === null
+    ? undefined
+    : structuredOutputFormatRecord(
+      outputConfig?.format,
+      'Anthropic output_config.format',
+      ['json_schema'],
+    );
+  if (anthropicFormat?.type === 'json_schema') {
+    assertOnlyKeys(anthropicFormat, ['type', 'schema'], 'Anthropic output_config.format');
+    contracts.push({
+      source: 'output_config.format',
+      type: 'json_schema',
+      name: 'sciforge_output',
+      strict: true,
+      schema: structuredOutputSchema(anthropicFormat.schema, 'Anthropic output_config.format'),
+    });
+  }
+
+  const canonical = contracts[0];
+  if (!canonical) return undefined;
+  for (const candidate of contracts.slice(1)) {
+    if (
+      candidate.type !== canonical.type
+      || (
+        candidate.type === 'json_schema'
+        && canonical.type === 'json_schema'
+        && (
+          candidate.strict !== canonical.strict
+          || !isDeepStrictEqual(candidate.schema, canonical.schema)
+        )
+      )
+    ) {
+      throw new RangeError(
+        `Conflicting structured-output contracts: ${canonical.source} and ${candidate.source}.`,
+      );
+    }
+  }
+  if (canonical.type === 'text') return undefined;
+  if (canonical.type === 'json_object') return canonical;
+  const descriptions = [...new Set(
+    contracts
+      .filter((contract): contract is JsonSchemaStructuredOutputContract => contract.type === 'json_schema')
+      .map((contract) => contract.description)
+      .filter((description): description is string => description !== undefined),
+  )];
+  if (descriptions.length > 1) {
+    throw new RangeError('Conflicting structured-output descriptions.');
+  }
   return {
-    type: 'json_schema',
-    name: 'sciforge_output',
-    strict: true,
-    schema: normalized,
+    ...canonical,
+    ...(descriptions[0] !== undefined ? { description: descriptions[0] } : {}),
   };
 }
 
-function chatStructuredOutputFormat(schema: unknown): JsonObject | undefined {
-  const format = structuredOutputFormat(schema);
-  if (!format) return undefined;
+export function responsesStructuredOutputFormat(request: ResponsesRequest): JsonObject | undefined {
+  const contract = structuredOutputContract(request);
+  if (!contract || contract.type === 'text') return undefined;
+  if (contract.type === 'json_object') return { type: 'json_object' };
+  if (contract.schema === undefined) {
+    throw new RangeError('Responses cannot represent a Chat JSON Schema without a schema.');
+  }
   return {
     type: 'json_schema',
-    json_schema: {
+    name: contract.name,
+    ...(contract.description !== undefined ? { description: contract.description } : {}),
+    strict: contract.strict,
+    schema: contract.schema,
+  };
+}
+
+export function hasStructuredOutputContract(request: ResponsesRequest): boolean {
+  const contract = structuredOutputContract(request);
+  return contract?.type === 'json_schema' || contract?.type === 'json_object';
+}
+
+type StructuredOutputContract =
+  | JsonSchemaStructuredOutputContract
+  | Readonly<{ source: string; type: 'text' }>
+  | Readonly<{ source: string; type: 'json_object' }>;
+
+type JsonSchemaStructuredOutputContract = Readonly<{
+  source: string;
+  type: 'json_schema';
+  name: string;
+  description?: string;
+  strict: boolean;
+  schema?: JsonObject;
+}>;
+
+function structuredOutputSchema(value: unknown, source: string): JsonObject {
+  assertJsonContractData(value, source);
+  const schema = normalizeProviderJsonSchema(value);
+  if (!isRecord(schema)) {
+    throw new RangeError(`${source} JSON Schema must be an object.`);
+  }
+  return schema;
+}
+
+function optionalRecord(value: unknown, source: string): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new RangeError(`${source} must be an object.`);
+  return value;
+}
+
+function structuredOutputFormatRecord(
+  value: unknown,
+  source: string,
+  supportedTypes: readonly string[],
+): Record<string, unknown> | undefined {
+  const format = optionalRecord(value, source);
+  if (!format) return undefined;
+  if (typeof format.type !== 'string' || !supportedTypes.includes(format.type)) {
+    throw new RangeError(`${source} type is unsupported.`);
+  }
+  return format;
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: readonly string[], source: string): void {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) throw new RangeError(`${source} contains unsupported fields.`);
+}
+
+function structuredOutputName(format: Record<string, unknown>, source: string): string {
+  if (!Object.hasOwn(format, 'name')) {
+    throw new RangeError(`${source} name is required.`);
+  }
+  if (typeof format.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/u.test(format.name)) {
+    throw new RangeError(`${source} name must contain 1-64 letters, digits, underscores, or hyphens.`);
+  }
+  return format.name;
+}
+
+function structuredOutputDescription(format: Record<string, unknown>, source: string): string | undefined {
+  if (!Object.hasOwn(format, 'description')) return undefined;
+  if (typeof format.description !== 'string') {
+    throw new RangeError(`${source} description must be a string.`);
+  }
+  return format.description;
+}
+
+function structuredOutputStrict(format: Record<string, unknown>, source: string): boolean {
+  if (!Object.hasOwn(format, 'strict') || format.strict === null) return false;
+  if (typeof format.strict !== 'boolean') {
+    throw new RangeError(`${source} strict must be a boolean.`);
+  }
+  return format.strict;
+}
+
+function assertJsonContractData(value: unknown, source: string): void {
+  const pending: unknown[] = [value];
+  const seen = new WeakSet<object>();
+  while (pending.length > 0) {
+    const entry = pending.pop();
+    if (entry === null || typeof entry === 'string' || typeof entry === 'boolean') continue;
+    if (typeof entry === 'number') {
+      if (!Number.isFinite(entry)) {
+        throw new RangeError(`${source} JSON Schema must contain only finite JSON numbers.`);
+      }
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') {
+      throw new RangeError(`${source} JSON Schema must contain only JSON values.`);
+    }
+    if (seen.has(entry)) throw new RangeError(`${source} JSON Schema must be an acyclic JSON tree.`);
+    seen.add(entry);
+    pending.push(...jsonContractChildren(entry, source));
+  }
+}
+
+function jsonContractChildren(value: object, source: string): unknown[] {
+  if (Array.isArray(value)) {
+    const names = Object.getOwnPropertyNames(value).filter((name) => name !== 'length');
+    if (
+      Object.getOwnPropertySymbols(value).length > 0
+      || names.length !== value.length
+      || names.some((name) => {
+        const index = Number(name);
+        return !Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== name;
+      })
+    ) {
+      throw new RangeError(`${source} JSON Schema must contain only plain JSON objects and arrays.`);
+    }
+    return names.map((name) => jsonContractDataProperty(value, name, source));
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new RangeError(`${source} JSON Schema must contain only plain JSON objects and arrays.`);
+  }
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new RangeError(`${source} JSON Schema must contain only plain JSON objects and arrays.`);
+  }
+  return Object.getOwnPropertyNames(value).map((name) => jsonContractDataProperty(value, name, source));
+}
+
+function jsonContractDataProperty(value: object, name: string, source: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+    throw new RangeError(`${source} JSON Schema must contain only plain JSON objects and arrays.`);
+  }
+  return descriptor.value;
+}
+
+function chatStructuredOutputFormat(request: ResponsesRequest): JsonObject | undefined {
+  const format = structuredOutputContract(request);
+  if (!format || format.type === 'text') return undefined;
+  if (format.type === 'json_object') return { type: 'json_object' };
+  return {
+    type: 'json_schema',
+    json_schema: compactJsonObject({
       name: format.name,
+      description: format.description,
       strict: format.strict,
       schema: format.schema,
-    },
+    }),
   };
 }
 
-function anthropicStructuredOutputFormat(schema: unknown): JsonObject | undefined {
-  const format = structuredOutputFormat(schema);
-  if (!format) return undefined;
+function anthropicStructuredOutputFormat(request: ResponsesRequest): JsonObject | undefined {
+  const format = structuredOutputContract(request);
+  if (!format || format.type === 'text') return undefined;
+  if (format.type === 'json_object') {
+    throw new RangeError('Anthropic cannot represent Responses json_object output mode.');
+  }
+  if (format.schema === undefined) {
+    throw new RangeError('Anthropic cannot represent a Chat JSON Schema without a schema.');
+  }
+  if (format.strict !== true) {
+    throw new RangeError('Anthropic cannot losslessly represent a non-strict Responses output schema.');
+  }
+  if (format.description !== undefined) {
+    throw new RangeError('Anthropic cannot represent a structured-output description.');
+  }
   return {
     format: {
       type: 'json_schema',
       schema: format.schema,
     },
   };
+}
+
+export function isStructuredOutputContractField(
+  request: Record<string, unknown>,
+  path: readonly string[],
+): boolean {
+  if (pathEquals(path, ['outputSchema'])) return true;
+  if (
+    pathStartsWithStructuredMetadata(path, ['text', 'format'])
+    && isRecord(request.text)
+    && isRecord(request.text.format)
+    && request.text.format.type === 'json_schema'
+  ) return true;
+  if (
+    pathStartsWithStructuredMetadata(path, ['response_format', 'json_schema'])
+    && isRecord(request.response_format)
+    && request.response_format.type === 'json_schema'
+  ) return true;
+  return pathEquals(path, ['output_config', 'format', 'schema'])
+    && isRecord(request.output_config)
+    && isRecord(request.output_config.format)
+    && request.output_config.format.type === 'json_schema';
+}
+
+function pathStartsWithStructuredMetadata(
+  path: readonly string[],
+  prefix: readonly string[],
+): boolean {
+  return path.length === prefix.length + 1
+    && prefix.every((segment, index) => path[index] === segment)
+    && ['name', 'description', 'schema'].includes(path[path.length - 1] ?? '');
+}
+
+function pathEquals(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length
+    && actual.every((segment, index) => segment === expected[index]);
 }
 
 export function responsesReasoningToAnthropicThinking(
@@ -475,6 +799,7 @@ export function estimateAnthropicMessagesInputTokens(request: AnthropicMessagesR
     system: request.system,
     messages: request.messages,
     tools: request.tools,
+    output_config: request.output_config,
   }));
 }
 
