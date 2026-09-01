@@ -52,6 +52,54 @@ test('request hygiene preserves prototype-shaped JSON keys without prototype mut
   assert.equal((Object.prototype as Record<string, unknown>).polluted, undefined);
 });
 
+test('request hygiene preserves structured-output schema subtrees as contract data', () => {
+  const opaqueConst = 'AbCd0123_+'.repeat(60);
+  const opaqueDescription = 'EfGh4567_+'.repeat(60);
+  const schema = {
+    type: 'object',
+    properties: {
+      value: { type: 'string', const: opaqueConst },
+    },
+    required: ['value'],
+    additionalProperties: false,
+  };
+  const body = {
+    outputSchema: schema,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'responses_contract',
+        description: opaqueDescription,
+        schema,
+      },
+    },
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'chat_contract',
+        description: opaqueDescription,
+        schema,
+      },
+    },
+    output_config: { format: { type: 'json_schema', schema } },
+  };
+
+  assert.deepEqual(hygienizeModelRequestBody(body), body);
+});
+
+test('request hygiene does not exempt schema-shaped fields without a structured-output discriminator', () => {
+  const opaquePayload = 'AbCd0123_+'.repeat(60);
+  const hygienized = hygienizeModelRequestBody({
+    'text.format.schema': opaquePayload,
+    text: { format: { type: 'plain_text', schema: opaquePayload } },
+  });
+  const text = hygienized.text as Record<string, unknown>;
+  const format = text.format as Record<string, unknown>;
+
+  assert.match(String(hygienized['text.format.schema']), /reason=encoded_payload/u);
+  assert.match(String(format.schema), /reason=encoded_payload/u);
+});
+
 test('request hygiene preserves opaque state only for native Responses continuation items', () => {
   const encryptedContent = 'AbCd0123_+'.repeat(80);
   const hygienized = hygienizeModelRequestBody({

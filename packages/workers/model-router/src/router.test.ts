@@ -886,9 +886,317 @@ test('Codex-shaped Responses requests negotiate to a Messages-only upstream with
   }
 });
 
+test('Codex-shaped structured output survives Responses fallback through every upstream wire', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-fallback-'));
+  const calls: CapturedFetch[] = [];
+  const outputSchema = {
+    type: 'object',
+    properties: {
+      result: {
+        type: 'object',
+        properties: {
+          outcome: { type: 'string', const: 'completed' },
+          summary: { type: 'string' },
+        },
+        required: ['outcome', 'summary'],
+        additionalProperties: false,
+      },
+    },
+    required: ['result'],
+    additionalProperties: false,
+  };
+  const providerText = JSON.stringify({
+    result: { outcome: 'completed', summary: 'Structured result preserved.' },
+  });
+  const fetchImpl: typeof fetch = async (url, init) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    calls.push({
+      url: String(url),
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      body,
+    });
+    const pathname = new URL(String(url)).pathname;
+    if (!pathname.endsWith('/messages')) {
+      return Response.json({ error: { message: 'endpoint not found' } }, { status: 404 });
+    }
+    return Response.json({
+      id: 'msg_structured_fallback',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: providerText }],
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 3, output_tokens: 2 },
+    });
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl,
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Return the exact Worker result.',
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'collaboration_worker_result',
+            strict: true,
+            schema: outputSchema,
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+      '/v1/responses',
+      '/v1/chat/completions',
+      '/v1/messages',
+    ]);
+    assert.deepEqual(calls[0]?.body.text, {
+      format: {
+        type: 'json_schema',
+        name: 'collaboration_worker_result',
+        strict: true,
+        schema: outputSchema,
+      },
+    });
+    assert.deepEqual(calls[1]?.body.response_format, {
+      type: 'json_schema',
+      json_schema: {
+        name: 'collaboration_worker_result',
+        strict: true,
+        schema: outputSchema,
+      },
+    });
+    assert.deepEqual(calls[2]?.body.output_config, {
+      format: { type: 'json_schema', schema: outputSchema },
+    });
+    assert.equal(body.output_text, providerText);
+  } finally {
+    await server.close();
+  }
+});
+
+test('structured output remains opaque when its schema overlaps Router control discriminators', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-control-'));
+  const calls: CapturedFetch[] = [];
+  const providerText = JSON.stringify({
+    type: 'final_answer',
+    content: 'schema-owned content',
+  });
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses', 'chat-completions'],
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async (url, init) => {
+      calls.push({
+        url: String(url),
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        body: await capturedRequestBody(init?.body),
+      });
+      if (new URL(String(url)).pathname.endsWith('/responses')) {
+        return Response.json({ error: { message: 'endpoint not found' } }, { status: 404 });
+      }
+      return chatCompletion('text-structured-control', providerText);
+    },
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Return the schema-owned object.',
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'schema_owned_control',
+            strict: true,
+            schema: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', const: 'final_answer' },
+                content: { type: 'string' },
+              },
+              required: ['type', 'content'],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json() as Record<string, unknown>).output_text, providerText);
+    assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+      '/v1/responses',
+      '/v1/chat/completions',
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('structured output containing provider-private values fails closed instead of being rewritten', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-sensitive-'));
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch([], [
+      chatCompletion('text-structured-sensitive', JSON.stringify({ modelEcho: 'text-model' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Return the schema-owned object.',
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'private_value_guard',
+            strict: true,
+            schema: {
+              type: 'object',
+              properties: { modelEcho: { type: 'string', const: 'text-model' } },
+              required: ['modelEcho'],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 502);
+    const responseText = await response.text();
+    assert.match(responseText, /structured_output_private_data/u);
+    assert.doesNotMatch(responseText, /text-model/u);
+  } finally {
+    await server.close();
+  }
+});
+
+test('structured output rebuilds public items from the checked output text', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-items-'));
+  const providerText = JSON.stringify({ answer: 'ok' });
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
+  const requestBody = {
+    model: 'sciforge-router',
+    input: 'Return the schema-owned object.',
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'public_item_guard',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: { answer: { type: 'string' } },
+          required: ['answer'],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async () => Response.json({
+      id: 'resp_structured_items',
+      object: 'response',
+      status: 'completed',
+      output_text: providerText,
+      output: [{
+        id: 'msg_private',
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        provider_model: 'text-model',
+        provider_url: 'https://text.example/v1',
+        content: [{
+          type: 'output_text',
+          text: JSON.stringify({ answer: 'text-secret' }),
+          annotations: [{ private: 'text-secret' }],
+        }],
+      }],
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+    }),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify(requestBody),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, providerText);
+    assert.doesNotMatch(JSON.stringify(body), /text-secret|text-model|text\.example/u);
+    const output = body.output as Array<Record<string, unknown>>;
+    assert.equal(output.length, 1);
+    assert.equal(output[0]?.type, 'message');
+    assert.deepEqual(output[0]?.content, [{
+      type: 'output_text',
+      text: providerText,
+      annotations: [],
+    }]);
+
+    const streamedResponse = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ ...requestBody, stream: true }),
+    });
+    assert.equal(streamedResponse.status, 200);
+    const streamBody = await streamedResponse.text();
+    assert.doesNotMatch(streamBody, /text-secret|text-model|text\.example/u);
+    const events = parseSseEvents(streamBody);
+    assert.equal(events.find((event) => event.type === 'response.output_text.done')?.text, providerText);
+    const completed = events.find((event) => event.type === 'response.completed')?.response;
+    assert.equal(completed?.output_text, providerText);
+    assert.equal(completed?.output?.length, 1);
+  } finally {
+    await server.close();
+  }
+});
+
 test('anthropic messages route through the configured text reasoner', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-messages-'));
   const calls: CapturedFetch[] = [];
+  const outputSchema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+    additionalProperties: false,
+  };
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig(),
@@ -914,6 +1222,10 @@ test('anthropic messages route through the configured text reasoner', async () =
         model: 'sciforge-router',
         max_tokens: 256,
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+        output_config: {
+          effort: 'high',
+          format: { type: 'json_schema', schema: outputSchema },
+        },
       }),
     });
 
@@ -927,6 +1239,10 @@ test('anthropic messages route through the configured text reasoner', async () =
     assert.deepEqual(calls[0]?.body.messages, [
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },
     ]);
+    assert.deepEqual(calls[0]?.body.output_config, {
+      effort: 'high',
+      format: { type: 'json_schema', schema: outputSchema },
+    });
   } finally {
     await server.close();
   }
@@ -1131,6 +1447,12 @@ test('anthropic messages accepts Claude Code model aliases as router public alia
 test('chat completions compatibility route returns OpenAI-shaped text choices', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-chat-compat-'));
   const calls: CapturedFetch[] = [];
+  const outputSchema = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+    additionalProperties: false,
+  };
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig(),
@@ -1148,10 +1470,19 @@ test('chat completions compatibility route returns OpenAI-shaped text choices', 
       body: JSON.stringify({
         model: 'sciforge-router',
         max_tokens: 256,
+        verbosity: 'low',
         messages: [
           { role: 'system', content: 'Be concise.' },
           { role: 'user', content: 'hello' },
         ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'chat_answer',
+            strict: true,
+            schema: outputSchema,
+          },
+        },
       }),
     });
 
@@ -1166,6 +1497,15 @@ test('chat completions compatibility route returns OpenAI-shaped text choices', 
     assert.equal(calls[0]?.body.messages?.[0]?.role, 'system');
     assert.match(JSON.stringify(calls[0]?.body.messages), /Be concise/);
     assert.match(JSON.stringify(calls[0]?.body.messages), /hello/);
+    assert.equal(calls[0]?.body.verbosity, 'low');
+    assert.deepEqual(calls[0]?.body.response_format, {
+      type: 'json_schema',
+      json_schema: {
+        name: 'chat_answer',
+        strict: true,
+        schema: outputSchema,
+      },
+    });
   } finally {
     await server.close();
   }
@@ -4384,6 +4724,99 @@ test('scientific file uploads are translated to evidence via the managed sci-mod
     assert.match(textBody, /source=sci-modality:protein\/esm2text-protein/);
     assert.doesNotMatch(textBody, /status=unsupported/);
     assert.doesNotMatch(textBody, /risk_marker=scientific_modality_risk:low|fallback_marker=workspace_text_fallback|MQIFVKTLTGK/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('protein evidence informs but never prefixes a structured Worker result', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-structured-protein-'));
+  await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'session-structured-protein'), { recursive: true });
+  await writeFile(
+    join(workspaceRoot, '.sciforge', 'uploads', 'session-structured-protein', 'protein.fasta'),
+    '>protein\nMQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQR\n',
+  );
+  const calls: CapturedFetch[] = [];
+  const providerText = JSON.stringify({
+    result: { outcome: 'completed', summary: 'valid worker result' },
+  });
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ scientificTranslator: testScientificTranslatorConfig() }),
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'sci-modality-runtime-token',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      Response.json({
+        ok: true,
+        summary: 'Protein evidence.',
+        data: {
+          modality: 'protein',
+          model: 'esm2text-protein',
+          summary: 'A translated protein observation.',
+        },
+        provenance: {},
+      }),
+      chatCompletion('text-structured-protein', providerText),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Analyze this protein.' },
+            {
+              type: 'input_object',
+              ref: '.sciforge/uploads/session-structured-protein/protein.fasta',
+              mimeType: 'text/plain',
+              title: 'protein.fasta',
+            },
+          ],
+        }],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'worker_result',
+            strict: true,
+            schema: {
+              type: 'object',
+              properties: {
+                result: {
+                  type: 'object',
+                  properties: {
+                    outcome: { type: 'string', const: 'completed' },
+                    summary: { type: 'string' },
+                  },
+                  required: ['outcome', 'summary'],
+                  additionalProperties: false,
+                },
+              },
+              required: ['result'],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const outputText = String((await response.json() as Record<string, unknown>).output_text);
+    assert.deepEqual(JSON.parse(outputText), JSON.parse(providerText));
+    assert.doesNotMatch(outputText, /expert translation|esm2text/u);
+    assert.equal(calls.length, 2);
+    assert.match(calls[0]?.url ?? '', /\/modality\/translate$/u);
+    const textReasonerBody = JSON.stringify(calls[1]?.body);
+    assert.match(textReasonerBody, /A translated protein observation/u);
+    assert.match(textReasonerBody, /worker_result/u);
+    assert.doesNotMatch(textReasonerBody, /final_answer|need_more_visual_info/u);
   } finally {
     await server.close();
   }

@@ -12,6 +12,7 @@ import {
   chatCompletionToResponse,
   chatToolNameAliasesFromResponsesTools,
   responsesReasoningToAnthropicThinking,
+  responsesStructuredOutputFormat,
   responsesToAnthropicMessages,
   responsesToChatCompletions,
   type JsonObject,
@@ -563,13 +564,7 @@ export function isDefinitiveProtocolRejection(
     return /\bconvert[ _-]?request[ _-]?failed\b/iu.test(normalized)
       && /\b(?:not[ _-]?implemented|unsupported)\b/iu.test(normalized);
   }
-  if (status !== 400 && status !== 422) return false;
-  return (
-    /\b(?:unknown|unsupported|unrecognized|invalid)\b.{0,48}\b(?:endpoint|route|path|protocol|media[ _-]?type|request[ _-]?(?:format|schema))\b/iu.test(normalized)
-    || /\b(?:endpoint|route|path|protocol|media[ _-]?type|request[ _-]?(?:format|schema))\b.{0,48}\b(?:unknown|unsupported|unrecognized|invalid|not found)\b/iu.test(normalized)
-    || /\b(?:unknown|unsupported|unrecognized|invalid)[ _-](?:endpoint|route|protocol|schema)\b/iu.test(normalized)
-    || /\b(?:messages|input)\b.{0,32}\b(?:is required|required field|must be provided)\b/iu.test(normalized)
-  );
+  return false;
 }
 
 export function buildUpstreamEndpointUrl(baseUrl: string, path: string): string {
@@ -592,13 +587,14 @@ const responsesDriver: UpstreamDriver = {
   prepare(options) {
     const profile = resolveProviderCompatibility(options.compatibility, 'responses');
     let request: ResponsesRequest;
+    let body: JsonObject;
     try {
       request = normalizeProviderResponsesRequest(options.request, profile);
+      body = responsesRequestBody(request, options.model);
     } catch (error) {
       throw providerNormalizationCapabilityError(error);
     }
     assertResponsesCapabilities(request);
-    const body = responsesRequestBody(request, options.model);
     return {
       url: buildUpstreamEndpointUrl(options.baseUrl, 'responses'),
       headers: bearerHeaders(options.apiKey),
@@ -714,28 +710,26 @@ function bearerHeaders(apiKey: string): Record<string, string> {
 
 function responsesRequestBody(request: ResponsesRequest, model: string): JsonObject {
   const body = { ...request, model } as Record<string, unknown>;
-  const outputSchema = body.outputSchema;
+  const structuredOutput = responsesStructuredOutputFormat(request);
   delete body.outputSchema;
+  delete body.response_format;
+  delete body.output_config;
   const maxOutputTokens = request.max_output_tokens ?? request.max_tokens;
   delete body.max_tokens;
   if (isDisabledAnthropicThinking(request.thinking)) delete body.thinking;
   if (maxOutputTokens !== undefined) body.max_output_tokens = maxOutputTokens;
-  if (outputSchema !== undefined && isRecord(outputSchema)) {
+  if (structuredOutput) {
     const currentText = isRecord(body.text) ? body.text : {};
     body.text = {
       ...currentText,
-      format: {
-        type: 'json_schema',
-        name: 'sciforge_output',
-        strict: true,
-        schema: outputSchema,
-      },
+      format: structuredOutput,
     };
   }
   return compactObject(body);
 }
 
 function assertResponsesCapabilities(request: ResponsesRequest): void {
+  assertNoUnmappedAnthropicOutputConfig(request, 'OpenAI Responses');
   if (request.thinking !== undefined && !isDisabledAnthropicThinking(request.thinking)) {
     throw new UpstreamCapabilityError('OpenAI Responses cannot losslessly represent Anthropic thinking controls.');
   }
@@ -745,6 +739,8 @@ function assertResponsesCapabilities(request: ResponsesRequest): void {
 }
 
 function assertChatCapabilities(request: ResponsesRequest): void {
+  assertNoUnmappedAnthropicOutputConfig(request, 'Chat Completions');
+  assertNoUnmappedResponsesTextControls(request, 'Chat Completions', ['format', 'verbosity']);
   if (request.thinking !== undefined && !isDisabledAnthropicThinking(request.thinking)) {
     throw new UpstreamCapabilityError('Chat Completions cannot losslessly represent Anthropic thinking controls.');
   }
@@ -756,6 +752,7 @@ function isDisabledAnthropicThinking(value: unknown): boolean {
 }
 
 function assertAnthropicCapabilities(request: ResponsesRequest): void {
+  assertNoUnmappedResponsesTextControls(request, 'Anthropic Messages', ['format']);
   if (request.asr_options !== undefined) {
     throw new UpstreamCapabilityError('Anthropic Messages cannot represent the requested audio-transcription controls.');
   }
@@ -771,6 +768,32 @@ function assertAnthropicCapabilities(request: ResponsesRequest): void {
   }
   if (request.tool_choice === 'none') {
     throw new UpstreamCapabilityError('Anthropic Messages cannot represent tool_choice="none" without dropping tools.');
+  }
+}
+
+function assertNoUnmappedAnthropicOutputConfig(request: ResponsesRequest, target: string): void {
+  if (request.output_config === undefined) return;
+  if (!isRecord(request.output_config)) {
+    throw new UpstreamCapabilityError(`${target} cannot represent Anthropic output_config controls.`);
+  }
+  const unsupported = Object.keys(request.output_config).filter((key) => key !== 'format');
+  if (unsupported.length > 0) {
+    throw new UpstreamCapabilityError(`${target} cannot represent Anthropic output_config controls.`);
+  }
+}
+
+function assertNoUnmappedResponsesTextControls(
+  request: ResponsesRequest,
+  target: string,
+  supported: readonly string[],
+): void {
+  if (request.text === undefined) return;
+  if (!isRecord(request.text)) {
+    throw new UpstreamCapabilityError(`${target} cannot represent Responses text controls.`);
+  }
+  const unsupported = Object.keys(request.text).filter((key) => !supported.includes(key));
+  if (unsupported.length > 0) {
+    throw new UpstreamCapabilityError(`${target} cannot represent Responses text controls.`);
   }
 }
 

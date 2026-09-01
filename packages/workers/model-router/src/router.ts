@@ -10,6 +10,7 @@ import {
   chatFinishReasonFromResponse,
   chatToolNameAliasesFromResponsesTools,
   estimateAnthropicMessagesInputTokens,
+  hasStructuredOutputContract,
   makeId,
   messageOutputItem,
   responseToAnthropicMessage,
@@ -1410,6 +1411,18 @@ async function routeResponsesRequest(
   },
 ): Promise<RoutedResponse> {
   const request = isRecord(body) ? body : {};
+  let structuredOutputRequested: boolean;
+  try {
+    structuredOutputRequested = hasStructuredOutputContract(request);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw routerError(
+      422,
+      'upstream_protocol_capability_unsupported',
+      error.message,
+      'textReasoner',
+    );
+  }
   const profileId = requestedProfileId(request, context.request, context.config);
   const profile = context.config.profiles[profileId];
   if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
@@ -1668,7 +1681,10 @@ async function routeResponsesRequest(
         observations,
         visualFailure: degraded,
         strictVisualEvidence: strictVisualEvidenceRequired,
-        allowVisualSupplement: supplementRounds < maxSupplementRounds && Boolean(profile.translators.vision && visionSecret),
+        structuredOutput: structuredOutputRequested,
+        allowVisualSupplement: !structuredOutputRequested
+          && supplementRounds < maxSupplementRounds
+          && Boolean(profile.translators.vision && visionSecret),
         calls,
         request: requestForTextReasoner,
         requestOptions: textReasonerRequestOptions,
@@ -1694,6 +1710,35 @@ async function routeResponsesRequest(
       if (hasToolCall) {
         outputText = textResult.outputText;
         outputItems = textResult.outputItems;
+        break;
+      }
+
+      if (structuredOutputRequested) {
+        if (!textResult.outputText.trim()) {
+          throw routerError(
+            502,
+            'structured_output_empty',
+            'The text reasoner returned an empty structured output.',
+            'textReasoner',
+          );
+        }
+        if (
+          publicProviderOutputText(
+            textResult.outputText,
+            profile,
+            publicModelAlias,
+            traceRedactionSecrets,
+          ) !== textResult.outputText
+        ) {
+          throw routerError(
+            502,
+            'structured_output_private_data',
+            'The text reasoner returned provider-private data inside structured output.',
+            'textReasoner',
+          );
+        }
+        outputText = textResult.outputText;
+        outputItems = [messageOutputItem(textResult.outputText)];
         break;
       }
 
@@ -1763,26 +1808,28 @@ async function routeResponsesRequest(
       break;
   }
 
-  if (!outputText) {
-    if (!outputItems.length) {
-      outputText = imageNotSent
-        ? `${imageNotSentPrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
-        : degraded
-          ? `${degradedUnavailablePrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
-        : '';
+  if (!structuredOutputRequested) {
+    if (!outputText) {
+      if (!outputItems.length) {
+        outputText = imageNotSent
+          ? `${imageNotSentPrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
+          : degraded
+            ? `${degradedUnavailablePrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
+          : '';
+      }
     }
-  }
-  if (imageNotSent && !mentionsImageNotSent(outputText)) {
-    outputText = `${imageNotSentPrefix(extracted.modalities)} ${outputText}`;
-  }
-  if (degraded && !mentionsModalityUnavailable(outputText)) {
-    outputText = `${degradedUnavailablePrefix(extracted.modalities)} ${outputText}`;
-  }
-  // Transparency: surface each scientific expert's raw output verbatim at the top of the answer.
-  if (scientificEvidence.length > 0) {
-    const block = formatScientificEvidenceBlock(scientificEvidence);
-    outputText = outputText ? `${block}${outputText}` : block.trimEnd();
-    outputItems = prependScientificEvidenceToOutputItems(outputItems, block.trimEnd(), outputText);
+    if (imageNotSent && !mentionsImageNotSent(outputText)) {
+      outputText = `${imageNotSentPrefix(extracted.modalities)} ${outputText}`;
+    }
+    if (degraded && !mentionsModalityUnavailable(outputText)) {
+      outputText = `${degradedUnavailablePrefix(extracted.modalities)} ${outputText}`;
+    }
+    // Transparency: surface each scientific expert's raw output verbatim at the top of the answer.
+    if (scientificEvidence.length > 0) {
+      const block = formatScientificEvidenceBlock(scientificEvidence);
+      outputText = outputText ? `${block}${outputText}` : block.trimEnd();
+      outputItems = prependScientificEvidenceToOutputItems(outputItems, block.trimEnd(), outputText);
+    }
   }
   if (outputText && !outputItems.some((item) => item.type !== 'reasoning')) {
     outputItems = [...outputItems, messageOutputItem(outputText)];
@@ -2968,6 +3015,7 @@ async function callTextReasoner(options: {
   observations: string[];
   visualFailure: boolean;
   strictVisualEvidence: boolean;
+  structuredOutput: boolean;
   allowVisualSupplement: boolean;
   calls: ProviderCallRecord[];
   request: Record<string, unknown>;
@@ -2978,10 +3026,12 @@ async function callTextReasoner(options: {
   preferredProtocol: UpstreamWireProtocol;
   traceSession?: ModelRouterTraceSession;
 }) {
-  const outputContractInstruction = options.strictVisualEvidence
-    ? 'Return only the caller-requested strict visual evidence JSON object. Do not add a control envelope or nest it under another field.'
-    : 'When answering with text instead of a tool call, return strict JSON only: {"type":"final_answer","content":"..."}.';
-  const supplementInstruction = options.allowVisualSupplement
+  const outputContractInstruction = options.structuredOutput
+    ? 'Return only the caller-requested structured output and follow its native schema exactly. Do not add a Router control envelope or nest the result under another field.'
+    : options.strictVisualEvidence
+      ? 'Return only the caller-requested strict visual evidence JSON object. Do not add a control envelope or nest it under another field.'
+      : 'When answering with text instead of a tool call, return strict JSON only: {"type":"final_answer","content":"..."}.';
+  const supplementInstruction = !options.structuredOutput && options.allowVisualSupplement
     ? 'If essential visual evidence is missing, you may instead return strict JSON only: {"type":"need_more_visual_info","target":"<modality_input id>","question":"...","reason":"..."}.'
     : '';
   const controlInstruction = options.observations.length
@@ -2993,8 +3043,12 @@ async function callTextReasoner(options: {
       outputContractInstruction,
       supplementInstruction,
       'If the request provides tools and the Agent Host protocol requires one, use the provider tool-call protocol instead of describing the tool call in text.',
-      'If any modality_input or visual_input is unavailable, the final answer must explicitly state that the referenced modality could not be inspected.',
-      'If any image observation has status=not_sent, the final answer must explicitly state that the image was not sent to the active text-only model and could not be inspected.',
+      ...(!options.structuredOutput
+        ? [
+          'If any modality_input or visual_input is unavailable, the final answer must explicitly state that the referenced modality could not be inspected.',
+          'If any image observation has status=not_sent, the final answer must explicitly state that the image was not sent to the active text-only model and could not be inspected.',
+        ]
+        : []),
     ].join(' ')
     : undefined;
   const messages: JsonObject[] = options.observations.length
@@ -3672,6 +3726,8 @@ function chatCompletionsToResponsesRequest(body: Record<string, unknown>, public
     ...(body.reasoning_effort !== undefined ? { reasoning_effort: body.reasoning_effort } : {}),
     ...(body.stop !== undefined ? { stop: body.stop } : {}),
     ...(body.stream !== undefined ? { stream: body.stream } : {}),
+    ...(body.verbosity !== undefined ? { text: { verbosity: body.verbosity } } : {}),
+    ...(body.response_format !== undefined ? { response_format: body.response_format } : {}),
   };
 }
 

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { isStructuredOutputContractField } from './response-compat';
+
 type JsonRecord = Record<string, unknown>;
 
 const MAX_TOOL_OUTPUT_CHARS = 6_000;
@@ -17,6 +19,8 @@ const OMITTED_SHELL_COMMAND =
 
 export function hygienizeModelRequestBody(body: Record<string, unknown>): Record<string, unknown> {
   return hygienizeValue(body, {
+    path: [],
+    root: body,
     source: 'model_request',
     visualGenerateCallIds: collectVisualGenerateCallIds(body),
   }) as Record<string, unknown>;
@@ -69,6 +73,7 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
     return value.map((entry, index) => hygienizeValue(entry, {
       ...context,
       key: undefined,
+      path: [...context.path, String(index)],
       source: `${context.source}.${index}`,
     }));
   }
@@ -83,8 +88,11 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
     && context.visualGenerateCallIds?.has(callId);
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
-    const hygienized = hygienizeValue(entry, {
+    const path = [...context.path, key];
+    const hygienized = isStructuredOutputContractField(context.root, path) ? entry : hygienizeValue(entry, {
       key,
+      path,
+      root: context.root,
       role,
       recordType,
       routeHandoffAllowed,
@@ -392,6 +400,8 @@ function stringField(value: unknown) {
 
 type HygieneContext = {
   key?: string;
+  path: readonly string[];
+  root: Record<string, unknown>;
   role?: string;
   recordType?: string;
   routeHandoffAllowed?: boolean;
