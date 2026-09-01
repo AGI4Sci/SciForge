@@ -87,10 +87,10 @@ export function defineDomainMainAgentRoutingContract(
     ...parsed,
     triggerHints: Object.freeze([...parsed.triggerHints]),
     allowedRoutes: Object.freeze([...parsed.allowedRoutes]),
-    workflow: Object.freeze(parsed.workflow.map((step) => Object.freeze({
+    workflow: Object.freeze(parsed.workflow.map(({ appliesToRoutes, ...step }) => Object.freeze({
       ...step,
-      ...(step.appliesToRoutes
-        ? { appliesToRoutes: Object.freeze([...step.appliesToRoutes]) }
+      ...(appliesToRoutes
+        ? { appliesToRoutes: Object.freeze([...appliesToRoutes]) }
         : {})
     }))),
     reproducibilityRequirements: Object.freeze([...parsed.reproducibilityRequirements])
