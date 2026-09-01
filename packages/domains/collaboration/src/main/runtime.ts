@@ -750,6 +750,44 @@ export class CollaborationRuntime {
     return this.requireTasks().submitTaskInteraction(input)
   }
 
+  /**
+   * Authorize an ordinary Agent Session against the exact local Worker run.
+   * The capability broker authenticates the Principal and Session envelope;
+   * this domain joins those facts to its own durable execution ownership.
+   */
+  authorizeTaskInteraction(
+    input: Readonly<{ projectId: string; taskId: string; executionId?: string | null }>,
+    session: Readonly<{ runtimeId: string; threadId: string }>,
+    principalUserId: string
+  ): void {
+    const state = this.store.snapshot()
+    if (state.user?.userId !== principalUserId) {
+      throw new Error('The current Principal does not own this local collaboration identity.')
+    }
+    const candidates = state.taskRuns.filter((run) => (
+      run.offer.projectId === input.projectId &&
+      run.offer.taskId === input.taskId &&
+      (!input.executionId || run.offer.executionId === input.executionId)
+    ))
+    const boundRuns = candidates.filter((candidate) => (
+      candidate.runtimeId === session.runtimeId && candidate.threadId === session.threadId
+    ))
+    if (boundRuns.length !== 1) {
+      throw new Error('The ordinary Agent Session is not bound to this exact Worker execution.')
+    }
+    const run = boundRuns[0]
+    if (input.executionId && run.offer.executionId !== input.executionId) {
+      throw new Error('The requested execution does not match the bound Worker Session.')
+    }
+    if (
+      !run.execution ||
+      run.execution.assigneeUserId !== principalUserId ||
+      run.execution.assigneeAgentId !== this.localAgentIdentity
+    ) {
+      throw new Error('The current Principal and local Agent Device do not own this Worker execution.')
+    }
+  }
+
   appendTaskCheckpoint(input: TaskCheckpointCreate): Promise<CollaborationTaskCheckpoint> {
     return this.requireTasks().appendTaskCheckpoint(input)
   }

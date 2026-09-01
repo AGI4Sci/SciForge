@@ -203,6 +203,119 @@ test('global collaboration mutations satisfy the production broker contract with
   ))?.effect, 'destructive')
 })
 
+test('Agent Task interaction capabilities fail closed without a Principal, Session, or owned execution', async () => {
+  let authorizationCalls = 0
+  let rejectOwnership = true
+  let submittedInput: unknown
+  const runtime = {
+    authorizeTaskInteraction: () => {
+      authorizationCalls += 1
+      if (rejectOwnership) throw new Error('execution ownership mismatch')
+    },
+    submitTaskInteraction: async (input: unknown) => {
+      submittedInput = input
+      return {
+        interactionId: 'int_TaskInteract01',
+        idempotencyKey: 'idem_task-interaction_success',
+        projectId: TEST_IDS.projectId,
+        taskId: TEST_IDS.taskId,
+        executionId: TEST_IDS.executionId,
+        kind: 'pause',
+        origin: 'agent',
+        text: null,
+        clientDirectiveId: null,
+        state: 'queued',
+        attempts: 0,
+        createdAt: '2026-08-31T00:00:00.000Z',
+        updatedAt: '2026-08-31T00:00:00.000Z',
+        dispatchedAt: null,
+        completedAt: null,
+        error: null
+      }
+    },
+    taskInteractionView: () => ({
+      projectId: TEST_IDS.projectId,
+      taskId: TEST_IDS.taskId,
+      state: 'idle',
+      pending: [],
+      interactions: [],
+      checkpoints: []
+    })
+  } as unknown as CollaborationRuntime
+  const definitions = createCollaborationCapabilityFactory<CollaborationCapabilityOptions>({
+    defineCapability: (definition) => definition,
+    getRuntime: () => runtime
+  }).createDefinitions()
+  const submit = definitions.find(({ id }) => id === COLLABORATION_CAPABILITY_IDS.taskInteractionSubmit)!
+  const input = {
+    projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId,
+    executionId: TEST_IDS.executionId,
+    kind: 'pause' as const,
+    origin: 'agent' as const
+  }
+  const assertPrincipalCurrent = () => undefined
+  await assert.rejects(
+    submit.handler(input, {
+      caller: { audience: 'agent' },
+      assertPrincipalCurrent
+    }),
+    /current Host Principal/
+  )
+  await assert.rejects(
+    submit.handler(input, {
+      caller: {
+        audience: 'agent',
+        principal: {
+          authority: 'test',
+          subject: TEST_IDS.userId,
+          assurance: 'cloud-authenticated',
+          deviceId: 'device-test',
+          identityVersion: 1
+        }
+      },
+      assertPrincipalCurrent
+    }),
+    /ordinary Session/
+  )
+  await assert.rejects(
+    submit.handler(input, {
+      caller: {
+        audience: 'agent',
+        principal: {
+          authority: 'test',
+          subject: TEST_IDS.userId,
+          assurance: 'cloud-authenticated',
+          deviceId: 'device-test',
+          identityVersion: 1
+        }
+      },
+      ordinarySession: { runtimeId: 'runtime-test', threadId: 'thread-test' },
+      assertPrincipalCurrent
+    }),
+    /execution ownership mismatch/
+  )
+  assert.equal(authorizationCalls, 1)
+
+  rejectOwnership = false
+  const result = await submit.handler(input, {
+    caller: {
+      audience: 'agent',
+      principal: {
+        authority: 'test',
+        subject: TEST_IDS.userId,
+        assurance: 'cloud-authenticated',
+        deviceId: 'device-test',
+        identityVersion: 1
+      }
+    },
+    ordinarySession: { runtimeId: 'runtime-test', threadId: 'thread-test' },
+    assertPrincipalCurrent
+  })
+  assert.deepEqual(submittedInput, { ...input, origin: 'agent' })
+  assert.equal((result.output as { interaction: { origin: string } }).interaction.origin, 'agent')
+})
+
 test('the Collaboration entry publishes one Coordinator command service backed by its active runtime', async () => {
   const transport: AuthenticatedCloudTransport = {
     status: () => ({

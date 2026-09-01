@@ -1,6 +1,7 @@
 import type { z } from 'zod'
 import {
   defineDomainMainInternalServiceDescriptor,
+  type DomainMainCapabilityInvocationContext,
   type DomainMainInternalServiceDescriptor,
   type DomainMainHost,
   type DomainMainRuntimeDisposer,
@@ -164,7 +165,10 @@ export type CollaborationCapabilityOptions = Readonly<{
   tags: readonly string[]
   inputSchema: z.ZodType
   outputSchema: z.ZodType
-  handler: (input: unknown) => Promise<Readonly<{ output: unknown; changed?: boolean }>>
+  handler: (
+    input: unknown,
+    context?: DomainMainCapabilityInvocationContext
+  ) => Promise<Readonly<{ output: unknown; changed?: boolean }>>
 }>
 
 export type CollaborationCapabilityFactory<CapabilityDefinition = unknown> = Readonly<{
@@ -546,8 +550,9 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         'read',
         collaborationTaskInteractionReadInputSchema,
         collaborationTaskInteractionReadResultSchema,
-        async (raw) => {
+        async (raw, context) => {
           const input = collaborationTaskInteractionReadInputSchema.parse(raw) as CollaborationTaskInteractionReadInput
+          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
           return {
             output: {
               view: options.getRuntime().taskInteractionView(
@@ -568,9 +573,12 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         'workspace-write',
         collaborationTaskInteractionSubmitInputSchema,
         collaborationTaskInteractionSubmitResultSchema,
-        async (raw) => {
+        async (raw, context) => {
           const input = collaborationTaskInteractionSubmitInputSchema.parse(raw) as CollaborationTaskInteractionSubmitInput
-          const interaction = await options.getRuntime().submitTaskInteraction(input)
+          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
+          const interaction = await options.getRuntime().submitTaskInteraction(
+            context?.caller.audience === 'agent' ? { ...input, origin: 'agent' } : input
+          )
           return {
             output: {
               interaction,
@@ -593,9 +601,12 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         'workspace-write',
         collaborationTaskCheckpointAppendInputSchema,
         collaborationTaskCheckpointAppendResultSchema,
-        async (raw) => {
+        async (raw, context) => {
           const input = collaborationTaskCheckpointAppendInputSchema.parse(raw) as CollaborationTaskCheckpointAppendInput
-          const checkpoint = await options.getRuntime().appendTaskCheckpoint(input)
+          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
+          const checkpoint = await options.getRuntime().appendTaskCheckpoint(
+            context?.caller.audience === 'agent' ? { ...input, source: 'agent' } : input
+          )
           return {
             output: {
               checkpoint,
@@ -680,4 +691,37 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
       )
     ]
   })
+}
+
+function authorizeAgentTaskInteraction(
+  runtime: CollaborationRuntime,
+  input: Readonly<{
+    projectId: string
+    taskId: string
+    executionId?: string | null
+    origin?: string
+    source?: string
+  }>,
+  context: DomainMainCapabilityInvocationContext | undefined
+): void {
+  if (context?.caller.audience !== 'agent') return
+  context.assertPrincipalCurrent()
+  if (!context.caller.principal) {
+    throw new Error('This Agent operation requires a current Host Principal.')
+  }
+  if (input.origin !== undefined && input.origin !== 'agent') {
+    throw new Error('Agent Task interactions must use the agent origin.')
+  }
+  if (input.source !== undefined && input.source !== 'agent') {
+    throw new Error('Agent Task checkpoints must use the agent source.')
+  }
+  if (!context.ordinarySession) {
+    throw new Error('This Agent operation requires a Host-authenticated ordinary Session.')
+  }
+  runtime.authorizeTaskInteraction(
+    input,
+    context.ordinarySession,
+    context.caller.principal.subject
+  )
+  context.assertPrincipalCurrent()
 }
