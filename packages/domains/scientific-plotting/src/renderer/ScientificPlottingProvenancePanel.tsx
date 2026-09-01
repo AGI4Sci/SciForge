@@ -118,6 +118,10 @@ export function ScientificPlottingProvenancePanel({
     let cancelled = false
     const figureRef = activeRecord?.figureRef
     if (!figureRef) {
+      // Clear the in-flight state when the selected record has no figure. Without
+      // this reset, a previous record's request can leave the preview spinner
+      // visible indefinitely after switching to a manifest-only/model record.
+      setPreviewLoading(false)
       setPreviewSrc(null)
       setPreviewIssue(t('scientificPlottingPreviewUnavailable'))
       return () => { cancelled = true }
@@ -481,6 +485,12 @@ function GenerationEvidence({ record, client, workspaceRoot }: Readonly<{
 
   useEffect(() => {
     let cancelled = false
+    // A single panel instance is reused while the active record changes. Reset
+    // code evidence immediately so a previously loaded source cannot be shown
+    // under the newly selected record until its own artifact is loaded.
+    setCode(null)
+    setShowCode(false)
+    setCodeIssue(null)
     if (!record.codeRef) {
       setCopyState('missing')
       setCopyIssue(null)
