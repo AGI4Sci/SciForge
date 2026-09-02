@@ -337,6 +337,8 @@ export function createCollaborationRefreshCoordinator(input: Readonly<{
   })
 }
 
+type CollaborationRefreshCoordinator = ReturnType<typeof createCollaborationRefreshCoordinator>
+
 export function CollaborationPanel({
   client,
   session,
@@ -364,34 +366,50 @@ export function CollaborationPanel({
   const challengeExpiresAtRef = useRef<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const refreshCoordinator = useMemo(() => createCollaborationRefreshCoordinator({
-    load: async () => {
-      const [nextSnapshot, taskList] = await Promise.all([
-        client.readStatus(),
-        client.listTasks()
-      ])
-      return { snapshot: nextSnapshot, tasks: taskList.tasks }
-    },
-    apply: ({ snapshot: nextSnapshot, tasks: nextTasks }) => {
-      setSnapshot(nextSnapshot)
-      setTasks(nextTasks)
-      setBaseUrl((current) => current || nextSnapshot.connection.baseUrl || '')
-      setSelectedProviderKey((current) => current || nextSnapshot.providerOptions[0]?.providerKey || '')
-      setActionError(null)
-    },
-    reject: (error) => setActionError(errorMessage(error, t('collaborationUnavailable'))),
-    setLoading
-  }), [client, t])
+  const refreshCoordinatorRef = useRef<CollaborationRefreshCoordinator | null>(null)
+  const createRefreshCoordinator = useCallback(
+    () => createCollaborationRefreshCoordinator({
+      load: async () => {
+        const [nextSnapshot, taskList] = await Promise.all([
+          client.readStatus(),
+          client.listTasks()
+        ])
+        return { snapshot: nextSnapshot, tasks: taskList.tasks }
+      },
+      apply: ({ snapshot: nextSnapshot, tasks: nextTasks }) => {
+        setSnapshot(nextSnapshot)
+        setTasks(nextTasks)
+        setBaseUrl((current) => current || nextSnapshot.connection.baseUrl || '')
+        setSelectedProviderKey((current) => current || nextSnapshot.providerOptions[0]?.providerKey || '')
+        setActionError(null)
+      },
+      reject: (error) => setActionError(errorMessage(error, t('collaborationUnavailable'))),
+      setLoading
+    }),
+    [client, t]
+  )
 
   const refresh = useCallback(
-    (options?: Readonly<{ showLoading?: boolean }>) => refreshCoordinator.request(options),
-    [refreshCoordinator]
+    (options?: Readonly<{ showLoading?: boolean }>) =>
+      refreshCoordinatorRef.current?.request(options) ?? Promise.resolve(),
+    []
   )
 
   useEffect(() => {
-    void refresh()
-    return () => refreshCoordinator.dispose()
-  }, [refresh, refreshCoordinator])
+    // Create the coordinator inside the effect's lifecycle. React StrictMode
+    // replays effect setup/cleanup in development; resetting the ref during
+    // cleanup ensures the replay gets a fresh live coordinator instead of
+    // sending requests to the disposed instance.
+    const coordinator = createRefreshCoordinator()
+    refreshCoordinatorRef.current = coordinator
+    void coordinator.request()
+    return () => {
+      coordinator.dispose()
+      if (refreshCoordinatorRef.current === coordinator) {
+        refreshCoordinatorRef.current = null
+      }
+    }
+  }, [createRefreshCoordinator])
 
   useEffect(() => {
     if (view === 'settings') return
