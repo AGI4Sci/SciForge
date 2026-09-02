@@ -11,11 +11,15 @@ import {
   browserCloseOutputSchema,
   browserEmptyInputSchema,
   browserFillInputSchema,
+  browserKeyInputSchema,
   browserNavigateInputSchema,
   browserOpenInputSchema,
   browserOpenOutputSchema,
   browserPageStateSchema,
+  browserPointInputSchema,
   browserPressInputSchema,
+  browserResizeInputSchema,
+  browserScrollInputSchema,
   browserSelectInputSchema,
   type BrowserActionOutput,
   type BrowserPageState
@@ -54,6 +58,30 @@ const contracts = Object.freeze({
     actionId: BROWSER_PREVIEW_CAPABILITY_IDS.reload,
     effect: 'external-write' as const,
     inputSchema: browserEmptyInputSchema,
+    outputSchema: browserActionOutputSchema
+  },
+  resize: {
+    actionId: BROWSER_PREVIEW_CAPABILITY_IDS.resize,
+    effect: 'external-write' as const,
+    inputSchema: browserResizeInputSchema,
+    outputSchema: browserActionOutputSchema
+  },
+  hover: {
+    actionId: BROWSER_PREVIEW_CAPABILITY_IDS.hover,
+    effect: 'external-write' as const,
+    inputSchema: browserPointInputSchema,
+    outputSchema: browserActionOutputSchema
+  },
+  scroll: {
+    actionId: BROWSER_PREVIEW_CAPABILITY_IDS.scroll,
+    effect: 'external-write' as const,
+    inputSchema: browserScrollInputSchema,
+    outputSchema: browserActionOutputSchema
+  },
+  pressKey: {
+    actionId: BROWSER_PREVIEW_CAPABILITY_IDS.pressKey,
+    effect: 'external-write' as const,
+    inputSchema: browserKeyInputSchema,
     outputSchema: browserActionOutputSchema
   },
   click: {
@@ -116,6 +144,10 @@ export type BrowserPreviewCapabilityClient = Readonly<{
   back(options: MutationOptions): Promise<BrowserActionOutput>
   forward(options: MutationOptions): Promise<BrowserActionOutput>
   reload(options: MutationOptions): Promise<BrowserActionOutput>
+  resize(input: { width: number; height: number }, options: MutationOptions): Promise<BrowserActionOutput>
+  hover(input: { x: number; y: number }, options: MutationOptions): Promise<BrowserActionOutput>
+  scroll(input: { deltaX: number; deltaY: number }, options: MutationOptions): Promise<BrowserActionOutput>
+  pressKey(input: { key: string }, options: MutationOptions): Promise<BrowserActionOutput>
   click(
     input: { targetRef: string } | { x: number; y: number },
     options: MutationOptions
@@ -149,6 +181,10 @@ export function createBrowserPreviewCapabilityClient(
     back: (options) => invoker.invoke(contracts.back, {}, options),
     forward: (options) => invoker.invoke(contracts.forward, {}, options),
     reload: (options) => invoker.invoke(contracts.reload, {}, options),
+    resize: (input, options) => invoker.invoke(contracts.resize, input, options),
+    hover: (input, options) => invoker.invoke(contracts.hover, input, options),
+    scroll: (input, options) => invoker.invoke(contracts.scroll, input, options),
+    pressKey: (input, options) => invoker.invoke(contracts.pressKey, input, options),
     click: (input, options) => invoker.invoke(contracts.click, input, options)
   })
 }

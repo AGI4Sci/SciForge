@@ -56,12 +56,16 @@ function fakeService(options: Readonly<{
     back: async () => actionResult(),
     forward: async () => actionResult(),
     reload: async () => actionResult(),
+    resize: async () => actionResult(),
+    hover: async () => actionResult(),
+    scroll: async () => actionResult(),
+    pressKey: async () => actionResult(),
     click: async () => actionResult(),
     fill: async () => actionResult(),
     select: async () => actionResult(),
     press: async () => actionResult(),
     revision: () => revision,
-    closeSession: async () => undefined,
+    closeSession: async () => false,
     close: async () => undefined
   }
 }
@@ -101,6 +105,17 @@ test('browser capabilities use the governed resource contract', async () => {
     assert.equal(definition?.concurrency.revision, 'optimistic')
     assert.equal(definition?.concurrency.idempotency, 'required')
   }
+  for (const id of [
+    BROWSER_PREVIEW_CAPABILITY_IDS.resize,
+    BROWSER_PREVIEW_CAPABILITY_IDS.hover,
+    BROWSER_PREVIEW_CAPABILITY_IDS.scroll
+  ]) {
+    const definition = byId.get(id)
+    assert.equal(definition?.effect, 'external-write')
+    assert.equal(definition?.approval, 'none')
+    assert.deepEqual(definition?.audiences, ['ui'])
+  }
+  assert.deepEqual(byId.get(BROWSER_PREVIEW_CAPABILITY_IDS.pressKey)?.audiences, ['ui'])
   for (const id of [
     BROWSER_PREVIEW_CAPABILITY_IDS.click,
     BROWSER_PREVIEW_CAPABILITY_IDS.press
@@ -155,6 +170,7 @@ test('closes only the browser page named by the resource handle', async () => {
     ...fakeService(),
     closeSession: async (sessionId: string) => {
       closed.push(sessionId)
+      return true
     }
   }
   const factory = createBrowserCapabilityFactory({
@@ -184,6 +200,40 @@ test('closes only the browser page named by the resource handle', async () => {
     changed: true,
     semanticRevision: 'browser-closed'
   })
+})
+
+test('releasing a shared browser lease does not retire the resource', async () => {
+  let closeCalls = 0
+  const service = {
+    ...fakeService(),
+    closeSession: async () => {
+      closeCalls += 1
+      return false
+    }
+  }
+  const factory = createBrowserCapabilityFactory({
+    defineCapability: (definition) => definition,
+    getService: () => service
+  })
+  const close = factory.createDefinitions().find(
+    ({ id }) => id === BROWSER_PREVIEW_CAPABILITY_IDS.close
+  )!
+
+  const result = await close.handler({}, {
+    caller: { audience: 'ui', callerId: 'window:1', workspaceId: '/workspace' },
+    resource: {
+      resourceId: 'browser-page:surface-browser-a',
+      resourceKind: BROWSER_PREVIEW_RESOURCE_KIND,
+      workspaceId: '/workspace',
+      semanticRevision: 'browser-2'
+    },
+    issueResource: () => {
+      throw new Error('Close must not issue another resource.')
+    }
+  })
+
+  assert.equal(closeCalls, 1)
+  assert.deepEqual(result, { output: { closed: true }, changed: false })
 })
 
 test('repeated opens reuse the exact observer and resolve the active service lazily', async () => {

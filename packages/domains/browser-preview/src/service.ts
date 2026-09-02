@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
@@ -13,10 +13,12 @@ import {
   type BrowserPageState
 } from './contract.js'
 
-const VIEWPORT = Object.freeze({ width: 1280, height: 800 })
+const DEFAULT_VIEWPORT = Object.freeze({ width: 1280, height: 800 })
 const MAX_SNAPSHOT_CHARS = 60_000
 const LOAD_TIMEOUT_MS = 20_000
 const ACTION_TIMEOUT_MS = 10_000
+const ACTION_SETTLE_MS = 60
+const SCREENSHOT_REFRESH_MS = 2_500
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright-core') as typeof import('playwright-core')
 const PRIVATE_IPV4 = [
@@ -39,10 +41,25 @@ type BrowserSession = {
   error: string | null
   revision: number
   lastSnapshotHash: string
+  lastScreenshotDataUrl?: string
+  lastScreenshotAt: number
+  screenshotDirty: boolean
   targetRefToAria: Map<string, string>
   ariaToTargetRef: Map<string, string>
   history: string[]
   historyIndex: number
+  openLeases: number
+  startup: Promise<void>
+  viewport: { width: number; height: number }
+  profile: BrowserProfile
+}
+
+type BrowserProfile = {
+  profileDirectory: string
+  context?: BrowserContext
+  startup: Promise<void>
+  starting: boolean
+  sessionIds: Set<string>
 }
 
 export type BrowserPreviewCaller = Readonly<{
@@ -61,6 +78,10 @@ export type BrowserPreviewService = Readonly<{
   back(surfaceId: string, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
   forward(surfaceId: string, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
   reload(surfaceId: string, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
+  resize(surfaceId: string, input: { width: number; height: number }, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
+  hover(surfaceId: string, input: { x: number; y: number }, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
+  scroll(surfaceId: string, input: { deltaX: number; deltaY: number }, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
+  pressKey(surfaceId: string, input: { key: string }, caller: BrowserPreviewCaller): Promise<BrowserActionOutput>
   click(
     surfaceId: string,
     input: { targetRef: string } | { x: number; y: number },
@@ -82,7 +103,7 @@ export type BrowserPreviewService = Readonly<{
     caller: BrowserPreviewCaller
   ): Promise<BrowserActionOutput>
   revision(surfaceId: string): string
-  closeSession(surfaceId: string, caller: BrowserPreviewCaller): Promise<void>
+  closeSession(surfaceId: string, caller: BrowserPreviewCaller): Promise<boolean>
   close(): Promise<void>
 }>
 
@@ -90,6 +111,7 @@ export function createBrowserPreviewService(options: Readonly<{
   userDataDir: string
 }>): BrowserPreviewService {
   const sessions = new Map<string, BrowserSession>()
+  const profiles = new Map<string, BrowserProfile>()
   const profilesRoot = join(options.userDataDir, 'browser-preview', 'profiles')
 
   const requireSession = (surfaceId: string, caller: BrowserPreviewCaller): BrowserSession => {
@@ -112,7 +134,8 @@ export function createBrowserPreviewService(options: Readonly<{
 
   const actionResult = async (session: BrowserSession, page: Page): Promise<BrowserActionOutput> => {
     touch(session)
-    await page.waitForTimeout(120)
+    session.screenshotDirty = true
+    await page.waitForTimeout(ACTION_SETTLE_MS)
     return {
       ok: true,
       url: sanitizeDisplayUrl(page.url()),
@@ -123,8 +146,8 @@ export function createBrowserPreviewService(options: Readonly<{
 
   const closeBrowserSession = async (session: BrowserSession): Promise<void> => {
     session.status = 'closed'
-    await session.context?.close().catch(() => undefined)
-    await rm(session.profileDirectory, { recursive: true, force: true }).catch(() => undefined)
+    await session.page?.close().catch(() => undefined)
+    session.page = undefined
   }
 
   return Object.freeze({
@@ -136,67 +159,107 @@ export function createBrowserPreviewService(options: Readonly<{
         if (existing.sessionId !== input.sessionId) {
           throw new Error('Browser surface belongs to a different agent task.')
         }
-        if (existing.page && !existing.page.isClosed() && existing.page.url() !== url.href) {
-          rememberExplicitPrivateOrigin(existing, url)
-          await navigatePage(existing, existing.page, url)
+        existing.openLeases += 1
+        try {
+          // A second panel instance may arrive while the first browser context
+          // is still launching. Wait for that shared startup before exposing
+          // the resource, otherwise its first observation races an empty page.
+          await existing.startup
+          if (existing.page && !existing.page.isClosed() && existing.page.url() !== url.href) {
+            rememberExplicitPrivateOrigin(existing, url)
+            await navigatePage(existing, existing.page, url)
+          }
+        } catch (error) {
+          existing.openLeases = Math.max(0, existing.openLeases - 1)
+          throw error
         }
         return revisionOf(existing)
       }
 
-      const profileDirectory = join(
-        profilesRoot,
-        createHash('sha256')
-          .update(`${caller.workspaceId ?? ''}\u0000${input.sessionId}\u0000${input.surfaceId}`)
-          .digest('hex')
-          .slice(0, 32)
-      )
+      // The profile is stable per SciForge workspace. The application data
+      // directory is already scoped to the OS user, so no external browser
+      // profile or credential store is ever opened or copied.
+      const profileKey = caller.workspaceId ?? 'default-user'
+      let profile = profiles.get(profileKey)
+      if (!profile) {
+        profile = {
+          profileDirectory: join(
+            profilesRoot,
+            createHash('sha256')
+              .update(`sciforge-browser-profile\u0000${profileKey}`)
+              .digest('hex')
+              .slice(0, 32)
+          ),
+          startup: Promise.resolve(),
+          starting: false,
+          sessionIds: new Set()
+        }
+        profiles.set(profileKey, profile)
+      }
       const session: BrowserSession = {
         sessionId: input.sessionId,
         surfaceId: input.surfaceId,
         workspaceId: caller.workspaceId,
-        profileDirectory,
+        profileDirectory: profile.profileDirectory,
         allowedPrivateOrigins: new Set(),
         status: 'starting',
         error: null,
         revision: 1,
         lastSnapshotHash: '',
+        lastScreenshotAt: 0,
+        screenshotDirty: true,
         targetRefToAria: new Map(),
         ariaToTargetRef: new Map(),
         history: [],
-        historyIndex: -1
+        historyIndex: -1,
+        openLeases: 1,
+        startup: Promise.resolve(),
+        viewport: { ...DEFAULT_VIEWPORT },
+        profile
       }
       sessions.set(input.surfaceId, session)
+      profile.sessionIds.add(input.surfaceId)
       rememberExplicitPrivateOrigin(session, url)
 
-      try {
-        await mkdir(profileDirectory, { recursive: true })
-        const context = await launchPersistentBrowser(profileDirectory)
-        session.context = context
-        context.setDefaultTimeout(ACTION_TIMEOUT_MS)
-        context.setDefaultNavigationTimeout(LOAD_TIMEOUT_MS)
-        await context.clearPermissions()
-        await context.route('**/*', async (route) => {
-          const requestUrl = route.request().url()
-          if (isAllowedRequestUrl(requestUrl, session.allowedPrivateOrigins)) {
-            await route.continue()
-          } else {
-            await route.abort('blockedbyclient')
+      session.startup = (async () => {
+        try {
+          await mkdir(profile.profileDirectory, { recursive: true })
+          if (!profile.context && !profile.starting) {
+            profile.starting = true
+            profile.startup = (async () => {
+              const context = await launchPersistentBrowser(profile.profileDirectory, DEFAULT_VIEWPORT)
+              profile.context = context
+              context.setDefaultTimeout(ACTION_TIMEOUT_MS)
+              context.setDefaultNavigationTimeout(LOAD_TIMEOUT_MS)
+              await context.clearPermissions()
+            })().finally(() => {
+              profile.starting = false
+            })
           }
-        })
-        context.on('page', (candidate) => {
-          if (candidate === session.page) return
-          void candidate.close().catch(() => undefined)
-        })
-        const pages = context.pages()
-        const page = pages[0] ?? await context.newPage()
-        session.page = page
-        installPageGuards(session, page)
-        await navigatePage(session, page, url)
-      } catch (error) {
-        session.status = 'error'
-        session.error = browserErrorMessage(error)
-        touch(session)
-      }
+          await profile.startup
+          const context = profile.context
+          if (!context) throw new Error('The shared browser context is unavailable.')
+          session.context = context
+          const page = await context.newPage()
+          await page.setViewportSize(session.viewport)
+          await page.route('**/*', async (route) => {
+            const requestUrl = route.request().url()
+            if (isAllowedRequestUrl(requestUrl, session.allowedPrivateOrigins)) {
+              await route.continue()
+            } else {
+              await route.abort('blockedbyclient')
+            }
+          })
+          session.page = page
+          installPageGuards(session, page)
+          await navigatePage(session, page, url)
+        } catch (error) {
+          session.status = 'error'
+          session.error = browserErrorMessage(error)
+          touch(session)
+        }
+      })()
+      await session.startup
       return revisionOf(session)
     },
 
@@ -210,13 +273,16 @@ export function createBrowserPreviewService(options: Readonly<{
       let rawSnapshot = ''
       let screenshotDataUrl: string | undefined
       try {
-        rawSnapshot = sanitizeAriaSnapshot(await page.ariaSnapshot({
-          mode: 'ai',
-          boxes: true,
-          depth: 10,
-          timeout: ACTION_TIMEOUT_MS
-        }))
-        if (caller.audience === 'ui') {
+        if (caller.audience !== 'ui') {
+          rawSnapshot = sanitizeAriaSnapshot(await page.ariaSnapshot({
+            mode: 'ai',
+            boxes: true,
+            depth: 10,
+            timeout: ACTION_TIMEOUT_MS
+          }))
+        }
+        const screenshotExpired = Date.now() - session.lastScreenshotAt >= SCREENSHOT_REFRESH_MS
+        if (caller.audience === 'ui' && (session.screenshotDirty || screenshotExpired)) {
           const screenshot = await page.screenshot({
             type: 'jpeg',
             quality: 68,
@@ -232,16 +298,18 @@ export function createBrowserPreviewService(options: Readonly<{
             maskColor: '#000'
           })
           screenshotDataUrl = `data:image/jpeg;base64,${screenshot.toString('base64')}`
+          session.lastScreenshotDataUrl = screenshotDataUrl
+          session.lastScreenshotAt = Date.now()
+          session.screenshotDirty = false
         }
       } catch (error) {
         session.error = browserErrorMessage(error)
         session.status = 'error'
       }
 
-      const truncated = rawSnapshot.length > MAX_SNAPSHOT_CHARS
-      rawSnapshot = rawSnapshot.slice(0, MAX_SNAPSHOT_CHARS)
+      const boundedRawSnapshot = rawSnapshot.slice(0, MAX_SNAPSHOT_CHARS)
       const stateHash = createHash('sha256')
-        .update(`${page.url()}\u0000${await page.title().catch(() => '')}\u0000${rawSnapshot}`)
+        .update(`${page.url()}\u0000${await page.title().catch(() => '')}\u0000${boundedRawSnapshot}`)
         .digest('hex')
       if (stateHash !== session.lastSnapshotHash) {
         session.lastSnapshotHash = stateHash
@@ -250,7 +318,10 @@ export function createBrowserPreviewService(options: Readonly<{
         touch(session)
       }
 
-      const publicSnapshot = rawSnapshot.replace(/\[ref=(e\d+)\]/gu, (_match, ariaRef: string) => {
+      // Opaque target references are longer than Playwright's compact ARIA refs.
+      // Bound the public snapshot after replacement so schema validation cannot
+      // reject an otherwise valid page when many refs are present.
+      const expandedSnapshot = boundedRawSnapshot.replace(/\[ref=(e\d+)\]/gu, (_match, ariaRef: string) => {
         let targetRef = session.ariaToTargetRef.get(ariaRef)
         if (!targetRef) {
           targetRef = `target_${randomBytes(18).toString('base64url')}`
@@ -259,6 +330,10 @@ export function createBrowserPreviewService(options: Readonly<{
         }
         return `[ref=${targetRef}]`
       })
+      const truncated = rawSnapshot.length > MAX_SNAPSHOT_CHARS
+        || expandedSnapshot.length > MAX_SNAPSHOT_CHARS
+      const publicSnapshot = truncateAriaSnapshot(expandedSnapshot, MAX_SNAPSHOT_CHARS)
+
       const targets = [...session.targetRefToAria.keys()]
         .slice(0, 512)
         .map((targetRef) => ({ targetRef }))
@@ -274,11 +349,13 @@ export function createBrowserPreviewService(options: Readonly<{
         error: session.error,
         canGoBack: session.historyIndex > 0,
         canGoForward: session.historyIndex >= 0 && session.historyIndex < session.history.length - 1,
-        viewport: VIEWPORT,
+        viewport: session.viewport,
         ariaSnapshot: publicSnapshot,
         targets,
         truncated,
-        ...(screenshotDataUrl ? { screenshotDataUrl } : {})
+        ...(caller.audience === 'ui' && (screenshotDataUrl || session.lastScreenshotDataUrl)
+          ? { screenshotDataUrl: screenshotDataUrl ?? session.lastScreenshotDataUrl }
+          : {})
       }
     },
 
@@ -313,6 +390,34 @@ export function createBrowserPreviewService(options: Readonly<{
       session.status = 'loading'
       await page.reload({ waitUntil: 'domcontentloaded', timeout: LOAD_TIMEOUT_MS })
       session.status = 'ready'
+      return actionResult(session, page)
+    },
+
+    async resize(surfaceId, input, caller) {
+      const { session, page } = requirePage(surfaceId, caller)
+      if (session.viewport.width === input.width && session.viewport.height === input.height) {
+        return actionResult(session, page)
+      }
+      await page.setViewportSize({ width: input.width, height: input.height })
+      session.viewport = { width: input.width, height: input.height }
+      return actionResult(session, page)
+    },
+
+    async hover(surfaceId, input, caller) {
+      const { session, page } = requirePage(surfaceId, caller)
+      await page.mouse.move(input.x, input.y)
+      return actionResult(session, page)
+    },
+
+    async scroll(surfaceId, input, caller) {
+      const { session, page } = requirePage(surfaceId, caller)
+      await page.mouse.wheel(input.deltaX, input.deltaY)
+      return actionResult(session, page)
+    },
+
+    async pressKey(surfaceId, input, caller) {
+      const { session, page } = requirePage(surfaceId, caller)
+      await page.keyboard.press(input.key === 'Space' ? ' ' : input.key)
       return actionResult(session, page)
     },
 
@@ -359,24 +464,40 @@ export function createBrowserPreviewService(options: Readonly<{
 
     async closeSession(surfaceId, caller) {
       const session = sessions.get(surfaceId)
-      if (!session) return
+      if (!session) return false
       authorizeSession(session, caller)
+      session.openLeases = Math.max(0, session.openLeases - 1)
+      if (session.openLeases > 0) return false
+      await session.startup
       sessions.delete(surfaceId)
+      session.profile.sessionIds.delete(surfaceId)
       await closeBrowserSession(session)
+      if (session.profile.sessionIds.size === 0) {
+        await session.profile.context?.close().catch(() => undefined)
+        profiles.delete(session.workspaceId ?? 'default-user')
+      }
+      return true
     },
 
     async close() {
       const closings = [...sessions.values()].map(closeBrowserSession)
       sessions.clear()
       await Promise.all(closings)
+      await Promise.all([...profiles.values()].map((profile) =>
+        profile.context?.close().catch(() => undefined)
+      ))
+      profiles.clear()
     }
   })
 }
 
-async function launchPersistentBrowser(profileDirectory: string): Promise<BrowserContext> {
+async function launchPersistentBrowser(
+  profileDirectory: string,
+  viewport: { width: number; height: number }
+): Promise<BrowserContext> {
   const common = {
     headless: true,
-    viewport: VIEWPORT,
+    viewport: { ...viewport },
     acceptDownloads: false,
     serviceWorkers: 'block' as const,
     args: [
@@ -425,15 +546,18 @@ function installPageGuards(session: BrowserSession, page: Page): void {
     }
     session.status = 'loading'
     session.error = null
+    session.screenshotDirty = true
     touch(session)
   })
   page.on('domcontentloaded', () => {
     session.status = 'ready'
     session.error = null
+    session.screenshotDirty = true
     touch(session)
   })
   page.on('pageerror', (error) => {
     session.error = browserErrorMessage(error)
+    session.screenshotDirty = true
     touch(session)
   })
   page.on('close', () => {
@@ -551,6 +675,12 @@ function sanitizeAriaSnapshot(snapshot: string): string {
     .join('\n')
 }
 
+function truncateAriaSnapshot(snapshot: string, maxChars: number): string {
+  if (snapshot.length <= maxChars) return snapshot
+  const lineBoundary = snapshot.lastIndexOf('\n', maxChars)
+  return snapshot.slice(0, lineBoundary > 0 ? lineBoundary : maxChars)
+}
+
 function touch(session: BrowserSession): void {
   session.revision += 1
 }
@@ -571,7 +701,7 @@ function emptyState(session: BrowserSession): BrowserPageState {
     error: session.error,
     canGoBack: false,
     canGoForward: false,
-    viewport: VIEWPORT,
+    viewport: session.viewport,
     ariaSnapshot: '',
     targets: [],
     truncated: false

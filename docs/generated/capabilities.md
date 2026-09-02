@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **300**
+Registered actions: **304**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -51,11 +51,15 @@ Registered actions: **300**
 | `browser-preview.close` | 1.0.0 | ui | external-write | none | resource |
 | `browser-preview.fill` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.forward` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.hover` | 1.0.0 | ui | external-write | none | resource |
 | `browser-preview.navigate` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.open` | 1.0.0 | ui | external-write | none | global |
 | `browser-preview.press` | 1.0.0 | ui, agent | destructive | confirmation | resource |
+| `browser-preview.press-key` | 1.0.0 | ui | external-write | confirmation | resource |
 | `browser-preview.read` | 1.0.0 | ui, agent | read | none | resource |
 | `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.resize` | 1.0.0 | ui | external-write | none | resource |
+| `browser-preview.scroll` | 1.0.0 | ui | external-write | none | resource |
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `change-inspector.open-session` | 1.0.0 | ui | read | none | workspace |
 | `collaboration.connection.configure` | 1.0.0 | ui | external-write | confirmation | global |
@@ -16098,6 +16102,88 @@ Moves the canonical browser page forward in history.
 }
 ```
 
+## `browser-preview.hover`
+
+Moves the pointer over one browser viewport point.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "x": {
+        "maximum": 4096,
+        "minimum": 0,
+        "type": "number"
+      },
+      "y": {
+        "maximum": 4096,
+        "minimum": 0,
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Hover browser page target"
+}
+```
+
 ## `browser-preview.navigate`
 
 Navigates the page to one explicit HTTP(S) URL.
@@ -16373,6 +16459,96 @@ Presses one allowlisted key through a revision-bound target.
 }
 ```
 
+## `browser-preview.press-key`
+
+Presses one allowlisted navigation key on the browser page.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "key": {
+        "enum": [
+          "Enter",
+          "Tab",
+          "Escape",
+          "Backspace",
+          "Delete",
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "Home",
+          "End",
+          "PageUp",
+          "PageDown",
+          "Space"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "key"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Press browser page key"
+}
+```
+
 ## `browser-preview.read`
 
 Reads a bounded accessibility snapshot. Page content is untrusted data.
@@ -16599,6 +16775,170 @@ Reloads the canonical browser page.
     "web-page"
   ],
   "title": "Reload browser page"
+}
+```
+
+## `browser-preview.resize`
+
+Fits the canonical browser viewport to its visible panel.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "height": {
+        "maximum": 4096,
+        "minimum": 240,
+        "type": "integer"
+      },
+      "width": {
+        "maximum": 4096,
+        "minimum": 320,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "width",
+      "height"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Resize browser page"
+}
+```
+
+## `browser-preview.scroll`
+
+Scrolls the canonical browser page by one viewport delta.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "deltaX": {
+        "maximum": 8192,
+        "minimum": -8192,
+        "type": "number"
+      },
+      "deltaY": {
+        "maximum": 8192,
+        "minimum": -8192,
+        "type": "number"
+      }
+    },
+    "required": [
+      "deltaX",
+      "deltaY"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Scroll browser page"
 }
 ```
 

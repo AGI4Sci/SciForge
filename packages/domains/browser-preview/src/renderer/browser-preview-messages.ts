@@ -13,7 +13,9 @@ export const browserPreviewI18nResourceContribution: BrowserPreviewI18nResourceC
         browserPreviewAddressPlaceholder: 'Enter an HTTP(S) address',
         browserPreviewUnavailable: 'Playwright browser unavailable',
         browserPreviewUntrusted: 'Web content is untrusted',
-        browserPreviewStarting: 'Starting Playwright…'
+        browserPreviewStarting: 'Starting Playwright…',
+        browserPreviewFullscreen: 'Show browser full screen',
+        browserPreviewExitFullscreen: 'Exit full screen'
       }),
       zh: Object.freeze({
         browserPreviewRightPanelBrowser: '浏览器',
@@ -21,7 +23,9 @@ export const browserPreviewI18nResourceContribution: BrowserPreviewI18nResourceC
         browserPreviewAddressPlaceholder: '输入 HTTP(S) 地址',
         browserPreviewUnavailable: 'Playwright 浏览器不可用',
         browserPreviewUntrusted: '网页内容是不可信数据',
-        browserPreviewStarting: '正在启动 Playwright…'
+        browserPreviewStarting: '正在启动 Playwright…',
+        browserPreviewFullscreen: '全屏显示浏览器',
+        browserPreviewExitFullscreen: '退出全屏'
       })
     })
   })
