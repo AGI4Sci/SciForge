@@ -151,13 +151,6 @@ import type {
   VisibleContextTargetRefResult
 } from './visible-context'
 import type { RemoteWorkspaceApi } from './remote-workspace'
-import type {
-  ResearchCard,
-  ResearchCardArchiveInput,
-  ResearchCardCreateInput,
-  ResearchCardListInput,
-  ResearchCardUpdateInput
-} from './research-cards'
 import type { DomainExtensionsApi } from './domain-extensions'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
@@ -742,12 +735,6 @@ export type SciForgeApi = {
   exportWriteDocument: (payload: WriteExportPayload) => Promise<WriteExportResult>
   speechToText: {
     transcribe: (payload: SpeechTranscriptionRequest) => Promise<SpeechTranscriptionResult>
-  }
-  researchCards: {
-    list: (input?: ResearchCardListInput) => Promise<ResearchCard[]>
-    create: (input: ResearchCardCreateInput) => Promise<ResearchCard>
-    update: (input: ResearchCardUpdateInput) => Promise<ResearchCard>
-    archive: (input: ResearchCardArchiveInput) => Promise<ResearchCard>
   }
   visibleContext: {
     publish: (snapshot: VisibleContextPublishInput) => Promise<VisibleContextSnapshot>

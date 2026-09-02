@@ -11,9 +11,9 @@ import {
   type EvidenceArtifactVersionIdentity
 } from './artifact-version-client.js'
 import type {
-  EvidenceDagQueueEnqueueResult,
-  EvidenceDagQueueInput
-} from './queue.js'
+  EvidenceDagAppendResult,
+  EvidenceDagTraceAppendInput
+} from './evidence-delta.js'
 
 export type EvidenceArtifactLifecycleThreadKey = Readonly<{
   runtimeId: string
@@ -50,12 +50,12 @@ type LifecycleReceipt = {
   lastSequence: number
   eventIds: string[]
   affectedThreadKeys: string[]
-  jobIds: string[]
+  deltaDigests: string[]
   processedAt: string
 }
 
 type LifecycleStateFile = {
-  version: 1
+  version: 2
   workspaces: WorkspaceCursor[]
   threads: TrackedThread[]
   receipts: LifecycleReceipt[]
@@ -68,7 +68,7 @@ const DEFAULT_POLL_INTERVAL_MS = 15_000
  * Durable ArtifactVersion lifecycle inbox owned by Evidence DAG.
  *
  * Artifact Versions remains the only event/outbox owner. This consumer stores
- * only an Evidence cursor, exact thread/ref associations, and enqueue receipts.
+ * only an Evidence cursor, exact thread/ref associations, and delta receipts.
  */
 export class EvidenceArtifactVersionLifecycleConsumer {
   private state: LifecycleStateFile = emptyState()
@@ -93,7 +93,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
       trace: readonly Readonly<Record<string, unknown>>[],
       lifecycle: ArtifactVersionLifecyclePage
     ) => readonly Readonly<Record<string, unknown>>[]
-    enqueue: (input: EvidenceDagQueueInput) => Promise<EvidenceDagQueueEnqueueResult>
+    append: (input: EvidenceDagTraceAppendInput) => Promise<EvidenceDagAppendResult>
     now?: () => Date
     pageSize?: number
     pollIntervalMs?: number
@@ -271,7 +271,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
       .filter((thread) => thread.workspaceRoot === workspaceRoot)
       .filter((thread) => page.events.some((event) => affectsThread(event, thread)))
       .sort((left, right) => left.key.localeCompare(right.key))
-    const jobIds: string[] = []
+    const deltaDigests: string[] = []
     for (const thread of affected) {
       const live = prepared.get(thread.key)
       if (!live || !live.trace.length) {
@@ -279,18 +279,18 @@ export class EvidenceArtifactVersionLifecycleConsumer {
           `Affected Evidence thread ${thread.key} is unavailable; lifecycle cursor was not advanced.`
         )
       }
-      const queued = await this.options.enqueue({
+      const appended = await this.options.append({
         idempotencyKey: `${receiptId}:${thread.key}`,
         runtimeId: thread.runtimeId,
         threadId: thread.threadId,
-        engineThreadId: `${thread.runtimeId}:${thread.threadId}`,
-        targetWatermark: `${live.targetWatermark}:artifact-lifecycle:${page.lastSequence}`,
-        reason: 'artifact_version_lifecycle',
-        priority: 'background',
+        operationId: `artifact-lifecycle:${page.lastSequence}`,
+        kind: 'artifact_lifecycle',
+        requestedWatermark: `${live.targetWatermark}:artifact-lifecycle:${page.lastSequence}`,
+        eventKind: 'artifact_version_lifecycle',
         trace: this.options.withLifecycle(live.trace, page),
         workspaceRoot
       })
-      jobIds.push(queued.jobId)
+      deltaDigests.push(appended.delta.deltaDigest)
     }
 
     const processedAt = this.nowIso()
@@ -301,7 +301,7 @@ export class EvidenceArtifactVersionLifecycleConsumer {
       lastSequence: page.lastSequence,
       eventIds: page.events.map((event) => event.eventId),
       affectedThreadKeys: affected.map((thread) => thread.key),
-      jobIds,
+      deltaDigests,
       processedAt
     })
     this.state.receipts = this.state.receipts.slice(-1_000)
@@ -453,12 +453,12 @@ function uniqueSorted(values: readonly string[]): string[] {
 }
 
 function emptyState(): LifecycleStateFile {
-  return { version: 1, workspaces: [], threads: [], receipts: [] }
+  return { version: 2, workspaces: [], threads: [], receipts: [] }
 }
 
 function canonicalState(value: unknown): LifecycleStateFile {
   const source = record(value)
-  if (!source || source.version !== 1) {
+  if (!source || (source.version !== 1 && source.version !== 2)) {
     throw new Error('Evidence ArtifactVersion lifecycle state is invalid.')
   }
   if (
@@ -517,7 +517,9 @@ function canonicalState(value: unknown): LifecycleStateFile {
       lastSequence,
       eventIds: stringArray(item?.eventIds),
       affectedThreadKeys: stringArray(item?.affectedThreadKeys),
-      jobIds: stringArray(item?.jobIds),
+      deltaDigests: source.version === 2
+        ? stringArray(item?.deltaDigests)
+        : [],
       processedAt
     }]
   })
@@ -531,7 +533,16 @@ function canonicalState(value: unknown): LifecycleStateFile {
   ) {
     throw new Error('Evidence ArtifactVersion lifecycle state contains invalid records.')
   }
-  return { version: 1, workspaces, threads, receipts }
+  return {
+    version: 2,
+    // v1 receipts represented queue acceptance, not durable delta commits.
+    // Replaying from its cursor is therefore required during migration.
+    workspaces: source.version === 1
+      ? workspaces.map((item) => ({ ...item, cursor: 0 }))
+      : workspaces,
+    threads,
+    receipts: source.version === 1 ? [] : receipts
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

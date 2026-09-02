@@ -9,7 +9,6 @@ import {
   researchDossierActivationPayloadV1Schema
 } from '../contract.js'
 import {
-  EvidenceReviewPage,
   LegacyImportPanel,
   OverviewPage,
   ResearchRecordingCallout,
@@ -291,7 +290,6 @@ test('shows only target-applicable dossier pages before the exact owner load', (
   assert.match(html, /researchDossierOverview/u)
   assert.match(html, /researchDossierReproduction/u)
   assert.doesNotMatch(html, /researchDossierVersions/u)
-  assert.doesNotMatch(html, /researchDossierEvidenceReview/u)
 })
 
 test('preview round-trip remains integrity-bound to the exact activation', () => {
@@ -314,80 +312,7 @@ test('preview round-trip remains integrity-bound to the exact activation', () =>
   })
 })
 
-test('renders fixed Evidence and exact Visual Review owner summaries', () => {
-  const html = renderToStaticMarkup(
-    <EvidenceReviewPage
-      evidence={{
-        target: { kind: 'compute-run', runId: 'compute-run:plot-1' },
-        snapshot: {
-          threadId: 'codex:thread-1', version: 3,
-          digest: `sha256:${'a'.repeat(64)}`, inputWatermark: '3:event',
-          schemaVersion: 'evidence.v3', extractorVersion: 'extractor.v3',
-          verifierVersion: 'verifier.v3', createdAt: '2026-08-11T00:00:00.000Z'
-        },
-        provenanceLevel: 'L4', provenanceComplete: true, freshness: 'fresh',
-        matchedNodeCount: 1, staleNodeCount: 0, breakpointCount: 0,
-        pending: null,
-        humanReview: {
-          gateStatus: 'clear', level: 'none', status: 'not_needed', blocking: false,
-          pendingCount: 0, blockingCount: 0, reviewPacketId: null
-        }
-      }}
-      review={{
-        documentId: 'review-document', revisionId: 'revision-7', status: 'accepted',
-        reviewDigest: `sha256:${'b'.repeat(64)}`,
-        reviewedAt: '2026-08-11T01:00:00.000Z', score: 0.99
-      }}
-      issues={{}}
-    />
-  )
-  assert.match(html, /L4/u)
-  assert.match(html, /fresh/u)
-  assert.match(html, /0\.990/u)
-  assert.match(html, /data-technical-details/u)
-  assert.match(html, /review-document/u)
-  assert.match(html, /revision-7/u)
-})
-
-test('omits visual review when the target has no review and no review issue', () => {
-  const html = renderToStaticMarkup(
-    <EvidenceReviewPage
-      evidence={null}
-      review={null}
-      issues={{ evidence: 'Evidence owner unavailable.' }}
-    />
-  )
-  assert.doesNotMatch(html, /researchDossierReview/u)
-  assert.match(html, /Evidence owner unavailable/u)
-})
-
-test('never presents a blocked Evidence review as available', () => {
-  const html = renderToStaticMarkup(
-    <EvidenceReviewPage
-      evidence={{
-        target: { kind: 'compute-run', runId: 'compute-run:blocked' },
-        snapshot: {
-          threadId: 'codex:thread-1', version: 4, digest: `sha256:${'a'.repeat(64)}`,
-          inputWatermark: '4:event', schemaVersion: 'evidence.v3', extractorVersion: 'extractor.v3',
-          verifierVersion: 'verifier.v3', createdAt: '2026-08-11T00:00:00.000Z'
-        },
-        provenanceLevel: 'L2', provenanceComplete: false, freshness: 'fresh',
-        matchedNodeCount: 1, staleNodeCount: 0, breakpointCount: 1,
-        pending: { state: 'retrying' },
-        humanReview: {
-          gateStatus: 'blocked', level: 'blocking', status: 'approved', blocking: true,
-          pendingCount: 0, blockingCount: 1, reviewPacketId: 'review-packet:1'
-        }
-      } as never}
-      review={null}
-      issues={{}}
-    />
-  )
-  assert.match(html, /researchDossierStatusNeedsAttention/u)
-  assert.match(html, /researchDossierStatusInProgress/u)
-})
-
-test('renders an exact Research Checkpoint as a usable four-page dossier projection', () => {
+test('renders an exact Research Checkpoint as a usable three-page dossier projection', () => {
   const contentDigest = 'd'.repeat(64)
   const checkpointRef = {
     artifactId: 'artifact:research', versionId: 'artifact-version:research:2',
@@ -510,7 +435,7 @@ test('overview surfaces owner issues that affect trust without exposing internal
   const html = renderToStaticMarkup(
     <OverviewPage
       record={record}
-      issues={{ reproduction: 'Exact RunSpec is unavailable.', evidence: 'Evidence compilation is stale.' }}
+      issues={{ reproduction: 'Exact RunSpec is unavailable.' }}
       canPreview={false}
       previewBusy={false}
       onPreview={() => undefined}
@@ -518,7 +443,6 @@ test('overview surfaces owner issues that affect trust without exposing internal
   )
   assert.match(html, /data-research-dossier-owner-issues/u)
   assert.match(html, /Exact RunSpec is unavailable/u)
-  assert.match(html, /Evidence compilation is stale/u)
 })
 
 test('plain research outputs do not invent unavailable trust axes', () => {

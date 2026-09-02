@@ -16,7 +16,12 @@ import {
   type EvidenceArtifactLifecycleThread,
   type EvidenceArtifactLifecycleThreadKey
 } from './artifact-version-lifecycle-consumer.js'
-import type { EvidenceDagQueueInput } from './queue.js'
+import {
+  EvidenceDeltaChain,
+  evidenceDagDeltaInputFromTrace,
+  type EvidenceDagAppendResult,
+  type EvidenceDagTraceAppendInput
+} from './evidence-delta.js'
 
 const workspaceRoot = '/workspace/lifecycle'
 const occurredAt = '2026-08-06T08:00:00.000Z'
@@ -33,7 +38,7 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
   const beta = artifactRef('beta', 'b')
   const events = Array.from({ length: 5 }, (_, index) => lifecycleEvent(index + 1, alpha))
   const calls: number[] = []
-  const enqueued: EvidenceDagQueueInput[] = []
+  const appended: EvidenceDagTraceAppendInput[] = []
   const client = createEvidenceArtifactVersionClient(() => ({
     commit: async () => { throw new Error('Explicit refs must not commit.') }
   }), lifecycleReadFactory)
@@ -45,10 +50,7 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
     prepareThread: prepareKnownThread(client, threads),
     identities: client.identities,
     withLifecycle: client.withLifecycle,
-    enqueue: async (input) => {
-      enqueued.push(input)
-      return { jobId: `job-${enqueued.length}`, coalesced: false, itemCount: input.trace.length }
-    },
+    append: appendRecorder(appended),
     pageSize: 2,
     pollIntervalMs: 60_000,
     now: () => new Date(occurredAt)
@@ -59,16 +61,16 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
   await consumer.close()
 
   assert.deepEqual(calls, [0, 2, 4])
-  assert.equal(enqueued.length, 3)
-  assert.ok(enqueued.every((input) => input.threadId === 'alpha-thread'))
-  assert.ok(enqueued.every((input) => input.reason === 'artifact_version_lifecycle'))
-  assert.deepEqual(enqueued.map((input) => input.targetWatermark), [
+  assert.equal(appended.length, 3)
+  assert.ok(appended.every((input) => input.threadId === 'alpha-thread'))
+  assert.ok(appended.every((input) => input.kind === 'artifact_lifecycle'))
+  assert.deepEqual(appended.map((input) => input.requestedWatermark), [
     '7:artifact-lifecycle:2',
     '7:artifact-lifecycle:4',
     '7:artifact-lifecycle:5'
   ])
-  assert.equal(new Set(enqueued.map((input) => input.idempotencyKey)).size, 3)
-  const projections = enqueued.map((input) => input.trace.find((item) =>
+  assert.equal(new Set(appended.map((input) => input.idempotencyKey)).size, 3)
+  const projections = appended.map((input) => input.trace.find((item) =>
     'evidenceArtifactVersions' in item
   )?.evidenceArtifactVersions as { lifecycleEvents: unknown[]; lifecyclePending: boolean })
   assert.deepEqual(projections.map((value) => value.lifecycleEvents.length), [2, 2, 1])
@@ -82,7 +84,7 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
   assert.equal(state.receipts.length, 3)
 
   const replayCalls: number[] = []
-  let replayEnqueues = 0
+  let replayAppends = 0
   const restarted = new EvidenceArtifactVersionLifecycleConsumer({
     storagePath,
     eventListPort: pagedEvents(events, replayCalls),
@@ -90,9 +92,9 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
     prepareThread: prepareKnownThread(client, threads),
     identities: client.identities,
     withLifecycle: client.withLifecycle,
-    enqueue: async () => {
-      replayEnqueues += 1
-      return { jobId: 'unexpected', coalesced: false, itemCount: 1 }
+    append: async (input) => {
+      replayAppends += 1
+      return appendRecorded([], input)
     },
     pageSize: 2,
     pollIntervalMs: 60_000,
@@ -103,7 +105,7 @@ test('durably drains every lifecycle page and enqueues only affected threads', a
   await restarted.close()
 
   assert.deepEqual(replayCalls, [5])
-  assert.equal(replayEnqueues, 0)
+  assert.equal(replayAppends, 0)
 })
 
 test('does not advance a cursor while a durably tracked affected thread is unavailable', async () => {
@@ -122,7 +124,10 @@ test('does not advance a cursor while a durably tracked affected thread is unava
     prepareThread: prepareKnownThread(client, [tracked]),
     identities: client.identities,
     withLifecycle: client.withLifecycle,
-    enqueue: async () => ({ jobId: 'unused', coalesced: false, itemCount: 1 }),
+    append: async () => appendRecorded([], {
+      runtimeId: 'codex', threadId: 'alpha-thread', workspaceRoot, operationId: 'unused',
+      kind: 'artifact_lifecycle', requestedWatermark: '1', idempotencyKey: 'unused-input', trace: []
+    }),
     now: () => new Date(occurredAt)
   })
   await first.start(false)
@@ -139,7 +144,10 @@ test('does not advance a cursor while a durably tracked affected thread is unava
     prepareThread: prepareKnownThread(client, [tracked]),
     identities: client.identities,
     withLifecycle: client.withLifecycle,
-    enqueue: async () => ({ jobId: 'must-not-enqueue', coalesced: false, itemCount: 1 }),
+    append: async () => appendRecorded([], {
+      runtimeId: 'codex', threadId: 'alpha-thread', workspaceRoot, operationId: 'unused',
+      kind: 'artifact_lifecycle', requestedWatermark: '1', idempotencyKey: 'unused-input', trace: []
+    }),
     now: () => new Date(occurredAt),
     log: (entry) => logs.push(entry.message)
   })
@@ -161,7 +169,7 @@ test('activation actively drains an exact full page and clears backlog state', a
   const alpha = artifactRef('alpha', 'a')
   const events = [lifecycleEvent(1, alpha), lifecycleEvent(2, alpha)]
   const calls: number[] = []
-  const enqueued: EvidenceDagQueueInput[] = []
+  const appended: EvidenceDagTraceAppendInput[] = []
   const client = createEvidenceArtifactVersionClient(() => ({
     commit: async () => { throw new Error('Explicit refs must not commit.') }
   }), lifecycleReadFactory)
@@ -173,21 +181,18 @@ test('activation actively drains an exact full page and clears backlog state', a
     prepareThread: prepareKnownThread(client, [activeThread]),
     identities: client.identities,
     withLifecycle: client.withLifecycle,
-    enqueue: async (input) => {
-      enqueued.push(input)
-      return { jobId: 'job-active', coalesced: false, itemCount: input.trace.length }
-    },
+    append: appendRecorder(appended),
     pageSize: 2,
     pollIntervalMs: 60_000,
     now: () => new Date(occurredAt)
   })
 
   await consumer.start(true)
-  await waitFor(() => enqueued.length === 1)
+  await waitFor(() => appended.length === 1)
   await consumer.close()
 
   assert.deepEqual(calls, [0, 2])
-  const projection = enqueued[0]?.trace.find((item) =>
+  const projection = appended[0]?.trace.find((item) =>
     'evidenceArtifactVersions' in item
   )?.evidenceArtifactVersions as { lifecyclePending: boolean }
   assert.equal(projection.lifecyclePending, false)
@@ -205,6 +210,25 @@ function artifactRef(name: string, digestPrefix: string): ArtifactVersionRefV1 {
     retention: 'reference',
     accessPolicy
   }
+}
+
+function appendRecorder(target: EvidenceDagTraceAppendInput[]) {
+  const chains = new Map<string, EvidenceDeltaChain>()
+  return async (input: EvidenceDagTraceAppendInput): Promise<EvidenceDagAppendResult> => {
+    target.push(input)
+    const deltaInput = evidenceDagDeltaInputFromTrace(input)
+    const chain = chains.get(deltaInput.scope.threadId) ?? new EvidenceDeltaChain(deltaInput.scope.threadId)
+    chains.set(deltaInput.scope.threadId, chain)
+    return chain.append(deltaInput)
+  }
+}
+
+function appendRecorded(
+  target: EvidenceDagTraceAppendInput[],
+  input: EvidenceDagTraceAppendInput
+): EvidenceDagAppendResult {
+  target.push(input)
+  return new EvidenceDeltaChain(input.threadId).append(evidenceDagDeltaInputFromTrace(input))
 }
 
 const lifecycleReadFactory = (): ArtifactVersionReadPortV1 => ({

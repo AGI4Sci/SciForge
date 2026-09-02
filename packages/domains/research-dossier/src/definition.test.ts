@@ -9,9 +9,10 @@ import {
 
 test('research dossier is renderer-only and owns one right-panel surface', () => {
   assert.deepEqual(domainPackageDefinition.entrypoints.map(({ process }) => process), ['renderer'])
+  assert.equal(domainPackageDefinition.module.displayName, 'Research')
   assert.deepEqual(RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRACT, {
     location: 'workbench.right-panel',
-    title: 'Research Dossier',
+    title: 'Research',
     resourceKind: 'research-dossier'
   })
   assert.deepEqual(RESEARCH_DOSSIER_RENDERER_RESOURCE_NAVIGATION_CONTRACT, {

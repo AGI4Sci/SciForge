@@ -7,72 +7,6 @@ import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/hos
 import { EvidenceDagRuntime } from './runtime.js'
 import type { EvidenceDagSidecarPort } from './sidecar.js'
 
-const digest = `sha256:${'a'.repeat(64)}`
-
-test('ensures current Evidence, runs an L0 audit, and blocks blocker findings', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'evidence-action-guard-'))
-  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
-  const runtime = new EvidenceDagRuntime({
-    userDataDir: root,
-    sidecar: fakeSidecar(),
-    fetchImpl: async (url, init) => {
-      const path = new URL(String(url)).pathname
-      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined
-      requests.push({ path, ...(body ? { body } : {}) })
-      if (path === '/updates') {
-        return response({
-          snapshot: {
-            threadId: 'codex:thread-1',
-            version: 1,
-            digest,
-            inputWatermark: '2',
-            schemaVersion: '1',
-            extractorVersion: '1',
-            verifierVersion: '1',
-            artifactDigests: [],
-            createdAt: new Date().toISOString(),
-            status: 'committed'
-          }
-        })
-      }
-      if (path === '/updates/status') {
-        return response({ snapshot: null })
-      }
-      if (path === '/audits') {
-        return response({
-          completed_at: new Date().toISOString(),
-          risk_digest: {
-            status: 'risks_found',
-            total_findings: 1,
-            counts_by_severity: { blocker: 1, major: 0, minor: 0, info: 0 },
-            highest_severity: 'blocker'
-          }
-        })
-      }
-      return new Response('{}', { status: 404 })
-    }
-  })
-  await runtime.activate(lifecycleContext(root))
-  const decision = await runtime.guardWriteExport({
-    runtimeId: 'codex',
-    threadId: 'thread-1',
-    workspaceRoot: '/workspace',
-    overrideConfirmed: true
-  })
-  assert.equal(decision.allowed, false)
-  assert.match(decision.message ?? '', /blocker risks/)
-  const audit = requests.find(({ path }) => path === '/audits')
-  assert.deepEqual(audit?.body, {
-    threadId: 'codex:thread-1',
-    targetDigest: digest,
-    level: 'L0',
-    trigger: 'manual',
-    threshold: 0.7
-  })
-  assert.equal(requests.filter(({ path }) => path === '/updates').length, 1)
-  await runtime.close()
-})
-
 test('allows an explicit override when export context is unavailable without invoking the service', async () => {
   const root = await mkdtemp(join(tmpdir(), 'evidence-action-guard-missing-'))
   let fetched = false
@@ -162,11 +96,4 @@ function lifecycleContext(userDataDir: string): DomainMainRuntimeLifecycleContex
     },
     log: () => undefined
   }
-}
-
-function response(data: unknown): Response {
-  return new Response(JSON.stringify({ ok: true, data }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' }
-  })
 }

@@ -8,6 +8,7 @@ import {
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
+  RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
@@ -23,6 +24,9 @@ import {
   domainRendererCommandInvocationSchema,
   domainRendererComposerContextResultSchema,
   domainRendererResourceNavigationContractSchema,
+  domainRendererResearchSummaryContractSchema,
+  domainRendererResearchSummaryNavigationSchema,
+  domainRendererResearchSummaryResultSchema,
   domainRendererWorkbenchNavigationSectionContractSchema,
   domainRendererWorkbenchNavigationSessionCatalogSchema,
   domainRendererWorkbenchWorkspaceSectionContractSchema,
@@ -33,10 +37,12 @@ import {
   isDomainRendererCommandHandler,
   isDomainRendererComposerContextProvider,
   isDomainRendererResourceNavigationValue,
+  isDomainRendererResearchSummaryValue,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
   isDomainRendererWorkbenchNavigationSectionValue,
   isDomainRendererWorkbenchWorkspaceSectionValue,
+  resolveDomainRendererResearchSummary,
   type DomainRendererCommandHandler,
   type DomainRendererCommandInvocation,
   type DomainRendererWorkbenchNavigationSectionRenderContext,
@@ -69,6 +75,10 @@ describe('renderer extension contribution contracts', () => {
     assert.equal(
       RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
       'renderer.resource-navigation'
+    )
+    assert.equal(
+      RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
+      'renderer.research-summary.v1'
     )
     assert.equal(RENDERER_EXTENSION_CONTRIBUTION_KIND, 'renderer.extension')
   })
@@ -396,6 +406,99 @@ describe('renderer extension contribution contracts', () => {
         resourceKind: 'artifact-version',
         resourceId: 'artifact-version:figure:2',
         integrity: { algorithm: 'md5', expectedDigest: 'md5:unsafe' }
+      }
+    }), z.ZodError)
+  })
+
+  it('defines bounded owner-provided Research summaries and fails closed', async () => {
+    const contract = domainRendererResearchSummaryContractSchema.parse({
+      slot: 'status',
+      label: 'Evidence status',
+      order: 20,
+      scopeKinds: ['workspace']
+    })
+    assert.equal(contract.slot, 'status')
+    assert.deepEqual(contract.resourceKinds, [])
+    for (const slot of ['goal', 'scope', 'status', 'artifacts', 'attention'] as const) {
+      assert.equal(domainRendererResearchSummaryContractSchema.parse({
+        slot,
+        label: `${slot} summary`,
+        order: 1,
+        scopeKinds: ['workspace']
+      }).slot, slot)
+    }
+    const value = { provide: () => ({
+      status: 'available' as const,
+      items: [{ label: 'Freshness', value: 'Current', tone: 'positive' as const }],
+      actions: [{
+        label: 'Open claim',
+        resource: { resourceKind: 'evidence-claim', resourceId: 'claim-1' }
+      }]
+    }) }
+    assert.equal(isDomainRendererResearchSummaryValue(value), true)
+    assert.deepEqual(await resolveDomainRendererResearchSummary(value, {
+      session: { id: 'session-1' },
+      scope: { kind: 'workspace', id: '/workspace/lab' }
+    }), {
+      status: 'available',
+      items: [{ label: 'Freshness', value: 'Current', tone: 'positive' }],
+      actions: [{
+        label: 'Open claim',
+        resource: { resourceKind: 'evidence-claim', resourceId: 'claim-1' }
+      }]
+    })
+    assert.deepEqual(await resolveDomainRendererResearchSummary({
+      provide: () => { throw new Error('denied') }
+    }, {
+      session: { id: 'session-1' },
+      scope: { kind: 'workspace', id: '/workspace/lab' }
+    }), { status: 'unavailable' })
+    assert.deepEqual(await resolveDomainRendererResearchSummary({
+      provide: () => ({ status: 'available', items: 'malformed', actions: [] })
+    } as never, {
+      session: { id: 'session-1' },
+      scope: { kind: 'workspace', id: '/workspace/lab' }
+    }), { status: 'unavailable' })
+    assert.throws(() => domainRendererResearchSummaryContractSchema.parse({
+      ...contract,
+      slot: 'graph'
+    }), z.ZodError)
+    assert.throws(() => domainRendererResearchSummaryContractSchema.parse({
+      ...contract,
+      resourceKinds: ['claim', 'claim']
+    }), z.ZodError)
+    assert.throws(() => domainRendererResearchSummaryResultSchema.parse({
+      status: 'available',
+      items: [{ label: 'x', value: 'x', extra: true }],
+      actions: []
+    }), z.ZodError)
+    assert.deepEqual(domainRendererResearchSummaryNavigationSchema.parse({
+      label: 'Open claim',
+      resource: {
+        resourceKind: 'evidence-claim',
+        resourceId: 'claim-1',
+        integrity: {
+          algorithm: 'sha256',
+          expectedDigest: `SHA256:${'A'.repeat(64)}`
+        }
+      }
+    }), {
+      label: 'Open claim',
+      resource: {
+        resourceKind: 'evidence-claim',
+        resourceId: 'claim-1',
+        integrity: {
+          algorithm: 'sha256',
+          expectedDigest: `sha256:${'a'.repeat(64)}`
+        }
+      }
+    })
+    assert.throws(() => domainRendererResearchSummaryNavigationSchema.parse({
+      label: 'Open claim',
+      resource: {
+        resourceKind: 'evidence-claim',
+        resourceId: 'claim-1',
+        resourceRef: 'not-a-broker-reference'
       }
     }), z.ZodError)
   })

@@ -23,7 +23,7 @@ _STATIC_ROUTE_SEGMENTS = {
     "analysis", "assessments", "attention", "audits", "claims", "decision",
     "decisions", "findings", "goals", "graph", "health", "history", "latest",
     "policy", "provenance", "releases", "retry", "reviews", "snapshots", "status",
-    "updates", "version",
+    "updates", "version", "scope", "invalidation", "approvals", "draft", "apply",
 }
 
 
@@ -202,10 +202,21 @@ class Handler(BaseHTTPRequestHandler):
             return engine.retry_update(parts[1], actor=body.get("actorId", "human"))
         if method == "GET" and parts == ["snapshots", "latest"]:
             return engine.snapshot_view(self._project_key(query))
+        if method == "POST" and parts == ["snapshots", "seal"]:
+            body = self._body()
+            body["projectKey"] = self._project_key(query, body)
+            return engine.seal_snapshot(body)
         if method == "GET" and len(parts) == 2 and parts[0] == "snapshots":
             return engine.snapshot_view(self._project_key(query), parts[1])
         if method == "GET" and parts == ["goals"]:
             return engine.goal_tree(self._project_key(query))
+        if method == "GET" and parts == ["goals", "draft"]:
+            return engine.goal_draft(self._project_key(query))
+        if method == "POST" and parts == ["goals", "draft"]:
+            body = self._body()
+            return engine.save_goal_draft(body)
+        if method == "POST" and parts == ["goals", "apply"]:
+            return engine.apply_goal_draft(self._body())
         if method == "POST" and parts == ["goals"]:
             body = self._body()
             return engine.create_goal(
@@ -239,6 +250,20 @@ class Handler(BaseHTTPRequestHandler):
             return engine.findings(self._project_key(query), query.get("status"))
         if method == "GET" and parts == ["reviews"]:
             return engine.reviews(self._project_key(query), query.get("status", "open"))
+        if method == "GET" and parts == ["scope", "revisions"]:
+            return engine.scope_revisions(self._project_key(query))
+        if method == "GET" and parts == ["scope", "draft"]:
+            return engine.scope_draft(self._project_key(query))
+        if method == "POST" and parts == ["scope", "draft"]:
+            return engine.save_scope_draft(self._body())
+        if method == "POST" and parts == ["scope", "apply"]:
+            return engine.apply_scope_draft(self._body())
+        if method == "GET" and parts == ["invalidation"]:
+            return engine.invalidation(self._project_key(query))
+        if method == "POST" and parts == ["invalidation"]:
+            body = self._body()
+            body["projectKey"] = self._project_key(query, body)
+            return engine.mark_invalidation(body)
         if method == "POST" and len(parts) == 3 and parts[0] == "reviews" \
                 and parts[2] == "decision":
             body = self._body()
@@ -264,6 +289,10 @@ class Handler(BaseHTTPRequestHandler):
             return engine.retry_audit(parts[1], actor=body.get("actorId", "human"))
         if method == "POST" and parts == ["decisions"]:
             return engine.record_decision(self._body())
+        if method == "GET" and parts == ["approvals"]:
+            return engine.approvals(self._project_key(query), query.get("snapshotDigest"))
+        if method == "POST" and parts == ["approvals"]:
+            return engine.record_approval(self._body())
         if method == "POST" and parts == ["policy"]:
             body = self._body()
             return engine.configure_policy(self._project_key(query, body), body)

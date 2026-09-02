@@ -36,10 +36,19 @@
       "title": "Evidence DAG",
       "resourceKind": "evidence-dag"
     },
-    "evidence-dag.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "evidence-dag.open",
-      "label": "rightPanelEvidenceDag"
+    "evidence-dag.research-summary": {
+      "slot": "status",
+      "label": "Evidence",
+      "order": 30,
+      "scopeKinds": ["workspace"],
+      "resourceKinds": ["evidence-dag", "evidence-claim", "evidence-closure"]
+    },
+    "evidence-dag.resource-navigation": {
+      "resourceKinds": ["evidence-dag", "evidence-claim", "evidence-closure", "evidence-snapshot"],
+      "target": {
+        "surface": "right-panel",
+        "contributionId": "evidence-dag.workbench-right-panel"
+      }
     }
   },
   "entrypoints": [
@@ -79,13 +88,13 @@
           "priority": 160
         },
         {
-          "kind": "renderer.command",
-          "id": "evidence-dag.open",
+          "kind": "renderer.research-summary.v1",
+          "id": "evidence-dag.research-summary",
           "priority": 160
         },
         {
-          "kind": "renderer.workbench-toolbar-action",
-          "id": "evidence-dag.workbench-toolbar-action",
+          "kind": "renderer.resource-navigation",
+          "id": "evidence-dag.resource-navigation",
           "priority": 160
         },
         {

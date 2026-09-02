@@ -5,6 +5,7 @@ import {
   projectDagActivationPayloadSchema,
   projectDagCapturedScopeSchema,
   projectDagDurableReceiptSchema,
+  projectDagReleaseV1Schema,
   projectDagStatusSchema,
   projectDagUpdateResultSchema
 } from './contract.js'
@@ -148,4 +149,27 @@ test('operation failures expose stable typed errors', () => {
   })
   assert.equal(parsed.ok, false)
   if (!parsed.ok) assert.equal(parsed.error.code, 'evidence_vector_regression')
+})
+
+test('release output references require exact Artifact Versions', () => {
+  const base = {
+    releaseId: 'release-1',
+    projectSnapshot: projectDigest,
+    classification: 'certified' as const,
+    target: 'internal',
+    outputArtifactVersions: [{
+      artifactVersionId: 'artifact-version-1',
+      contentDigest: evidenceDigest
+    }],
+    auditRefs: ['audit-1'],
+    decisionRefs: ['decision-1'],
+    approvalRefs: ['approval-1'],
+    attemptOutcome: 'accepted',
+    createdAt: acceptedAt
+  }
+  assert.equal(projectDagReleaseV1Schema.safeParse(base).success, true)
+  assert.equal(projectDagReleaseV1Schema.safeParse({
+    ...base,
+    outputArtifactVersions: [{ artifactVersionId: 'latest', contentDigest: evidenceDigest }]
+  }).success, false)
 })

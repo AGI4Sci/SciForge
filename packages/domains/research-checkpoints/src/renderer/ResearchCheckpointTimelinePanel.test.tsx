@@ -113,7 +113,7 @@ test('does not flash a loading card before an unrecorded turn status is known', 
   assert.equal(html, '')
 })
 
-test('renders a neutral exact-Dossier entry without the research card, badge, outputs, or warnings', () => {
+test('renders a neutral exact-Dossier entry without a duplicate aggregate card, badge, outputs, or warnings', () => {
   const html = renderToStaticMarkup(
     <ResearchCheckpointStatusCard
       status={committed()}

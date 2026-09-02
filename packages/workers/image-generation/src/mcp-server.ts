@@ -209,6 +209,7 @@ const recipeSchema = z.object({
   size: sizeSchema,
   stylePreset: z.string().trim().max(160).optional(),
   referencePath: z.string().trim().max(4096).optional(),
+  seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   outputFormat: z.enum(IMAGE_OUTPUT_FORMATS).optional(),
   intent: z.enum(IMAGE_DRAWING_INTENTS).optional(),
   drawingBrief: z.unknown().optional(),
@@ -316,6 +317,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
       }).strict().optional(),
       stylePreset: z.string().trim().max(160).optional(),
       referencePath: z.string().trim().max(4096).optional(),
+      seed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
       visualPlan: visualPlanSchema
     },
     annotations: READ_ONLY_ANNOTATIONS
@@ -329,6 +331,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
         ...(input.size ? { size: input.size } : {}),
         ...(input.stylePreset ? { stylePreset: input.stylePreset } : {}),
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
+        ...(input.seed !== undefined ? { seed: input.seed } : {}),
         visualPlan: input.visualPlan
       }
       const plan = await planImageGeneration(request)

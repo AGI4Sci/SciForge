@@ -119,7 +119,7 @@ flowchart LR
 `src/main/index.ts` 是应用组合根。它负责 Electron 生命周期、窗口与托盘、日志与 trace、settings、领域 catalog、capability broker、agent runtime、workspace host、远程通道、更新、通知、IPC 和开发桥的初始化。`app.whenReady()` 中的主要启动顺序如下：
 
 1. 创建 `JsonSettingsStore`、日志和 trace 基础设施。
-2. 初始化上下文账本、共享记忆、runtime goals、research cards、visible context 等应用服务。
+2. 初始化上下文账本、共享记忆、runtime goals、Research Surface、visible context 等应用服务。
 3. 通过 `createApplicationDomainCatalog()` 合并 4 个 core capability contribution 与生成的领域 main entries。
 4. 建立 workspace egress、workspace-host session manager、签名扩展 store。
 5. 从 catalog 组合 capability registry/broker，并激活 runtime lifecycle、action guard、artifact consumer 等领域贡献。
@@ -202,7 +202,7 @@ renderer 采用“Zustand + React 局部状态 + 主进程权威状态”的混�
 主进程通过 Electron `app.getPath('userData')` 保存应用级数据：
 
 - `sciforge-settings.json`：`JsonSettingsStore`，带规范化/迁移、损坏文件备份和原子替换。
-- `runtime-context-ledgers/ledgers.json`、`shared-memory/memories.json`、`runtime-goals/goals.json`、`research-cards/cards.json`：各服务的 JSON snapshot。
+- `runtime-context-ledgers/ledgers.json`、`shared-memory/memories.json`、`runtime-goals/goals.json`：各服务的 JSON snapshot。
 - `visible-context/snapshot.json` 及 capture 文件：当前可见上下文与图像。
 - `codex-runtime/threads.json`、`codex-runtime/events/*.jsonl`、usage JSONL：Codex 线程、事件和用量。
 - `claude-code-runtime/*`：Claude Code 线程、事件及 SDK session 项目数据。

@@ -4,6 +4,7 @@ import {
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
   RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
+  RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
   RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
@@ -12,6 +13,7 @@ import {
   domainRendererComposerContextProviderContractSchema,
   domainRendererExtensionContractSchema,
   domainRendererResourceNavigationContractSchema,
+  domainRendererResearchSummaryContractSchema,
   domainRendererWorkbenchBottomPanelContractSchema,
   domainRendererWorkbenchGlobalOverlayContractSchema,
   domainRendererWorkbenchNavigationSectionContractSchema,
@@ -20,6 +22,7 @@ import {
   isDomainRendererCommandHandler,
   isDomainRendererChatResultPanelValue,
   isDomainRendererResourceNavigationValue,
+  isDomainRendererResearchSummaryValue,
   isDomainRendererComposerContextProvider,
   isDomainRendererWorkbenchSurfaceValue,
   isDomainRendererWorkbenchToolbarActionValue,
@@ -29,6 +32,8 @@ import {
   type DomainRendererComposerContextProviderContract,
   type DomainRendererResourceNavigationContract,
   type DomainRendererResourceNavigationValue,
+  type DomainRendererResearchSummaryContract,
+  type DomainRendererResearchSummaryValue,
   type DomainRendererWorkbenchBottomPanelContract,
   type DomainRendererWorkbenchBottomPanelValue,
   type DomainRendererWorkbenchGlobalOverlayContract,
@@ -118,6 +123,7 @@ export type InstalledRendererContributions = Readonly<{
   rightPanels: WorkbenchRightPanelContributionRegistry
   chatResultPanels: ChatResultPanelContributionRegistry
   resourceNavigations: ResourceNavigationContributionRegistry
+  researchSummaries: ResearchSummaryContributionRegistry
   bottomPanels: WorkbenchBottomPanelContributionRegistry
   globalOverlays: WorkbenchGlobalOverlayContributionRegistry
   composerContexts: ComposerContextProviderRegistry
@@ -127,6 +133,44 @@ export type InstalledRendererContributions = Readonly<{
   readonly disposed: boolean
   dispose(): void
 }>
+
+export type RegisteredResearchSummaryContribution = Readonly<{
+  id: string
+  ownerId: string
+  order: number
+  contract: DomainRendererResearchSummaryContract
+  value: DomainRendererResearchSummaryValue
+}>
+
+type PendingResearchSummaryContribution = RegisteredResearchSummaryContribution & Readonly<{
+  onDispose?: () => void
+}>
+
+/** Deterministically ordered, read-only owner summaries for Research. */
+export class ResearchSummaryContributionRegistry {
+  #entries: RegisteredResearchSummaryContribution[] = []
+
+  register(input: RegisteredResearchSummaryContribution): () => void {
+    if (this.#entries.some((entry) => entry.id === input.id)) {
+      throw new Error(`Duplicate Research summary contribution "${input.id}".`)
+    }
+    this.#entries.push(Object.freeze({ ...input }))
+    this.#entries.sort((left, right) =>
+      left.order - right.order || left.ownerId.localeCompare(right.ownerId) || left.id.localeCompare(right.id)
+    )
+    return () => {
+      this.#entries = this.#entries.filter((entry) => entry.id !== input.id)
+    }
+  }
+
+  list(): readonly RegisteredResearchSummaryContribution[] {
+    return [...this.#entries]
+  }
+
+  dispose(): void {
+    this.#entries = []
+  }
+}
 
 export type InstalledRendererContributionOptions = Readonly<{
   entrySet?: InstalledDomainProcessEntrySet<'renderer', unknown>
@@ -212,6 +256,7 @@ export function createInstalledRendererContributions(
     value: DomainRendererResourceNavigationValue
     onDispose?: () => void
   }> = []
+  const researchSummaries: PendingResearchSummaryContribution[] = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
   const lifecycles: Array<{
     contribution: RendererLifecycleContribution
@@ -376,6 +421,21 @@ export function createInstalledRendererContributions(
       })
       continue
     }
+    if (installed.declaration.kind === RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND) {
+      const contract = domainRendererResearchSummaryContractSchema.safeParse(installed.contract)
+      if (!contract.success || !isDomainRendererResearchSummaryValue(installed.value)) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      researchSummaries.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: contract.data.order,
+        contract: contract.data,
+        value: installed.value,
+        ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+      })
+      continue
+    }
     if (installed.declaration.kind === RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND) {
       if (!isRendererWorkspacePreviewPluginContribution(installed.value, installed)) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
@@ -440,6 +500,7 @@ export function createInstalledRendererContributions(
   const rightPanels = new WorkbenchRightPanelContributionRegistry()
   const chatResultPanelRegistry = new ChatResultPanelContributionRegistry()
   const resourceNavigationRegistry = new ResourceNavigationContributionRegistry(rightPanels)
+  const researchSummaryRegistry = new ResearchSummaryContributionRegistry()
   const workbenchBottomPanels = new WorkbenchBottomPanelContributionRegistry()
   const workbenchGlobalOverlays = new WorkbenchGlobalOverlayContributionRegistry()
   const workbenchComposerContexts = new ComposerContextProviderRegistry()
@@ -459,6 +520,7 @@ export function createInstalledRendererContributions(
     () => rightPanels.dispose(),
     () => chatResultPanelRegistry.dispose(),
     () => resourceNavigationRegistry.dispose(),
+    () => researchSummaryRegistry.dispose(),
     () => workbenchBottomPanels.dispose(),
     () => workbenchGlobalOverlays.dispose(),
     () => workbenchComposerContexts.dispose(),
@@ -537,6 +599,14 @@ export function createInstalledRendererContributions(
         resourceNavigationRegistry.register(navigation).dispose
       )
     }
+    for (const summary of researchSummaries) {
+      const { onDispose, ...registeredSummary } = summary
+      pushOwnedRegistration(
+        registrationDisposers,
+        onDispose,
+        researchSummaryRegistry.register(registeredSummary)
+      )
+    }
     for (const lifecycle of lifecycles) {
       const dispose = lifecycle.contribution.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
@@ -570,6 +640,7 @@ export function createInstalledRendererContributions(
     rightPanels,
     chatResultPanels: chatResultPanelRegistry,
     resourceNavigations: resourceNavigationRegistry,
+    researchSummaries: researchSummaryRegistry,
     bottomPanels: workbenchBottomPanels,
     globalOverlays: workbenchGlobalOverlays,
     composerContexts: workbenchComposerContexts,

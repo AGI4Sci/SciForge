@@ -3,8 +3,8 @@
 Project DAG 的同版本 ownership boundary，包含 Project 编译器、durable update
 receipts、主进程 lifecycle/capability、可选 workbench UI 与进程无关公共合同。
 `./main` 与 `./renderer` 是显式分离的入口；包内 Python sidecar 严格按
-`docs/evidence-project-dag-design.zh-CN.md` 将多个 **committed Evidence Snapshot**
-编译为项目级不可变快照。它不读取原始聊天、不接受未提交 PROV、不提供直连
+[`ADR-0043`](../../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md) 将多个
+**committed Evidence Snapshot** 编译为项目级不可变快照。它不读取原始聊天、不接受未提交 PROV、不提供直连
 compiler 的 HTTP 旁路。Project DAG 仅通过 Evidence DAG 的公开合同与正式
 Python 依赖消费 Evidence，不依赖宿主私有路径或相邻目录注入。
 
@@ -13,12 +13,13 @@ sidecar 分配私有动态 loopback 端口，并合并并发 readiness 请求；
 立即失败，停止时只终止该生命周期创建的进程。显式外部 endpoint 保持原语义，包不
 探测或终止不属于自己的监听进程。
 
-可复跑节点、边、权限与比较语义见
-[`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md)。
+Research Artifacts 的术语和跨域边界见
+[`Research Artifacts context`](../../../docs/contexts/research-artifacts/CONTEXT.md)。
 
 ## 唯一更新链路
 
-所有自动提交、手动立即更新、Goal 变化、DecisionEvent 和恢复重试最终都写入同一 `project_update_job`：
+显式 Project 更新、Goal/Scope 变更和恢复重试最终都写入同一 `project_update_job`。上游
+Evidence 事件只记录 Project freshness，不会自动提交逐条 Evidence 编译：
 
 ```http
 POST /updates
@@ -32,7 +33,7 @@ Content-Type: application/json
     "includedSessions":["runtime:thread-1"],
     "excludedSessions":[],"isolatedSessions":[]
   },
-  "reason":"evidence_snapshot_committed",
+  "reason":"manual_immediate",
   "priority":5,
   "autonomyMode":"checkpointed"
 }
@@ -43,17 +44,11 @@ Content-Type: application/json
 Snapshot envelope。Evidence DAG 始终是来源、证据与 provenance 的唯一事实层；
 Project DAG 只按 Goal、scope 与 policy 编译派生视图。
 
-Evidence commit 可以只携带变化 session；worker 只与该 `projectKey` 已持久化 membership/vector 合并，绝不扫描全局 Evidence store 扩大 scope。显式 scope 命令必须携带完整 captured scope。每个 Project Snapshot 固化实际 included/excluded/isolated 集合与精确 digest vector。
-
-桌面集成只注册一个 SDK `main.artifact-consumer`。`turn-completed` 与
-`execution-completed` 都先转换为 `DomainArtifactEvent`，再进入同一个 durable
-handoff outbox；执行完成事件没有 Agent thread 时使用 SDK 定义的 synthetic
-runtime/thread scope。不存在第二条 execution 直连编译路径。
-
-handoff outbox 只解析当前 schema。已知旧版本或数值更高的 schema 不会被解释或重放；
-Domain 会保留其原始字节作为本地隔离备份，再写入唯一的当前格式空 outbox，避免
-Desktop 升级或降级时由不可安全重放的派生队列阻断启动。当前 schema 内部的未知字段、
-重复记录、非规范 identity 和状态矛盾仍然 fail closed。
+上游 Evidence commit 只通过 Project invalidation 标记 freshness；Project surface 保持关闭时
+不会 eager compile。显式 scope 命令必须携带完整 captured scope。每个 Project Snapshot
+固化实际 included/excluded/isolated 集合与精确 digest vector。桌面集成只注册一个 SDK
+`main.artifact-consumer`，其唯一职责是把有 Workspace 绑定的上游事件转换为 invalidation；
+不存在 per-Evidence Project 编译、状态或重试旁路。
 
 `POST /updates` 返回 durable receipt，而不是要求调用方猜测全局 queue 是否 idle：
 

@@ -555,6 +555,14 @@ class Compiler:
                     "UPDATE review SET status='resolved',payload=?,resolved_at=? WHERE id=?",
                     (json.dumps(payload, ensure_ascii=False), now_iso(), review["id"]),
                 )
+                self.store.x(
+                    "INSERT INTO review_event (id,project_key,review_id,event_type,actor,payload,created_at)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (new_id("review-event"), project_key, review["id"],
+                     "ReviewCandidateResolved", "project-compiler",
+                     json.dumps({"reason": "all materialized claims assigned or invalidated"},
+                                ensure_ascii=False), now_iso()),
+                )
 
     # -------------------------------------------------------------- per session
     def _process_session(self, delta, run_id: str, diff: dict, *,

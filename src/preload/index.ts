@@ -204,12 +204,6 @@ const api = {
   speechToText: {
     transcribe: transcribeSpeech
   },
-  researchCards: {
-    list: (input) => ipcRenderer.invoke('researchCards:list', input ?? {}),
-    create: (input) => ipcRenderer.invoke('researchCards:create', input),
-    update: (input) => ipcRenderer.invoke('researchCards:update', input),
-    archive: (input) => ipcRenderer.invoke('researchCards:archive', input)
-  },
   visibleContext: {
     publish: (snapshot) => ipcRenderer.invoke('visibleContext:publish', snapshot),
     get: () => ipcRenderer.invoke('visibleContext:get'),

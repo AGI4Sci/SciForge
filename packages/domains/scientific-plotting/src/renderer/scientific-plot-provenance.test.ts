@@ -8,7 +8,8 @@ import type {
 import type { ScientificPlottingCapabilityClient } from './scientific-plotting-capability-client.js'
 import {
   loadScientificPlotProvenance,
-  parseScientificPlotManifest
+  parseScientificPlotManifest,
+  scientificPlotRerunAvailability
 } from './scientific-plot-provenance.js'
 
 const DIGEST = 'a'.repeat(64)
@@ -37,7 +38,12 @@ test('loads exact plot manifest, recipe, figure, data, and log refs from Artifac
   const log = historyItem('scientific-plot-render-log', 'log', [], {
     metadata: { plotVersionId: 'plot-v1' }
   })
-  const items = [manifest, recipe, figure, code, derived, log]
+  const source = historyItem('dataset', 'input-v1', [], {
+    byteLength: 10,
+    mediaType: 'text/csv',
+    artifactId: 'artifact:input'
+  })
+  const items = [manifest, recipe, figure, code, derived, source, log]
   const encodedManifest = Buffer.from(JSON.stringify(plotManifest()), 'utf8').toString('base64')
   const client: ScientificPlottingCapabilityClient = {
     listArtifactVersions: async () => ({ ok: true, value: { items } }),
@@ -78,18 +84,82 @@ test('loads exact plot manifest, recipe, figure, data, and log refs from Artifac
   const parsed = parseScientificPlotManifest(encodedManifest)
   assert.equal(parsed.ok, true)
   if (!parsed.ok) return
-  assert.deepEqual(result.records[0], {
-    manifest: parsed.value,
-    manifestPath: '.sciforge/plots/figure-v1.manifest.json',
-    manifestItem: manifest,
-    manifestRef: manifest.ref,
-    recipeRef: recipe.ref,
-    codeRef: code.ref,
-    figureRef: figure.ref,
-    derivedDataRef: derived.ref,
-    logRef: log.ref,
-    currentFigureVersionId: 'artifact-version:figure-v2'
+  const record = result.records[0]
+  assert.ok(record)
+  assert.deepEqual(record.manifest, parsed.value)
+  assert.equal(record.manifestPath, '.sciforge/plots/figure-v1.manifest.json')
+  assert.equal(record.manifestItem, manifest)
+  assert.equal(record.manifestRef, manifest.ref)
+  assert.equal(record.recipeRef, recipe.ref)
+  assert.equal(record.codeRef, code.ref)
+  assert.equal(record.figureRef, figure.ref)
+  assert.equal(record.derivedDataRef, derived.ref)
+  assert.equal(record.logRef, log.ref)
+  assert.equal(record.currentFigureVersionId, 'artifact-version:figure-v2')
+  assert.equal(record.figureStatus, 'available')
+  assert.deepEqual(record.supportingVersions.map(({ ref }) => ref.versionId), [
+    manifest.ref.versionId,
+    recipe.ref.versionId,
+    derived.ref.versionId,
+    code.ref.versionId,
+    source.ref.versionId,
+    log.ref.versionId
+  ])
+  assert.ok(record.supportingVersions.every(({ status }) => status === 'available'))
+})
+
+test('retains missing and restricted dependency states instead of dropping the Figure', async () => {
+  const derived = historyItem('scientific-plot-derived-data', 'derived', [])
+  const recipe = historyItem('scientific-plot-recipe', 'recipe', [dependency('derived-data', derived.ref)])
+  const code = historyItem('scientific-plot-code', 'code-v1', [dependency('recipe', recipe.ref)])
+  const figure = historyItem('scientific-plot', 'figure-v1', [dependency('recipe', recipe.ref), dependency('code', code.ref)])
+  const manifest = historyItem(
+    'scientific-plot-render-manifest',
+    'manifest',
+    [dependency('recipe', recipe.ref), dependency('figure', figure.ref), dependency('code', code.ref)],
+    { metadata: { manifestPath: '.sciforge/plots/figure.manifest.json' } }
+  )
+  const parsedManifest = plotManifest() as Record<string, unknown>
+  const parsedRecipe = parsedManifest.recipe as Record<string, unknown>
+  const dataSources = parsedRecipe.dataSources as Array<Record<string, unknown>>
+  const sourceRef = dataSources[0]?.artifactVersion as ArtifactVersionRefV1
+  const restrictedRef = { ...sourceRef, accessPolicy: { visibility: 'restricted' as const, principals: ['user:owner'], allowExport: false } }
+  dataSources[0] = { ...dataSources[0], artifactVersion: restrictedRef, sha256: restrictedRef.contentDigest }
+  dataSources.push({
+    ...dataSources[0],
+    sourceId: 'missing-input',
+    artifactVersion: { ...sourceRef, artifactId: 'artifact:missing-input', versionId: 'artifact-version:missing-input' },
+    sha256: sourceRef.contentDigest
   })
+  const encodedManifest = Buffer.from(JSON.stringify(parsedManifest), 'utf8').toString('base64')
+  const client = provenanceClient([manifest, recipe, figure, code, derived], manifest, encodedManifest)
+
+  const result = await loadScientificPlotProvenance(client, '/workspace')
+  assert.equal(result.records.length, 1)
+  assert.ok(result.issues.some((issue) => issue.includes('not present in the authorized Version listing')))
+  assert.ok(result.issues.some((issue) => issue.includes('access is restricted')))
+  const record = result.records[0]!
+  assert.equal(record.figureStatus, 'available')
+  assert.equal(record.supportingVersions.find(({ ref }) => ref.versionId === sourceRef.versionId)?.status, 'restricted')
+  assert.equal(scientificPlotRerunAvailability(record).allowed, false)
+})
+
+test('disables rerun for a legacy Version without a committed Code Artifact', async () => {
+  const recipe = historyItem('scientific-plot-recipe', 'recipe', [])
+  const figure = historyItem('scientific-plot', 'figure-v1', [dependency('recipe', recipe.ref)])
+  const manifest = historyItem(
+    'scientific-plot-render-manifest',
+    'manifest',
+    [dependency('recipe', recipe.ref), dependency('figure', figure.ref)],
+    { metadata: { manifestPath: '.sciforge/plots/legacy.manifest.json' } }
+  )
+  const encodedManifest = Buffer.from(JSON.stringify(plotManifest()), 'utf8').toString('base64')
+  const client = provenanceClient([manifest, recipe, figure], manifest, encodedManifest)
+  const result = await loadScientificPlotProvenance(client, '/workspace')
+  assert.equal(result.records.length, 1)
+  const availability = scientificPlotRerunAvailability(result.records[0]!)
+  assert.equal(availability.allowed, false)
+  assert.match(availability.reason, /committed executable Code Artifact/)
 })
 
 test('rejects malformed bytes instead of presenting incomplete provenance as ready', () => {
@@ -123,18 +193,22 @@ function historyItem(
   options: Readonly<{
     currentVersionId?: string
     metadata?: Record<string, string>
+    byteLength?: number
+    mediaType?: string
+    artifactId?: string
+    versionId?: string
   }> = {}
 ): ArtifactVersionListV1['items'][number] {
-  const artifactId = `artifact:${stem}`
-  const versionId = `artifact-version:${stem}`
+  const artifactId = options.artifactId ?? `artifact:${stem}`
+  const versionId = options.versionId ?? `artifact-version:${stem}`
   const ref: ArtifactVersionRefV1 = {
     artifactId,
     versionId,
     contentDigest: DIGEST,
-    byteLength: 42,
-      mediaType: kind === 'scientific-plot'
-        ? 'image/png'
-        : kind === 'scientific-plot-code' ? 'text/x-python' : 'application/json',
+    byteLength: options.byteLength ?? 42,
+    mediaType: options.mediaType ?? (kind === 'scientific-plot'
+      ? 'image/png'
+      : kind === 'scientific-plot-code' ? 'text/x-python' : 'application/json'),
     availability: 'available',
     retention: 'snapshot',
     accessPolicy: ACCESS
@@ -160,7 +234,7 @@ function historyItem(
       storage: {
         mode: 'snapshot',
         contentDigest: DIGEST,
-        byteLength: 42,
+        byteLength: options.byteLength ?? 42,
         mediaType: ref.mediaType
       },
       dependencies,
@@ -168,6 +242,41 @@ function historyItem(
       metadata: options.metadata ?? {}
     },
     ref
+  }
+}
+
+function provenanceClient(
+  items: ArtifactVersionListV1['items'],
+  manifest: ArtifactVersionListV1['items'][number],
+  encodedManifest: string
+): ScientificPlottingCapabilityClient {
+  return {
+    listArtifactVersions: async () => ({ ok: true, value: { items } }),
+    readArtifactVersion: async (_workspaceRoot, input) => input.versionId === manifest.ref.versionId
+      ? {
+          ok: true,
+          value: {
+            artifact: manifest.artifact,
+            version: manifest.version,
+            ref: manifest.ref,
+            dataBase64: encodedManifest
+          }
+        }
+      : { ok: false, issue: { code: 'version-not-found', message: 'not found' } },
+    materializeArtifactVersion: async () => ({ ok: false, issue: { code: 'io-failure', message: 'not used' } }),
+    rerun: async () => ({
+      ok: false,
+      status: 'version_read_failed',
+      message: 'not used',
+      provenanceBreakpoints: [{
+        schemaVersion: 1,
+        code: 'exact-rerun-failed',
+        stage: 'baseline',
+        message: 'not used',
+        retryable: false
+      }]
+    }),
+    compare: async () => ({ ok: false, status: 'manifest_read_failed', message: 'not used' })
   }
 }
 

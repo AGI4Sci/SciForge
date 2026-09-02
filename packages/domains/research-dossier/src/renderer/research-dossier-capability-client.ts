@@ -31,13 +31,6 @@ import {
   type ArtifactVersionRestoreAsNewInputV1,
 } from '@sciforge/domain-artifact-versions/contract'
 import {
-  VISUAL_REVIEW_CAPABILITY_IDS,
-  visualReviewDocumentInputSchema,
-  visualReviewOpenOutputSchema,
-  type VisualReviewDocumentInput
-} from '@sciforge/domain-visual-review/contract'
-import type { VisualDocumentOpenResult } from '@sciforge/domain-visual-review/contract'
-import {
   RESEARCH_CHECKPOINT_CAPABILITY_IDS,
   researchCheckpointLegacyImportInputV1Schema,
   researchCheckpointLegacyImportResultV1Schema,
@@ -119,12 +112,6 @@ const contracts = Object.freeze({
     inputSchema: artifactVersionBundleExportInputV2Schema,
     outputSchema: artifactVersionBundleExportResultV2Schema
   },
-  readVisualReviewDocument: {
-    actionId: VISUAL_REVIEW_CAPABILITY_IDS.readDocument,
-    effect: 'read' as const,
-    inputSchema: visualReviewDocumentInputSchema,
-    outputSchema: visualReviewOpenOutputSchema
-  },
   researchCheckpointStatus: {
     actionId: RESEARCH_CHECKPOINT_CAPABILITY_IDS.status,
     effect: 'read' as const,
@@ -196,10 +183,6 @@ export type ResearchDossierCapabilityClient = Readonly<{
     workspaceRoot: string,
     input: ArtifactVersionBundleExportInputV2
   ): Promise<ArtifactVersionResultV1<ArtifactVersionBundleReceiptV2>>
-  readVisualReviewDocument(
-    workspaceRoot: string,
-    input: VisualReviewDocumentInput
-  ): Promise<VisualDocumentOpenResult>
   readResearchRecordingStatus(
     workspaceRoot: string,
     input: ResearchCheckpointStatusInputV1
@@ -281,11 +264,6 @@ export function createResearchDossierCapabilityClient(
         workspaceId: workspaceRoot,
         approval: { mode: 'confirmation' }
       }
-    ),
-    readVisualReviewDocument: (workspaceRoot, input) => invoker.invoke(
-      contracts.readVisualReviewDocument,
-      input,
-      { workspaceId: workspaceRoot }
     ),
     readResearchRecordingStatus: (workspaceRoot, input) => invoker.invoke(
       contracts.researchCheckpointStatus,

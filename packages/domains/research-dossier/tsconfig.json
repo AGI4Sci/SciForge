@@ -15,7 +15,6 @@
     "baseUrl": ".",
     "paths": {
       "@sciforge/domain-sdk/*": ["../../domain-sdk/src/*"],
-      "@sciforge/domain-visual-review/contract": ["../visual-review/src/contract.ts"],
       "@sciforge/domain-artifact-versions/contract": ["../artifact-versions/src/contract.ts"],
       "@sciforge/domain-research-checkpoints/contract": ["../research-checkpoints/src/contract.ts"]
     }

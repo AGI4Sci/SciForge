@@ -1,4 +1,4 @@
-# Research Dossier
+# Research
 
 Presentation-only SciForge domain that opens an exact artifact version or
 scientific compute run and composes owner-provided read models into a

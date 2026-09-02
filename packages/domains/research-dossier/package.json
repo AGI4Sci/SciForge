@@ -24,7 +24,6 @@
     "@sciforge/domain-artifact-versions": "^1.1.0",
     "@sciforge/domain-research-checkpoints": "^1.0.0",
     "@sciforge/domain-sdk": "^0.2.0",
-    "@sciforge/domain-visual-review": "^1.0.1",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",

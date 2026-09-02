@@ -44,8 +44,8 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
       return '/host-private-user-data'
     },
     defineCapability: (definition) => definition,
-    createProjectDagRuntime: (options) => {
-      calls.push(`create:${options?.userDataDir}`)
+    createProjectDagRuntime: () => {
+      calls.push('create')
       return fakeRuntime
     }
   })
@@ -93,14 +93,14 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
     data: { marker: 'view' }
   })
   assert.deepEqual(calls, [
-    'create:/lifecycle-user-data',
+    'create',
     'activate',
     'view'
   ])
 
   await consumer.consume({})
   assert.deepEqual(calls, [
-    'create:/lifecycle-user-data',
+    'create',
     'activate',
     'view',
     'consume'
@@ -109,7 +109,7 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
   await deactivate()
   await entry.contributions[1]!.onDispose?.()
   assert.deepEqual(calls, [
-    'create:/lifecycle-user-data',
+    'create',
     'activate',
     'view',
     'consume',

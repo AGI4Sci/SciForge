@@ -14,40 +14,46 @@ import {
   type ScientificPlottingProvenancePreparation,
   type ScientificPlottingProvenanceReceiptV1
 } from './scientific-plotting-provenance-consumer.js'
-import type { EvidenceDagQueueInput } from './queue.js'
+import {
+  EvidenceDagDeltaStore,
+  evidenceDagDeltaInputFromTrace,
+  type EvidenceDagAppendResult,
+  type EvidenceDagTraceAppendInput
+} from './evidence-delta.js'
 
 test('delivers a strict Scientific Plotting lineage as a durable synthetic trace', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'evidence-plot-success-'))
   const receipt = plotReceipt('plot-operation-success-0001')
   await writeProducerReceipt(workspaceRoot, receipt)
-  const enqueued: EvidenceDagQueueInput[] = []
+  const appended: EvidenceDagTraceAppendInput[] = []
   const consumer = consumerFor({
     workspaceRoot,
     receipt,
-    enqueue: async (input) => {
-      enqueued.push(input)
-      return { jobId: 'plot-job-1', coalesced: false, itemCount: input.trace.length }
+    append: async (input) => {
+      appended.push(input)
+      return appendToStore(input, workspaceRoot)
     }
   })
 
   await consumer.start(true)
+  await consumer.pollNow()
   await waitFor(async () =>
     await optionalDelivery(workspaceRoot, receipt.operationId) !== undefined
   )
 
-  assert.equal(enqueued.length, 1)
-  assert.equal(enqueued[0]?.idempotencyKey?.startsWith('scientific-plotting/provenance-delivery:'), true)
-  assert.equal(enqueued[0]?.reason, 'scientific_plotting_provenance')
-  assert.equal(enqueued[0]?.workspaceRoot, workspaceRoot)
-  const synthetic = enqueued[0]?.trace.find((item) =>
+  assert.equal(appended.length, 1)
+  assert.equal(appended[0]?.idempotencyKey?.startsWith('scientific-plotting/provenance-delivery:'), true)
+  assert.equal(appended[0]?.kind, 'scientific_provenance')
+  assert.equal(appended[0]?.workspaceRoot, workspaceRoot)
+  const synthetic = appended[0]?.trace.find((item) =>
     item.id === `scientific-plotting/provenance:${receipt.operationId}`
   )
   assert.deepEqual(synthetic?.evidenceLineage, receipt.evidenceLineage)
   const delivery = scientificPlottingEvidenceDeliveryReceiptV1Schema.parse(
     await optionalDelivery(workspaceRoot, receipt.operationId)
   )
-  assert.equal(delivery.state, 'enqueued')
-  assert.equal(delivery.jobId, 'plot-job-1')
+  assert.equal(delivery.state, 'committed')
+  assert.equal(delivery.deltaDigest.startsWith('sha256:'), true)
   assert.equal(
     delivery.sourceDigest,
     createHash('sha256').update(await producerBytes(workspaceRoot, receipt.operationId)).digest('hex')
@@ -62,35 +68,34 @@ test('keeps receipts pending while the target thread or durable queue is unavail
   const serviceReceipt = plotReceipt('plot-operation-service-0001')
   await writeProducerReceipt(missingThreadWorkspace, threadReceipt)
   await writeProducerReceipt(missingServiceWorkspace, serviceReceipt)
-  let enqueueCalls = 0
+  let appendCalls = 0
   const missingThread = new ScientificPlottingProvenanceConsumer({
-    storagePath: join(missingThreadWorkspace, 'consumer-state.json'),
     discoverWorkspaces: async () => [missingThreadWorkspace],
     prepare: async () => {
       throw new Error('Target thread is missing.')
     },
-    enqueue: async () => {
-      enqueueCalls += 1
-      return { jobId: 'unexpected', coalesced: false, itemCount: 1 }
+    append: async (input) => {
+      appendCalls += 1
+      return appendToStore(input, missingThreadWorkspace)
     }
   })
   await missingThread.start(true)
   await missingThread.pollNow()
-  assert.equal(enqueueCalls, 0)
+  assert.equal(appendCalls, 0)
   assert.equal(await optionalDelivery(missingThreadWorkspace, threadReceipt.operationId), undefined)
   await missingThread.close()
 
   const missingService = consumerFor({
     workspaceRoot: missingServiceWorkspace,
     receipt: serviceReceipt,
-    enqueue: async () => {
-      enqueueCalls += 1
-      throw new Error('Durable Evidence queue is unavailable.')
+    append: async () => {
+      appendCalls += 1
+      throw new Error('Durable Evidence delta store is unavailable.')
     }
   })
   await missingService.start(true)
   await missingService.pollNow()
-  assert.equal(enqueueCalls, 1)
+  assert.equal(appendCalls, 1)
   assert.equal(await optionalDelivery(missingServiceWorkspace, serviceReceipt.operationId), undefined)
   await missingService.close()
 })
@@ -98,46 +103,44 @@ test('keeps receipts pending while the target thread or durable queue is unavail
 test('recovers the enqueue-to-delivery crash window without a duplicate enqueue', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'evidence-plot-restart-'))
   const receipt = plotReceipt('plot-operation-restart-0001')
-  const storagePath = join(workspaceRoot, 'consumer-state.json')
   await writeProducerReceipt(workspaceRoot, receipt)
-  let firstEnqueues = 0
+  let firstAppends = 0
   const first = consumerFor({
     workspaceRoot,
     receipt,
-    storagePath,
-    enqueue: async (input) => {
-      firstEnqueues += 1
-      return { jobId: 'durable-job', coalesced: false, itemCount: input.trace.length }
+    append: async (input) => {
+      firstAppends += 1
+      return appendToStore(input, workspaceRoot)
     },
-    afterEnqueue: async () => {
+    afterAppend: async () => {
       throw new Error('Simulated crash before delivery receipt.')
     }
   })
   await first.start(true)
   await first.pollNow()
-  assert.equal(firstEnqueues, 1)
+  assert.equal(firstAppends, 1)
   assert.equal(await optionalDelivery(workspaceRoot, receipt.operationId), undefined)
   await first.close()
 
-  let restartedEnqueues = 0
+  let restartedAppends = 0
   const restarted = consumerFor({
     workspaceRoot,
     receipt,
-    storagePath,
-    enqueue: async () => {
-      restartedEnqueues += 1
-      return { jobId: 'duplicate-job', coalesced: false, itemCount: 1 }
+    append: async (input) => {
+      restartedAppends += 1
+      return appendToStore(input, workspaceRoot)
     }
   })
   await restarted.start(true)
+  await restarted.pollNow()
   await waitFor(async () =>
     await optionalDelivery(workspaceRoot, receipt.operationId) !== undefined
   )
-  assert.equal(restartedEnqueues, 0)
+  assert.equal(restartedAppends, 1)
   const delivery = scientificPlottingEvidenceDeliveryReceiptV1Schema.parse(
     await optionalDelivery(workspaceRoot, receipt.operationId)
   )
-  assert.equal(delivery.jobId, 'durable-job')
+  assert.equal(delivery.deltaDigest.startsWith('sha256:'), true)
   await restarted.close()
 })
 
@@ -146,20 +149,20 @@ test('fails closed when a receipt resolves to a target in another workspace', as
   const otherWorkspace = await mkdtemp(join(tmpdir(), 'evidence-plot-scope-b-'))
   const receipt = plotReceipt('plot-operation-cross-workspace-0001')
   await writeProducerReceipt(workspaceRoot, receipt)
-  let enqueueCalls = 0
+  let appendCalls = 0
   const consumer = consumerFor({
     workspaceRoot,
     receipt,
     prepare: async () => preparation(otherWorkspace, receipt),
-    enqueue: async () => {
-      enqueueCalls += 1
-      return { jobId: 'unexpected', coalesced: false, itemCount: 1 }
+    append: async (input) => {
+      appendCalls += 1
+      return appendToStore(input, workspaceRoot)
     }
   })
 
   await consumer.start(true)
   await consumer.pollNow()
-  assert.equal(enqueueCalls, 0)
+  assert.equal(appendCalls, 0)
   assert.equal(await optionalDelivery(workspaceRoot, receipt.operationId), undefined)
   await consumer.close()
 })
@@ -187,7 +190,7 @@ test('fails closed on conflicting full refs for the same versionId', async () =>
     }
   })
   await writeProducerReceipt(workspaceRoot, receipt)
-  let enqueueCalls = 0
+  let appendCalls = 0
   const consumer = consumerFor({
     workspaceRoot,
     receipt,
@@ -195,15 +198,15 @@ test('fails closed on conflicting full refs for the same versionId', async () =>
       scientificPlottingReceiptArtifactRefs(parsedReceipt)
       return preparation(targetWorkspace, parsedReceipt)
     },
-    enqueue: async () => {
-      enqueueCalls += 1
-      return { jobId: 'unexpected', coalesced: false, itemCount: 1 }
+    append: async (input) => {
+      appendCalls += 1
+      return appendToStore(input, workspaceRoot)
     }
   })
 
   await consumer.start(true)
   await consumer.pollNow()
-  assert.equal(enqueueCalls, 0)
+  assert.equal(appendCalls, 0)
   assert.equal(await optionalDelivery(workspaceRoot, receipt.operationId), undefined)
   await consumer.close()
 })
@@ -211,26 +214,32 @@ test('fails closed on conflicting full refs for the same versionId', async () =>
 function consumerFor(input: Readonly<{
   workspaceRoot: string
   receipt: ScientificPlottingProvenanceReceiptV1
-  storagePath?: string
   prepare?: (
     workspaceRoot: string,
     receipt: ScientificPlottingProvenanceReceiptV1
   ) => Promise<ScientificPlottingProvenancePreparation>
-  enqueue: (input: EvidenceDagQueueInput) => Promise<{
-    jobId: string
-    coalesced: boolean
-    itemCount: number
-  }>
-  afterEnqueue?: () => Promise<void>
+  append: (input: EvidenceDagTraceAppendInput) => Promise<EvidenceDagAppendResult>
+  afterAppend?: () => Promise<void>
 }>): ScientificPlottingProvenanceConsumer {
   return new ScientificPlottingProvenanceConsumer({
-    storagePath: input.storagePath ?? join(input.workspaceRoot, 'consumer-state.json'),
     discoverWorkspaces: async () => [input.workspaceRoot],
     prepare: input.prepare ?? (async () => preparation(input.workspaceRoot, input.receipt)),
-    enqueue: input.enqueue,
-    ...(input.afterEnqueue ? { afterEnqueue: input.afterEnqueue } : {}),
+    append: input.append,
+    ...(input.afterAppend ? { afterAppend: input.afterAppend } : {}),
     pollIntervalMs: 60_000
   })
+}
+
+const testStores = new Map<string, EvidenceDagDeltaStore>()
+async function appendToStore(
+  input: EvidenceDagTraceAppendInput,
+  workspaceRoot: string
+) {
+  const store = testStores.get(workspaceRoot) ?? new EvidenceDagDeltaStore(
+    join(workspaceRoot, 'deltas.json')
+  )
+  testStores.set(workspaceRoot, store)
+  return store.append(evidenceDagDeltaInputFromTrace(input))
 }
 
 function preparation(

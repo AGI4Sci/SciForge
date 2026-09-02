@@ -47,13 +47,13 @@ test('research dossier page navigation preserves target and session history inpu
   })
   const next = moveResearchDossierActivationToPage(
     researchDossierActivationPayloadV1Schema.parse(activation.payload),
-    'evidence-review',
+    'reproduction',
     2
   )
   assert.deepEqual(next.payload, {
     contractVersion: 1,
     target: { kind: 'compute-run', runId: 'run-1' },
-    page: 'evidence-review'
+    page: 'reproduction'
   })
   assert.equal(next.revision, 2)
 })

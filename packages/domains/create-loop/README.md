@@ -66,8 +66,8 @@ rename durable. Pending intents are replayed independently with the same event
 ID and bytes; capacity exhaustion rejects a new run before `run_started` and
 never evicts an unacknowledged terminal event.
 
-The end-to-end contract is documented in
-[`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md).
+The current graph derivation and formal-baseline boundary is documented in
+[`ADR-0043`](../../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md).
 
 ## Dynamic dataset construction
 

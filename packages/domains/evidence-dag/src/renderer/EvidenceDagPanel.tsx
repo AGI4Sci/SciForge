@@ -4,8 +4,7 @@ import {
   Network,
   PanelRightClose,
   Play,
-  RefreshCw,
-  RotateCcw
+  RefreshCw
 } from 'lucide-react'
 import {
   useEffect,
@@ -23,7 +22,6 @@ import type {
 import {
   evidenceDagActivationPayloadSchema,
   type EvidenceDagActivationPayload,
-  type EvidenceDagUpdateInput,
   type EvidenceDagViewInput,
   type EvidenceDagViewOutput
 } from '../contract'
@@ -235,7 +233,7 @@ export function EvidenceDagPanel({
     workspacePreview
   ])
 
-  const submitUpdate = (operation: EvidenceDagUpdateInput['operation']): void => {
+  const submitUpdate = (): void => {
     if (!target.runtimeId || !target.threadId) {
       setError(t('evidenceDagUnavailable'))
       return
@@ -246,15 +244,7 @@ export function EvidenceDagPanel({
     void client.update({
       runtimeId: target.runtimeId,
       threadId: target.threadId,
-      ...(target.workspaceRoot ? { workspaceRoot: target.workspaceRoot } : {}),
-      operation,
-      ...(operation === 'rebuild'
-        ? {
-            rebuildKind: 'reinterpretation' as const,
-            rebuildRationale:
-              'Explicit reinterpretation requested from the Evidence DAG panel.'
-          }
-        : {})
+      ...(target.workspaceRoot ? { workspaceRoot: target.workspaceRoot } : {})
     }).then((result) => {
       setView({
         url: result.url,
@@ -306,7 +296,7 @@ export function EvidenceDagPanel({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
-            onClick={() => submitUpdate('update')}
+            onClick={submitUpdate}
             disabled={loading || updateBusy || !target.runtimeId || !target.threadId}
             className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -386,7 +376,7 @@ export function EvidenceDagPanel({
             {target.runtimeId && target.threadId ? (
               <button
                 type="button"
-                onClick={() => submitUpdate('update')}
+                onClick={submitUpdate}
                 disabled={submitting}
                 className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-xs text-ds-ink hover:bg-ds-hover disabled:opacity-50"
               >
@@ -397,20 +387,6 @@ export function EvidenceDagPanel({
         )}
       </div>
 
-      {target.runtimeId && target.threadId ? (
-        <details className="shrink-0 border-t border-ds-border bg-ds-sidebar px-3 py-2 text-[11px] text-ds-muted">
-          <summary className="cursor-pointer select-none">{t('evidenceDagRebuild')}</summary>
-          <button
-            type="button"
-            onClick={() => submitUpdate('rebuild')}
-            disabled={updateBusy}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-amber-800 disabled:opacity-50"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            {t('evidenceDagRebuild')}
-          </button>
-        </details>
-      ) : null}
     </aside>
   )
 }

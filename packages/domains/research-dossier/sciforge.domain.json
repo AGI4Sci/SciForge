@@ -8,7 +8,7 @@
   },
   "module": {
     "id": "sciforge.research-dossier",
-    "displayName": "Research Dossier",
+    "displayName": "Research",
     "version": "1.0.1",
     "hostApi": {
       "minimum": "1.1.0",
@@ -19,13 +19,13 @@
   "contributionContracts": {
     "research-dossier.workbench-right-panel": {
       "location": "workbench.right-panel",
-      "title": "Research Dossier",
+      "title": "Research",
       "resourceKind": "research-dossier"
     },
     "research-dossier.workbench-toolbar-action": {
       "location": "workbench.topbar",
       "commandId": "research-dossier.open",
-      "label": "rightPanelResearchDossier"
+      "label": "rightPanelResearch"
     },
     "research-dossier.resource-navigation": {
       "resourceKinds": [

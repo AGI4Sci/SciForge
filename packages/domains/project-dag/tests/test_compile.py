@@ -414,7 +414,7 @@ class WorkflowTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def enqueue(self, snapshots: list[dict], *, project: str | None = None,
-                reason: str = "evidence_snapshot_committed", mode: str = "autonomous") -> dict:
+                reason: str = "manual_immediate", mode: str = "autonomous") -> dict:
         vector = [{"threadId": s["threadId"], "digest": s["digest"]} for s in snapshots]
         return self.engine.enqueue_update({
             "projectKey": project or self.project,
@@ -947,12 +947,10 @@ class WorkflowTests(unittest.TestCase):
                 "reason": "manual_update",
             })
 
-    def test_evidence_commit_merges_persisted_membership_and_isolates_projects(self):
+    def test_explicit_scope_keeps_project_membership_and_isolates_projects(self):
         s1 = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
-        self.enqueue([s1]); self.drain()
         s2 = write_snapshot(self.sessions, "s2", [("claim two", "source two")])
-        # Incremental event carries only the changed session. Persisted s1 is retained.
-        self.enqueue([s2]); self.drain()
+        self.enqueue([s1, s2]); self.drain()
         latest = self.engine.workflow.latest_snapshot(self.project)
         self.assertEqual({v["threadId"] for v in latest["evidenceVector"]}, {"s1", "s2"})
 
@@ -1066,7 +1064,11 @@ class WorkflowTests(unittest.TestCase):
 
         changed_s2 = write_snapshot(
             self.sessions, "s2", [("changed claim", "changed source")], version=2)
-        self.enqueue([changed_s2]); self.drain()
+        self.engine.mark_invalidation({
+            "projectKey": self.project,
+            "reason": "upstream_changed",
+            "changedFields": ["evidenceVector"],
+        })
         after_auto = self.engine.workflow.latest_snapshot(self.project)
         self.assertEqual(after_auto["evidenceVector"],
                          [{"threadId": "s1", "digest": s1["digest"]}])

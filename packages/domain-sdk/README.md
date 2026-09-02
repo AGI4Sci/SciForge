@@ -145,6 +145,7 @@ UI. It defines these generic contribution kinds:
 - `renderer.workbench-global-overlay`
 - `renderer.composer-context-provider`
 - `renderer.resource-navigation`
+- `renderer.research-summary.v1`
 - `renderer.extension`
 
 A command declaration ID is its stable command ID. Its runtime value has the exact shape
@@ -159,6 +160,12 @@ The three slots use contribution IDs rather than host-private modes. Composer co
 return bounded text items and metadata through a strict result schema. These pure contracts also
 describe future sandboxed renderer contributions; a sandbox host supplies the view transport
 without changing the manifest data model.
+
+Research summary contributions provide bounded, read-only owner projections for the primary
+Research surface. Each contribution declares one generic slot (`goal`, `scope`, `status`,
+`artifacts`, or `attention`), deterministic order, applicable scope/resource kinds, and exact
+resource-navigation actions. An owner may return an explicit unavailable state; the Research
+surface does not cache failed owner state or apply package-specific permission filtering.
 
 A package-owned composed workspace may discover `renderer.extension` contributions at the
 generic `workbench.workspace-section` location. The strict manifest contract names the workspace,
@@ -303,8 +310,8 @@ of a guessed command. Historical approval is never an authorization for a rerun.
 `canonicalizeReproValue` implements the canonical JSON bytes used for digests, and
 `canonicalizeReproSpecForDigest` excludes only `specDigest`. Consumers must validate both the
 strict schema and digest before use. See
-[`docs/reproducible-dag-v3.zh-CN.md`](../../docs/reproducible-dag-v3.zh-CN.md) for ownership,
-lineage, and comparison semantics.
+[`ADR-0043`](../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md) for
+the current ownership, derivation, and sealing boundaries.
 
 Node-only domain services use stable SDK subpaths for shared host-independent runtime behavior:
 

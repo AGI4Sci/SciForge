@@ -92,6 +92,20 @@ export type ScientificPlotManifestProjection = z.infer<
 >
 type HistoryItem = ArtifactVersionListV1['items'][number]
 
+export type ScientificPlotDependencyStatus =
+  | 'available'
+  | 'missing'
+  | 'restricted'
+  | 'unavailable'
+
+export type ScientificPlotSupportingVersion = Readonly<{
+  ref: ArtifactVersionRefV1
+  roles: readonly string[]
+  status: ScientificPlotDependencyStatus
+  item?: HistoryItem
+  issue?: string
+}>
+
 export type ScientificPlotProvenanceRecord = Readonly<{
   manifest: ScientificPlotManifestProjection
   manifestPath: string
@@ -102,6 +116,9 @@ export type ScientificPlotProvenanceRecord = Readonly<{
   figureRef?: ArtifactVersionRefV1
   derivedDataRef?: ArtifactVersionRefV1
   logRef?: ArtifactVersionRefV1
+  figureStatus: ScientificPlotDependencyStatus
+  figureIssue?: string
+  supportingVersions: readonly ScientificPlotSupportingVersion[]
   currentFigureVersionId?: string
 }>
 
@@ -142,10 +159,11 @@ export async function loadScientificPlotProvenance(
     const figureRef = dependencyRef(manifestItem, 'figure')
     const recipeItem = recipeRef ? itemByVersionId.get(recipeRef.versionId) : undefined
     const derivedDataRef = recipeItem ? dependencyRef(recipeItem, 'derived-data') : undefined
-    const logItem = allItems.find((item) => (
+    const logItems = allItems.filter((item) => (
       item.artifact.kind === 'scientific-plot-render-log' &&
       item.version.metadata.plotVersionId === parsed.value.plotVersionId
     ))
+    const logItem = logItems[0]
     const metadataManifestPath = manifestItem.version.metadata.manifestPath
     const manifestPath = typeof metadataManifestPath === 'string'
       ? metadataManifestPath
@@ -155,6 +173,22 @@ export async function loadScientificPlotProvenance(
         issue: `${manifestItem.version.versionId}: exact manifest has no rerun path metadata.`
       } as const
     }
+
+    const dependencies = collectDependencyClosure({
+      manifestItem,
+      recipe: parsed.value.recipe,
+      recipeRef,
+      codeRef,
+      figureRef,
+      logItems,
+      itemByVersionId
+    })
+    const figureDependency = figureRef
+      ? dependencies.find((dependency) => sameArtifactVersionRef(dependency.ref, figureRef))
+      : undefined
+    const supportingVersions = dependencies
+      .filter((dependency) => !figureRef || !sameArtifactVersionRef(dependency.ref, figureRef))
+      .map(toSupportingVersion)
 
     return {
       record: {
@@ -167,6 +201,9 @@ export async function loadScientificPlotProvenance(
         ...(figureRef ? { figureRef } : {}),
         ...(derivedDataRef ? { derivedDataRef } : {}),
         ...(logItem ? { logRef: logItem.ref } : {}),
+        figureStatus: figureDependency?.status ?? (figureRef ? 'missing' : 'unavailable'),
+        ...(figureDependency?.issue ? { figureIssue: figureDependency.issue } : {}),
+        supportingVersions,
         ...(figureRef
           ? {
               currentFigureVersionId: itemByVersionId.get(figureRef.versionId)
@@ -180,7 +217,17 @@ export async function loadScientificPlotProvenance(
   const records: ScientificPlotProvenanceRecord[] = []
   const issues: string[] = []
   for (const entry of loaded) {
-    if ('record' in entry && entry.record) records.push(entry.record)
+    if ('record' in entry && entry.record) {
+      records.push(entry.record)
+      if (entry.record.figureIssue) {
+        issues.push(`${entry.record.figureRef?.versionId ?? entry.record.manifestRef.versionId}: ${entry.record.figureIssue}`)
+      }
+      for (const dependency of entry.record.supportingVersions) {
+        if (dependency.issue) {
+          issues.push(`${dependency.ref.versionId}: ${dependency.issue}`)
+        }
+      }
+    }
     if ('issue' in entry && entry.issue) issues.push(entry.issue)
   }
   return { records, issues }
@@ -196,11 +243,10 @@ export function parseScientificPlotManifest(dataBase64: string):
     if (!parsed.success) {
       return { ok: false, message: 'snapshot is not a valid Scientific Plot render manifest.' }
     }
-    // Model-owned images have a different owner and lifecycle: the Image
-    // Generation worker writes the replay receipt and Visual Review performs
-    // the human-gated Artifact Version acceptance.  Scientific Plotting owns
-    // only the formal code/hybrid manifest projection, so never present a
-    // model-only receipt as if it were a rerunnable plot version.
+    // Model-owned images have a different owner and lifecycle: Image
+    // Generation writes the replay receipt and Visual Review performs the
+    // human-gated Artifact Version acceptance. Scientific Plotting only
+    // presents formal code/hybrid render manifests.
     if (plotRoute(parsed.data.recipe.visualPlan) === 'model') {
       return {
         ok: false,
@@ -220,6 +266,122 @@ function dependencyRef(item: HistoryItem, role: string): ArtifactVersionRefV1 | 
   return item.version.dependencies.find((dependency) => dependency.role === role)?.target
 }
 
+type DependencyProjection = Readonly<{
+  ref: ArtifactVersionRefV1
+  roles: readonly string[]
+  status: ScientificPlotDependencyStatus
+  item?: HistoryItem
+  issue?: string
+}>
+
+function collectDependencyClosure(input: Readonly<{
+  manifestItem: HistoryItem
+  recipe: ScientificPlotManifestProjection['recipe']
+  recipeRef?: ArtifactVersionRefV1
+  codeRef?: ArtifactVersionRefV1
+  figureRef?: ArtifactVersionRefV1
+  logItems: readonly HistoryItem[]
+  itemByVersionId: ReadonlyMap<string, HistoryItem>
+}>): DependencyProjection[] {
+  const entries = new Map<string, { ref: ArtifactVersionRefV1; roles: Set<string> }>()
+  const visited = new Set<string>()
+
+  const add = (ref: ArtifactVersionRefV1, role: string): void => {
+    const key = artifactVersionRefKey(ref)
+    const entry = entries.get(key)
+    if (entry) {
+      entry.roles.add(role)
+      return
+    }
+    entries.set(key, { ref, roles: new Set([role]) })
+  }
+
+  const visit = (ref: ArtifactVersionRefV1, role: string): void => {
+    add(ref, role)
+    const key = artifactVersionRefKey(ref)
+    if (visited.has(key)) return
+    visited.add(key)
+    const item = input.itemByVersionId.get(ref.versionId)
+    if (!item) return
+    for (const dependency of item.version.dependencies) {
+      visit(dependency.target, `${role}.${dependency.role}`)
+    }
+  }
+
+  visit(input.manifestItem.ref, 'manifest')
+  for (const dependency of input.manifestItem.version.dependencies) {
+    visit(dependency.target, `manifest.${dependency.role}`)
+  }
+  for (const source of input.recipe.dataSources) {
+    if (source.kind === 'artifact-version') {
+      visit(source.artifactVersion, `recipe.data-source.${source.sourceId}`)
+    }
+  }
+  if (input.recipeRef) visit(input.recipeRef, 'recipe')
+  if (input.codeRef) visit(input.codeRef, 'code')
+  if (input.figureRef) visit(input.figureRef, 'figure')
+  for (const [index, logItem] of input.logItems.entries()) {
+    visit(logItem.ref, `render-log.${index + 1}`)
+  }
+
+  return [...entries.values()].map((entry) => {
+    const item = input.itemByVersionId.get(entry.ref.versionId)
+    const assessed = assessDependency(entry.ref, item)
+    return {
+      ref: entry.ref,
+      roles: [...entry.roles].sort(),
+      status: assessed.status,
+      ...(item ? { item } : {}),
+      ...(assessed.issue ? { issue: assessed.issue } : {})
+    }
+  })
+}
+
+function toSupportingVersion(dependency: DependencyProjection): ScientificPlotSupportingVersion {
+  return dependency
+}
+
+function assessDependency(
+  ref: ArtifactVersionRefV1,
+  item: HistoryItem | undefined
+): Readonly<{ status: ScientificPlotDependencyStatus; issue?: string }> {
+  if (ref.accessPolicy.visibility === 'restricted') {
+    return { status: 'restricted', issue: 'Artifact Version access is restricted.' }
+  }
+  if (ref.availability === 'missing') {
+    return { status: 'missing', issue: 'Artifact Version content is marked missing.' }
+  }
+  if (ref.availability === 'remote') {
+    return { status: 'unavailable', issue: 'Artifact Version content is remote and unavailable in this workspace.' }
+  }
+  if (!item) {
+    return { status: 'missing', issue: 'Exact Artifact Version is not present in the authorized Version listing.' }
+  }
+  if (!sameArtifactVersionRef(ref, item.ref)) {
+    return { status: 'unavailable', issue: 'The listed Artifact Version ref does not match the dependency ref.' }
+  }
+  return { status: 'available' }
+}
+
+function sameArtifactVersionRef(left: ArtifactVersionRefV1, right: ArtifactVersionRefV1): boolean {
+  return artifactVersionRefKey(left) === artifactVersionRefKey(right)
+}
+
+function artifactVersionRefKey(ref: ArtifactVersionRefV1): string {
+  return JSON.stringify([
+    ref.artifactId,
+    ref.versionId,
+    ref.contentDigest,
+    ref.byteLength,
+    ref.mediaType ?? null,
+    ref.availability,
+    ref.retention,
+    ref.accessPolicy.visibility,
+    ref.accessPolicy.principals,
+    ref.accessPolicy.allowExport
+  ])
+}
+
 function decodeBase64(value: string): Uint8Array {
   const binary = globalThis.atob(value)
   const bytes = new Uint8Array(binary.length)
@@ -233,4 +395,30 @@ function plotRoute(value: unknown): 'code' | 'model' | 'hybrid' | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const route = (value as { route?: unknown }).route
   return route === 'code' || route === 'model' || route === 'hybrid' ? route : undefined
+}
+
+export function scientificPlotRerunAvailability(
+  record: ScientificPlotProvenanceRecord
+): Readonly<{ allowed: boolean; reason: string }> {
+  const route = plotRoute(record.manifest.recipe.visualPlan)
+  if (route === 'model') {
+    return { allowed: false, reason: 'Model-owned receipts are replayable through Image Generation, not Scientific Plotting rerun.' }
+  }
+  if (!record.figureRef || !record.recipeRef || !record.currentFigureVersionId) {
+    return { allowed: false, reason: 'The exact Figure, Recipe, or current Version reference is missing.' }
+  }
+  if (!record.codeRef) {
+    return { allowed: false, reason: 'This historical Version has no committed executable Code Artifact.' }
+  }
+  if (record.figureStatus !== 'available') {
+    return { allowed: false, reason: record.figureIssue ?? 'The exact Figure Version is unavailable.' }
+  }
+  const unavailable = record.supportingVersions.find((dependency) => dependency.status !== 'available')
+  if (unavailable) {
+    return {
+      allowed: false,
+      reason: unavailable.issue ?? `Supporting Artifact Version ${unavailable.ref.versionId} is ${unavailable.status}.`
+    }
+  }
+  return { allowed: true, reason: '' }
 }

@@ -1,111 +1,81 @@
-import { lazy, type ReactElement } from 'react'
-import { Layers3 } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
-  type DomainRendererCommandHandler,
-  type DomainRendererWorkbenchRightPanelValue,
-  type DomainRendererWorkbenchToolbarActionValue,
+  type DomainRendererResearchSummaryValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 import {
-  ARTIFACT_VERSIONS_RENDERER_COMMAND_CONTRIBUTION,
-  ARTIFACT_VERSIONS_RENDERER_I18N_CONTRIBUTION,
-  ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRACT,
-  ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  ARTIFACT_VERSIONS_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  ARTIFACT_VERSIONS_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  artifactVersionListInputV2Schema,
+  artifactVersionListResultV2Schema,
+  ARTIFACT_VERSIONS_CAPABILITY_IDS,
+  type ArtifactVersionListInputV2,
+  type ArtifactVersionResultV1,
+  type ArtifactVersionListV2
+} from '../contract.js'
+import {
+  ARTIFACT_VERSIONS_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+  ARTIFACT_VERSIONS_RENDERER_RESEARCH_SUMMARY_CONTRACT,
   domainPackageDefinition
 } from '../definition.js'
-import { createArtifactVersionsCapabilityClient } from './artifact-versions-capability-client.js'
-import {
-  artifactVersionsI18nResourceContribution,
-  type ArtifactVersionsI18nResourceContribution
-} from './artifact-versions-messages.js'
 
-const ArtifactVersionsPanel = lazy(() =>
-  import('./ArtifactVersionsPanel.js').then((module) => ({
-    default: module.ArtifactVersionsPanel
-  }))
-)
+const listContract = Object.freeze({
+  actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.listV2,
+  effect: 'read' as const,
+  inputSchema: artifactVersionListInputV2Schema,
+  outputSchema: artifactVersionListResultV2Schema
+})
 
-export type ArtifactVersionsRightPanelContribution =
-  DomainRendererWorkbenchRightPanelValue<ReactElement>
-export type ArtifactVersionsCommandContribution = DomainRendererCommandHandler
-export type ArtifactVersionsToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof Layers3>
-export type ArtifactVersionsRendererContribution =
-  | ArtifactVersionsRightPanelContribution
-  | ArtifactVersionsCommandContribution
-  | ArtifactVersionsToolbarActionContribution
-  | ArtifactVersionsI18nResourceContribution
-
-export function createArtifactVersionsRightPanelContribution(
+export function createArtifactVersionsResearchSummaryContribution(
   host: DomainRendererHost
-): ArtifactVersionsRightPanelContribution {
-  const client = createArtifactVersionsCapabilityClient(host.capabilityInvoker)
+): DomainRendererResearchSummaryValue {
   return Object.freeze({
-    render: ({ className, onCollapse, session }) => (
-      <ArtifactVersionsPanel
-        client={client}
-        workspaceRoot={session.workspaceRoot ?? ''}
-        className={className}
-        onCollapse={onCollapse}
-      />
-    )
-  })
-}
-
-export function createArtifactVersionsCommandContribution(
-  host: DomainRendererHost
-): ArtifactVersionsCommandContribution {
-  return Object.freeze({
-    execute: (context) => {
-      if (!context.sessionId || !host.workbench) return
-      host.workbench.openRightPanel({
-        contributionId: ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-        sessionId: context.sessionId
-      })
-    },
-    isAvailable: (context) => Boolean(
-      host.workbench && context.sessionId?.trim() && context.workspaceRoot?.trim()
-    ),
-    isActive: (context) =>
-      context.activeSurface?.kind === 'right-panel' &&
-      context.activeSurface.contributionId ===
-        ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+    provide: async ({ scope }) => {
+      if (scope.kind !== 'workspace' || !scope.id.trim()) {
+        return { status: 'unavailable' as const, reason: 'Artifact scope is unavailable.' }
+      }
+      try {
+        const result = await host.capabilityInvoker.invoke<
+          ArtifactVersionListInputV2,
+          ArtifactVersionResultV1<ArtifactVersionListV2>
+        >(listContract, { currentOnly: true, limit: 8 }, { workspaceId: scope.id })
+        if (!result.ok) return { status: 'unavailable' as const, reason: result.issue.message }
+        const items = result.value.items
+        return {
+          status: 'available' as const,
+          title: 'Recent artifacts',
+          items: [{
+            label: 'Versions',
+            value: String(items.length),
+            tone: items.length ? 'positive' as const : 'neutral' as const
+          }],
+          actions: items.map((item) => ({
+            label: item.artifact.label ?? item.artifact.artifactId,
+            resource: {
+              resourceKind: 'artifact-version',
+              resourceId: item.version.versionId,
+              integrity: {
+                algorithm: 'sha256' as const,
+                expectedDigest: `sha256:${item.ref.contentDigest}`
+              }
+            }
+          }))
+        }
+      } catch {
+        return { status: 'unavailable' as const, reason: 'Artifact owner is unavailable.' }
+      }
+    }
   })
 }
 
 export function createDomainRendererEntry(
   host: DomainRendererHost
-): TrustedRendererDomainPackageEntry<ArtifactVersionsRendererContribution> {
-  return defineTrustedRendererDomainPackageEntry<ArtifactVersionsRendererContribution>({
+): TrustedRendererDomainPackageEntry<DomainRendererResearchSummaryValue> {
+  return defineTrustedRendererDomainPackageEntry<DomainRendererResearchSummaryValue>({
     definition: domainPackageDefinition,
-    contributions: [
-      {
-        ...ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-        contract: ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRACT,
-        value: createArtifactVersionsRightPanelContribution(host)
-      },
-      {
-        ...ARTIFACT_VERSIONS_RENDERER_COMMAND_CONTRIBUTION,
-        value: createArtifactVersionsCommandContribution(host)
-      },
-      {
-        ...ARTIFACT_VERSIONS_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
-        contract: ARTIFACT_VERSIONS_RENDERER_TOOLBAR_ACTION_CONTRACT,
-        value: Object.freeze({ icon: Layers3 })
-      },
-      {
-        ...ARTIFACT_VERSIONS_RENDERER_I18N_CONTRIBUTION,
-        value: artifactVersionsI18nResourceContribution
-      }
-    ]
+    contributions: [{
+      ...ARTIFACT_VERSIONS_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+      contract: ARTIFACT_VERSIONS_RENDERER_RESEARCH_SUMMARY_CONTRACT,
+      value: createArtifactVersionsResearchSummaryContribution(host)
+    }]
   })
 }
-
-export * from './ArtifactVersionsPanel.js'
-export * from './artifact-version-actions.js'
-export * from './artifact-versions-capability-client.js'
-export * from './artifact-versions-messages.js'

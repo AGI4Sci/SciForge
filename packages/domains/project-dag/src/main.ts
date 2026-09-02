@@ -129,7 +129,7 @@ export function createDomainMainEntry(
         throw new Error('Project DAG runtime lifecycle is already active.')
       }
       const pending = (async (): Promise<OwnedProjectDagRuntime> => {
-        const runtime = createRuntime({ userDataDir: context.userDataDir })
+        const runtime = createRuntime()
         try {
           const deactivate = await runtime.activate(context)
           const record = { runtime, deactivate, disposed: false }

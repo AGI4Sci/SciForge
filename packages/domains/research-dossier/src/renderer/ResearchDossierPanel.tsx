@@ -53,18 +53,26 @@ import {
   type ResearchDossierPage
 } from '../contract.js'
 import type {
+  DomainRendererContribution,
   DomainRendererWorkspacePreviewHost,
   DomainRendererWorkbenchHost,
   DomainWorkbenchRightPanelActivation,
   DomainWorkbenchRightPanelSession
 } from '@sciforge/domain-sdk/host'
+import {
+  RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
+  domainRendererResearchSummaryContractSchema,
+  isDomainRendererResearchSummaryValue,
+  resolveDomainRendererResearchSummary,
+  type DomainRendererResearchSummaryResult,
+  type DomainRendererResearchSummaryValue
+} from '@sciforge/domain-sdk/renderer'
 
 import type { ResearchDossierCapabilityClient } from './research-dossier-capability-client.js'
 import {
   loadExactResearchDossier,
   loadResearchDossierBrowse,
-  type ResearchDossierBrowseV1,
-  type ResearchDossierVisualReviewSummaryV1
+  type ResearchDossierBrowseV1
 } from './research-dossier-loader.js'
 import {
   artifactHistoryInput,
@@ -84,35 +92,6 @@ import {
   type ResearchDossierExactRecord
 } from './research-dossier-model.js'
 
-/**
- * Presentation-only shape for older activation payloads. The current upstream
- * Evidence owner does not expose an exact dossier-summary capability, so new
- * loads never fabricate this projection.
- */
-type LegacyEvidenceDossierSummary = Readonly<{
-  target?: unknown
-  provenanceLevel: string
-  provenanceComplete: boolean
-  freshness: string
-  matchedNodeCount?: number
-  staleNodeCount?: number
-  breakpointCount: number
-  pending: Readonly<{ state: string }> | null
-  humanReview: Readonly<{
-    level: string
-    status: string
-    gateStatus: string
-    blocking: boolean
-    pendingCount?: number
-    blockingCount?: number
-    reviewPacketId?: string | null
-  }> | null
-  snapshot: Readonly<{
-    digest: string
-    [key: string]: unknown
-  }>
-}>
-
 type LoadState =
   | Readonly<{ status: 'idle' | 'loading' }>
   | Readonly<{ status: 'error'; code: string; message: string }>
@@ -120,9 +99,7 @@ type LoadState =
   | Readonly<{
       status: 'ready'
       record: ResearchDossierExactRecord
-      evidence: LegacyEvidenceDossierSummary | null
-      review: ResearchDossierVisualReviewSummaryV1 | null
-      issues: Readonly<Partial<Record<'versions' | 'checkpoint' | 'reproduction' | 'evidence' | 'review', string>>>
+      issues: Readonly<Partial<Record<'versions' | 'checkpoint' | 'reproduction', string>>>
     }>
 
 export type ResearchRecordingLoadState =
@@ -183,6 +160,7 @@ export type ResearchDossierPanelProps = Readonly<{
   surfaceId: string
   workbench?: DomainRendererWorkbenchHost
   workspacePreview?: DomainRendererWorkspacePreviewHost
+  researchSummaries?: readonly DomainRendererContribution[]
 }>
 
 export function ResearchDossierPanel({
@@ -194,7 +172,8 @@ export function ResearchDossierPanel({
   onCollapse,
   surfaceId,
   workbench,
-  workspacePreview
+  workspacePreview,
+  researchSummaries = []
 }: ResearchDossierPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const parsedActivation = useMemo(
@@ -293,8 +272,6 @@ export function ResearchDossierPanel({
       commit({
         status: 'ready',
         record: result.value.record,
-        evidence: result.value.evidence,
-        review: result.value.review,
         issues: result.value.issues
       })
     } catch (error) {
@@ -591,7 +568,7 @@ export function ResearchDossierPanel({
         target: parsedActivation.value.target,
         page: parsedActivation.value.page,
         revision: activation?.revision ?? 1,
-        label: t('researchDossierTitle')
+        label: t('researchTitle')
       }))
     } catch (error) {
       setPreviewIssue(errorMessage(error))
@@ -754,7 +731,7 @@ export function ResearchDossierPanel({
               <BookOpenCheck className="h-4 w-4" strokeWidth={1.8} />
             </span>
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-ds-ink">{t('researchDossierTitle')}</div>
+              <div className="text-[13px] font-semibold text-ds-ink">{t('researchTitle')}</div>
               <div className="truncate text-[9.5px] text-ds-faint">
                 {t('researchDossierSubtitle')}
               </div>
@@ -793,7 +770,7 @@ export function ResearchDossierPanel({
           </div>
         </div>
         {visiblePages.length ? (
-          <nav className="flex gap-0.5 overflow-x-auto px-2" aria-label={t('researchDossierTitle')}>
+          <nav className="flex gap-0.5 overflow-x-auto px-2" aria-label={t('researchTitle')}>
           {visiblePages.map((item) => (
             <button
               key={item.id}
@@ -831,6 +808,9 @@ export function ResearchDossierPanel({
         ) : state.status === 'browse' ? (
           <BrowsePage
             value={state.value}
+            session={session}
+            workbench={workbench}
+            researchSummaries={researchSummaries}
             recordingState={recordingState}
             recordingAction={recordingAction}
             recordingNotice={recordingNotice}
@@ -886,13 +866,7 @@ export function ResearchDossierPanel({
                 issue={state.issues.reproduction}
                 onOpenArtifact={openArtifact}
               />
-            ) : (
-              <EvidenceReviewPage
-                evidence={state.evidence}
-                review={state.review}
-                issues={state.issues}
-              />
-            )}
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -902,6 +876,9 @@ export function ResearchDossierPanel({
 
 function BrowsePage({
   value,
+  session,
+  workbench,
+  researchSummaries,
   recordingState,
   recordingAction,
   recordingNotice,
@@ -920,6 +897,9 @@ function BrowsePage({
   onOpenArtifact
 }: Readonly<{
   value: ResearchDossierBrowseV1
+  session: DomainWorkbenchRightPanelSession
+  workbench?: DomainRendererWorkbenchHost
+  researchSummaries: readonly DomainRendererContribution[]
   recordingState: ResearchRecordingLoadState
   recordingAction: ResearchRecordingAction | null
   recordingNotice: ResearchRecordingActionNotice | null
@@ -940,6 +920,11 @@ function BrowsePage({
   const { t } = useTranslation('common')
   return (
     <div className="grid gap-3">
+      <ResearchSummaryList
+        session={session}
+        workbench={workbench}
+        contributions={researchSummaries}
+      />
       <ResearchRecordingCallout
         state={recordingState}
         action={recordingAction}
@@ -1216,6 +1201,171 @@ export function LegacyImportPanel({
   )
 }
 
+type LoadedResearchSummary = Readonly<{
+  id: string
+  label: string
+  slot: string
+  order: number
+  result: DomainRendererResearchSummaryResult
+}>
+
+function ResearchSummaryList({
+  session,
+  workbench,
+  contributions
+}: Readonly<{
+  session: DomainWorkbenchRightPanelSession
+  workbench?: DomainRendererWorkbenchHost
+  contributions: readonly DomainRendererContribution[]
+}>): ReactElement | null {
+  const { t } = useTranslation('common')
+  const [state, setState] = useState<
+    'loading' | 'ready'
+  >('loading')
+  const [summaries, setSummaries] = useState<readonly LoadedResearchSummary[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    const workspaceRoot = session.workspaceRoot?.trim()
+    const candidates = contributions.flatMap((contribution) => {
+      if (contribution.kind !== RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND) return []
+      const contract = domainRendererResearchSummaryContractSchema.safeParse(contribution.contract)
+      if (!contract.success || !isDomainRendererResearchSummaryValue(contribution.value)) return []
+      if (!contract.data.scopeKinds.includes('workspace') || !workspaceRoot) return []
+      return [{ contribution, contract: contract.data }]
+    })
+    if (!candidates.length) {
+      setSummaries([])
+      setState('ready')
+      return () => { cancelled = true }
+    }
+    const scopedWorkspaceRoot = workspaceRoot ?? ''
+    setState('loading')
+    void Promise.all(candidates.map(async ({ contribution, contract }) => ({
+      id: contribution.id,
+      label: contract.label,
+      slot: contract.slot,
+      order: contract.order,
+      result: await resolveDomainRendererResearchSummary(
+        contribution.value as DomainRendererResearchSummaryValue,
+        {
+          session: { id: session.id, ...(session.runtimeId ? { runtimeId: session.runtimeId } : {}), ...(workspaceRoot ? { workspaceRoot } : {}) },
+          scope: { kind: 'workspace', id: scopedWorkspaceRoot }
+        }
+      ).then((result) => result.status === 'available'
+        ? {
+            ...result,
+            // The owner has already authorized the payload. This only removes
+            // actions for which the optional generic navigator is not installed.
+            actions: result.actions.filter((action) => (
+              contract.resourceKinds.includes(action.resource.resourceKind) &&
+              isResearchSummaryActionAvailable(workbench, action.resource.resourceKind)
+            ))
+          }
+        : result)
+    }))).then((next) => {
+      if (cancelled) return
+      const slotOrder = new Map(['goal', 'scope', 'status', 'artifacts', 'attention'].map((slot, index) => [slot, index]))
+      setSummaries(next.sort((left, right) =>
+        (slotOrder.get(left.slot) ?? Number.MAX_SAFE_INTEGER) - (slotOrder.get(right.slot) ?? Number.MAX_SAFE_INTEGER) ||
+        left.order - right.order || left.id.localeCompare(right.id)
+      ))
+      setState('ready')
+    })
+    return () => { cancelled = true }
+  }, [contributions, session.id, session.runtimeId, session.workspaceRoot, workbench])
+
+  if (state === 'loading') {
+    return (
+      <section className="rounded-xl border border-ds-border bg-ds-main/40 p-3 text-[10.5px] text-ds-muted">
+        <div className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t('researchDossierSummaryLoading')}</div>
+      </section>
+    )
+  }
+  if (!summaries.length) return null
+  return (
+    <div className="grid gap-2" data-research-summary-list>
+      {summaries.map((summary) => (
+        <ResearchSummaryCard
+          key={summary.id}
+          summary={summary}
+          session={session}
+          workbench={workbench}
+        />
+      ))}
+    </div>
+  )
+}
+
+function isResearchSummaryActionAvailable(
+  workbench: DomainRendererWorkbenchHost | undefined,
+  resourceKind: string
+): boolean {
+  if (!workbench?.canOpenResource) return true
+  try {
+    return workbench.canOpenResource(resourceKind)
+  } catch {
+    return false
+  }
+}
+
+function ResearchSummaryCard({
+  summary,
+  session,
+  workbench
+}: Readonly<{
+  summary: LoadedResearchSummary
+  session: DomainWorkbenchRightPanelSession
+  workbench?: DomainRendererWorkbenchHost
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  const result = summary.result
+  return (
+    <section className="rounded-xl border border-ds-border bg-ds-main/45 p-3" data-research-summary={summary.id} data-research-summary-slot={summary.slot}>
+      <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold text-ds-ink">
+        <Scale className="h-3.5 w-3.5 text-accent" />
+        {summary.label}
+      </div>
+      {result.status === 'unavailable' ? (
+        <p className="text-[10px] leading-relaxed text-ds-muted">
+          {result.reason ?? t('researchDossierSummaryUnavailable')}
+        </p>
+      ) : (
+        <>
+          {result.title ? <div className="mb-1.5 text-[10px] text-ds-muted">{result.title}</div> : null}
+          {result.items.length ? (
+            <dl className="grid gap-1.5">
+              {result.items.map((item) => (
+                <div key={`${item.label}:${item.value}`} className="flex items-start justify-between gap-3 text-[10px]">
+                  <dt className="text-ds-muted">{item.label}</dt>
+                  <dd className={item.tone === 'critical' ? 'text-ds-danger' : item.tone === 'warning' ? 'text-ds-warning' : item.tone === 'positive' ? 'text-ds-success' : 'text-ds-ink'}>{item.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {result.actions.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {result.actions.map((action) => (
+                <button
+                  key={`${action.label}:${action.resource.resourceKind}:${action.resource.resourceId}`}
+                  type="button"
+                  className={actionButtonClass}
+                  disabled={!workbench?.openResource}
+                  onClick={() => {
+                    workbench?.openResource?.({ sessionId: session.id, resource: action.resource })
+                  }}
+                >
+                  <ChevronRight className="h-3 w-3" />{action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
+    </section>
+  )
+}
+
 function BrowseArtifactList({
   items,
   onOpen
@@ -1260,7 +1410,7 @@ export function OverviewPage({
   onOpenArtifact
 }: Readonly<{
   record: ResearchDossierExactRecord
-  issues?: Readonly<Partial<Record<'checkpoint' | 'reproduction' | 'evidence' | 'review', string>>>
+  issues?: Readonly<Partial<Record<'checkpoint' | 'reproduction', string>>>
   canPreview: boolean
   previewBusy: boolean
   onPreview: () => void
@@ -1273,9 +1423,7 @@ export function OverviewPage({
   const groupedBreakpoints = groupDossierBreakpoints(breakpoints)
   const attentionIssues = [...new Set([
     issues.checkpoint,
-    issues.reproduction,
-    issues.evidence,
-    issues.review
+    issues.reproduction
   ].filter((value): value is string => Boolean(value)))]
   return (
     <>
@@ -1922,72 +2070,6 @@ function ResearchCheckpointReproduction({
   )
 }
 
-export function EvidenceReviewPage({
-  evidence,
-  review,
-  issues
-}: Readonly<{
-  evidence: LegacyEvidenceDossierSummary | null
-  review: ResearchDossierVisualReviewSummaryV1 | null
-  issues: Readonly<Partial<Record<'evidence' | 'review', string>>>
-}>): ReactElement {
-  const { t } = useTranslation('common')
-  return (
-    <>
-      {evidence || issues.evidence ? <SectionCard title={t('researchDossierTrustSummary')} icon={<Scale />}>
-        {evidence ? (
-          <div className="grid gap-2">
-            <LabeledValue label="Level" value={evidence.provenanceLevel} />
-            <LabeledValue label={t('researchDossierProvenance')} value={t(researchStatusKey(evidence.provenanceComplete ? 'complete' : 'incomplete'))} />
-            <LabeledValue label="Freshness" value={t(researchStatusKey(evidence.freshness))} />
-            {evidence.breakpointCount > 0
-              ? <LabeledValue label={t('researchDossierLimitations')} value={String(evidence.breakpointCount)} />
-              : null}
-            <LabeledValue label="Compilation" value={t(researchStatusKey(evidence.pending ? evidence.pending.state : 'committed'))} />
-            {evidence.humanReview && !(
-              evidence.humanReview.level === 'none' && evidence.humanReview.status === 'not_needed'
-            ) ? (
-              <LabeledValue
-                label="Evidence review"
-                value={t(evidenceHumanReviewStatusKey(evidence.humanReview))}
-              />
-            ) : null}
-            <TechnicalDetails>
-              <LabeledValue label="Snapshot" value={evidence.snapshot.digest} mono />
-              <LabeledValue label="Freshness" value={evidence.freshness} mono />
-              <LabeledValue label="Compilation" value={evidence.pending ? evidence.pending.state : 'committed'} mono />
-              {evidence.humanReview ? (
-                <LabeledValue
-                  label="Evidence review"
-                  value={`${evidence.humanReview.gateStatus} · ${evidence.humanReview.status}`}
-                  mono
-                />
-              ) : null}
-            </TechnicalDetails>
-          </div>
-        ) : <UnavailableSection compact message={issues.evidence ?? t('researchDossierSectionUnavailable')} />}
-      </SectionCard> : null}
-      {review || issues.review ? (
-        <SectionCard title={t('researchDossierReview')} icon={<BookOpenCheck />}>
-          {review ? (
-          <div className="grid gap-2">
-            <LabeledValue label="Status" value={t(researchStatusKey(review.status))} />
-            <LabeledValue label="Score" value={review.score.toFixed(3)} />
-            <LabeledValue label="Reviewed" value={formatTime(review.reviewedAt)} />
-            <TechnicalDetails>
-              <LabeledValue label="Document" value={review.documentId} mono />
-              <LabeledValue label="Revision" value={review.revisionId} mono />
-              <LabeledValue label="Review digest" value={review.reviewDigest} mono />
-              <LabeledValue label="Status" value={review.status} mono />
-            </TechnicalDetails>
-          </div>
-          ) : <UnavailableSection compact message={issues.review!} />}
-        </SectionCard>
-      ) : null}
-    </>
-  )
-}
-
 function SectionCard({
   title,
   icon,
@@ -2257,18 +2339,6 @@ function researchStatusKey(value: string):
   return 'researchDossierStatusAvailable'
 }
 
-function evidenceHumanReviewStatusKey(
-  review: LegacyEvidenceDossierSummary['humanReview']
-): ReturnType<typeof researchStatusKey> {
-  if (!review) return 'researchDossierStatusNotVerified'
-  if (review.blocking || review.gateStatus === 'blocked') return 'researchDossierStatusNeedsAttention'
-  if (/^(pending|deferred|retrying|candidate)$/u.test(review.status)) return 'researchDossierStatusInProgress'
-  if (review.gateStatus === 'clear' && /^(approved|not_needed|complete|accepted)$/u.test(review.status)) {
-    return 'researchDossierStatusVerified'
-  }
-  return researchStatusKey(review.status)
-}
-
 function limitationSummaryKey(code: string):
   | 'researchDossierLimitationSource'
   | 'researchDossierLimitationFile'
@@ -2424,8 +2494,7 @@ function randomToken(): string {
 const PAGES = [
   { id: 'overview', label: 'researchDossierOverview' },
   { id: 'versions', label: 'researchDossierVersions' },
-  { id: 'reproduction', label: 'researchDossierReproduction' },
-  { id: 'evidence-review', label: 'researchDossierEvidenceReview' }
+  { id: 'reproduction', label: 'researchDossierReproduction' }
 ] as const
 
 function visibleDossierPages(
@@ -2446,14 +2515,10 @@ function visibleDossierPages(
     state.issues.checkpoint ||
     state.issues.reproduction
   )
-  const hasEvidenceReview = Boolean(
-    state.evidence || state.review || state.issues.evidence || state.issues.review
-  )
   return PAGES.filter((item) => (
     item.id === 'overview' ||
     (item.id === 'versions' && hasVersions) ||
-    (item.id === 'reproduction' && hasReproduction) ||
-    (item.id === 'evidence-review' && hasEvidenceReview)
+    (item.id === 'reproduction' && hasReproduction)
   ))
 }
 

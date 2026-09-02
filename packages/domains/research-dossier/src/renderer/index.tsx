@@ -4,6 +4,7 @@ import { LibraryBig } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
+  RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
   type DomainRendererCommandHandler,
   type DomainRendererResourceNavigationValue,
   type DomainRendererWorkbenchRightPanelValue,
@@ -52,13 +53,14 @@ export function createResearchDossierResourceNavigationContribution():
     resolve: ({ resource }) => {
       const resourceId = resource.resourceId.trim()
       if (!resourceId) return null
-      const target = resource.resourceKind === 'artifact-version'
-        ? { kind: 'artifact-version' as const, versionId: resourceId }
-        : resource.resourceKind === 'compute-run'
-          ? { kind: 'compute-run' as const, runId: resourceId }
+      const target = resource.resourceKind === 'compute-run'
+        ? { kind: 'compute-run' as const, runId: resourceId }
+        : resource.resourceKind === 'artifact-version'
+          ? { kind: 'artifact-version' as const, versionId: resourceId }
           : null
       if (!target) return null
       const activation = createResearchDossierActivation(target, {
+        ...(resource.resourceKind === 'artifact-version' ? { page: 'versions' as const } : {}),
         ...(resource.integrity?.expectedDigest
           ? { expectedDigest: resource.integrity.expectedDigest }
           : {})
@@ -77,6 +79,12 @@ export function createResearchDossierRightPanelContribution(
   host: DomainRendererHost
 ): ResearchDossierRightPanelContribution {
   const client = createResearchDossierCapabilityClient(host.capabilityInvoker)
+  // Installed composition is immutable for the lifetime of this entry. Keep
+  // one contribution snapshot so panel state changes do not re-invoke every
+  // owner summary provider just because the registry returns a defensive copy.
+  const researchSummaries = host.contributions?.list(
+    RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND
+  ) ?? []
   return Object.freeze({
     render: ({ activation, ...context }) => (
       <ResearchDossierPanel
@@ -92,6 +100,7 @@ export function createResearchDossierRightPanelContribution(
         client={client}
         workbench={host.workbench}
         workspacePreview={host.workspacePreview}
+        researchSummaries={researchSummaries}
       />
     )
   })

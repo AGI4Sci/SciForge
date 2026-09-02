@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS project_policy (
   allow_agent_critical_override INTEGER NOT NULL DEFAULT 0,
   min_literature_level TEXT NOT NULL DEFAULT 'L2',
   min_run_level      TEXT NOT NULL DEFAULT 'L4',
+  decision_rules     TEXT NOT NULL DEFAULT '{}',
   updated_at         TEXT NOT NULL
 );
 
@@ -178,8 +179,91 @@ CREATE TABLE IF NOT EXISTS project_scope (
   project_key  TEXT NOT NULL,
   session_id   TEXT NOT NULL,
   disposition  TEXT NOT NULL CHECK(disposition IN ('included','excluded','isolated')),
+  reason       TEXT NOT NULL DEFAULT '',
   updated_at   TEXT NOT NULL,
   PRIMARY KEY(project_key, session_id)
+);
+
+-- Stage 4 keeps the desired Scope as an explicit immutable revision. The
+-- materialized project_scope rows are only the current applied membership;
+-- historical revisions preserve why a Session was included/excluded/isolated.
+CREATE TABLE IF NOT EXISTS project_scope_revision (
+  project_key   TEXT NOT NULL,
+  revision      INTEGER NOT NULL,
+  included_sessions TEXT NOT NULL,
+  excluded_sessions TEXT NOT NULL,
+  isolated_sessions TEXT NOT NULL,
+  reasons       TEXT NOT NULL DEFAULT '{}',
+  created_by    TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY(project_key, revision)
+);
+
+CREATE TABLE IF NOT EXISTS project_goal_draft (
+  project_key TEXT PRIMARY KEY,
+  root_goal_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  base_version INTEGER,
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_scope_draft (
+  project_key       TEXT PRIMARY KEY,
+  included_sessions TEXT NOT NULL,
+  excluded_sessions TEXT NOT NULL,
+  isolated_sessions TEXT NOT NULL,
+  reasons           TEXT NOT NULL DEFAULT '{}',
+  base_revision     INTEGER,
+  updated_by        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_invalidation (
+  project_key TEXT PRIMARY KEY,
+  desired_fingerprint TEXT,
+  applied_fingerprint TEXT,
+  stale INTEGER NOT NULL DEFAULT 0,
+  reason TEXT,
+  changed_fields TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS approval_record (
+  id TEXT PRIMARY KEY,
+  project_key TEXT NOT NULL,
+  decision_id TEXT NOT NULL,
+  project_snapshot_digest TEXT NOT NULL,
+  attestor TEXT NOT NULL,
+  trusted_role_assertion_ref TEXT,
+  attestation TEXT NOT NULL,
+  policy_ref TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  revokes_approval_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_approval_snapshot
+  ON approval_record(project_key,project_snapshot_digest,created_at);
+
+CREATE TABLE IF NOT EXISTS finding_event (
+  id TEXT PRIMARY KEY,
+  project_key TEXT NOT NULL,
+  finding_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS review_event (
+  id TEXT PRIMARY KEY,
+  project_key TEXT NOT NULL,
+  review_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 -- One durable, coalescing compiler lane per project.  While a job is running,
@@ -228,6 +312,8 @@ CREATE TABLE IF NOT EXISTS project_snapshot (
   created_at        TEXT NOT NULL,
   status            TEXT NOT NULL CHECK(status='committed'),
   payload           TEXT NOT NULL,
+  scope_revision    INTEGER,
+  input_fingerprint TEXT,
   PRIMARY KEY(project_key, version)
 );
 
@@ -302,6 +388,9 @@ CREATE TABLE IF NOT EXISTS decision_event (
   confidence       REAL NOT NULL,
   reversibility    TEXT NOT NULL,
   supersedes_id    TEXT,
+  action_class     TEXT NOT NULL DEFAULT 'draft_internal_reversible',
+  target           TEXT NOT NULL DEFAULT '',
+  policy_ref       TEXT NOT NULL DEFAULT 'decision-policy/v1',
   created_at       TEXT NOT NULL
 );
 
@@ -649,7 +738,106 @@ class Store:
                 self.conn.close()
                 raise RuntimeError("Project DAG requires a clean project-view database")
         self.conn.executescript(SCHEMA)
+        self._ensure_stage4_schema()
+        self._migrate_legacy_governance_roots()
         self.conn.commit()
+
+    def _ensure_stage4_schema(self) -> None:
+        """Install additive Stage 4 columns/tables for existing v3 stores."""
+        def columns(table: str) -> set[str]:
+            return {row["name"] for row in self.q(f"PRAGMA table_info({table})")}
+
+        if "reason" not in columns("project_scope"):
+            self.conn.execute(
+                "ALTER TABLE project_scope ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+        snapshot_columns = columns("project_snapshot")
+        if "scope_revision" not in snapshot_columns:
+            self.conn.execute("ALTER TABLE project_snapshot ADD COLUMN scope_revision INTEGER")
+        if "input_fingerprint" not in snapshot_columns:
+            self.conn.execute("ALTER TABLE project_snapshot ADD COLUMN input_fingerprint TEXT")
+        release_columns = columns("release_record")
+        for name, definition in {
+            "classification": "TEXT NOT NULL DEFAULT 'internal'",
+            "target": "TEXT NOT NULL DEFAULT ''",
+            "attempt_outcome": "TEXT NOT NULL DEFAULT 'accepted'",
+            "audit_refs": "TEXT NOT NULL DEFAULT '[]'",
+            "decision_refs": "TEXT NOT NULL DEFAULT '[]'",
+            "approval_refs": "TEXT NOT NULL DEFAULT '[]'",
+        }.items():
+            if name not in release_columns:
+                self.conn.execute(f"ALTER TABLE release_record ADD COLUMN {name} {definition}")
+        policy_columns = columns("project_policy")
+        if "decision_rules" not in policy_columns:
+            self.conn.execute(
+                "ALTER TABLE project_policy ADD COLUMN decision_rules TEXT NOT NULL DEFAULT '{}'")
+        decision_columns = columns("decision_event")
+        for name, definition in {
+            "action_class": "TEXT NOT NULL DEFAULT 'draft_internal_reversible'",
+            "target": "TEXT NOT NULL DEFAULT ''",
+            "policy_ref": "TEXT NOT NULL DEFAULT 'decision-policy/v1'",
+        }.items():
+            if name not in decision_columns:
+                self.conn.execute(f"ALTER TABLE decision_event ADD COLUMN {name} {definition}")
+        # The CREATE TABLE statements above are idempotent and also create all
+        # additive Stage 4 indexes on databases created before this change.
+        self.conn.executescript(";\n".join(
+            statement.strip() for statement in (
+                """CREATE TABLE IF NOT EXISTS project_scope_revision (
+                  project_key TEXT NOT NULL, revision INTEGER NOT NULL,
+                  included_sessions TEXT NOT NULL, excluded_sessions TEXT NOT NULL,
+                  isolated_sessions TEXT NOT NULL, reasons TEXT NOT NULL DEFAULT '{}',
+                  created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+                  PRIMARY KEY(project_key, revision)
+                )""",
+                """CREATE TABLE IF NOT EXISTS project_goal_draft (
+                  project_key TEXT PRIMARY KEY, root_goal_id TEXT, title TEXT NOT NULL,
+                  description TEXT NOT NULL DEFAULT '', base_version INTEGER,
+                  updated_by TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS project_scope_draft (
+                  project_key TEXT PRIMARY KEY, included_sessions TEXT NOT NULL,
+                  excluded_sessions TEXT NOT NULL, isolated_sessions TEXT NOT NULL,
+                  reasons TEXT NOT NULL DEFAULT '{}', base_revision INTEGER,
+                  updated_by TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS project_invalidation (
+                  project_key TEXT PRIMARY KEY, desired_fingerprint TEXT,
+                  applied_fingerprint TEXT, stale INTEGER NOT NULL DEFAULT 0,
+                  reason TEXT, changed_fields TEXT NOT NULL DEFAULT '[]',
+                  updated_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS approval_record (
+                  id TEXT PRIMARY KEY, project_key TEXT NOT NULL, decision_id TEXT NOT NULL,
+                  project_snapshot_digest TEXT NOT NULL, attestor TEXT NOT NULL,
+                  trusted_role_assertion_ref TEXT, attestation TEXT NOT NULL,
+                  policy_ref TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT,
+                  revokes_approval_id TEXT
+                )""",
+                """CREATE TABLE IF NOT EXISTS finding_event (
+                  id TEXT PRIMARY KEY, project_key TEXT NOT NULL, finding_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL, actor TEXT NOT NULL, payload TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS review_event (
+                  id TEXT PRIMARY KEY, project_key TEXT NOT NULL, review_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL, actor TEXT NOT NULL, payload TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                )""",
+            )
+        ))
+
+    def _migrate_legacy_governance_roots(self) -> None:
+        """Record pre-event Finding/Review rows as exact legacy roots once."""
+        self.conn.execute(
+            "INSERT INTO finding_event (id,project_key,finding_id,event_type,actor,payload,created_at)"
+            " SELECT 'legacy-finding-root:' || id,project_key,id,'legacy_finding_root',"
+            " 'migration',details,created_at FROM finding f"
+            " WHERE NOT EXISTS (SELECT 1 FROM finding_event e WHERE e.finding_id=f.id)")
+        self.conn.execute(
+            "INSERT INTO review_event (id,project_key,review_id,event_type,actor,payload,created_at)"
+            " SELECT 'legacy-review-root:' || id,project_key,id,'legacy_review_root',"
+            " 'migration',payload,created_at FROM review r"
+            " WHERE NOT EXISTS (SELECT 1 FROM review_event e WHERE e.review_id=r.id)")
 
     def close(self) -> None:
         self.conn.close()

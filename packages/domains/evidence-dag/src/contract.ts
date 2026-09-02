@@ -26,6 +26,8 @@ export const EVIDENCE_DAG_CAPABILITY_IDS = Object.freeze({
   view: 'evidence-dag.view',
   snapshotStatus: 'evidence-dag.snapshot-status',
   update: 'evidence-dag.update',
+  sealClosure: 'evidence-dag.seal-closure',
+  appendSidechain: 'evidence-dag.append-sidechain',
   priority: 'evidence-dag.priority',
   resolvePreview: 'evidence-dag.resolve-evidence-preview',
   exportSnapshotProducts: 'evidence-dag.export-snapshot-products'
@@ -75,6 +77,195 @@ export const evidenceDagSnapshotIdentitySchema = evidenceDagCommittedSnapshotSch
   digest: true
 })
 
+const nullableSha256DigestSchema = sha256DigestSchema.nullable()
+
+/** Stable gap identifiers used by Evidence closures and compact status. */
+export const evidenceDagGapCodeSchema = z.enum([
+  'missing_delta',
+  'unsupported_edge_family',
+  'access_restricted',
+  'source_unavailable',
+  'lineage_incomplete',
+  'independence_unknown',
+  'contradiction_unresolved',
+  'negative_result_missing',
+  'failed_replication_missing',
+  'shared_ancestry_unknown'
+])
+
+export const evidenceDagDeltaScopeSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  operationId: boundedIdSchema,
+  kind: z.enum([
+    'turn',
+    'execution',
+    'artifact_lifecycle',
+    'scientific_provenance',
+    'manual',
+    'assessment',
+    'correction'
+  ]),
+  workspaceRoot: z.string().trim().min(1).max(4_096)
+}).strict()
+
+/** An exact immutable append to one Evidence thread. */
+export const evidenceDagDeltaSchema = z.object({
+  deltaDigest: sha256DigestSchema,
+  payloadDigest: sha256DigestSchema,
+  predecessorDigest: nullableSha256DigestSchema,
+  sequence: z.number().int().positive(),
+  scope: evidenceDagDeltaScopeSchema,
+  requestedWatermark: watermarkSchema,
+  committedWatermark: watermarkSchema,
+  schemaVersion: boundedIdSchema,
+  extractorVersion: boundedIdSchema,
+  verifierVersion: boundedIdSchema,
+  idempotencyKey: z.string().trim().min(8).max(512),
+  sourceRefs: z.array(boundedIdSchema).max(10_000),
+  artifactRefs: z.array(boundedIdSchema).max(10_000),
+  runRefs: z.array(boundedIdSchema).max(10_000),
+  payload: z.record(z.string().trim().min(1).max(256), z.unknown()),
+  createdAt: timestampSchema
+}).strict()
+
+export const evidenceDagHeadSchema = z.object({
+  threadId: boundedIdSchema,
+  headDigest: nullableSha256DigestSchema,
+  sequence: z.number().int().nonnegative(),
+  committedWatermark: watermarkSchema.nullable(),
+  updatedAt: timestampSchema,
+  rootKind: z.enum(['empty', 'legacy_checkpoint_root', 'delta']).optional(),
+  legacyRootStatus: z.enum(['legacy/complete', 'legacy/incomplete']).nullable().optional()
+}).strict()
+
+export const evidenceDagIndependenceMetadataV1Schema = z.object({
+  producerIdentity: boundedIdSchema,
+  reviewerIdentity: boundedIdSchema.nullable(),
+  producerInvocationId: boundedIdSchema,
+  reviewerInvocationId: boundedIdSchema.nullable(),
+  producerPromptDigest: sha256DigestSchema.nullable(),
+  reviewerPromptDigest: sha256DigestSchema.nullable(),
+  producerContextDigest: sha256DigestSchema.nullable(),
+  reviewerContextDigest: sha256DigestSchema.nullable(),
+  effectiveContextDigest: sha256DigestSchema.nullable(),
+  modelOrToolVersion: boundedIdSchema,
+  predicate: z.enum(['distinct_invocation', 'distinct_context', 'deterministic_tool', 'none']),
+  result: z.enum(['independent', 'not_independent', 'not_independently_assessed']),
+  assessedAt: timestampSchema
+}).strict()
+
+export const evidenceDagCorrectionRelationSchema = z.enum([
+  'corrects',
+  'refines',
+  'supersedes',
+  'invalidates',
+  'retracts',
+  'derived_from',
+  'rerun_of'
+])
+
+/** Append-only metadata linking a correction to the record it explains. */
+export const evidenceDagCorrectionRecordV1Schema = z.object({
+  recordId: boundedIdSchema,
+  targetRecordId: boundedIdSchema,
+  relation: evidenceDagCorrectionRelationSchema,
+  reason: z.string().trim().min(1).max(4_000),
+  producerIdentity: boundedIdSchema,
+  reviewerIdentity: boundedIdSchema.nullable(),
+  createdAt: timestampSchema
+}).strict()
+
+export const evidenceDagSidechainRecordTypeSchema = z.enum([
+  'audit',
+  'finding',
+  'review',
+  'decision',
+  'approval'
+])
+
+/** Append-only records created from, but never backfilled into, a closure. */
+export const evidenceDagSidechainRecordV1Schema = z.object({
+  recordDigest: sha256DigestSchema,
+  threadId: boundedIdSchema,
+  sequence: z.number().int().positive(),
+  recordId: boundedIdSchema,
+  recordType: evidenceDagSidechainRecordTypeSchema,
+  closureDigest: sha256DigestSchema,
+  idempotencyKey: z.string().trim().min(8).max(512),
+  payload: z.record(z.string().trim().min(1).max(256), z.unknown()),
+  producerIdentity: boundedIdSchema,
+  reviewerIdentity: boundedIdSchema.nullable(),
+  createdAt: timestampSchema
+}).strict()
+
+/** A byte-preserving import marker for a pre-delta Evidence Snapshot. */
+export const evidenceDagLegacyCheckpointRootSchema = z.object({
+  kind: z.literal('legacy_checkpoint_root'),
+  threadId: boundedIdSchema,
+  snapshot: evidenceDagCommittedSnapshotSchema,
+  snapshotBytesBase64: z.string().min(1).max(128 * 1024 * 1024),
+  snapshotBytesDigest: sha256DigestSchema,
+  ancestry: z.enum(['proven', 'unproven']),
+  status: z.enum(['legacy/complete', 'legacy/incomplete']),
+  gapCodes: z.array(evidenceDagGapCodeSchema).max(128),
+  importedAt: timestampSchema
+}).strict()
+
+export const evidenceDagClosurePolicyV1Schema = z.object({
+  version: z.literal('EvidenceClosurePolicyV1'),
+  targetClaimIds: z.array(boundedIdSchema).min(1).max(10_000),
+  expectedHeadDigest: sha256DigestSchema,
+  barrierWatermark: watermarkSchema,
+  edgeFamilies: z.array(boundedIdSchema).max(128),
+  directions: z.array(z.enum(['inbound', 'outbound'])).min(1).max(2),
+  maxDepth: z.number().int().nonnegative().max(10_000),
+  termination: z.enum(['depth', 'fixed_point', 'required_records']),
+  expandEquivalent: z.boolean(),
+  expandRefinement: z.boolean(),
+  cycleHandling: z.enum(['allow', 'record_gap', 'fail']),
+  unknownEdgeHandling: z.enum(['ignore', 'record_gap', 'fail']),
+  requiredRecords: z.array(boundedIdSchema).max(256),
+  requiredExternalRefs: z.array(boundedIdSchema).max(10_000)
+}).strict()
+
+export const evidenceDagCompactSummarySchema = z.object({
+  desiredHeadDigest: nullableSha256DigestSchema,
+  appliedHeadDigest: nullableSha256DigestSchema,
+  freshness: z.enum(['fresh', 'stale', 'pending', 'failed', 'unknown']),
+  coverage: z.object({ complete: z.boolean(), gapCount: z.number().int().nonnegative() }).strict(),
+  materialRiskCount: z.number().int().nonnegative(),
+  lastSuccessAt: timestampSchema.nullable(),
+  failure: evidenceDagTypedErrorSchema.nullable()
+}).strict()
+
+export const evidenceDagProvisionalViewSchema = z.object({
+  threadId: boundedIdSchema,
+  desiredHeadDigest: nullableSha256DigestSchema,
+  appliedHeadDigest: nullableSha256DigestSchema,
+  inputFingerprint: sha256DigestSchema,
+  compilerVersion: boundedIdSchema,
+  policyVersion: boundedIdSchema,
+  summary: evidenceDagCompactSummarySchema,
+  lastGood: z.record(z.string().trim().min(1).max(256), z.unknown()).nullable(),
+  updatedAt: timestampSchema
+}).strict()
+
+export const evidenceDagSealedClosureSchema = z.object({
+  threadId: boundedIdSchema,
+  closureDigest: sha256DigestSchema,
+  headDigest: sha256DigestSchema,
+  policyDigest: sha256DigestSchema,
+  policy: evidenceDagClosurePolicyV1Schema,
+  status: z.enum(['complete', 'lagging', 'incomplete']),
+  includedDeltaDigests: z.array(sha256DigestSchema).max(100_000),
+  includedExternalRefs: z.array(boundedIdSchema).max(10_000),
+  gapCodes: z.array(evidenceDagGapCodeSchema).max(128),
+  sealedAt: timestampSchema,
+  includedLegacyRootDigests: z.array(sha256DigestSchema).max(16).optional(),
+  legacyRootStatus: z.enum(['legacy/complete', 'legacy/incomplete']).nullable().optional()
+}).strict()
+
 const evidenceDagPendingBaseShape = {
   jobId: boundedIdSchema,
   targetWatermark: watermarkSchema,
@@ -111,7 +302,16 @@ export const evidenceDagPendingUpdateSchema = z.discriminatedUnion('state', [
 export const evidenceDagCanonicalStatusSchema = z.object({
   committed: evidenceDagCommittedSnapshotSchema.nullable(),
   pending: evidenceDagPendingUpdateSchema.nullable(),
-  updatedAt: timestampSchema
+  updatedAt: timestampSchema,
+  authoritativeHead: evidenceDagHeadSchema.optional(),
+  provisional: evidenceDagProvisionalViewSchema.nullable().optional(),
+  desiredHeadDigest: nullableSha256DigestSchema.optional(),
+  appliedHeadDigest: nullableSha256DigestSchema.optional(),
+  freshness: z.enum(['fresh', 'stale', 'pending', 'failed', 'unknown']).optional(),
+  coverage: z.object({ complete: z.boolean(), gapCount: z.number().int().nonnegative() }).strict().optional(),
+  materialRiskCount: z.number().int().nonnegative().optional(),
+  lastSuccessAt: timestampSchema.nullable().optional(),
+  failure: evidenceDagTypedErrorSchema.nullable().optional()
 }).strict()
 
 export const evidenceDagViewInputSchema = z.object({
@@ -145,43 +345,48 @@ export const evidenceDagSnapshotStatusInputSchema = z.object({
 
 export const evidenceDagSnapshotStatusOutputSchema = evidenceDagCanonicalStatusSchema
 
-export const evidenceDagUpdateOperationSchema = z.enum(['update', 'rebuild'])
-export const evidenceDagRebuildKindSchema = z.enum([
-  'schema_upgrade',
-  'corruption_recovery',
-  'reinterpretation'
-])
-
 export const evidenceDagUpdateInputSchema = z.object({
   runtimeId: runtimeIdSchema,
   threadId: boundedIdSchema,
   workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
-  operation: evidenceDagUpdateOperationSchema.default('update'),
-  rebuildKind: evidenceDagRebuildKindSchema.optional(),
-  rebuildRationale: z.string().trim().min(1).max(1_000).optional()
-}).strict().superRefine((value, context) => {
-  const rebuilding = value.operation === 'rebuild'
-  if (rebuilding && (!value.rebuildKind || !value.rebuildRationale)) {
-    context.addIssue({
-      code: 'custom',
-      message: 'rebuildKind and rebuildRationale are required for rebuild.'
-    })
-  }
-  if (!rebuilding && (value.rebuildKind || value.rebuildRationale)) {
-    context.addIssue({
-      code: 'custom',
-      message: 'rebuild fields are only valid for rebuild.'
-    })
-  }
-})
+}).strict()
 
 export const evidenceDagUpdateOutputSchema = z.object({
   url: z.string().url().max(4_096),
   threadId: boundedIdSchema,
   itemCount: z.number().int().nonnegative(),
-  jobId: boundedIdSchema,
-  coalesced: z.boolean(),
+  deltaDigest: sha256DigestSchema,
+  idempotent: z.boolean(),
   status: evidenceDagCanonicalStatusSchema
+}).strict()
+
+export const evidenceDagSealClosureInputSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
+  idempotencyKey: z.string().trim().min(8).max(512),
+  policy: evidenceDagClosurePolicyV1Schema
+}).strict()
+
+export const evidenceDagSealClosureOutputSchema = evidenceDagSealedClosureSchema
+
+export const evidenceDagSidechainAppendInputSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
+  recordId: boundedIdSchema,
+  recordType: evidenceDagSidechainRecordTypeSchema,
+  closureDigest: sha256DigestSchema,
+  idempotencyKey: z.string().trim().min(8).max(512),
+  payload: z.record(z.string().trim().min(1).max(256), z.unknown()),
+  producerIdentity: boundedIdSchema,
+  reviewerIdentity: boundedIdSchema.nullable().optional(),
+  createdAt: timestampSchema.optional()
+}).strict()
+
+export const evidenceDagSidechainAppendOutputSchema = z.object({
+  record: evidenceDagSidechainRecordV1Schema,
+  idempotent: z.boolean()
 }).strict()
 
 export const evidenceDagPriorityInputSchema = z.object({
@@ -442,6 +647,24 @@ export type EvidenceDagErrorCode = z.infer<typeof evidenceDagErrorCodeSchema>
 export type EvidenceDagTypedError = z.infer<typeof evidenceDagTypedErrorSchema>
 export type EvidenceDagCommittedSnapshot = z.infer<typeof evidenceDagCommittedSnapshotSchema>
 export type EvidenceDagSnapshotIdentity = z.infer<typeof evidenceDagSnapshotIdentitySchema>
+export type EvidenceDagGapCode = z.infer<typeof evidenceDagGapCodeSchema>
+export type EvidenceDagDeltaScope = z.infer<typeof evidenceDagDeltaScopeSchema>
+export type EvidenceDagDelta = z.infer<typeof evidenceDagDeltaSchema>
+export type EvidenceDagHead = z.infer<typeof evidenceDagHeadSchema>
+export type EvidenceDagIndependenceMetadataV1 = z.infer<
+  typeof evidenceDagIndependenceMetadataV1Schema
+>
+export type EvidenceDagCorrectionRelation = z.infer<typeof evidenceDagCorrectionRelationSchema>
+export type EvidenceDagCorrectionRecordV1 = z.infer<typeof evidenceDagCorrectionRecordV1Schema>
+export type EvidenceDagSidechainRecordType = z.infer<typeof evidenceDagSidechainRecordTypeSchema>
+export type EvidenceDagSidechainRecordV1 = z.infer<typeof evidenceDagSidechainRecordV1Schema>
+export type EvidenceDagLegacyCheckpointRoot = z.infer<
+  typeof evidenceDagLegacyCheckpointRootSchema
+>
+export type EvidenceDagClosurePolicyV1 = z.infer<typeof evidenceDagClosurePolicyV1Schema>
+export type EvidenceDagCompactSummary = z.infer<typeof evidenceDagCompactSummarySchema>
+export type EvidenceDagProvisionalView = z.infer<typeof evidenceDagProvisionalViewSchema>
+export type EvidenceDagSealedClosure = z.infer<typeof evidenceDagSealedClosureSchema>
 export type EvidenceDagPendingUpdate = z.infer<typeof evidenceDagPendingUpdateSchema>
 export type EvidenceDagCanonicalStatus = z.infer<typeof evidenceDagCanonicalStatusSchema>
 export type EvidenceDagViewInput = z.input<typeof evidenceDagViewInputSchema>
@@ -451,6 +674,10 @@ export type EvidenceDagSnapshotStatusInput = z.infer<
 >
 export type EvidenceDagUpdateInput = z.input<typeof evidenceDagUpdateInputSchema>
 export type EvidenceDagUpdateOutput = z.infer<typeof evidenceDagUpdateOutputSchema>
+export type EvidenceDagSealClosureInput = z.infer<typeof evidenceDagSealClosureInputSchema>
+export type EvidenceDagSealClosureOutput = z.infer<typeof evidenceDagSealClosureOutputSchema>
+export type EvidenceDagSidechainAppendInput = z.infer<typeof evidenceDagSidechainAppendInputSchema>
+export type EvidenceDagSidechainAppendOutput = z.infer<typeof evidenceDagSidechainAppendOutputSchema>
 export type EvidenceDagPriorityInput = z.infer<typeof evidenceDagPriorityInputSchema>
 export type EvidenceDagPriorityOutput = z.infer<typeof evidenceDagPriorityOutputSchema>
 export type EvidenceSourceSelector = z.infer<typeof evidenceSourceSelectorSchema>

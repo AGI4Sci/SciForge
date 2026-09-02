@@ -34,6 +34,8 @@ import type {
 import type { ScientificPlottingCapabilityClient } from './scientific-plotting-capability-client.js'
 import {
   loadScientificPlotProvenance,
+  scientificPlotRerunAvailability,
+  type ScientificPlotDependencyStatus,
   type ScientificPlotProvenanceRecord
 } from './scientific-plot-provenance.js'
 
@@ -46,15 +48,19 @@ export type ScientificPlottingProvenancePanelProps = Readonly<{
   client: ScientificPlottingCapabilityClient
   workspaceRoot: string
   preferredManifestVersionId?: string
+  preferredFigureVersionId?: string
+  preferredResourceDigest?: string
   className?: string
   onCollapse: () => void
-  onOpenArtifactHistory?: () => void
+  onOpenArtifactHistory?: (ref?: ArtifactVersionRefV1) => void
 }>
 
 export function ScientificPlottingProvenancePanel({
   client,
   workspaceRoot,
   preferredManifestVersionId,
+  preferredFigureVersionId,
+  preferredResourceDigest,
   className = '',
   onCollapse,
   onOpenArtifactHistory
@@ -71,7 +77,7 @@ export function ScientificPlottingProvenancePanel({
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewIssue, setPreviewIssue] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'image' | 'evidence' | 'data' | 'review'>('image')
+  const [activeTab, setActiveTab] = useState<'preview' | 'reproduce' | 'evidence' | 'versions'>('preview')
 
   const load = useCallback(async () => {
     if (!workspaceRoot.trim()) {
@@ -92,6 +98,13 @@ export function ScientificPlottingProvenancePanel({
         if (preferredManifestVersionId && result.records.some(
           (record) => record.manifestRef.versionId === preferredManifestVersionId
         )) return preferredManifestVersionId
+        if (preferredFigureVersionId) {
+          const figureRecord = result.records.find(
+            (record) => record.figureRef?.versionId === preferredFigureVersionId &&
+              (!preferredResourceDigest || `sha256:${record.figureRef.contentDigest}` === preferredResourceDigest)
+          )
+          if (figureRecord) return figureRecord.manifestRef.versionId
+        }
         return result.records[0]?.manifestRef.versionId ?? ''
       })
     } catch (error) {
@@ -99,7 +112,7 @@ export function ScientificPlottingProvenancePanel({
     } finally {
       setLoading(false)
     }
-  }, [client, preferredManifestVersionId, workspaceRoot])
+  }, [client, preferredFigureVersionId, preferredManifestVersionId, preferredResourceDigest, workspaceRoot])
 
   useEffect(() => {
     void load()
@@ -113,6 +126,9 @@ export function ScientificPlottingProvenancePanel({
   const compareRecord = records.find(
     (record) => record.manifestRef.versionId === compareVersionId
   )
+  const rerunAvailability = activeRecord
+    ? scientificPlotRerunAvailability(activeRecord)
+    : { allowed: false, reason: 'No exact Figure Version is selected.' }
 
   useEffect(() => {
     let cancelled = false
@@ -290,29 +306,14 @@ export function ScientificPlottingProvenancePanel({
                 </select>
               </label>
               <ExactReference label={t('scientificPlottingExactManifest')} refValue={activeRecord.manifestRef} />
-              {activeRecord.figureRef ? (
-                <ExactReference label={t('scientificPlottingExactFigure')} refValue={activeRecord.figureRef} />
-              ) : null}
-              {activeRecord.recipeRef ? (
-                <ExactReference label={t('scientificPlottingExactRecipe')} refValue={activeRecord.recipeRef} />
-              ) : null}
-              {onOpenArtifactHistory ? (
-                <button
-                  type="button"
-                  onClick={onOpenArtifactHistory}
-                  className="flex items-center justify-center gap-1.5 rounded-lg border border-ds-border px-2.5 py-2 text-[11px] font-medium text-ds-ink transition hover:bg-ds-hover"
-                >
-                  <History className="h-3.5 w-3.5" />
-                  {t('scientificPlottingOpenArtifactHistory')}
-                </button>
-              ) : null}
             </div>
 
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => void rerun()}
-                disabled={Boolean(busy) || !activeRecord.figureRef || !activeRecord.recipeRef || !activeRecord.currentFigureVersionId}
+                disabled={Boolean(busy) || !rerunAvailability.allowed}
+                title={rerunAvailability.allowed ? undefined : rerunAvailability.reason}
                 className="flex items-center justify-center gap-1.5 rounded-lg bg-ds-accent px-2.5 py-2 text-[11px] font-semibold text-white disabled:opacity-50"
               >
                 {busy === 'rerun' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
@@ -328,6 +329,11 @@ export function ScientificPlottingProvenancePanel({
                 {busy === 'compare' ? t('scientificPlottingBusy') : t('scientificPlottingCompare')}
               </button>
             </div>
+            {!rerunAvailability.allowed ? (
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-2.5 py-2 text-[10px] text-amber-700 dark:text-amber-300">
+                {t('scientificPlottingRerunUnavailable')}: {rerunAvailability.reason}
+              </div>
+            ) : null}
             <select
               aria-label={t('scientificPlottingCompareWith')}
               value={compareVersionId}
@@ -359,10 +365,10 @@ export function ScientificPlottingProvenancePanel({
 
             <div className="grid grid-cols-4 gap-1 rounded-xl border border-ds-border-muted bg-ds-main/30 p-1">
               {([
-                ['image', t('scientificPlottingTabImage'), ImageIcon],
+                ['preview', t('scientificPlottingTabPreview'), ImageIcon],
+                ['reproduce', t('scientificPlottingTabReproduce'), Play],
                 ['evidence', t('scientificPlottingTabEvidence'), FileText],
-                ['data', t('scientificPlottingTabData'), Database],
-                ['review', t('scientificPlottingTabReview'), CheckCircle2]
+                ['versions', t('scientificPlottingTabVersions'), History]
               ] as const).map(([tab, label, Icon]) => (
                 <button
                   key={tab}
@@ -377,14 +383,17 @@ export function ScientificPlottingProvenancePanel({
                 </button>
               ))}
             </div>
-            {activeTab === 'image' ? (
+            {activeTab === 'preview' ? (
               <ImageTab record={activeRecord} previewSrc={previewSrc} />
+            ) : activeTab === 'reproduce' ? (
+              <GenerationEvidence record={activeRecord} client={client} workspaceRoot={workspaceRoot} />
             ) : activeTab === 'evidence' ? (
-              <CodeGenerationEvidence record={activeRecord} client={client} workspaceRoot={workspaceRoot} />
-            ) : activeTab === 'data' ? (
               <ProvenanceSections record={activeRecord} section="data" />
             ) : (
-              <ProvenanceSections record={activeRecord} section="review" />
+              <ArtifactVersionsTab
+                record={activeRecord}
+                onOpenArtifactHistory={onOpenArtifactHistory}
+              />
             )}
           </>
         )}
@@ -466,7 +475,72 @@ function ImageTab({ record, previewSrc }: Readonly<{
   )
 }
 
-function CodeGenerationEvidence({ record, client, workspaceRoot }: Readonly<{
+function ArtifactVersionsTab({ record, onOpenArtifactHistory }: Readonly<{
+  record: ScientificPlotProvenanceRecord
+  onOpenArtifactHistory?: (ref?: ArtifactVersionRefV1) => void
+}>): ReactElement {
+  const { t } = useTranslation('common')
+  return (
+    <div className="grid gap-2">
+      <section className="grid gap-2 rounded-xl border border-ds-border-muted bg-ds-main/25 p-3">
+        <div className="text-[12px] font-semibold text-ds-ink">{t('scientificPlottingRootFigure')}</div>
+        {record.figureRef ? (
+          <ExactReference
+            label={t('scientificPlottingExactFigure')}
+            refValue={record.figureRef}
+            status={record.figureStatus}
+            issue={record.figureIssue}
+            onOpen={onOpenArtifactHistory}
+          />
+        ) : (
+          <MutedText>{t('scientificPlottingFigureVersionUnavailable')}</MutedText>
+        )}
+        {record.supportingVersions.length > 0 ? (
+          <div className="grid gap-2 border-l-2 border-ds-border-muted pl-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-ds-muted">
+              {t('scientificPlottingSupportingVersions')}
+            </div>
+            {record.supportingVersions.map((item) => (
+              <ExactReference
+                key={item.ref.versionId}
+                label={item.roles.join(' · ')}
+                refValue={item.ref}
+                status={item.status}
+                issue={item.issue}
+                compact
+                onOpen={onOpenArtifactHistory}
+              />
+            ))}
+          </div>
+        ) : null}
+        {onOpenArtifactHistory ? (
+          <button
+            type="button"
+            onClick={() => onOpenArtifactHistory(record.figureRef ?? record.manifestRef)}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-ds-border px-2.5 py-2 text-[11px] font-medium text-ds-ink transition hover:bg-ds-hover"
+          >
+            <History className="h-3.5 w-3.5" />
+            {t('scientificPlottingOpenArtifactHistory')}
+          </button>
+        ) : null}
+      </section>
+      <details className="overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/25">
+        <summary className="cursor-pointer px-3 py-2.5 text-[12px] font-semibold text-ds-ink">
+          {t('scientificPlottingTechnicalDetails')}
+        </summary>
+        <div className="grid gap-2 border-t border-ds-border-muted px-3 py-3">
+          <ExactReference label={t('scientificPlottingExactManifest')} refValue={record.manifestRef} compact />
+          <KeyValue label={t('scientificPlottingManifestPath')} value={record.manifestPath} mono />
+          <KeyValue label={t('scientificPlottingOutputPath')} value={record.manifest.outputPath} mono />
+          <KeyValue label={t('scientificPlottingOutputHash')} value={record.manifest.outputHash} mono />
+          <JsonDetails label={t('scientificPlottingRecipe')} value={record.manifest.recipe} />
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function GenerationEvidence({ record, client, workspaceRoot }: Readonly<{
   record: ScientificPlotProvenanceRecord
   client: ScientificPlottingCapabilityClient
   workspaceRoot: string
@@ -474,6 +548,7 @@ function CodeGenerationEvidence({ record, client, workspaceRoot }: Readonly<{
   const { t } = useTranslation('common')
   const { recipe } = record.manifest
   const route = routeOf(recipe.visualPlan)
+  const modelExecution = modelExecutionOf(record.manifest)
   const [code, setCode] = useState<string | null>(null)
   const [codeLoading, setCodeLoading] = useState(false)
   const [codeIssue, setCodeIssue] = useState<string | null>(null)
@@ -566,6 +641,22 @@ function CodeGenerationEvidence({ record, client, workspaceRoot }: Readonly<{
     } finally {
       setRestoreLoading(false)
     }
+  }
+  if (route === 'model' && modelExecution) {
+    return (
+      <div className="grid gap-2">
+        <div className="rounded-xl border border-ds-border-muted bg-ds-main/25 p-3">
+          <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-ds-ink"><Wand2 className="h-3.5 w-3.5" />{t('scientificPlottingModelEvidence')}</div>
+          <KeyValue label={t('scientificPlottingModel')} value={`${modelExecution.model.id} · ${modelExecution.model.version}`} />
+          <KeyValue label={t('scientificPlottingReplay')} value={modelExecution.replay.exactOutputExpected ? t('scientificPlottingExactReplay') : t('scientificPlottingReplayable')} />
+          <KeyValue label={t('scientificPlottingPrompt')} value={modelExecution.effectivePromptHash} mono />
+          <JsonDetails label={t('scientificPlottingPrompt')} value={modelExecution.effectivePrompt} />
+          <JsonDetails label={t('scientificPlottingModelParameters')} value={modelExecution.parameters} />
+          {modelExecution.references?.length ? <JsonDetails label={t('scientificPlottingModelReferences')} value={modelExecution.references} /> : null}
+        </div>
+        <JsonDetails label={t('scientificPlottingVisualPlan')} value={recipe.visualPlan} />
+      </div>
+    )
   }
   return (
     <div className="grid gap-2">
@@ -682,15 +773,54 @@ function Badge({ label, tone }: Readonly<{ label: string; tone: 'blue' | 'violet
 }
 
 function routeLabel(route: string): string {
-  return route === 'hybrid' ? 'Hybrid' : 'Code'
+  return route === 'hybrid' ? 'Hybrid' : route === 'model' ? 'Model-only' : 'Code'
 }
 
-function routeOf(value: unknown): 'code' | 'hybrid' {
+function routeOf(value: unknown): 'code' | 'model' | 'hybrid' {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const route = (value as { route?: unknown }).route
-    if (route === 'hybrid') return route
+    if (route === 'model' || route === 'hybrid') return route
   }
   return 'code'
+}
+
+type ModelExecutionProjection = Readonly<{
+  model: { id: string; version: string }
+  effectivePrompt: string
+  effectivePromptHash: string
+  parameters: unknown
+  references?: readonly unknown[]
+  replay: { recipeHash: string; exactOutputExpected: boolean }
+}>
+
+function modelExecutionOf(value: unknown): ModelExecutionProjection | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const execution = (value as { modelExecution?: unknown }).modelExecution
+  if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null
+  const candidate = execution as Record<string, unknown>
+  const model = candidate.model
+  const replay = candidate.replay
+  if (!model || typeof model !== 'object' || Array.isArray(model) || !replay || typeof replay !== 'object' || Array.isArray(replay)) return null
+  const modelRecord = model as Record<string, unknown>
+  const replayRecord = replay as Record<string, unknown>
+  if (
+    typeof modelRecord.id !== 'string'
+    || typeof modelRecord.version !== 'string'
+    || typeof candidate.effectivePrompt !== 'string'
+    || typeof candidate.effectivePromptHash !== 'string'
+    || typeof replayRecord.recipeHash !== 'string'
+  ) return null
+  return {
+    model: { id: modelRecord.id, version: modelRecord.version },
+    effectivePrompt: candidate.effectivePrompt,
+    effectivePromptHash: candidate.effectivePromptHash,
+    parameters: candidate.parameters,
+    ...(Array.isArray(candidate.references) ? { references: candidate.references } : {}),
+    replay: {
+      recipeHash: replayRecord.recipeHash,
+      exactOutputExpected: replayRecord.exactOutputExpected === true
+    }
+  }
 }
 
 function ProvenanceSections({ record, section: _section }: Readonly<{
@@ -879,24 +1009,60 @@ function ProvenanceSection({
 function ExactReference({
   label,
   refValue,
-  compact = false
+  compact = false,
+  status,
+  issue,
+  onOpen
 }: Readonly<{
   label: string
   refValue: ArtifactVersionRefV1
   compact?: boolean
+  status?: ScientificPlotDependencyStatus
+  issue?: string
+  onOpen?: (ref: ArtifactVersionRefV1) => void
 }>): ReactElement {
   const { t } = useTranslation('common')
+  const state = status ?? dependencyStatusFromRef(refValue)
+  const stateTone = state === 'available'
+    ? 'text-emerald-700 dark:text-emerald-300'
+    : state === 'restricted' || state === 'unavailable'
+      ? 'text-red-700 dark:text-red-300'
+      : 'text-amber-700 dark:text-amber-300'
   return (
     <div className={`min-w-0 rounded-lg border border-ds-border-muted bg-ds-main/50 ${compact ? 'p-2' : 'p-2.5'}`}>
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-ds-muted">{label}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 text-[10px] font-semibold uppercase tracking-wide text-ds-muted">{label}</div>
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={() => onOpen(refValue)}
+            className="shrink-0 rounded-md p-1 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            title={t('scientificPlottingOpenArtifactHistory')}
+            aria-label={t('scientificPlottingOpenArtifactHistory')}
+          >
+            <History className="h-3 w-3" />
+          </button>
+        ) : null}
+      </div>
       <dl className="mt-1 grid gap-1 text-[10px]">
         <KeyValue label={t('scientificPlottingArtifact')} value={refValue.artifactId} mono />
         <KeyValue label={t('scientificPlottingVersion')} value={refValue.versionId} mono />
         <KeyValue label={t('scientificPlottingDigest')} value={refValue.contentDigest} mono />
+        <KeyValue label={t('scientificPlottingByteLength')} value={String(refValue.byteLength)} mono />
+        <KeyValue label={t('scientificPlottingRetention')} value={refValue.retention} />
         <KeyValue label={t('scientificPlottingAvailability')} value={refValue.availability} />
+        <KeyValue label={t('scientificPlottingStatus')} value={state} mono={state !== 'available'} />
       </dl>
+      {issue ? <div className={`mt-1 break-words text-[10px] ${stateTone}`}>{issue}</div> : null}
     </div>
   )
+}
+
+function dependencyStatusFromRef(refValue: ArtifactVersionRefV1): ScientificPlotDependencyStatus {
+  if (refValue.accessPolicy.visibility === 'restricted') return 'restricted'
+  if (refValue.availability === 'missing') return 'missing'
+  if (refValue.availability === 'remote') return 'unavailable'
+  return 'available'
 }
 
 function KeyValue({

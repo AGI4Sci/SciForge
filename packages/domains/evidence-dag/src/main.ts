@@ -17,8 +17,12 @@ import {
   evidenceDagPreviewOutputSchema,
   evidenceDagPriorityInputSchema,
   evidenceDagPriorityOutputSchema,
+  evidenceDagSealClosureInputSchema,
+  evidenceDagSealClosureOutputSchema,
   evidenceDagSnapshotStatusInputSchema,
   evidenceDagSnapshotStatusOutputSchema,
+  evidenceDagSidechainAppendInputSchema,
+  evidenceDagSidechainAppendOutputSchema,
   evidenceDagUpdateInputSchema,
   evidenceDagUpdateOutputSchema,
   evidenceDagViewInputSchema,
@@ -39,6 +43,23 @@ import {
 import { EVIDENCE_DAG_WRITE_EXPORT_ACTION } from './main/gate.js'
 
 export { evidenceTraceFromThread } from './main/artifacts.js'
+export {
+  EvidenceDagSealError,
+  EvidenceDagDeltaStore,
+  EvidenceDeltaChain,
+  digest as evidenceDagDigest,
+  evaluateEvidenceDagIndependence,
+  type EvidenceDagAppendResult,
+  type EvidenceDagAssessmentAppendInput,
+  type EvidenceDagCorrectionAppendInput,
+  type EvidenceDagDeltaAppendInput,
+  type EvidenceDagLegacyRootInput,
+  type EvidenceDagProvisionalCompileInput,
+  type EvidenceDagProvisionalCompilerOptions,
+  type EvidenceDagSidechainAppendInput,
+  type EvidenceDagTraceAppendInput
+} from './main/evidence-delta.js'
+export type { EvidenceDagSidechainAppendOutput } from './contract.js'
 export {
   artifactVersionCommitPort,
   artifactVersionEventListPort,
@@ -273,7 +294,7 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
         effect: 'read',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'none' },
-        audiences: ['system'],
+        audiences: ['ui', 'system'],
         inputSchema: evidenceDagSnapshotStatusInputSchema,
         outputSchema: evidenceDagSnapshotStatusOutputSchema,
         handler: async (input, context) => ({
@@ -295,6 +316,42 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
         outputSchema: evidenceDagUpdateOutputSchema,
         handler: async (input, context) => ({
           output: await options.getRuntime().update({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
+      }),
+      define({
+        id: EVIDENCE_DAG_CAPABILITY_IDS.sealClosure,
+        title: 'Seal Evidence closure',
+        description: 'Seals one exact Evidence claim closure using an expected-head compare-and-set.',
+        scope: 'workspace',
+        effect: 'compute',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: evidenceDagSealClosureInputSchema,
+        outputSchema: evidenceDagSealClosureOutputSchema,
+        audiences: ['ui', 'agent'],
+        handler: async (input, context) => ({
+          output: await options.getRuntime().sealClosure({
+            ...input,
+            workspaceRoot: evidenceWorkspaceFromCaller(context)
+          })
+        })
+      }),
+      define({
+        id: EVIDENCE_DAG_CAPABILITY_IDS.appendSidechain,
+        title: 'Append Evidence audit sidechain',
+        description: 'Appends an audit, finding, review, decision, or approval record bound to one sealed closure.',
+        scope: 'workspace',
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: evidenceDagSidechainAppendInputSchema,
+        outputSchema: evidenceDagSidechainAppendOutputSchema,
+        audiences: ['system'],
+        handler: async (input, context) => ({
+          output: await options.getRuntime().appendSidechain({
             ...input,
             workspaceRoot: evidenceWorkspaceFromCaller(context)
           })

@@ -5,10 +5,10 @@ import {
   PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
   PROJECT_DAG_DOMAIN_MODULE_ID,
   PROJECT_DAG_DOMAIN_PACKAGE_NAME,
-  PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
   PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
   PROJECT_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
   domainPackageDefinition
 } from './definition.js'
@@ -27,8 +27,8 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
       PROJECT_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
       PROJECT_DAG_ARTIFACT_CONSUMER_CONTRIBUTION,
       PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-      PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
-      PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+      PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+      PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
       PROJECT_DAG_RENDERER_I18N_CONTRIBUTION
     ].map(({ kind, id }) => ({ kind, id })),
     [
@@ -49,12 +49,12 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
         id: 'project-dag.workbench-right-panel'
       },
       {
-        kind: 'renderer.command',
-        id: 'project-dag.open'
+        kind: 'renderer.research-summary.v1',
+        id: 'project-dag.research-summary'
       },
       {
-        kind: 'renderer.workbench-toolbar-action',
-        id: 'project-dag.workbench-toolbar-action'
+        kind: 'renderer.resource-navigation',
+        id: 'project-dag.resource-navigation'
       },
       {
         kind: 'renderer.i18n-resource',
@@ -64,13 +64,19 @@ test('Project DAG manifest owns main lifecycle and renderer contributions', () =
   )
 })
 
-test('Project DAG definition declares its stable toolbar command reference', () => {
-  assert.deepEqual(
-    domainPackageDefinition.contributionContracts['project-dag.workbench-toolbar-action'],
-    {
-      location: 'workbench.topbar',
-      commandId: 'project-dag.open',
-      label: 'rightPanelProjectDag'
+test('Project DAG definition declares summary and navigation contracts', () => {
+  assert.deepEqual(domainPackageDefinition.contributionContracts['project-dag.research-summary'], {
+    slot: 'goal',
+    label: 'Goal and scope',
+    order: 10,
+    scopeKinds: ['workspace'],
+    resourceKinds: ['project-dag', 'project-goal', 'project-snapshot']
+  })
+  assert.deepEqual(domainPackageDefinition.contributionContracts['project-dag.resource-navigation'], {
+    resourceKinds: ['project-dag', 'project-goal', 'project-snapshot'],
+    target: {
+      surface: 'right-panel',
+      contributionId: 'project-dag.workbench-right-panel'
     }
-  )
+  })
 })

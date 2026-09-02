@@ -6,6 +6,10 @@ import { getI18n, setI18n } from 'react-i18next'
 import { Window } from 'happy-dom'
 
 import type {
+  DomainRendererContribution,
+  DomainRendererWorkbenchHost
+} from '@sciforge/domain-sdk/host'
+import type {
   ResearchCheckpointStartInputV1,
   ResearchCheckpointStartReceiptV1,
   ResearchCheckpointStatusV1,
@@ -188,6 +192,113 @@ test('clicking Stop before v1 and Start again binds the canonical policy revisio
     assert.equal(statusReads.length, 3)
     assert.match(mounted.container.innerHTML, /data-research-recording-policy-revision="9"/u)
     assert.equal(buttonByLabel(mounted.container, 'researchDossierStopRecording').disabled, false)
+  } finally {
+    await mounted.unmount()
+  }
+})
+
+test('renders owner summary availability and only opens exact resources with an installed navigator', async () => {
+  const opened: unknown[] = []
+  const provided: Array<Readonly<{ sessionId: string; scopeId: string }>> = []
+  const workbench: DomainRendererWorkbenchHost = {
+    canOpenResource: (resourceKind) => resourceKind === 'evidence-claim',
+    openResource: (input) => {
+      opened.push(input)
+      return true
+    },
+    openRightPanel: () => undefined
+  }
+  const researchSummaries = [
+    {
+      id: 'fixture.evidence-unavailable',
+      kind: 'renderer.research-summary.v1',
+      packageName: '@fixture/evidence',
+      owner: { moduleId: 'fixture.evidence', moduleVersion: '1.0.0' },
+      contract: {
+        slot: 'status',
+        label: 'Evidence',
+        order: 30,
+        scopeKinds: ['workspace'],
+        resourceKinds: ['evidence-claim']
+      },
+      value: {
+        provide: () => ({
+          status: 'unavailable' as const,
+          reason: 'Evidence access is restricted.'
+        })
+      }
+    },
+    {
+      id: 'fixture.project-summary',
+      kind: 'renderer.research-summary.v1',
+      packageName: '@fixture/project',
+      owner: { moduleId: 'fixture.project', moduleVersion: '1.0.0' },
+      contract: {
+        slot: 'goal',
+        label: 'Goal',
+        order: 10,
+        scopeKinds: ['workspace'],
+        resourceKinds: ['evidence-claim', 'artifact-version']
+      },
+      value: {
+        provide: ({ session, scope }: { session: { id: string }; scope: { id: string } }) => {
+          provided.push({ sessionId: session.id, scopeId: scope.id })
+          return {
+            status: 'available' as const,
+            items: [{ label: 'Goal', value: 'Compare two exact runs', tone: 'positive' as const }],
+            actions: [
+              {
+                label: 'Open claim',
+                resource: { resourceKind: 'evidence-claim', resourceId: 'claim:exact-1' }
+              },
+              {
+                label: 'Unavailable artifact navigator',
+                resource: { resourceKind: 'artifact-version', resourceId: 'artifact-version:missing-1' }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ] as unknown as readonly DomainRendererContribution[]
+  const client = recordingClient({
+    statuses: [automaticStatus(1, true)],
+    statusReads: [],
+    stop: async () => ({ ok: true, value: { recording: null, policyRevision: 1 } }),
+    start: async () => ({
+      ok: true,
+      value: { created: true, recording: activeRecording(), policyRevision: 1 }
+    })
+  })
+  const mounted = await mountPanel(
+    client,
+    session('thread-summary', 'codex', '/workspace/summary'),
+    { workbench, researchSummaries }
+  )
+
+  try {
+    assert.deepEqual(provided, [{
+      sessionId: 'thread-summary',
+      scopeId: '/workspace/summary'
+    }])
+    const summaryList = mounted.container.querySelector('[data-research-summary-list]')
+    assert.ok(summaryList)
+    assert.match(summaryList.textContent ?? '', /Compare two exact runs/u)
+    assert.match(summaryList.textContent ?? '', /Evidence access is restricted/u)
+    assert.doesNotMatch(summaryList.textContent ?? '', /Unavailable artifact navigator/u)
+
+    const openClaim = Array.from(summaryList.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Open claim'))
+    assert.ok(openClaim)
+    assert.equal((openClaim as HTMLButtonElement).disabled, false)
+    ;(openClaim as HTMLButtonElement).click()
+    assert.deepEqual(opened, [{
+      sessionId: 'thread-summary',
+      resource: {
+        resourceKind: 'evidence-claim',
+        resourceId: 'claim:exact-1'
+      }
+    }])
   } finally {
     await mounted.unmount()
   }
@@ -462,7 +573,8 @@ async function mountPanel(
     'thread-policy',
     'codex',
     '/workspace/lab'
-  )
+  ),
+  overrides: Pick<ResearchDossierPanelProps, 'workbench' | 'researchSummaries'> = {}
 ): Promise<Readonly<{
   container: HTMLElement
   root: Root
@@ -476,6 +588,7 @@ async function mountPanel(
   const render = async (sessionValue: ResearchDossierPanelProps['session']) => act(async () => {
     root.render(
       <ResearchDossierPanel
+        {...overrides}
         client={client}
         session={sessionValue}
         active

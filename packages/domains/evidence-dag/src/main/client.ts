@@ -6,7 +6,6 @@ import {
   evidenceDagDataCiteMetadataV1Schema,
   evidenceDagExportProductKindSchema,
   evidenceDagTypedErrorSchema,
-  type EvidenceDagCommittedSnapshot,
   type EvidenceDagDataCiteMetadataV1,
   type EvidenceDagExportProductKind,
   type EvidenceDagPreviewInput,
@@ -21,31 +20,10 @@ export const EVIDENCE_DAG_SERVICE_ID = 'evidence-dag-engine' as const
 export const EVIDENCE_DAG_SERVICE_VERSION = '1.0.0' as const
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 600_000
-const MAX_BATCH_ITEMS = 10
-const MAX_BATCH_JSON_BYTES = 400_000
 
 export type EvidenceDagServiceEndpoint = Readonly<{
   baseUrl: string
   apiKey: string
-}>
-
-export type EvidenceDagUpdateSubmission = Readonly<{
-  jobId: string
-  engineThreadId: string
-  targetWatermark: string
-  reason: string
-  priority: 'background' | 'normal' | 'high' | 'immediate'
-  trace: readonly Readonly<Record<string, unknown>>[]
-  workspaceRoot: string
-  rebuild?: boolean
-  rebuildRationale?: string
-  resumeAfterBatch?: number
-}>
-
-export type EvidenceDagUpdateProgress = Readonly<{
-  completedBatches: number
-  totalBatches: number
-  snapshot: EvidenceDagCommittedSnapshot
 }>
 
 const evidenceDagSnapshotProductProjectionSchema = z.object({
@@ -143,70 +121,6 @@ export class EvidenceDagServiceClient {
       { method: 'GET', cache: 'no-store' }
     )
     return record(data) ?? {}
-  }
-
-  async committedSnapshot(threadId: string): Promise<EvidenceDagCommittedSnapshot | null> {
-    const status = await this.status(threadId)
-    return normalizeSnapshot(status.snapshot)
-  }
-
-  async update(
-    input: EvidenceDagUpdateSubmission,
-    onProgress?: (progress: EvidenceDagUpdateProgress) => Promise<void> | void
-  ): Promise<EvidenceDagCommittedSnapshot> {
-    const batches = traceBatches(input.trace)
-    const resumeAfterBatch = Number.isInteger(input.resumeAfterBatch) &&
-      Number(input.resumeAfterBatch) > 0
-      ? Math.min(Number(input.resumeAfterBatch), batches.length)
-      : 0
-    let snapshot: EvidenceDagCommittedSnapshot | null = null
-    for (const [index, trace] of batches.entries()) {
-      if (index < resumeAfterBatch) continue
-      const targetWatermark = batches.length === 1
-        ? input.targetWatermark
-        : `${input.targetWatermark}:batch:${index + 1}/${batches.length}`
-      const data = record(await this.request('/updates', {
-        method: 'POST',
-        body: JSON.stringify({
-          threadId: input.engineThreadId,
-          targetWatermark,
-          reason: input.reason,
-          priority: input.priority,
-          trace,
-          workspaceRoot: input.workspaceRoot,
-          ...(input.rebuild && index === 0 ? { rebuild: true } : {}),
-          ...(input.rebuildRationale && index === 0
-            ? { rebuildRationale: input.rebuildRationale }
-            : {}),
-          queuedAt: this.now().toISOString(),
-          correlationId: input.jobId,
-          idempotencyKey: `${input.jobId}:${index + 1}/${batches.length}`
-        })
-      }))
-      snapshot = normalizeSnapshot(data?.snapshot)
-      if (!snapshot) {
-        throw this.error({
-          code: 'internal_error',
-          message: 'Evidence DAG update returned no committed snapshot.',
-          retryable: false,
-          occurredAt: this.now().toISOString()
-        })
-      }
-      await onProgress?.({
-        completedBatches: index + 1,
-        totalBatches: batches.length,
-        snapshot
-      })
-    }
-    if (!snapshot) {
-      throw this.error({
-        code: 'internal_error',
-        message: 'Evidence DAG update requires at least one trace item.',
-        retryable: false,
-        occurredAt: this.now().toISOString()
-      })
-    }
-    return snapshot
   }
 
   async evidencePreview(input: EvidenceDagPreviewInput): Promise<unknown> {
@@ -351,22 +265,6 @@ export function isEvidenceDagServiceIdentity(value: unknown): boolean {
     identity.version === EVIDENCE_DAG_SERVICE_VERSION
 }
 
-function normalizeSnapshot(value: unknown): EvidenceDagCommittedSnapshot | null {
-  const snapshot = record(value)
-  if (!snapshot || snapshot.status !== 'committed') return null
-  return evidenceDagCommittedSnapshotSchema.parse({
-    threadId: snapshot.threadId,
-    version: snapshot.version,
-    digest: snapshot.digest,
-    inputWatermark: snapshot.inputWatermark,
-    schemaVersion: snapshot.schemaVersion,
-    extractorVersion: snapshot.extractorVersion,
-    verifierVersion: snapshot.verifierVersion,
-    artifactDigests: snapshot.artifactDigests,
-    createdAt: snapshot.createdAt
-  })
-}
-
 function canonicalErrorCode(
   upstreamCode: string,
   status: number
@@ -388,30 +286,6 @@ function canonicalErrorCode(
   if (upstreamCode.includes('snapshot')) return 'snapshot_corrupt'
   if (status === 401 || status === 403) return 'access_restricted'
   return 'internal_error'
-}
-
-export function traceBatches(
-  trace: readonly Readonly<Record<string, unknown>>[]
-): Readonly<Record<string, unknown>>[][] {
-  const batches: Record<string, unknown>[][] = []
-  let current: Record<string, unknown>[] = []
-  let currentBytes = 2
-  for (const item of trace) {
-    const normalized = structuredClone(item) as Record<string, unknown>
-    const bytes = Buffer.byteLength(JSON.stringify(normalized), 'utf8') + 1
-    if (current.length && (
-      current.length >= MAX_BATCH_ITEMS ||
-      currentBytes + bytes > MAX_BATCH_JSON_BYTES
-    )) {
-      batches.push(current)
-      current = []
-      currentBytes = 2
-    }
-    current.push(normalized)
-    currentBytes += bytes
-  }
-  if (current.length) batches.push(current)
-  return batches
 }
 
 function record(value: unknown): Record<string, unknown> | null {

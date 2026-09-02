@@ -27,7 +27,6 @@
     "start": "python3 -c \"import sys; sys.path.insert(0, 'python'); from evidence_dag.server import main; main()\"",
     "serve": "npm run start",
     "samples": "python3 samples/load.py",
-    "demo:v3": "python3 samples/reproducible_dag_v3_demo.py",
     "python:test": "PYTHONPATH=python python3 -m unittest discover -s tests -v",
     "desktop:test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",

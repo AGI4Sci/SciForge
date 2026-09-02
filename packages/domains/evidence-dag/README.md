@@ -20,9 +20,11 @@ contributions generically and does not import package-private implementation.
 
 ## Python Evidence engine
 
-Thread-scoped Evidence DAG compiler for SciForge. The package-owned engine consumes visible runtime trace deltas through one update command, links SourceAssertions to structured SourceAnchors and versioned Artifacts, executes A0-A2 review, and commits immutable Evidence Snapshots. Audit is a read-only side chain over a selected committed snapshot.
+Thread-scoped Evidence compiler for SciForge. Ordinary completed turns and executions append visible runtime trace deltas to the Evidence delta store; an explicit update or formal boundary may compile those records into an immutable Evidence Snapshot. The package-owned engine links SourceAssertions to structured SourceAnchors and versioned Artifacts and executes A0-A2 review. Audit is a read-only side chain over a selected committed snapshot.
 
-The package follows [`docs/evidence-project-dag-design.zh-CN.md`](../../../docs/evidence-project-dag-design.zh-CN.md). There is no direct ingest, verify, inline-audit, or mutable PROV import route.
+The package follows [`ADR-0043`](../../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md)
+and the [`Research Artifacts context`](../../../docs/contexts/research-artifacts/CONTEXT.md). There is no direct ingest,
+verify, inline-audit, or mutable PROV import route.
 
 ## Core contracts
 
@@ -33,8 +35,8 @@ The package follows [`docs/evidence-project-dag-design.zh-CN.md`](../../../docs/
 - SourceAnchor selectors are structured (`pdf|text|table|figure|code|dataset|web`) and carry a digest of the selected content.
 - The main-process adapter commits only explicit reference candidates with locator, digest, and byte length, or consumes an already-pinned `ArtifactVersionRefV1`. The Python compiler never opens a locator, hashes a file, creates an Artifact identity, or rebinds a version.
 - Missing, incomplete, or ambiguous artifact provenance remains `pending`/`failed` and fails closed at L0. Chat/agent summaries and raw tool receipts are never promoted into scientific Artifacts.
-- Artifact identity, version commits, access policy, source availability, moves, and content-change detection are owned by `@sciforge/domain-artifact-versions`. On activation and on a bounded background interval, Evidence drains that durable lifecycle outbox to empty by workspace. Evidence persists its sequence cursor, exact thread/version associations, and idempotent queue receipts in `artifact-version-lifecycle.json`; a cursor advances only after every affected thread update is durably accepted by the existing Evidence queue. Restart replays the same receipt safely. Missing/content/current-change events mark affected current projections stale, moves require review, and old snapshots and pinned IDs/digests are never rewritten.
-- Scientific Plotting publishes immutable `pending` receipts under `.sciforge/evidence-dag/inbox/scientific-plotting/<sha256(operationId)>.json`. Evidence validates the routed thread/workspace, all five committed refs, every lineage ref, and the stored bytes before appending a synthetic structured trace to its durable queue. It writes a separate `enqueued` delivery receipt only after that queue write is durable; `enqueued` means hand-off accepted, not Evidence Snapshot or L4 completion. Missing services/threads and any scope or digest mismatch leave the producer receipt pending for restart-safe retry.
+- Artifact identity, version commits, access policy, source availability, moves, and content-change detection are owned by `@sciforge/domain-artifact-versions`. On activation and on a bounded background interval, Evidence drains that durable lifecycle outbox to empty by workspace. Evidence persists its sequence cursor, exact thread/version associations, and idempotent delivery receipts in `artifact-version-lifecycle.json`; a cursor advances only after every affected thread delta is durably accepted by the Evidence delta store. Restart replays the same receipt safely. Missing/content/current-change events mark affected current projections stale, moves require review, and old snapshots and pinned IDs/digests are never rewritten.
+- Scientific Plotting publishes immutable `pending` receipts under `.sciforge/evidence-dag/inbox/scientific-plotting/<sha256(operationId)>.json`. Evidence validates the routed thread/workspace, all five committed refs, every lineage ref, and the stored bytes before appending a synthetic structured trace to the Evidence delta store. It writes a separate `enqueued` delivery receipt only after that append is durable; `enqueued` means hand-off accepted, not Evidence Snapshot or L4 completion. Missing services/threads and any scope or digest mismatch leave the producer receipt pending for restart-safe retry.
 - A0, A1, and A2 assessments are append-only records bound to the committed snapshot digest. A1/A2 use prompts and context independent from extraction.
 - ExperimentRun, AnalysisRun, DatasetVersion, SoftwareVersion, Environment, Observation, Artifact, and Agent are first-class source-layer objects. PROV export maps runs to `activity`, actors to `agent`, and other records to `entity`; `used`, `wasGeneratedBy`, `wasDerivedFrom`, `wasAssociatedWith`, and `wasAttributedTo` retain their native PROV-JSON forms.
 - Evidence v3 adds first-class ParameterSet, ToolInvocation, ApprovalDecision, WorkflowRun, and Conclusion nodes. Existing Artifact/SoftwareVersion nodes carry `semanticRole` for input, output, code, or Evidence instead of duplicating node types. `part_of`, `authorized_by`, and `rerun_of` complete executable and governance lineage.
@@ -306,8 +308,8 @@ unverifiable comparisons retain `rerun_of` with an inconclusive reason. The
 Workbench panel exposes native Conclusion nodes, lineage coverage, breakpoints,
 and canonical rerun-spec download.
 
-See [`docs/reproducible-dag-v3.zh-CN.md`](../../../docs/reproducible-dag-v3.zh-CN.md)
-for the cross-package contract.
+See [`ADR-0043`](../../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md)
+for the cross-package derivation and sealing contract.
 
 ## Domain events and metrics
 

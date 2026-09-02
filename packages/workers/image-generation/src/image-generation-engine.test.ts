@@ -448,7 +448,7 @@ describe('image generation engine', () => {
         provider: 'placeholder',
         model: { id: 'sciforge-placeholder', version: '0.1.0' },
         effectivePrompt: 'A clean science illustration with several labeled regions',
-        replay: { supported: true, exactOutputExpected: true }
+        replay: { supported: true, exactOutputExpected: false }
       }
     })
     expect(result.modelExecution.effectivePromptHash).toBe(
@@ -538,6 +538,7 @@ describe('image generation engine', () => {
         mode: 'image_to_image',
         prompt: 'Add the model-owned background and visual style around the controlled source.',
         referencePath: sourcePath,
+        seed: 42,
         size: { width: 512, height: 512 },
         outputFormat: 'png',
         visualPlan: {
@@ -563,6 +564,11 @@ describe('image generation engine', () => {
       referenceHash: createHash('sha256').update(sourceBytes).digest('hex'),
       modelExecution: {
         provider: 'image-endpoint',
+        references: [{
+          path: sourcePath,
+          contentDigest: createHash('sha256').update(sourceBytes).digest('hex')
+        }],
+        parameters: { seed: 42 },
         replay: { supported: true }
       }
     })
@@ -984,6 +990,27 @@ describe('image generation engine', () => {
     expect(result.outputs[0]?.provider).toBe('image-endpoint')
     expect(existsSync(result.outputs[0]!.outputPath)).toBe(true)
     expect(readFileSync(result.outputs[0]!.outputPath).equals(readFileSync(sourcePath))).toBe(false)
+    expect(JSON.parse(readFileSync(result.outputs[0]!.manifestPath, 'utf8'))).toMatchObject({
+      tool: 'image_generation_edit_from_visual_review_packet',
+      modelExecution: {
+        provider: 'image-endpoint',
+        effectivePrompt: expect.stringContaining('换个颜色'),
+        references: [{
+          path: 'source-diagram.png',
+          contentDigest: createHash('sha256').update(readFileSync(sourcePath)).digest('hex')
+        }],
+        parameters: {
+          mode: 'image_to_image',
+          outputFormat: 'png'
+        },
+        replay: { supported: true, exactOutputExpected: false }
+      }
+    })
+    expect(JSON.parse(readFileSync(result.outputs[0]!.artifactManifestPath, 'utf8'))).toMatchObject({
+      modelExecution: {
+        references: [{ path: 'source-diagram.png' }]
+      }
+    })
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     const output = await loadImage(result.outputs[0]!.outputPath)

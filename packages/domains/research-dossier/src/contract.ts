@@ -8,8 +8,7 @@ export const RESEARCH_DOSSIER_RIGHT_PANEL_CONTRIBUTION_ID =
 export const researchDossierPageSchema = z.enum([
   'overview',
   'versions',
-  'reproduction',
-  'evidence-review'
+  'reproduction'
 ])
 
 export const researchDossierTargetV1Schema = z.discriminatedUnion('kind', [
