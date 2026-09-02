@@ -4,6 +4,7 @@ import {
   BROWSER_PREVIEW_TRUST,
   browserClickInputSchema,
   browserFillInputSchema,
+  browserKeyInputSchema,
   browserPageStateSchema
 } from './contract.js'
 import {
@@ -28,6 +29,8 @@ test('browser action schemas expose bounded opaque targets and no selector/evalu
     }).success,
     false
   )
+  assert.equal(browserKeyInputSchema.safeParse({ key: 'PageDown' }).success, true)
+  assert.equal(browserKeyInputSchema.safeParse({ key: 'a' }).success, false)
 })
 
 test('browser page observations are explicitly marked as untrusted', () => {

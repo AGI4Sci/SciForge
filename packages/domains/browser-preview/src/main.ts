@@ -14,7 +14,11 @@ import {
   browserOpenInputSchema,
   browserOpenOutputSchema,
   browserPageStateSchema,
+  browserKeyInputSchema,
+  browserPointInputSchema,
   browserPressInputSchema,
+  browserResizeInputSchema,
+  browserScrollInputSchema,
   browserSelectInputSchema
 } from './contract.js'
 import {
@@ -337,11 +341,11 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
         outputSchema: browserCloseOutputSchema,
         handler: async (_input, context) => {
           const surfaceId = requireSurfaceId(context)
-          await options.getService().closeSession(surfaceId, context.caller)
+          const closed = await options.getService().closeSession(surfaceId, context.caller)
           return {
             output: { closed: true },
-            changed: true,
-            semanticRevision: 'browser-closed'
+            changed: closed,
+            ...(closed ? { semanticRevision: 'browser-closed' } : {})
           }
         }
       }, ['ui'])),
@@ -417,6 +421,62 @@ export function createBrowserCapabilityFactory<CapabilityDefinition>(options: Re
           (service, id) => service.reload(id, context.caller)
         )
       })),
+      options.defineCapability(resourceCapability({
+        id: BROWSER_PREVIEW_CAPABILITY_IDS.resize,
+        title: 'Resize browser page',
+        description: 'Fits the canonical browser viewport to its visible panel.',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: browserResizeInputSchema,
+        outputSchema: browserActionOutputSchema,
+        handler: (input, context) => result(
+          context,
+          (service, id) => service.resize(id, input, context.caller)
+        )
+      }, ['ui'])),
+      options.defineCapability(resourceCapability({
+        id: BROWSER_PREVIEW_CAPABILITY_IDS.hover,
+        title: 'Hover browser page target',
+        description: 'Moves the pointer over one browser viewport point.',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: browserPointInputSchema,
+        outputSchema: browserActionOutputSchema,
+        handler: (input, context) => result(
+          context,
+          (service, id) => service.hover(id, input, context.caller)
+        )
+      }, ['ui'])),
+      options.defineCapability(resourceCapability({
+        id: BROWSER_PREVIEW_CAPABILITY_IDS.scroll,
+        title: 'Scroll browser page',
+        description: 'Scrolls the canonical browser page by one viewport delta.',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: browserScrollInputSchema,
+        outputSchema: browserActionOutputSchema,
+        handler: (input, context) => result(
+          context,
+          (service, id) => service.scroll(id, input, context.caller)
+        )
+      }, ['ui'])),
+      options.defineCapability(resourceCapability({
+        id: BROWSER_PREVIEW_CAPABILITY_IDS.pressKey,
+        title: 'Press browser page key',
+        description: 'Presses one allowlisted navigation key on the browser page.',
+        effect: 'external-write',
+        approval: 'confirmation',
+        concurrency: { revision: 'optimistic', idempotency: 'required' },
+        inputSchema: browserKeyInputSchema,
+        outputSchema: browserActionOutputSchema,
+        handler: (input, context) => result(
+          context,
+          (service, id) => service.pressKey(id, input, context.caller)
+        )
+      }, ['ui'])),
       options.defineCapability(resourceCapability({
         id: BROWSER_PREVIEW_CAPABILITY_IDS.click,
         title: 'Click browser page target',
