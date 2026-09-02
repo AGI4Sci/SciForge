@@ -10,6 +10,10 @@ const packageJson = JSON.parse(await readFile(
   new URL('../package.json', import.meta.url),
   'utf8'
 ))
+const vitestConfigSource = await readFile(
+  new URL('../vitest.config.ts', import.meta.url),
+  'utf8'
+)
 const deploymentGuideSource = await readFile(
   new URL('../docs/operations/zulip-aliyun-deployment.zh-CN.md', import.meta.url),
   'utf8'
@@ -52,6 +56,12 @@ test('runs the full regression suite and every installed domain package through 
     packageJson.scripts['domain-packages:typecheck'],
     'node ./scripts/domain-packages.mjs --run typecheck'
   )
+})
+
+test('sizes root Vitest workers to the available runner capacity', () => {
+  assert.equal(packageJson.scripts.test, 'vitest run')
+  assert.match(vitestConfigSource, /availableParallelism/u)
+  assert.match(vitestConfigSource, /maxWorkers/u)
 })
 
 test('enforces architecture and both canonical Electron application paths', () => {
