@@ -969,7 +969,7 @@ class Engine:
             classification=payload.get("classification", "internal"),
             decision_refs=payload.get("decisionRefs") or [],
             approval_refs=payload.get("approvalRefs") or [],
-            expected_head_digest=payload.get("expectedHeadDigest"),
+            expected_head_digest=payload["expectedHeadDigest"],
             action_class=payload.get("actionClass"),
         )
         return self._project_response(

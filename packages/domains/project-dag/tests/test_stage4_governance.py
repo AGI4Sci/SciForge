@@ -55,7 +55,7 @@ class Stage4GovernanceTests(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertTrue({
                 "project_scope_revision", "project_goal_draft", "project_invalidation",
-                "approval_record", "finding_event", "review_event",
+                "project_snapshot_seal", "approval_record", "finding_event", "review_event",
             } <= names)
             self.assertEqual(DECISION_POLICY_V1, "decision-policy/v1")
             store.close()
@@ -93,11 +93,23 @@ class Stage4GovernanceTests(unittest.TestCase):
             })
             self.assertEqual(receipt["state"], "queued")
             snapshot = engine.process_updates(project)["snapshot"]
+            with self.assertRaisesRegex(ValueError, "must be sealed"):
+                engine.workflow.record_decision(
+                    project_key=project, action="endorse", decided_by="human",
+                    actor_id="research-lead", autonomy_mode="checkpointed",
+                    rationale="The unsealed baseline must not enter governance.",
+                    alternatives=[], evidence_digest=snapshot["digest"], confidence=0.9,
+                    reversibility="reversible",
+                )
             self.assertEqual(
                 engine.workflow.seal_snapshot(
                     project, expected_head_digest=snapshot["digest"])["digest"],
                 snapshot["digest"],
             )
+            self.assertIsNotNone(engine.store.q1(
+                "SELECT 1 FROM project_snapshot_seal WHERE project_key=? AND snapshot_digest=?",
+                (project, snapshot["digest"]),
+            ))
             with self.assertRaisesRegex(ValueError, "head changed"):
                 engine.workflow.seal_snapshot(
                     project, expected_head_digest="project:" + "0" * 64)

@@ -715,15 +715,45 @@ class ProjectWorkflow:
                 if (invalidation and invalidation.get("stale")) or active:
                     self.store.conn.rollback()
                     raise ValueError("Project Snapshot is stale; derive the current exact inputs first")
-                self._event(project_key, "ProjectSnapshotSealed", "project-governance", {
-                    "projectSnapshot": expected_head_digest, "reason": reason,
-                })
+                self._record_snapshot_seal(project_key, expected_head_digest, reason)
                 self.store.conn.commit()
                 return latest
             except Exception:
                 if self.store.conn.in_transaction:
                     self.store.conn.rollback()
                 raise
+
+    def _record_snapshot_seal(self, project_key: str, snapshot_digest: str,
+                              reason: str) -> None:
+        self.store.x(
+            "INSERT OR IGNORE INTO project_snapshot_seal"
+            " (project_key,snapshot_digest,reason,sealed_by,sealed_at)"
+            " VALUES (?,?,?,?,?)",
+            (project_key, snapshot_digest, reason, "project-governance", now_iso()),
+        )
+        self._event(project_key, "ProjectSnapshotSealed", "project-governance", {
+            "projectSnapshot": snapshot_digest, "reason": reason,
+        })
+
+    def _require_sealed_snapshot(self, project_key: str,
+                                 snapshot_digest: str) -> dict:
+        snapshot = self.snapshot(snapshot_digest)
+        if snapshot is None or snapshot["projectKey"] != project_key:
+            raise ValueError("Project Snapshot is required for formal use")
+        latest = self.latest_snapshot(project_key)
+        if latest is None or latest["digest"] != snapshot_digest:
+            raise ValueError("Project Snapshot is stale; reload the latest Project Snapshot")
+        invalidation = self.invalidation(project_key)
+        if invalidation and invalidation.get("stale"):
+            raise ValueError("Project Snapshot is stale; derive the current exact inputs first")
+        seal = self.store.q1(
+            "SELECT 1 FROM project_snapshot_seal"
+            " WHERE project_key=? AND snapshot_digest=?",
+            (project_key, snapshot_digest),
+        )
+        if seal is None:
+            raise ValueError("Project Snapshot must be sealed before formal use")
+        return snapshot
 
     # --------------------------------------------------------------- worker
     def process_next(self, project_key: Optional[str] = None) -> Optional[dict]:
@@ -1459,6 +1489,12 @@ class ProjectWorkflow:
         policy = self.policy(job["project_key"])
         if int(policy["policy_version"]) != int(job["policy_version"]):
             raise RuntimeError("audit policy changed while the job was running")
+        # The audit selector established an exact current head and excluded
+        # eligible Project update work. Persist the seal in the same
+        # transaction as the audit sidechain so A3 cannot create formal
+        # records against an unsealed snapshot.
+        self._record_snapshot_seal(
+            job["project_key"], job["target_digest"], f"audit:{job['level']}")
         findings: list[str] = []
         l0_findings_after_semantic_verification: list[str] = []
         if job["level"] == "L0":
@@ -2049,9 +2085,7 @@ class ProjectWorkflow:
         if not isinstance(alternatives, list) or not all(
                 isinstance(item, str) and item.strip() for item in alternatives):
             raise ValueError("alternatives must be a string array")
-        snapshot = self.snapshot(evidence_digest)
-        if snapshot is None or snapshot["projectKey"] != project_key:
-            raise ValueError("evidenceDigest must identify a committed Project Snapshot")
+        snapshot = self._require_sealed_snapshot(project_key, evidence_digest)
         finding = None
         if finding_id:
             finding = self.store.q1("SELECT * FROM finding WHERE id=?", (finding_id,))
@@ -2247,9 +2281,7 @@ class ProjectWorkflow:
         decision = self.store.q1("SELECT * FROM decision_event WHERE id=?", (decision_id,))
         if decision is None or decision["project_key"] != project_key:
             raise KeyError(decision_id)
-        snapshot = self.snapshot(decision["evidence_digest"])
-        if snapshot is None or snapshot["projectKey"] != project_key:
-            raise ValueError("Approval requires an exact Project Snapshot")
+        snapshot = self._require_sealed_snapshot(project_key, decision["evidence_digest"])
         if revokes_approval_id:
             prior = self.store.q1("SELECT * FROM approval_record WHERE id=?", (revokes_approval_id,))
             if prior is None or prior["project_key"] != project_key:
@@ -2303,22 +2335,21 @@ class ProjectWorkflow:
                 if (item := self.approval(row["id"])) is not None]
 
     def create_release(self, *, project_key: str, project_snapshot_digest: str,
-                       audit_digest: str, created_by: str,
+                       expected_head_digest: str, audit_digest: str, created_by: str,
                        output_artifacts: list[dict], requested_status: str = "candidate",
                        runtime_authorization: Optional[dict] = None,
                        external_action: bool = False,
                        target: str = "", classification: str = "internal",
                        decision_refs: Optional[list[str]] = None,
                        approval_refs: Optional[list[str]] = None,
-                       expected_head_digest: Optional[str] = None,
                        action_class: Optional[str] = None) -> dict:
         if requested_status not in {"candidate", "certified"}:
             raise ValueError("requestedStatus must be candidate or certified")
-        snapshot = self.snapshot(project_snapshot_digest)
-        if snapshot is None or snapshot["projectKey"] != project_key:
-            raise KeyError(project_snapshot_digest)
-        if expected_head_digest is not None and expected_head_digest != project_snapshot_digest:
+        if not isinstance(expected_head_digest, str) or not expected_head_digest.strip():
+            raise ValueError("expectedHeadDigest is required")
+        if expected_head_digest != project_snapshot_digest:
             raise ValueError("Project Snapshot head changed; reload before release")
+        snapshot = self._require_sealed_snapshot(project_key, expected_head_digest)
         audit = self.store.q1(
             "SELECT * FROM audit_run WHERE project_key=? AND target_digest=? AND digest=?"
             " AND status='completed' AND level='L2'",
@@ -2387,6 +2418,9 @@ class ProjectWorkflow:
         action_classes = {item.get("actionClass", "draft_internal_reversible") for item in decisions}
         required_class = "public_external" if classification == "public" else (
             "certified_internal" if requested_status == "certified" else None)
+        if required_class and action_class is not None and action_class != required_class:
+            raise ValueError(
+                "release action class must match the requested certified/public release")
         if required_class:
             action_classes.add(required_class)
         selected_action_class = action_class or (
@@ -2404,6 +2438,10 @@ class ProjectWorkflow:
                 policy_block = False
         else:
             policy_block = False
+        if requested_status == "certified":
+            rule = policy["decisionRules"][selected_action_class or required_class or "certified_internal"]
+            if not rule.get("allowCertification"):
+                policy_block = True
         approvals = [self.approval(ref) for ref in approval_refs]
         if any(item is None or item.get("projectSnapshot") != project_snapshot_digest
                or item.get("status") != "effective" for item in approvals):
@@ -2412,7 +2450,23 @@ class ProjectWorkflow:
             approval_refs = [item["approvalId"] for item in self.approvals(
                 project_key, project_snapshot_digest)
                 if item.get("status") == "effective"
-                and not str(item.get("attestor", "")).lower().startswith("agent")]
+                and not str(item.get("attestor", "")).lower().startswith("agent")
+                and (decision := self.decision(item["decisionRef"])) is not None
+                and decision.get("actionClass") == selected_action_class]
+            approvals = [self.approval(ref) for ref in approval_refs]
+        if requested_status == "certified":
+            selected_class = selected_action_class or required_class or "certified_internal"
+            for approval in approvals:
+                if approval is None:
+                    raise ValueError("Release approvals must bind the exact Project Snapshot")
+                decision = self.decision(approval["decisionRef"])
+                if decision is None or decision.get("projectSnapshot") != project_snapshot_digest:
+                    raise ValueError("Release approvals must bind an exact Decision")
+                if decision.get("actionClass") != selected_class:
+                    raise ValueError(
+                        "Release approvals must bind the requested release action class")
+                if decision["decisionId"] not in decision_refs:
+                    decision_refs.append(decision["decisionId"])
         if requested_status == "certified":
             rule = policy["decisionRules"][selected_action_class or required_class or "certified_internal"]
             human_approvals = [item for item in self.approvals(
@@ -2566,9 +2620,7 @@ class ProjectWorkflow:
             raise ValueError("Review Packet does not identify a committed Project Snapshot")
         if expected_snapshot_digest and expected_snapshot_digest != digest:
             raise ValueError("Review Packet snapshot changed; reload before recording a decision")
-        latest = self.latest_snapshot(project_key)
-        if latest is None or latest["digest"] != digest:
-            raise ValueError("Review Packet is stale; reload the latest Project Snapshot")
+        self._require_sealed_snapshot(project_key, digest)
         decision_action, review_status, db_status = action_map[action]
         policy = self.policy(project_key)
         timestamp = now_iso()
@@ -2578,6 +2630,8 @@ class ProjectWorkflow:
             autonomy_mode=policy["autonomy_mode"], rationale=rationale,
             alternatives=sorted(set(action_map) - {action}), evidence_digest=digest,
             confidence=confidence, reversibility="fully_reversible", supersedes_id=None,
+            action_class=("certified_internal" if action == "approve"
+                          else "draft_internal_reversible"),
         )
         approval = None
         if action == "approve":

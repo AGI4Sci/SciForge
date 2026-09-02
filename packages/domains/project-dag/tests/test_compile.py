@@ -1312,14 +1312,17 @@ class WorkflowTests(unittest.TestCase):
         snapshot = write_snapshot(self.sessions, "s1", [("fragile claim", "one source")])
         self.enqueue([snapshot]); self.engine.process_updates(self.project)
         self.engine.process_audits(self.project)
+        self.engine.process_updates(self.project)
+        self.engine.process_audits(self.project)
         prior = self.engine.store.q1(
             "SELECT * FROM decision_event WHERE project_key=? ORDER BY created_at LIMIT 1",
             (self.project,))
+        current = self.engine.workflow.latest_snapshot(self.project)
         decision = self.engine.record_decision({
             "projectKey": self.project, "action": "supersede", "decidedBy": "human",
             "actorId": "researcher", "autonomyMode": "autonomous",
             "rationale": "new expert assessment", "alternatives": ["endorse"],
-            "evidenceDigest": prior["evidence_digest"], "confidence": 0.95,
+            "evidenceDigest": current["digest"], "confidence": 0.95,
             "reversibility": "reversible", "supersedesId": prior["id"],
         })
         self.assertEqual(decision["supersedes_id"], prior["id"])
@@ -2279,14 +2282,25 @@ class WorkflowTests(unittest.TestCase):
         })
         audit = self.engine.process_audits(self.project)["audit"]
         self.assertEqual(audit["id"], queued["id"])
+        self.engine.workflow.seal_snapshot(
+            self.project, expected_head_digest=latest["digest"])
+        with self.assertRaisesRegex(ValueError, "action class"):
+            self.engine.workflow.create_release(
+                project_key=self.project, project_snapshot_digest=latest["digest"],
+                expected_head_digest=latest["digest"], audit_digest=audit["digest"],
+                created_by="research-lead", output_artifacts=[], requested_status="certified",
+                action_class="draft_internal_reversible",
+            )
         with self.assertRaises(PermissionError):
             self.engine.workflow.create_release(
                 project_key=self.project, project_snapshot_digest=latest["digest"],
-                audit_digest=audit["digest"], created_by="agent", output_artifacts=[],
+                expected_head_digest=latest["digest"], audit_digest=audit["digest"],
+                created_by="agent", output_artifacts=[],
                 external_action=True)
         release = self.engine.workflow.create_release(
             project_key=self.project, project_snapshot_digest=latest["digest"],
-            audit_digest=audit["digest"], created_by="agent", output_artifacts=[],
+            expected_head_digest=latest["digest"], audit_digest=audit["digest"],
+            created_by="agent", output_artifacts=[],
             requested_status="candidate", external_action=True,
             runtime_authorization={"granted": True, "permissionId": "runtime:permit:1"})
         self.assertEqual(release["certification_status"], "candidate")
@@ -2378,7 +2392,8 @@ class WorkflowTests(unittest.TestCase):
         blocked_release = self.engine.workflow.create_release(
             project_key=self.project,
             project_snapshot_digest=graph_view["snapshot"]["digest"],
-            audit_digest=audit["digest"], created_by="research-lead",
+            expected_head_digest=graph_view["snapshot"]["digest"], audit_digest=audit["digest"],
+            created_by="research-lead",
             output_artifacts=[], requested_status="certified",
         )
         self.assertEqual(blocked_release["certification_status"], "blocked")
@@ -2412,7 +2427,8 @@ class WorkflowTests(unittest.TestCase):
         certified_release = self.engine.workflow.create_release(
             project_key=self.project,
             project_snapshot_digest=graph_view["snapshot"]["digest"],
-            audit_digest=audit["digest"], created_by="research-lead",
+            expected_head_digest=graph_view["snapshot"]["digest"], audit_digest=audit["digest"],
+            created_by="research-lead",
             output_artifacts=[], requested_status="certified",
         )
         self.assertEqual(certified_release["certification_status"], "certified")

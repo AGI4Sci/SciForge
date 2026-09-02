@@ -317,6 +317,15 @@ CREATE TABLE IF NOT EXISTS project_snapshot (
   PRIMARY KEY(project_key, version)
 );
 
+CREATE TABLE IF NOT EXISTS project_snapshot_seal (
+  project_key       TEXT NOT NULL,
+  snapshot_digest   TEXT NOT NULL,
+  reason            TEXT NOT NULL,
+  sealed_by         TEXT NOT NULL,
+  sealed_at         TEXT NOT NULL,
+  PRIMARY KEY(project_key, snapshot_digest)
+);
+
 CREATE TABLE IF NOT EXISTS domain_event (
   id          TEXT PRIMARY KEY,
   event_type  TEXT NOT NULL,
@@ -805,6 +814,11 @@ class Store:
                   applied_fingerprint TEXT, stale INTEGER NOT NULL DEFAULT 0,
                   reason TEXT, changed_fields TEXT NOT NULL DEFAULT '[]',
                   updated_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS project_snapshot_seal (
+                  project_key TEXT NOT NULL, snapshot_digest TEXT NOT NULL,
+                  reason TEXT NOT NULL, sealed_by TEXT NOT NULL, sealed_at TEXT NOT NULL,
+                  PRIMARY KEY(project_key, snapshot_digest)
                 )""",
                 """CREATE TABLE IF NOT EXISTS approval_record (
                   id TEXT PRIMARY KEY, project_key TEXT NOT NULL, decision_id TEXT NOT NULL,
