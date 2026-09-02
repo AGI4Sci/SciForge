@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-life-science-preview",
   "version": "1.0.1",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Trusted compile-time life-science Workspace Preview domain package for SciForge.",

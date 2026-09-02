@@ -145,3 +145,94 @@ describe('visible context visual targets', () => {
     expect(disconnect).toHaveBeenCalled()
   })
 })
+
+describe('visible context publishing', () => {
+  it('filters invalid components before they cross the IPC boundary', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+    const valid = visibleContext.registerVisibleContextComponent({
+      id: 'valid.component',
+      region: 'main',
+      component: 'test',
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Valid component',
+      state: {
+        longText: 'y'.repeat(10_000),
+        manyItems: Array.from({ length: 100 }, (_, index) => index)
+      }
+    })
+    const invalid = visibleContext.registerVisibleContextComponent({
+      id: 'invalid.component',
+      region: 'main',
+      component: 'test',
+      title: 'x'.repeat(257),
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Invalid component'
+    })
+
+    visibleContext.publishVisibleContextNow()
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0].components.map((component) => component.id)).toEqual([
+      'valid.component'
+    ])
+    const publishedState = publish.mock.calls[0]?.[0].components[0]?.state as {
+      longText: string
+      manyItems: number[]
+    }
+    expect(publishedState.longText).toHaveLength(4096)
+    expect(publishedState.manyItems).toHaveLength(64)
+    invalid()
+    valid()
+  })
+
+  it('keeps one IPC publish in flight and coalesces queued snapshots to the latest revision', async () => {
+    vi.resetModules()
+    let resolveFirst: (() => void) | undefined
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve
+    })
+    const publish = vi.fn()
+      .mockImplementationOnce(() => first)
+      .mockResolvedValue({ windowId: 'electron:1' })
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+    const unregister = visibleContext.registerVisibleContextComponent({
+      id: 'stable.component',
+      region: 'main',
+      component: 'test',
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Stable component'
+    })
+
+    visibleContext.publishVisibleContextNow()
+    visibleContext.publishVisibleContextNow()
+    visibleContext.publishVisibleContextNow()
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ revision: 1 }))
+
+    resolveFirst?.()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2))
+    expect(publish.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ revision: 3 }))
+    unregister()
+  })
+})

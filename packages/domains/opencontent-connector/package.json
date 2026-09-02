@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-opencontent-connector",
   "version": "5.0.2",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Principal-bound OpenContent enrollment and transport integration for SciForge.",

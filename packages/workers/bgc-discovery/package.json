@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/bgc-discovery",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "SciForge BGC discovery MCP worker for marine fungal genome mining evidence cards.",

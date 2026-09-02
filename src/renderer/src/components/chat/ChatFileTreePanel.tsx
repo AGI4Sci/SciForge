@@ -708,7 +708,19 @@ export function ChatFileTreePanel({
 
   const copyReferencePath = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
     if (!navigator?.clipboard?.writeText) return
-    await navigator.clipboard.writeText(reference.relativePath)
+    try {
+      const result = await window.sciforge.resolveWorkspaceFile(withActiveWorkspaceLocator({
+        path: reference.relativePath,
+        workspaceRoot: reference.workspaceRoot || root
+      }))
+      if (!result.ok) {
+        window.alert(result.message)
+        return
+      }
+      await navigator.clipboard.writeText(result.path)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+    }
   }
 
   const copyReferenceContent = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {

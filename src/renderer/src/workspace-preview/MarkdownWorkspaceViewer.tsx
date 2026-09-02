@@ -60,6 +60,42 @@ import type {
 } from './document-annotation-types'
 
 const EMPTY_MARKDOWN_ANNOTATION_OVERLAYS: readonly DocumentTextAnnotationOverlay[] = []
+const MARKDOWN_PREVIEW_SCROLL_POSITION_LIMIT = 100
+const markdownPreviewScrollPositions = new Map<string, number>()
+
+export function markdownPreviewScrollPositionKey(input: Readonly<{
+  documentContentKey?: string
+  filePath?: string | null
+  workspaceRoot?: string | null
+}>): string {
+  const filePath = input.filePath?.trim().replaceAll('\\', '/') ?? ''
+  if (filePath) {
+    const workspaceRoot = input.workspaceRoot?.trim().replaceAll('\\', '/').replace(/\/+$/u, '') ?? ''
+    return filePath.startsWith('/') || /^[A-Za-z]:\//u.test(filePath)
+      ? filePath
+      : [workspaceRoot, filePath].join('\u0000')
+  }
+  return [input.workspaceRoot?.trim() ?? '', input.documentContentKey?.trim() ?? ''].join('\u0000')
+}
+
+export function rememberMarkdownPreviewScrollTop(key: string, scrollTop: number): void {
+  if (!key || !Number.isFinite(scrollTop)) return
+  markdownPreviewScrollPositions.delete(key)
+  markdownPreviewScrollPositions.set(key, Math.max(0, scrollTop))
+  while (markdownPreviewScrollPositions.size > MARKDOWN_PREVIEW_SCROLL_POSITION_LIMIT) {
+    const oldestKey = markdownPreviewScrollPositions.keys().next().value
+    if (typeof oldestKey !== 'string') break
+    markdownPreviewScrollPositions.delete(oldestKey)
+  }
+}
+
+export function markdownPreviewScrollTopForKey(key: string): number | undefined {
+  const value = markdownPreviewScrollPositions.get(key)
+  if (value === undefined) return undefined
+  markdownPreviewScrollPositions.delete(key)
+  markdownPreviewScrollPositions.set(key, value)
+  return value
+}
 
 export type MarkdownWorkspaceViewerApplyEditHandler = (
   operation: Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>
@@ -222,6 +258,11 @@ export function MarkdownWorkspaceViewer({
   const previewScrollerRef = useRef<HTMLDivElement | null>(null)
   const previewTextRootRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const previewScrollPositionKey = useMemo(() => markdownPreviewScrollPositionKey({
+    documentContentKey,
+    filePath: observation?.file.path,
+    workspaceRoot: observation?.file.workspaceRoot
+  }), [documentContentKey, observation?.file.path, observation?.file.workspaceRoot])
   const handledNavigationRequestIdRef = useRef<string | null>(null)
   const copyRequestRef = useRef(0)
   const copyInFlightRef = useRef(false)
@@ -252,6 +293,58 @@ export function MarkdownWorkspaceViewer({
 
   const showEditor = mode === 'edit' || mode === 'split'
   const showPreview = mode === 'preview' || mode === 'split'
+
+  useEffect(() => {
+    if (!showPreview || !previewScrollPositionKey) return undefined
+    const savedScrollTop = markdownPreviewScrollTopForKey(previewScrollPositionKey)
+    if (savedScrollTop === undefined) return undefined
+    let frame: number | null = null
+    let attempts = 0
+    let cancelledByUser = false
+    const cancelRestoration = (): void => {
+      cancelledByUser = true
+    }
+    const stopRestoration = (): void => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      frame = null
+    }
+    const restore = (): void => {
+      if (cancelledByUser) return
+      const scroller = previewScrollerRef.current
+      if (!scroller) {
+        if (attempts < 60) {
+          attempts += 1
+          frame = window.requestAnimationFrame(restore)
+        }
+        return
+      }
+      const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+      scroller.scrollTop = Math.min(savedScrollTop, maxScrollTop)
+      if (attempts < 60) {
+        attempts += 1
+        frame = window.requestAnimationFrame(restore)
+      }
+    }
+    const scroller = previewScrollerRef.current
+    scroller?.addEventListener('pointerdown', cancelRestoration)
+    scroller?.addEventListener('wheel', cancelRestoration)
+    scroller?.addEventListener('touchstart', cancelRestoration)
+    scroller?.addEventListener('keydown', cancelRestoration)
+    frame = window.requestAnimationFrame(restore)
+    return () => {
+      stopRestoration()
+      scroller?.removeEventListener('pointerdown', cancelRestoration)
+      scroller?.removeEventListener('wheel', cancelRestoration)
+      scroller?.removeEventListener('touchstart', cancelRestoration)
+      scroller?.removeEventListener('keydown', cancelRestoration)
+    }
+  }, [previewScrollPositionKey, showPreview])
+
+  useEffect(() => () => {
+    const scroller = previewScrollerRef.current
+    if (scroller) rememberMarkdownPreviewScrollTop(previewScrollPositionKey, scroller.scrollTop)
+  }, [previewScrollPositionKey])
+
   const wechatCopyFeedback = buildMarkdownWechatCopyFeedbackModel(wechatCopyState)
   const sourceSearchMatches = useMemo(
     () => findDocumentTextSearchMatches(editorSearchText, searchQuery),
@@ -450,9 +543,16 @@ export function MarkdownWorkspaceViewer({
   }, [synchronizePaneScroll])
 
   const handlePreviewScroll = useCallback((preview: HTMLDivElement): void => {
+    rememberMarkdownPreviewScrollTop(previewScrollPositionKey, preview.scrollTop)
     const editor = editorRef.current
     if (editor) synchronizePaneScroll('preview', preview, editor)
-  }, [synchronizePaneScroll])
+  }, [previewScrollPositionKey, synchronizePaneScroll])
+
+  const handleOpenWorkspaceLink = useCallback<WriteMarkdownWorkspaceLinkOpener>((input) => {
+    const preview = previewScrollerRef.current
+    if (preview) rememberMarkdownPreviewScrollTop(previewScrollPositionKey, preview.scrollTop)
+    onOpenWorkspaceLink?.(input)
+  }, [onOpenWorkspaceLink, previewScrollPositionKey])
 
   const jumpSearch = useCallback((direction: -1 | 1): void => {
     if (searchMatchCount === 0) return
@@ -698,7 +798,7 @@ export function MarkdownWorkspaceViewer({
                   filePath={observation?.file.path}
                   workspaceRoot={observation?.file.workspaceRoot}
                   loadWorkspaceImage={loadWorkspaceImage}
-                  onOpenWorkspaceLink={onOpenWorkspaceLink}
+                  onOpenWorkspaceLink={handleOpenWorkspaceLink}
                 />
               </div>
               <MarkdownAnnotationOverlayLayer

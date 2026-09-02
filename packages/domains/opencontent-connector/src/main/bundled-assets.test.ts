@@ -61,7 +61,7 @@ describe('OpenContent bundled assets', () => {
       files?: string[]
       sciforgeInternal?: unknown
     }
-    expect(packageJson).toMatchObject({ private: false, license: 'MIT' })
+    expect(packageJson).toMatchObject({ private: false, license: 'Apache-2.0' })
     expect(packageJson.files).not.toContain('assets')
     expect(packageJson.sciforgeInternal).toBeUndefined()
   })

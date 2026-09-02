@@ -230,7 +230,7 @@
 - [x] 【Workspace 文件树拖到会话 reference foundation】让 composer 识别 workspace 文件树的自定义 reference drag MIME 和标准 `WorkspacePreviewDragSource` fallback，拖到输入框时添加 `ComposerFileReference` 并插入对应 `@file` mention token；OS 文件 / 图片 / PDF 拖入路径保持不变。
 - [x] 【Workspace 文件树内部 drop move/copy foundation】让右侧 workspace 文件树目录行和 root 空白区域消费 workspace reference drag payload，复用现有 `moveWorkspaceEntry` / `copyWorkspaceEntry` 执行树内移动或复制；同 workspace 默认 move、Option/Alt 或跨 workspace 默认 copy，并阻止目录拖进自身或子目录。
 - [x] 【Workspace 文件树外部文件 drag-in import foundation】新增 `importWorkspaceEntries` 服务 / IPC / preload / dev bridge，支持从 Electron 文件拖拽导入外部文件或文件夹到 workspace 目录，复用冲突安全命名策略，并阻止把目录导入自身或子目录。
-- [x] 【Workspace 文件树复制路径 / 内容 foundation】保留右键复制相对路径，并为文件项新增复制内容动作；复用 `readWorkspaceFile`，仅复制未截断文本和 DOCX plain text，PDF / 图片 / 截断大文件给出明确降级提示。
+- [x] 【Workspace 文件树复制路径 / 内容 foundation】右键复制路径会通过 workspace 解析器复制条目的绝对路径，并为文件项提供复制内容动作；复用 `readWorkspaceFile`，仅复制未截断文本和 DOCX plain text，PDF / 图片 / 截断大文件给出明确降级提示。
 - [x] 【Workspace 文件树系统剪贴板 paste foundation】新增 `pasteWorkspaceClipboard` 服务 / IPC / preload / dev bridge，让右键 Paste 在无内部 copy/cut 项时把系统剪贴板图片保存为 PNG、文本保存为 `.txt` 到当前目录，并复用冲突安全命名策略。
 - [x] 【Workspace 文件树系统剪贴板文件 paste foundation】扩展 `pasteWorkspaceClipboard`，识别系统剪贴板里的本地文件 / 文件夹路径（如 `text/uri-list`、GNOME copied-files、macOS / Windows bookmark 或 filename buffer），复用 `importWorkspaceEntries` 导入目标目录，并沿用冲突安全命名策略；无文件路径时继续回退图片 / 文本 paste。
 - [x] 【Workspace 文件树 conflictPolicy integration foundation】将 workspace 文件树 copy / import / paste / move 统一接入 shared `WorkspaceFileConflictPolicy`，默认保持 rename，支持 overwrite / skip，ask / merge 明确拒绝为未实现，避免拖拽和粘贴链路各自维护冲突处理旁路。

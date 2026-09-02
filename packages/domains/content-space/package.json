@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-content-space",
   "version": "5.0.2",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Provider-neutral Content Space domain package for SciForge.",

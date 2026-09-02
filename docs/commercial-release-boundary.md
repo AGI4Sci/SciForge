@@ -3,7 +3,7 @@
 Last updated: 2026-06-27
 
 This note was created during commercial-use cleanup work. SciForge is
-distributed under the MIT License in `LICENSE`. This document defines the
+distributed under the Apache License 2.0 in `LICENSE`. This document defines the
 source boundary for releases and preserves the historical cleanup evidence. It
 is an engineering release note, not legal advice.
 

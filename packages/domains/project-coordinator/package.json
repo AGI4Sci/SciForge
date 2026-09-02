@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-project-coordinator",
   "version": "4.3.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Project planning, Worker selection, Task review, and content provisioning HCI for SciForge collaboration.",

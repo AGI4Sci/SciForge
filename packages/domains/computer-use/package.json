@@ -1,7 +1,7 @@
 {
   "name": "@sciforge/domain-computer-use",
   "version": "1.0.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "private": false,
   "description": "Domain-owned managed MCP Computer Use with target-scoped CDP execution.",

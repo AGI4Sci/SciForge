@@ -183,7 +183,7 @@ See the [server README](./packages/collaboration-server/README.md) for source bu
 
 We welcome issues, showcases, scientific workers, Skills, runtime adapters, documentation, and UI improvements. Before submitting a PR, run the typecheck, tests, and build steps appropriate to your changes; see the [Contribution Guide](./docs/CONTRIBUTING.md) for collaboration conventions.
 
-SciForge is licensed under the [MIT License](./LICENSE). See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for third-party dependencies, reference projects, and asset sources.
+SciForge is licensed under the [Apache License 2.0](./LICENSE). See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for third-party dependencies, reference projects, and asset sources.
 
 <a href="https://github.com/AGI4Sci/SciForge/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=AGI4Sci/SciForge" alt="SciForge contributors">
