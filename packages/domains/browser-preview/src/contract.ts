@@ -12,6 +12,10 @@ export const BROWSER_PREVIEW_CAPABILITY_IDS = Object.freeze({
   back: 'browser-preview.back',
   forward: 'browser-preview.forward',
   reload: 'browser-preview.reload',
+  resize: 'browser-preview.resize',
+  hover: 'browser-preview.hover',
+  scroll: 'browser-preview.scroll',
+  pressKey: 'browser-preview.press-key',
   click: 'browser-preview.click',
   fill: 'browser-preview.fill',
   select: 'browser-preview.select',
@@ -43,6 +47,25 @@ export const browserCloseOutputSchema = z.object({
 export const browserEmptyInputSchema = z.object({}).strict()
 export const browserNavigateInputSchema = z.object({
   url: z.string().trim().min(1).max(4096)
+}).strict()
+export const browserResizeInputSchema = z.object({
+  width: z.number().int().min(320).max(4096),
+  height: z.number().int().min(240).max(4096)
+}).strict()
+export const browserPointInputSchema = z.object({
+  x: z.number().finite().nonnegative().max(4096),
+  y: z.number().finite().nonnegative().max(4096)
+}).strict()
+export const browserScrollInputSchema = z.object({
+  deltaX: z.number().finite().min(-8192).max(8192),
+  deltaY: z.number().finite().min(-8192).max(8192)
+}).strict()
+export const browserKeyInputSchema = z.object({
+  key: z.enum([
+    'Enter', 'Tab', 'Escape', 'Backspace', 'Delete',
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+    'Home', 'End', 'PageUp', 'PageDown', 'Space'
+  ])
 }).strict()
 export const browserClickInputSchema = z.union([
   z.object({ targetRef: z.string().regex(/^target_[A-Za-z0-9_-]{20,}$/u) }).strict(),
