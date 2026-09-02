@@ -5,27 +5,22 @@ import { domainPackageDefinition as domainPackageDefinition1 } from '@sciforge/d
 import { domainPackageDefinition as domainPackageDefinition2 } from '@sciforge/domain-biology-room/definition'
 import { domainPackageDefinition as domainPackageDefinition3 } from '@sciforge/domain-browser-preview/definition'
 import { domainPackageDefinition as domainPackageDefinition4 } from '@sciforge/domain-change-inspector/definition'
-import { domainPackageDefinition as domainPackageDefinition5 } from '@sciforge/domain-collaboration/definition'
-import { domainPackageDefinition as domainPackageDefinition6 } from '@sciforge/domain-computer-use/definition'
-import { domainPackageDefinition as domainPackageDefinition7 } from '@sciforge/domain-content-space/definition'
-import { domainPackageDefinition as domainPackageDefinition8 } from '@sciforge/domain-create-loop/definition'
-import { domainPackageDefinition as domainPackageDefinition9 } from '@sciforge/domain-dataset-api/definition'
-import { domainPackageDefinition as domainPackageDefinition10 } from '@sciforge/domain-evidence-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition11 } from '@sciforge/domain-git-checkpoints/definition'
-import { domainPackageDefinition as domainPackageDefinition12 } from '@sciforge/domain-identity-access/definition'
-import { domainPackageDefinition as domainPackageDefinition13 } from '@sciforge/domain-life-science-preview/definition'
-import { domainPackageDefinition as domainPackageDefinition14 } from '@sciforge/domain-opencontent-connector/definition'
-import { domainPackageDefinition as domainPackageDefinition15 } from '@sciforge/domain-opencontent-content-space-provider/definition'
-import { domainPackageDefinition as domainPackageDefinition16 } from '@sciforge/domain-paper-radar/definition'
-import { domainPackageDefinition as domainPackageDefinition17 } from '@sciforge/domain-project-coordinator/definition'
-import { domainPackageDefinition as domainPackageDefinition18 } from '@sciforge/domain-project-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition19 } from '@sciforge/domain-remote-ssh/definition'
-import { domainPackageDefinition as domainPackageDefinition20 } from '@sciforge/domain-research-checkpoints/definition'
-import { domainPackageDefinition as domainPackageDefinition21 } from '@sciforge/domain-research-dossier/definition'
-import { domainPackageDefinition as domainPackageDefinition22 } from '@sciforge/domain-scientific-compute/definition'
-import { domainPackageDefinition as domainPackageDefinition23 } from '@sciforge/domain-scientific-plotting/definition'
-import { domainPackageDefinition as domainPackageDefinition24 } from '@sciforge/domain-terminal/definition'
-import { domainPackageDefinition as domainPackageDefinition25 } from '@sciforge/domain-visual-review/definition'
+import { domainPackageDefinition as domainPackageDefinition5 } from '@sciforge/domain-computer-use/definition'
+import { domainPackageDefinition as domainPackageDefinition6 } from '@sciforge/domain-create-loop/definition'
+import { domainPackageDefinition as domainPackageDefinition7 } from '@sciforge/domain-dataset-api/definition'
+import { domainPackageDefinition as domainPackageDefinition8 } from '@sciforge/domain-evidence-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition9 } from '@sciforge/domain-git-checkpoints/definition'
+import { domainPackageDefinition as domainPackageDefinition10 } from '@sciforge/domain-identity-access/definition'
+import { domainPackageDefinition as domainPackageDefinition11 } from '@sciforge/domain-life-science-preview/definition'
+import { domainPackageDefinition as domainPackageDefinition12 } from '@sciforge/domain-paper-radar/definition'
+import { domainPackageDefinition as domainPackageDefinition13 } from '@sciforge/domain-project-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition14 } from '@sciforge/domain-remote-ssh/definition'
+import { domainPackageDefinition as domainPackageDefinition15 } from '@sciforge/domain-research-checkpoints/definition'
+import { domainPackageDefinition as domainPackageDefinition16 } from '@sciforge/domain-research-dossier/definition'
+import { domainPackageDefinition as domainPackageDefinition17 } from '@sciforge/domain-scientific-compute/definition'
+import { domainPackageDefinition as domainPackageDefinition18 } from '@sciforge/domain-scientific-plotting/definition'
+import { domainPackageDefinition as domainPackageDefinition19 } from '@sciforge/domain-terminal/definition'
+import { domainPackageDefinition as domainPackageDefinition20 } from '@sciforge/domain-visual-review/definition'
 
 export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0,
@@ -48,10 +43,5 @@ export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition17,
   domainPackageDefinition18,
   domainPackageDefinition19,
-  domainPackageDefinition20,
-  domainPackageDefinition21,
-  domainPackageDefinition22,
-  domainPackageDefinition23,
-  domainPackageDefinition24,
-  domainPackageDefinition25
+  domainPackageDefinition20
 ])

@@ -10,13 +10,13 @@ on:
       ref:
         description: "Git ref to build"
         required: true
-        default: "gui"
+        default: "main"
         type: string
 permissions:
   contents: write
 
 concurrency:
-  group: release-gui
+  group: release-main
   cancel-in-progress: false
 
 env:
@@ -44,14 +44,14 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.ref }}
 
-      - name: Pin a commit from gui
+      - name: Pin a commit from main
         id: source
         run: |
           set -euo pipefail
-          git fetch --no-tags origin refs/heads/gui:refs/remotes/origin/gui
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           source_sha="$(git rev-parse HEAD)"
-          if ! git merge-base --is-ancestor "${source_sha}" origin/gui; then
-            echo "::error::Release ref must resolve to a commit in origin/gui"
+          if ! git merge-base --is-ancestor "${source_sha}" origin/main; then
+            echo "::error::Release ref must resolve to a commit in origin/main"
             exit 1
           fi
           echo "sha=${source_sha}" >> "${GITHUB_OUTPUT}"

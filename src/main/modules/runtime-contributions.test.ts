@@ -1035,7 +1035,7 @@ describe('main runtime contributions', () => {
     const principal = Object.freeze({
       authority: 'sciforge.identity-access',
       subject: 'owner-1',
-      assurance: 'cloud-authenticated' as const,
+      assurance: 'local-selection' as const,
       deviceId: 'device-1',
       identityVersion: 7
     })
@@ -1309,7 +1309,7 @@ describe('main runtime contributions', () => {
     const principal = Object.freeze({
       authority: 'sciforge.identity-access',
       subject: 'owner-2',
-      assurance: 'cloud-authenticated' as const,
+      assurance: 'local-selection' as const,
       deviceId: 'device-2',
       identityVersion: 3
     })

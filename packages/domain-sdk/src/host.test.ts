@@ -50,22 +50,22 @@ describe('domain host contracts', () => {
   it('defines strict non-callable internal service descriptors', () => {
     assert.deepEqual(defineDomainMainInternalServiceDescriptor({
       location: 'main.internal-service-descriptor',
-      serviceId: 'opencontent.content-space',
+      serviceId: 'document-provider.service',
       contractVersion: '1.0.0',
-      allowedConsumerModuleIds: ['sciforge.opencontent-content-space-provider']
+      allowedConsumerModuleIds: ['sciforge.document-provider']
     }), {
       location: 'main.internal-service-descriptor',
-      serviceId: 'opencontent.content-space',
+      serviceId: 'document-provider.service',
       contractVersion: '1.0.0',
-      allowedConsumerModuleIds: ['sciforge.opencontent-content-space-provider']
+      allowedConsumerModuleIds: ['sciforge.document-provider']
     })
     assert.throws(() => defineDomainMainInternalServiceDescriptor({
       location: 'main.internal-service-descriptor',
-      serviceId: 'opencontent.content-space',
+      serviceId: 'document-provider.service',
       contractVersion: '1.0.0',
       allowedConsumerModuleIds: [
-        'sciforge.opencontent-content-space-provider',
-        'sciforge.opencontent-content-space-provider'
+        'sciforge.document-provider',
+        'sciforge.document-provider'
       ]
     }))
   })
@@ -126,18 +126,18 @@ describe('domain host contracts', () => {
 
   it('freezes an exact finite capability batch plan and rejects operation drift', () => {
     const plan = domainMainFiniteCapabilityBatchPlanSchema.parse({
-      requiredSystemCapabilityGrant: 'content-space.provisioning-batch',
+      requiredSystemCapabilityGrant: 'workspace-files.provisioning-batch',
       revision: 'project-content:project-1:7',
       operations: [
         {
           operationId: 'authorize-provider',
-          actionId: 'content-space.agent-authorize-provider-administration',
+          actionId: 'workspace-files.agent-authorize-provider-administration',
           idempotencyKey: 'provision-project-1-revision-7-authorize',
           input: { providerInstanceRef: 'provider-instance-1' }
         },
         {
           operationId: 'create-root',
-          actionId: 'content-space.agent-admin-create-space',
+          actionId: 'workspace-files.agent-admin-create-space',
           idempotencyKey: 'provision-project-1-revision-7-create',
           input: { label: 'Project 1' },
           resource: {
@@ -198,7 +198,7 @@ describe('domain host contracts', () => {
       ...plan,
       operations: Array.from({ length: 65 }, (_, index) => ({
         operationId: `operation-${index}`,
-        actionId: 'content-space.agent-admin-list-members',
+        actionId: 'workspace-files.agent-admin-list-members',
         input: {}
       }))
     }))

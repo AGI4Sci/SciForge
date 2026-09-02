@@ -1254,7 +1254,7 @@ describe('portable resource export and owner facade', () => {
     })
 
     const issued = resultSchema.parse((await invoke(
-      'domain-runtime:fixture.collaboration',
+      'domain-runtime:fixture.session',
       'execution-alpha',
       { action: 'materialize' }
     )).output)
@@ -1262,14 +1262,14 @@ describe('portable resource export and owner facade', () => {
     expect(issued.exportable).toBe(false)
 
     const sameExecution = resultSchema.parse((await invoke(
-      'domain-runtime:fixture.collaboration',
+      'domain-runtime:fixture.session',
       'execution-alpha',
       { action: 'probe', resourceRef: issued.resourceRef! }
     )).output)
     expect(sameExecution.usable).toBe(true)
 
     const otherExecution = resultSchema.parse((await invoke(
-      'domain-runtime:fixture.collaboration',
+      'domain-runtime:fixture.session',
       'execution-beta',
       { action: 'probe', resourceRef: issued.resourceRef! }
     )).output)
@@ -1283,7 +1283,7 @@ describe('portable resource export and owner facade', () => {
     expect(otherCaller.usable).toBe(false)
 
     const discarded = resultSchema.parse((await invoke(
-      'domain-runtime:fixture.collaboration',
+      'domain-runtime:fixture.session',
       'execution-alpha',
       { action: 'discard', resourceRef: issued.resourceRef! }
     )).output)
@@ -1324,7 +1324,7 @@ describe('portable resource export and owner facade', () => {
     }))
 
     await expect(broker.invokeHostSystem({
-      callerId: 'domain-runtime:fixture.collaboration',
+      callerId: 'domain-runtime:fixture.session',
       workspaceId: 'workspace-alpha'
     }, {
       actionId: 'fixture.portable.system-context-required',

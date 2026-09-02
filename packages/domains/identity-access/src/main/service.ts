@@ -14,11 +14,6 @@ import {
   type IdentityListAccountsOutput,
   type IdentityUiState
 } from '../contract.js'
-import {
-  activeCloudDeviceId,
-  activeCloudUserId,
-  subscribeCloudIdentityChanges
-} from './cloud-link-service.js'
 import { IdentityStore, IdentityStoreOpenError } from './store.js'
 
 type StoreFactory = Readonly<{
@@ -31,7 +26,6 @@ export class IdentityService implements DomainMainPrincipalProvider {
   private unavailableState: IdentityUiState | null = null
   private readonly listeners = new Set<(snapshot: PrincipalContextSnapshot) => void>()
   private readonly databasePath: string
-  private readonly disposeCloudIdentitySubscription: () => void
   private lastPublishedVersion = 0
 
   constructor(
@@ -41,16 +35,6 @@ export class IdentityService implements DomainMainPrincipalProvider {
   ) {
     this.databasePath = join(this.userDataDir, 'identity-access', 'identity.sqlite')
     this.initialize()
-    this.disposeCloudIdentitySubscription = subscribeCloudIdentityChanges(
-      this.databasePath,
-      (change) => {
-        if (change.kind === 'storage-failed') {
-          this.failClosed(change.error)
-          return
-        }
-        this.refreshCloudIdentityState()
-      }
-    )
   }
 
   inspect(): IdentityUiState {
@@ -162,9 +146,7 @@ export class IdentityService implements DomainMainPrincipalProvider {
     }
     return principalContextFromState(
       state,
-      this.deviceId,
-      activeCloudUserId(this.databasePath),
-      activeCloudDeviceId(this.databasePath)
+      this.deviceId
     )
   }
 
@@ -174,7 +156,6 @@ export class IdentityService implements DomainMainPrincipalProvider {
   }
 
   close(): void {
-    this.disposeCloudIdentitySubscription()
     this.store?.close()
     this.store = null
     this.listeners.clear()
@@ -248,9 +229,7 @@ export class IdentityService implements DomainMainPrincipalProvider {
   private publish(state: IdentityAvailableState): void {
     const snapshot = principalContextFromState(
       state,
-      this.deviceId,
-      activeCloudUserId(this.databasePath),
-      activeCloudDeviceId(this.databasePath)
+      this.deviceId
     )
     if (snapshot.identityVersion <= this.lastPublishedVersion) return
     this.lastPublishedVersion = snapshot.identityVersion
@@ -268,14 +247,6 @@ export class IdentityService implements DomainMainPrincipalProvider {
     }
   }
 
-  private refreshCloudIdentityState(): void {
-    if (!this.store || this.unavailableState) return
-    try {
-      this.publish(this.store.state())
-    } catch (error) {
-      this.failClosed(error)
-    }
-  }
 }
 
 function nextIdentityVersion(identityVersion: number): number {
@@ -290,31 +261,17 @@ function nextIdentityVersion(identityVersion: number): number {
 
 function principalContextFromState(
   state: IdentityAvailableState,
-  localDeviceId: string,
-  activeCloudUser: string | null,
-  activeCloudDevice: string | null
+  localDeviceId: string
 ): PrincipalContextSnapshot {
   const account = state.currentAccount
-  const cloudIdentity = account?.cloudIdentity
-  const hasActiveCloudDevice = cloudIdentity?.cloudUserId === activeCloudUser &&
-    cloudIdentity.deviceStatus === 'active' &&
-    cloudIdentity.deviceId === activeCloudDevice
   const principal = account
-    ? hasActiveCloudDevice
-      ? {
-          authority: 'sciforge-cloud',
-          subject: cloudIdentity.cloudUserId,
-          assurance: 'cloud-authenticated' as const,
-          deviceId: cloudIdentity.deviceId,
-          identityVersion: state.identityVersion
-        }
-      : {
-        authority: IDENTITY_PRINCIPAL_AUTHORITY,
-        subject: account.userId,
-        assurance: 'local-selection' as const,
-        deviceId: localDeviceId,
-        identityVersion: state.identityVersion
-      }
+    ? {
+      authority: IDENTITY_PRINCIPAL_AUTHORITY,
+      subject: account.userId,
+      assurance: 'local-selection' as const,
+      deviceId: localDeviceId,
+      identityVersion: state.identityVersion
+    }
     : null
   return definePrincipalContextSnapshot({
     identityVersion: state.identityVersion,

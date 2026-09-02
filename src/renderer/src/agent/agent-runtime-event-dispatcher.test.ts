@@ -700,8 +700,8 @@ describe('agent runtime event dispatcher', () => {
         text: 'expanded prompt',
         displayText: 'short prompt',
         meta: {
-          source: 'collaboration.remote-session-projection',
-          sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+          source: 'remote-session-projection',
+          sourceLabel: '手机远程会话'
         },
         createdAt: '2026-06-11T00:00:00.000Z'
       },
@@ -716,8 +716,8 @@ describe('agent runtime event dispatcher', () => {
       text: 'expanded prompt',
       meta: {
         displayText: 'short prompt',
-        source: 'collaboration.remote-session-projection',
-        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+        source: 'remote-session-projection',
+        sourceLabel: '手机远程会话'
       }
     })
     expect(sink.onTurnComplete).toHaveBeenCalled()

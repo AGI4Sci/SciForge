@@ -425,7 +425,7 @@ describe('dev browser bridge server', () => {
       payload: {
         transportRequestId: '123e4567-e89b-42d3-a456-426614174090',
         request: {
-          actionId: 'content-space.upload-new',
+          actionId: 'workspace-files.upload-new',
           invocationId: 'upload-90',
           input: {}
         }

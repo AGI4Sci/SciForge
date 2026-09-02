@@ -56,12 +56,12 @@ describe('Host-owned file transfers', () => {
     const service = createService(root, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
     let invocation: HostResourceGrantInvocation | undefined = invocationFor(caller)
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       const sourcePath = join(root, 'selected.bin')
       await writeFile(sourcePath, 'captured bytes')
       const selection = await service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: sourcePath,
         maxBytes: 1024
@@ -82,7 +82,7 @@ describe('Host-owned file transfers', () => {
       await source.close()
 
       const otherOwnerSelection = await service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: sourcePath,
         maxBytes: 1024
@@ -99,7 +99,7 @@ describe('Host-owned file transfers', () => {
       await afterWrongOwner.close()
 
       const wrongCallerSelection = await service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: sourcePath,
         maxBytes: 1024
@@ -117,7 +117,7 @@ describe('Host-owned file transfers', () => {
       await afterWrongCaller.close()
 
       const wrongKindSelection = await service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: sourcePath,
         maxBytes: 1024
@@ -133,7 +133,7 @@ describe('Host-owned file transfers', () => {
       await afterWrongKind.close()
 
       const principalSelection = await service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: sourcePath,
         maxBytes: 1024
@@ -162,12 +162,12 @@ describe('Host-owned file transfers', () => {
     const service = createService(root, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
     let invocation: HostResourceGrantInvocation | undefined = invocationFor(caller)
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       const sourcePath = join(root, 'selected.bin')
       await writeFile(sourcePath, 'bytes')
       const selection = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })
       const source = await port.openUploadSource({
         handle: requireUploadHandle(selection), maxBytes: 1024
@@ -179,7 +179,7 @@ describe('Host-owned file transfers', () => {
 
       currentPrincipal = principalV1
       const second = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })
       invocation = undefined
       await expect(port.openUploadSource({
@@ -196,11 +196,11 @@ describe('Host-owned file transfers', () => {
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
     const invocation = invocationFor(caller)
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       const destinationPath = join(root, 'download.bin')
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: destinationPath
+        ownerId: 'domain.workspace-files', caller, path: destinationPath
       })
       expect(selection).not.toHaveProperty('path')
       const destination = await port.openDownloadDestination({
@@ -212,7 +212,7 @@ describe('Host-owned file transfers', () => {
 
       const conflictPath = join(root, 'conflict.bin')
       const conflictSelection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: conflictPath
+        ownerId: 'domain.workspace-files', caller, path: conflictPath
       })
       const conflict = await port.openDownloadDestination({
         handle: requireDownloadHandle(conflictSelection), maxBytes: 1024
@@ -236,12 +236,12 @@ describe('Host-owned file transfers', () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const destinationPath = join(root, 'download.bin')
     let replacementPath: string | undefined
     try {
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: destinationPath
+        ownerId: 'domain.workspace-files', caller, path: destinationPath
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(selection), maxBytes: 1024
@@ -292,10 +292,10 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const first = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'first.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'first.bin')
       })
       await expect(port.openDownloadDestination({
         handle: requireDownloadHandle(first),
@@ -306,7 +306,7 @@ describe('Host-owned file transfers', () => {
         .toBe(false)
 
       const second = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'second.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'second.bin')
       })
       const reusable = await port.openDownloadDestination({
         handle: requireDownloadHandle(second),
@@ -323,11 +323,11 @@ describe('Host-owned file transfers', () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const destinationPath = join(root, 'ordered.bin')
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: destinationPath
+        ownerId: 'domain.workspace-files', caller, path: destinationPath
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(selection), maxBytes: 1024
@@ -349,13 +349,13 @@ describe('Host-owned file transfers', () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const prototype = await fileHandlePrototype(root)
     const write = vi.spyOn(prototype, 'write')
       .mockRejectedValueOnce(new Error(`private Host path: ${root}/partial`))
     try {
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'sanitized.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'sanitized.bin')
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(selection), maxBytes: 1024
@@ -399,12 +399,12 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'close-source.bin')
     await writeFile(sourcePath, 'bytes')
     try {
       const upload = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const source = await port.openUploadSource({
         handle: requireUploadHandle(upload), maxBytes: 5
@@ -417,7 +417,7 @@ describe('Host-owned file transfers', () => {
       )
 
       const download = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'close-destination.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'close-destination.bin')
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(download), maxBytes: 5
@@ -465,11 +465,11 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const destinationPath = join(root, 'link-race.bin')
     try {
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: destinationPath
+        ownerId: 'domain.workspace-files', caller, path: destinationPath
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(selection),
@@ -500,11 +500,11 @@ describe('Host-owned file transfers', () => {
     const service = createService(root, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
     const invocation = invocationFor(caller)
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       const destinationPath = join(root, 'download.bin')
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: destinationPath
+        ownerId: 'domain.workspace-files', caller, path: destinationPath
       })
       const controller = new AbortController()
       const destination = await port.openDownloadDestination({
@@ -520,7 +520,7 @@ describe('Host-owned file transfers', () => {
 
       const changedPath = join(root, 'changed.bin')
       const changedSelection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: changedPath
+        ownerId: 'domain.workspace-files', caller, path: changedPath
       })
       const changed = await port.openDownloadDestination({
         handle: requireDownloadHandle(changedSelection), maxBytes: 1024
@@ -571,19 +571,19 @@ describe('Host-owned file transfers', () => {
       }
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, 'bounded bytes')
     try {
       await expect(service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })).rejects.toMatchObject({ code: 'source_unavailable' })
       expect(closeCalls).toBe(1)
 
       failure = 'close'
       const closeCallsBeforeFailure = closeCalls
       await expect(service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })).rejects.toMatchObject({ code: 'source_unavailable' })
       expect(closeCalls).toBeGreaterThan(closeCallsBeforeFailure)
 
@@ -591,7 +591,7 @@ describe('Host-owned file transfers', () => {
         .toBe(false)
       failure = undefined
       const valid = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })
       const source = await port.openUploadSource({
         handle: requireUploadHandle(valid), maxBytes: 1024
@@ -613,7 +613,7 @@ describe('Host-owned file transfers', () => {
     const ordinary = createService(root, () => principalV1)
     try {
       await expect(ordinary.registerUpload({
-        ownerId: 'domain.content-space', caller, path: symlinkPath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: symlinkPath, maxBytes: 1024
       })).rejects.toMatchObject({ code: 'source_unavailable' })
     } finally {
       await ordinary.dispose()
@@ -641,7 +641,7 @@ describe('Host-owned file transfers', () => {
     })
     try {
       await expect(changed.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })).rejects.toMatchObject({ code: 'source_changed' })
       expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
         .toBe(false)
@@ -659,12 +659,12 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, '12345')
     try {
       const replacedSelection = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const replacedDirectory = (await readdir(root))
         .find((name) => name.startsWith('sciforge-upload-'))
@@ -681,7 +681,7 @@ describe('Host-owned file transfers', () => {
         .toBe(false)
 
       const mutatedSelection = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const mutatedDirectory = (await readdir(root))
         .find((name) => name.startsWith('sciforge-upload-'))
@@ -701,7 +701,7 @@ describe('Host-owned file transfers', () => {
         .toBe(false)
 
       const reusable = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const reopened = await port.openUploadSource({
         handle: requireUploadHandle(reusable),
@@ -722,7 +722,7 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, '12345')
     const prototype = await fileHandlePrototype(root)
@@ -751,14 +751,14 @@ describe('Host-owned file transfers', () => {
       })
     try {
       await expect(service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })).rejects.toMatchObject({ code: 'source_changed' })
       expect(mutated).toBe(true)
       expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
         .toBe(false)
 
       const reusable = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const source = await port.openUploadSource({
         handle: requireUploadHandle(reusable),
@@ -780,7 +780,7 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, '12345')
     const entered = deferred()
@@ -788,7 +788,7 @@ describe('Host-owned file transfers', () => {
     let read: Readonly<{ mockRestore: () => void }> | undefined
     try {
       const selection = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const stagedDirectory = (await readdir(root))
         .find((name) => name.startsWith('sciforge-upload-'))
@@ -828,7 +828,7 @@ describe('Host-owned file transfers', () => {
         .toBe(false)
 
       const reusable = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const reopened = await port.openUploadSource({
         handle: requireUploadHandle(reusable),
@@ -851,7 +851,7 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, '12345')
     let stageRelocated = false
@@ -859,7 +859,7 @@ describe('Host-owned file transfers', () => {
     const relocatedDirectory = join(root, 'relocated-stage')
     try {
       const selection = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const stagedDirectory = (await readdir(root))
         .find((name) => name.startsWith('sciforge-upload-'))
@@ -880,7 +880,7 @@ describe('Host-owned file transfers', () => {
       await expect(readFile(join(relocatedDirectory, 'source.bin'), 'utf8'))
         .resolves.toBe('12345')
       await expect(service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })).rejects.toMatchObject({ code: 'capacity_exceeded' })
 
       await rm(stagedDirectoryPath, { recursive: true, force: true })
@@ -888,7 +888,7 @@ describe('Host-owned file transfers', () => {
       stageRelocated = false
       await service.sweepExpired()
       const reusable = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const reopened = await port.openUploadSource({
         handle: requireUploadHandle(reusable),
@@ -926,7 +926,7 @@ describe('Host-owned file transfers', () => {
       })
     try {
       const registration = service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })
       await entered.promise
       let disposed = false
@@ -955,7 +955,7 @@ describe('Host-owned file transfers', () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'selected.bin')
     await writeFile(sourcePath, 'bounded bytes')
     const prototype = await fileHandlePrototype(root)
@@ -973,7 +973,7 @@ describe('Host-owned file transfers', () => {
       })
     try {
       const pending = service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })
       await entered.promise
       await service.revokeCaller(caller.callerId)
@@ -982,7 +982,7 @@ describe('Host-owned file transfers', () => {
       stat.mockRestore()
 
       const later = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 1024
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 1024
       })
       const source = await port.openUploadSource({
         handle: requireUploadHandle(later), maxBytes: 1024
@@ -993,7 +993,7 @@ describe('Host-owned file transfers', () => {
 
       const downloadPath = join(root, 'revoked-download.bin')
       const downloadSelection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: downloadPath
+        ownerId: 'domain.workspace-files', caller, path: downloadPath
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(downloadSelection), maxBytes: 1024
@@ -1028,7 +1028,7 @@ describe('Host-owned file transfers', () => {
     const controller = new AbortController()
     try {
       const registration = service.registerDownload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: join(root, 'cancelled.bin'),
         signal: controller.signal
@@ -1039,7 +1039,7 @@ describe('Host-owned file transfers', () => {
       await expect(registration).rejects.toMatchObject({ code: 'cancelled' })
 
       await expect(service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'valid.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'valid.bin')
       })).resolves.toMatchObject({ cancelled: false })
     } finally {
       release.resolve()
@@ -1057,7 +1057,7 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const controller = new AbortController()
     const firstPath = join(root, 'first-upload.bin')
     const secondPath = join(root, 'second-upload.bin')
@@ -1065,7 +1065,7 @@ describe('Host-owned file transfers', () => {
     await writeFile(secondPath, 'abcde')
     try {
       const registration = service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: firstPath,
         maxBytes: 5,
@@ -1085,7 +1085,7 @@ describe('Host-owned file transfers', () => {
         .toBe(false)
 
       const replacement = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: secondPath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: secondPath, maxBytes: 5
       })
       const source = await port.openUploadSource({
         handle: requireUploadHandle(replacement), maxBytes: 5
@@ -1105,11 +1105,11 @@ describe('Host-owned file transfers', () => {
       maxGrants: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const controller = new AbortController()
     try {
       const registration = service.registerDownload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: join(root, 'cancelled-download.bin'),
         signal: controller.signal
@@ -1124,7 +1124,7 @@ describe('Host-owned file transfers', () => {
         handle: requireDownloadHandle(selection), maxBytes: 5
       })).rejects.toMatchObject({ code: 'grant_unavailable' })
       const replacement = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'replacement.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'replacement.bin')
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(replacement), maxBytes: 5
@@ -1140,14 +1140,14 @@ describe('Host-owned file transfers', () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     const sourcePath = join(root, 'consumed-upload.bin')
     const destinationPath = join(root, 'consumed-download.bin')
     await writeFile(sourcePath, 'kept')
     try {
       const uploadController = new AbortController()
       const upload = await service.registerUpload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: sourcePath,
         maxBytes: 4,
@@ -1162,7 +1162,7 @@ describe('Host-owned file transfers', () => {
 
       const downloadController = new AbortController()
       const download = await service.registerDownload({
-        ownerId: 'domain.content-space',
+        ownerId: 'domain.workspace-files',
         caller,
         path: destinationPath,
         signal: downloadController.signal
@@ -1188,15 +1188,15 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const sourcePath = join(root, 'selected.bin')
       await writeFile(sourcePath, '12345')
       const upload = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 5
       })
       const download = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'download.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'download.bin')
       })
       await expect(port.openDownloadDestination({
         handle: requireDownloadHandle(download), maxBytes: 1
@@ -1220,17 +1220,17 @@ describe('Host-owned file transfers', () => {
     const root = await mkdtemp(join(tmpdir(), 'sciforge-file-transfer-'))
     const service = createService(root, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const sourcePath = join(root, 'too-large.bin')
       await writeFile(sourcePath, '12345')
       await expect(service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: sourcePath, maxBytes: 4
+        ownerId: 'domain.workspace-files', caller, path: sourcePath, maxBytes: 4
       })).rejects.toMatchObject({ code: 'bound_exceeded' })
 
       const destinationPath = join(root, 'bounded.bin')
       const selection = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: destinationPath
+        ownerId: 'domain.workspace-files', caller, path: destinationPath
       })
       const destination = await port.openDownloadDestination({
         handle: requireDownloadHandle(selection), maxBytes: 4
@@ -1258,17 +1258,17 @@ describe('Host-owned file transfers', () => {
       maxTemporaryBytes: 5
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const fullPath = join(root, 'full.bin')
       const smallPath = join(root, 'small.bin')
       await writeFile(fullPath, '12345')
       await writeFile(smallPath, '1')
       const expired = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: fullPath, maxBytes: 5
+        ownerId: 'domain.workspace-files', caller, path: fullPath, maxBytes: 5
       })
       await expect(service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: smallPath, maxBytes: 1
+        ownerId: 'domain.workspace-files', caller, path: smallPath, maxBytes: 1
       })).rejects.toMatchObject({ code: 'capacity_exceeded' })
 
       now = new Date('2026-08-16T10:00:02.000Z')
@@ -1276,7 +1276,7 @@ describe('Host-owned file transfers', () => {
       expect((await readdir(root)).some((name) => name.startsWith('sciforge-upload-')))
         .toBe(false)
       const afterSweep = await service.registerUpload({
-        ownerId: 'domain.content-space', caller, path: smallPath, maxBytes: 1
+        ownerId: 'domain.workspace-files', caller, path: smallPath, maxBytes: 1
       })
       await expect(port.openUploadSource({
         handle: requireUploadHandle(expired), maxBytes: 5
@@ -1302,17 +1302,17 @@ describe('Host-owned file transfers', () => {
       maxGrants: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const first = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'one.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'one.bin')
       })
       await expect(service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'two.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'two.bin')
       })).rejects.toMatchObject({ code: 'capacity_exceeded' })
       now = new Date('2026-08-16T10:00:02.000Z')
       await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'two.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'two.bin')
       })
       await expect(port.openDownloadDestination({
         handle: requireDownloadHandle(first), maxBytes: 1024
@@ -1331,20 +1331,20 @@ describe('Host-owned file transfers', () => {
       maxGrants: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', invocationProviderFor(caller))
+    const port = service.forOwner('domain.workspace-files', invocationProviderFor(caller))
     try {
       const first = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'one.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'one.bin')
       })
       const active = await port.openDownloadDestination({
         handle: requireDownloadHandle(first), maxBytes: 1024
       })
       await expect(service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'two.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'two.bin')
       })).rejects.toMatchObject({ code: 'capacity_exceeded' })
       await active.abort()
       const afterAbort = await service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'two.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'two.bin')
       })
       const committed = await port.openDownloadDestination({
         handle: requireDownloadHandle(afterAbort), maxBytes: 1024
@@ -1352,7 +1352,7 @@ describe('Host-owned file transfers', () => {
       await committed.write(new TextEncoder().encode('complete'))
       await committed.commit()
       await expect(service.registerDownload({
-        ownerId: 'domain.content-space', caller, path: join(root, 'three.bin')
+        ownerId: 'domain.workspace-files', caller, path: join(root, 'three.bin')
       })).resolves.toMatchObject({ cancelled: false })
     } finally {
       await service.dispose()
@@ -1377,21 +1377,21 @@ describe('Host-owned file transfers', () => {
         audience: 'agent',
         workspaceId: workspace
       }),
-      actionId: 'content-space.agent-upload-new',
-      invocationId: 'content-space-upload-readme-1',
+      actionId: 'workspace-files.agent-upload-new',
+      invocationId: 'workspace-files-upload-readme-1',
       effect: 'external-write',
       approval: 'none',
       approved: true,
       scope: 'resource',
       autonomousWrite: 'resource-authorized',
       authorizedResource: Object.freeze({
-        resourceRef: 'res_content_space_folder',
-        resourceKind: 'content-space.container',
+        resourceRef: 'res_workspace_folder',
+        resourceKind: 'workspace-files.container',
         workspaceId: workspace,
         semanticRevision: '1'
       })
     })
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       const source = await port.openWorkspaceUploadSource({
         relativePath: 'README.md',
@@ -1421,7 +1421,7 @@ describe('Host-owned file transfers', () => {
     const service = createService(temporary, () => principalV1)
     const caller = grantCaller('agent:thread-1', principalV1)
     let invocation = workspaceTransferInvocation(caller, workspace, 'upload-source')
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     const entered = deferred()
     const release = deferred()
     let read: Readonly<{ mockRestore: () => void }> | undefined
@@ -1478,20 +1478,20 @@ describe('Host-owned file transfers', () => {
         audience: 'agent',
         workspaceId: workspace
       }),
-      actionId: 'content-space.agent-download',
-      invocationId: 'content-space-download-readme-1',
+      actionId: 'workspace-files.agent-download',
+      invocationId: 'workspace-files-download-readme-1',
       effect: 'workspace-write',
       approval: 'none',
       approved: true,
       scope: 'resource',
       authorizedResource: Object.freeze({
-        resourceRef: 'res_content_space_file',
-        resourceKind: 'content-space.file',
+        resourceRef: 'res_workspace_file',
+        resourceKind: 'workspace-files.file',
         workspaceId: workspace,
         semanticRevision: '1'
       })
     })
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       const destination = await port.openWorkspaceDownloadDestination({
         relativePath: 'README.downloaded.md',
@@ -1530,7 +1530,7 @@ describe('Host-owned file transfers', () => {
       authorizedResource
     }
     let invocation: HostResourceGrantInvocation | undefined = exactInvocation
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     const targetPath = join(workspace, 'revision-bound.bin')
     try {
       const destination = await port.openWorkspaceDownloadDestination({
@@ -1573,7 +1573,7 @@ describe('Host-owned file transfers', () => {
       workspace,
       'download-destination'
     )
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     let parentRelocated = false
     try {
       const destination = await port.openWorkspaceDownloadDestination({
@@ -1639,7 +1639,7 @@ describe('Host-owned file transfers', () => {
       workspace,
       'download-destination'
     )
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     let parentRelocated = false
     try {
       const destination = port.openWorkspaceDownloadDestination({
@@ -1691,15 +1691,15 @@ describe('Host-owned file transfers', () => {
         audience: 'agent',
         workspaceId: workspace
       }),
-      actionId: 'content-space.agent-upload-new',
-      invocationId: 'content-space-upload-without-resource-1',
+      actionId: 'workspace-files.agent-upload-new',
+      invocationId: 'workspace-files-upload-without-resource-1',
       effect: 'external-write',
       approval: 'none',
       approved: true,
       scope: 'resource',
       autonomousWrite: 'resource-authorized'
     })
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       await expect(port.openWorkspaceUploadSource({
         relativePath: 'README.md',
@@ -1734,9 +1734,9 @@ describe('Host-owned file transfers', () => {
         workspaceId: workspace
       }),
       actionId: direction === 'upload-source'
-        ? 'content-space.agent-upload-new'
-        : 'content-space.agent-download',
-      invocationId: `content-space-${direction}-bounded-1`,
+        ? 'workspace-files.agent-upload-new'
+        : 'workspace-files.agent-download',
+      invocationId: `workspace-files-${direction}-bounded-1`,
       effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
       approval: 'none',
       approved: true,
@@ -1745,14 +1745,14 @@ describe('Host-owned file transfers', () => {
         ? { autonomousWrite: 'resource-authorized' }
         : {}),
       authorizedResource: Object.freeze({
-        resourceRef: 'res_content_space_entry',
-        resourceKind: 'content-space.entry',
+        resourceRef: 'res_workspace_entry',
+        resourceKind: 'workspace-files.entry',
         workspaceId: resourceWorkspace,
         semanticRevision: '1'
       })
     })
     let invocation = invocationForDirection('upload-source')
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       await expect(port.openWorkspaceDownloadDestination({
         relativePath: 'README.downloaded.md',
@@ -1786,8 +1786,8 @@ describe('Host-owned file transfers', () => {
     const service = createService(join(root, 'temporary'), () => principalV1)
     const caller = grantCaller('agent:thread-1', principalV1)
     const authorizedResource = Object.freeze({
-      resourceRef: 'res_content_space_entry',
-      resourceKind: 'content-space.entry',
+      resourceRef: 'res_workspace_entry',
+      resourceKind: 'workspace-files.entry',
       workspaceId: workspace,
       semanticRevision: '1'
     })
@@ -1800,11 +1800,11 @@ describe('Host-owned file transfers', () => {
         workspaceId: workspace
       }),
       actionId: direction === 'upload-source'
-        ? 'content-space.agent-upload-new'
-        : 'content-space.agent-download',
+        ? 'workspace-files.agent-upload-new'
+        : 'workspace-files.agent-download',
       invocationId: direction === 'upload-source'
-        ? 'content-space-workspace-upload-1'
-        : 'content-space-workspace-download-1',
+        ? 'workspace-files-workspace-upload-1'
+        : 'workspace-files-workspace-download-1',
       effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
       approval: 'none',
       approved: true,
@@ -1815,7 +1815,7 @@ describe('Host-owned file transfers', () => {
       authorizedResource
     })
     let invocation: HostResourceGrantInvocation | undefined = transferInvocation('upload-source')
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     try {
       await Promise.all([
         writeFile(join(workspace, 'upload.txt'), 'workspace bytes'),
@@ -2276,9 +2276,9 @@ function workspaceTransferInvocation(
       workspaceId
     }),
     actionId: direction === 'upload-source'
-      ? 'content-space.agent-upload-new'
-      : 'content-space.agent-download',
-    invocationId: `content-space-${direction}-${semanticRevision}`,
+      ? 'workspace-files.agent-upload-new'
+      : 'workspace-files.agent-download',
+    invocationId: `workspace-files-${direction}-${semanticRevision}`,
     effect: direction === 'upload-source' ? 'external-write' : 'workspace-write',
     approval: 'none',
     approved: true,
@@ -2287,8 +2287,8 @@ function workspaceTransferInvocation(
       ? { autonomousWrite: 'resource-authorized' as const }
       : {}),
     authorizedResource: Object.freeze({
-      resourceRef: 'res_content_space_entry',
-      resourceKind: 'content-space.entry',
+      resourceRef: 'res_workspace_entry',
+      resourceKind: 'workspace-files.entry',
       workspaceId,
       semanticRevision
     })
@@ -2395,7 +2395,7 @@ async function expectBlockedCommitNotPublished(
   const service = createService(root, () => currentPrincipal)
   const caller = grantCaller('window:7', principalV1)
   let invocation = invocationFor(caller)
-  const port = service.forOwner('domain.content-space', () => invocation)
+  const port = service.forOwner('domain.workspace-files', () => invocation)
   const controller = new AbortController()
   const entered = deferred()
   const release = deferred()
@@ -2411,7 +2411,7 @@ async function expectBlockedCommitNotPublished(
         await originalSync.call(this)
       })
     const selection = await service.registerDownload({
-      ownerId: 'domain.content-space', caller, path: destinationPath
+      ownerId: 'domain.workspace-files', caller, path: destinationPath
     })
     const destination = await port.openDownloadDestination({
       handle: requireDownloadHandle(selection),

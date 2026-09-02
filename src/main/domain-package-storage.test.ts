@@ -63,7 +63,7 @@ const principalA: PrincipalSnapshot = {
 
 const accessA = Object.freeze({
   binding: Object.freeze({
-    providerInstanceRef: 'opencontent.demo',
+    providerInstanceRef: 'document.demo',
     connectionId: 'connection-a'
   }),
   expectedPrincipal: principalA
@@ -151,7 +151,7 @@ describe('domain package storage', () => {
     let currentPrincipal: PrincipalSnapshot | undefined = principalA
     const { factory } = await fixture(() => currentPrincipal)
     const storage = factory.forOwner({
-      moduleId: 'example.opencontent-connector',
+      moduleId: 'example.document-provider',
       moduleVersion: '1.0.0'
     })
     const credentials = storage.secrets.providerCredentials!
@@ -188,70 +188,70 @@ describe('domain package storage', () => {
     }, async (secret) => secret.length)).resolves.toBe(12)
   })
 
-  it('binds a cloud-authenticated Principal independently from the Host execution node', async () => {
-    const cloudPrincipal: PrincipalSnapshot = Object.freeze({
-      authority: 'sciforge-cloud',
-      subject: 'cloud-user-a',
-      assurance: 'cloud-authenticated',
-      deviceId: 'cloud-device-a',
+  it('binds an externally issued Principal independently from the Host execution node', async () => {
+    const externalPrincipal: PrincipalSnapshot = Object.freeze({
+      authority: 'external-identity',
+      subject: 'external-user-a',
+      assurance: 'local-selection',
+      deviceId: 'external-device-a',
       identityVersion: 4
     })
-    const cloudAccess = Object.freeze({
+    const externalAccess = Object.freeze({
       ...accessA,
-      expectedPrincipal: cloudPrincipal
+      expectedPrincipal: externalPrincipal
     })
-    const { factory } = await fixture(() => cloudPrincipal)
+    const { factory } = await fixture(() => externalPrincipal)
     const credentials = factory.forOwner({
-      moduleId: 'example.cloud-principal',
+      moduleId: 'example.external-principal',
       moduleVersion: '1.0.0'
     }).secrets.providerCredentials!
 
-    await expect(credentials.status(cloudAccess)).resolves.toEqual({ state: 'absent' })
-    await credentials.replace(cloudAccess, 'cloud-principal-token')
-    await expect(credentials.use(cloudAccess, (secret) => secret)).resolves
-      .toBe('cloud-principal-token')
+    await expect(credentials.status(externalAccess)).resolves.toEqual({ state: 'absent' })
+    await credentials.replace(externalAccess, 'external-principal-token')
+    await expect(credentials.use(externalAccess, (secret) => secret)).resolves
+      .toBe('external-principal-token')
   })
 
-  it('does not reuse a provider credential after the Cloud Principal moves to another Device', async () => {
-    const cloudPrincipalA: PrincipalSnapshot = Object.freeze({
-      authority: 'sciforge-cloud',
-      subject: 'cloud-user-a',
-      assurance: 'cloud-authenticated',
-      deviceId: 'cloud-device-a',
+  it('does not reuse a provider credential after an external Principal moves to another Device', async () => {
+    const externalPrincipalA: PrincipalSnapshot = Object.freeze({
+      authority: 'external-identity',
+      subject: 'external-user-a',
+      assurance: 'local-selection',
+      deviceId: 'external-device-a',
       identityVersion: 4
     })
-    let currentPrincipal: PrincipalSnapshot | undefined = cloudPrincipalA
+    let currentPrincipal: PrincipalSnapshot | undefined = externalPrincipalA
     const { factory } = await fixture(() => currentPrincipal)
     const credentials = factory.forOwner({
-      moduleId: 'example.cloud-device-binding',
+      moduleId: 'example.external-device-binding',
       moduleVersion: '1.0.0'
     }).secrets.providerCredentials!
     const accessFor = (expectedPrincipal: PrincipalSnapshot) => Object.freeze({
       ...accessA,
       expectedPrincipal
     })
-    await credentials.replace(accessFor(cloudPrincipalA), 'cloud-device-a-token')
+    await credentials.replace(accessFor(externalPrincipalA), 'external-device-a-token')
 
-    const cloudPrincipalB: PrincipalSnapshot = Object.freeze({
-      ...cloudPrincipalA,
-      deviceId: 'cloud-device-b',
+    const externalPrincipalB: PrincipalSnapshot = Object.freeze({
+      ...externalPrincipalA,
+      deviceId: 'external-device-b',
       identityVersion: 5
     })
-    currentPrincipal = cloudPrincipalB
-    await expect(credentials.status(accessFor(cloudPrincipalB))).resolves
+    currentPrincipal = externalPrincipalB
+    await expect(credentials.status(accessFor(externalPrincipalB))).resolves
       .toEqual({ state: 'absent' })
-    await expect(credentials.use(accessFor(cloudPrincipalB), () => undefined)).rejects
+    await expect(credentials.use(accessFor(externalPrincipalB), () => undefined)).rejects
       .toMatchObject({ code: 'credential_unavailable' })
 
-    const renewedCloudPrincipalA: PrincipalSnapshot = Object.freeze({
-      ...cloudPrincipalA,
+    const renewedExternalPrincipalA: PrincipalSnapshot = Object.freeze({
+      ...externalPrincipalA,
       identityVersion: 6
     })
-    currentPrincipal = renewedCloudPrincipalA
+    currentPrincipal = renewedExternalPrincipalA
     await expect(credentials.use(
-      accessFor(renewedCloudPrincipalA),
+      accessFor(renewedExternalPrincipalA),
       (secret) => secret
-    )).resolves.toBe('cloud-device-a-token')
+    )).resolves.toBe('external-device-a-token')
   })
 
   it('does not commit an expected Principal credential into a Principal that wins the storage lock', async () => {
@@ -342,7 +342,7 @@ describe('domain package storage', () => {
     current = principalA
     await expect(credentials.status({
       ...accessA,
-      expectedPrincipal: { ...principalA, assurance: 'cloud-authenticated' }
+      expectedPrincipal: { ...principalA, authority: 'other-authority' }
     })).rejects.toMatchObject({ code: 'credential_binding_mismatch' })
   })
 
@@ -355,7 +355,7 @@ describe('domain package storage', () => {
 
     await expect(credentials.status({
       ...accessA,
-      binding: { ...accessA.binding, providerInstanceRef: 'opencontent.other' }
+      binding: { ...accessA.binding, providerInstanceRef: 'document.other' }
     })).resolves.toEqual({ state: 'absent' })
     await expect(credentials.status({
       ...accessA,

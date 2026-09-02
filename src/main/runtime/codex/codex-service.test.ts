@@ -2633,7 +2633,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       tool: 'sciforge_invoke',
       deliveryEffect,
       value: {
-        capabilityId: 'content-space.create-folder',
+        capabilityId: 'workspace-files.create-folder',
         operationRef: `op_${'a'.repeat(24)}`,
         output: { ok: true },
         changed: false,
@@ -4148,8 +4148,8 @@ process.stdout.write(JSON.stringify({
         text: 'expanded runtime prompt',
         displayText: 'short user prompt',
         metadata: {
-          source: 'collaboration.remote-session-projection',
-          sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+          source: 'remote-session-projection',
+          sourceLabel: '手机远程会话'
         }
       })
     ).resolves.toMatchObject({
@@ -4176,8 +4176,8 @@ process.stdout.write(JSON.stringify({
       text: 'expanded runtime prompt',
       displayText: 'short user prompt',
       metadata: {
-        source: 'collaboration.remote-session-projection',
-        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+        source: 'remote-session-projection',
+        sourceLabel: '手机远程会话'
       }
     })
     await expect(service.readThreadPage('thread-1')).resolves.toMatchObject({
@@ -4190,8 +4190,8 @@ process.stdout.write(JSON.stringify({
             text: 'expanded runtime prompt',
             displayText: 'short user prompt',
             meta: {
-              source: 'collaboration.remote-session-projection',
-              sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+              source: 'remote-session-projection',
+              sourceLabel: '手机远程会话'
             }
           })
         ]

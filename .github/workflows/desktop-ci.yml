@@ -1,0 +1,123 @@
+name: Desktop CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-ci.yml"
+      - "packages/domains/**"
+      - "packages/domain-sdk/**"
+      - "packages/execution-governance/**"
+      - "packages/full-trace/**"
+      - "packages/workers/**"
+      - "scripts/**"
+      - "src/**"
+      - "electron-builder.config.cjs"
+      - "vitest.config.ts"
+      - "tsconfig*.json"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit publishable package versions
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          node scripts/publishable-package-version-audit.mjs --base "origin/${{ github.base_ref }}"
+
+      - name: Check package boundaries and generated composition
+        run: |
+          npm run domain-packages:generate
+          git diff --exit-code
+          npm run domain-packages:check
+          npm run capability:check
+
+      - name: Run application typecheck
+        run: npm run typecheck
+
+      - name: Run regression suite
+        run: npm test
+
+      - name: Enforce architecture principles
+        run: npm run architecture-principles:test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run local identity and Host boundary tests
+        run: |
+          npm --workspace @sciforge/domain-identity-access test
+          npx vitest run \
+            src/main/capabilities/broker.test.ts \
+            src/main/capabilities/agent-tools.test.ts \
+            src/main/ipc/register-app-ipc-handlers.test.ts \
+            src/main/principal-context.test.ts \
+            src/renderer/src/lib/capability-client.test.ts
+
+      - name: Run domain SDK and package smoke tests
+        run: |
+          npm run domain-sdk:test
+          npm run smoke:domain-packages:tarball
+
+  desktop-agent-platform-contract:
+    name: Desktop (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-latest
+          - platform: macOS
+            os: macos-latest
+          - platform: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the Desktop application
+        env:
+          NODE_OPTIONS: "--max-old-space-size=6144"
+        run: npm run build
+
+      - name: Verify source Electron application path
+        if: matrix.platform == 'macOS'
+        run: npm run smoke:electron:source
+
+      - name: Verify packaged Electron application path
+        if: matrix.platform == 'macOS'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=6144"
+        run: npm run smoke:electron:packaged:build

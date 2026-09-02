@@ -18,7 +18,7 @@ import {
 test('installs a private root skill idempotently into the canonical project skill root', async () => {
   await withFixture(async ({ archivePath, workspaceRoot }) => {
     const verified = await verifyPrivateSkillPackage({ archivePath })
-    assert.equal(verified.skillName, 'opencontent-base')
+    assert.equal(verified.skillName, 'document-base')
     assert.equal(verified.version, '1.0.1')
     assert.equal(verified.fileCount, 3)
 
@@ -35,7 +35,7 @@ test('installs a private root skill idempotently into the canonical project skil
     assert.equal(listed.ok, true)
     if (listed.ok) {
       assert.ok(listed.skills.some((skill) =>
-        skill.id === 'opencontent-base'
+        skill.id === 'document-base'
       ))
     }
 
@@ -48,7 +48,7 @@ test('installs a private root skill idempotently into the canonical project skil
 test('accepts one containing directory and verifies a sender-provided digest', async () => {
   await withFixture(async ({ root, workspaceRoot }) => {
     const archivePath = join(root, 'nested.zip')
-    const bytes = await archiveBytes({ prefix: 'opencontent-base/' })
+    const bytes = await archiveBytes({ prefix: 'document-base/' })
     await writeFile(archivePath, bytes)
     const digest = createHash('sha256').update(bytes).digest('hex')
     const installed = await installPrivateSkillPackage({
@@ -69,7 +69,7 @@ test('rejects digest drift, traversal, bundled credentials, and conflicting inst
 
     const credentialArchive = join(root, 'credential.zip')
     await writeFile(credentialArchive, await archiveBytes({
-      extra: { '.env': 'OPENCONTENT_APIKEY=must-not-travel' }
+      extra: { '.env': 'PRIVATE_API_KEY=must-not-travel' }
     }))
     await assert.rejects(
       verifyPrivateSkillPackage({ archivePath: credentialArchive }),
@@ -112,7 +112,7 @@ async function withFixture(action) {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-private-skill-'))
   try {
     const workspaceRoot = join(root, 'workspace')
-    const archivePath = join(root, 'opencontent-base.zip')
+    const archivePath = join(root, 'document-base.zip')
     await mkdir(workspaceRoot)
     await writeFile(archivePath, await archiveBytes())
     await action({ archivePath, root, workspaceRoot })
@@ -124,8 +124,8 @@ async function withFixture(action) {
 async function archiveBytes({ prefix = '', extra = {} } = {}) {
   const zip = new JSZip()
   zip.file(`${prefix}SKILL.md`, skillDocument())
-  zip.file(`${prefix}.env.example`, 'OPENCONTENT_SITE=https://example.invalid\n')
-  zip.file(`${prefix}cli/bin/oc.js`, '#!/usr/bin/env node\n', {
+  zip.file(`${prefix}.env.example`, 'PRIVATE_SITE=https://example.invalid\n')
+  zip.file(`${prefix}cli/bin/tool.js`, '#!/usr/bin/env node\n', {
     unixPermissions: 0o100755
   })
   for (const [path, content] of Object.entries(extra)) zip.file(`${prefix}${path}`, content)
@@ -135,12 +135,12 @@ async function archiveBytes({ prefix = '', extra = {} } = {}) {
 function skillDocument() {
   return [
     '---',
-    'name: opencontent-base',
-    'description: Optional OpenContent Agent commands.',
+    'name: document-base',
+    'description: Optional private Agent commands.',
     'version: 1.0.1',
     '---',
     '',
-    '# OpenContent Base',
+    '# Private Base',
     ''
   ].join('\n')
 }

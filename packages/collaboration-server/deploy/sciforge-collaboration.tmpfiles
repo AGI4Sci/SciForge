@@ -1,5 +1,0 @@
-d /opt/sciforge-collaboration 0755 root root -
-d /opt/sciforge-collaboration/releases 0755 root root -
-d /etc/sciforge 0750 root sciforge_collab -
-d /etc/sciforge/collaboration-secrets 0750 root sciforge_collab -
-d /var/backups/sciforge-collaboration 0700 sciforge_collab sciforge_collab -

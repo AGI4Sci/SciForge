@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
@@ -83,19 +80,11 @@ describe('application domain composition', () => {
     catalog.dispose()
   })
 
-  it('passes the canonical Host application version into packaged Identity activation', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'sciforge-domain-host-version-'))
-    let appVersionReads = 0
+  it('does not register a runtime lifecycle for local Identity', () => {
     const catalog = createApplicationDomainCatalog({
-      getUserDataDir: () => root,
+      getUserDataDir: () => '/tmp/sciforge-domain-host-version',
       getDeviceId: () => 'device-composition-test',
       portableResourcesFor: createUnavailablePortableResourcesForTest(),
-      getAppVersion: () => {
-        appVersionReads += 1
-        return '9.8.7-host'
-      },
-      getAppRoot: () => join(root, 'missing-packaged-app-root'),
-      isPackaged: () => true,
       packageStorageFor: createNonSecretPackageStorageForTest(),
       capabilityInvokerFor: () => ({
         invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
@@ -106,22 +95,8 @@ describe('application domain composition', () => {
       MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
       isDomainMainRuntimeLifecycleContribution
     ).find(({ owner }) => owner.moduleId === IDENTITY_ACCESS_DOMAIN_MODULE_ID)
-    let dispose: (() => void | Promise<void>) | undefined
-
-    try {
-      expect(lifecycle).toBeDefined()
-      dispose = await lifecycle!.value.activate({
-        userDataDir: root,
-        appRoot: join(root, 'missing-packaged-app-root'),
-        environment: {},
-        signal: new AbortController().signal
-      } as never) as (() => void | Promise<void>) | undefined
-      expect(appVersionReads).toBe(1)
-    } finally {
-      await dispose?.()
-      catalog.dispose()
-      rmSync(root, { recursive: true, force: true })
-    }
+    expect(lifecycle).toBeUndefined()
+    catalog.dispose()
   })
 })
 

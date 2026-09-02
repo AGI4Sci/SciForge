@@ -38,7 +38,7 @@ const HOST_PRINCIPAL: PrincipalSnapshot = Object.freeze({
 const FORGED_PRINCIPAL: PrincipalSnapshot = Object.freeze({
   authority: 'forged.provider',
   subject: 'attacker',
-  assurance: 'cloud-authenticated',
+  assurance: 'local-selection',
   deviceId: 'untrusted-device',
   identityVersion: 99
 })
