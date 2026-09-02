@@ -1489,12 +1489,11 @@ class ProjectWorkflow:
         policy = self.policy(job["project_key"])
         if int(policy["policy_version"]) != int(job["policy_version"]):
             raise RuntimeError("audit policy changed while the job was running")
-        # The audit selector established an exact current head and excluded
-        # eligible Project update work. Persist the seal in the same
-        # transaction as the audit sidechain so A3 cannot create formal
-        # records against an unsealed snapshot.
-        self._record_snapshot_seal(
-            job["project_key"], job["target_digest"], f"audit:{job['level']}")
+        # Seal through the canonical CAS path before audit-sidechain writes so
+        # A3 cannot create formal records against an unsealed snapshot.
+        self.seal_snapshot(
+            job["project_key"], expected_head_digest=job["target_digest"],
+            reason=f"audit:{job['level']}")
         findings: list[str] = []
         l0_findings_after_semantic_verification: list[str] = []
         if job["level"] == "L0":

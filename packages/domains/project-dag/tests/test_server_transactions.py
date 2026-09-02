@@ -471,7 +471,7 @@ class RuntimeActorTransactionTests(unittest.TestCase):
             result = self.actors.audit.process_audits(project)
 
         self.assertIsNotNone(result)
-        self.assertEqual(observed_claim_transaction, [True])
+        self.assertEqual(observed_claim_transaction, [True, True])
 
 
 class HttpActorSerializationTests(unittest.TestCase):
