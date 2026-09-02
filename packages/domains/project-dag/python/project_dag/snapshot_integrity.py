@@ -58,4 +58,12 @@ def validate_project_snapshot_row(row: Mapping[str, Any]) -> dict[str, Any]:
                 f"Project Snapshot {payload_key} does not match its database row"
             )
 
+    if row.get("input_fingerprint") is not None:
+        fingerprint = payload.get("inputFingerprint")
+        if fingerprint is not None and fingerprint != row.get("input_fingerprint"):
+            raise ValueError("Project Snapshot input fingerprint does not match its database row")
+    if row.get("scope_revision") is not None and payload.get("scopeRevision") is not None:
+        if int(payload["scopeRevision"]) != int(row["scope_revision"]):
+            raise ValueError("Project Snapshot scope revision does not match its database row")
+
     return payload

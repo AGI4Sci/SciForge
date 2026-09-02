@@ -5,6 +5,7 @@ import type {
   DomainMainRuntimeLifecycleContribution
 } from '@sciforge/domain-sdk/host'
 import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
+import { resolve } from 'node:path'
 import type { z } from 'zod'
 import {
   PROJECT_DAG_CAPABILITY_IDS,
@@ -129,7 +130,7 @@ export function createDomainMainEntry(
         throw new Error('Project DAG runtime lifecycle is already active.')
       }
       const pending = (async (): Promise<OwnedProjectDagRuntime> => {
-        const runtime = createRuntime({ userDataDir: context.userDataDir })
+        const runtime = createRuntime()
         try {
           const deactivate = await runtime.activate(context)
           const record = { runtime, deactivate, disposed: false }
@@ -323,11 +324,23 @@ function withCallerWorkspace<T extends ProjectDagTarget>(
   context: ProjectDagCapabilityHandlerContext
 ): T {
   const callerWorkspace = context.caller.workspaceId?.trim()
-  if (!callerWorkspace) return input
-  if (input.workspaceRoot && input.workspaceRoot !== callerWorkspace) {
+  if (!callerWorkspace) {
     throw new ProjectDagRuntimeError(projectDagErrorSchema.parse({
       code: 'access_restricted',
-      message: 'Project DAG workspaceRoot must match the caller workspace.',
+      message: 'Project DAG capability requires a workspace-scoped caller.',
+      retryable: false
+    }))
+  }
+  if (
+    (input.workspaceRoot && !sameWorkspace(input.workspaceRoot, callerWorkspace)) ||
+    (input.projectRoot && !sameWorkspace(input.projectRoot, callerWorkspace)) ||
+    input.project?.trim()
+  ) {
+    throw new ProjectDagRuntimeError(projectDagErrorSchema.parse({
+      code: 'access_restricted',
+      message: input.project?.trim()
+        ? 'Project DAG accepts only the canonical caller Workspace identity.'
+        : 'Project DAG target must match the caller workspace.',
       retryable: false
     }))
   }
@@ -335,4 +348,8 @@ function withCallerWorkspace<T extends ProjectDagTarget>(
     ...input,
     workspaceRoot: callerWorkspace
   }
+}
+
+function sameWorkspace(left: string, right: string): boolean {
+  return resolve(left.trim()) === resolve(right.trim())
 }

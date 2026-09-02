@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import type { ArtifactVersionRefV1 } from '@sciforge/domain-artifact-versions/contract'
 import { evidenceDagWatermarkCoversValue } from '../contract.js'
 import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
 import {
@@ -12,7 +10,11 @@ import {
   evidenceDagWorkspaceRoot,
   updateEvidenceDagVisibleSurfaces
 } from './runtime.js'
-import { EvidenceDagQueue } from './queue.js'
+import {
+  EvidenceDagDeltaStore,
+  evidenceDagDeltaInputFromTrace
+} from './evidence-delta.js'
+import { evidenceDagThreadId } from './client.js'
 import type { EvidenceDagSidecarPort } from './sidecar.js'
 
 test('reconciles pending work only when the committed watermark fully covers its target', () => {
@@ -88,7 +90,7 @@ test('keeps a thread prioritized until its last visible surface closes', () => {
   ), false)
 })
 
-test('ensures the sidecar immediately before a background queue submission', async () => {
+test('appends a durable delta without publishing a per-turn full Snapshot', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-background-'))
   const events: string[] = []
   const sidecar: EvidenceDagSidecarPort = {
@@ -112,7 +114,7 @@ test('ensures the sidecar immediately before a background queue submission', asy
             threadId: 'codex:thread-1',
             version: 1,
             digest: `sha256:${'a'.repeat(64)}`,
-            inputWatermark: '7',
+            inputWatermark: '1',
             schemaVersion: '1',
             extractorVersion: '1',
             verifierVersion: '1',
@@ -142,9 +144,410 @@ test('ensures the sidecar immediately before a background queue submission', asy
     workspaceRoot: '/workspace',
     artifacts: [{ id: 'answer-1', kind: 'assistant_message', text: 'Evidence.' }]
   })
-  await waitFor(() => events.includes('submit'))
+  const persisted = JSON.parse(await readFile(
+    join(userDataDir, 'evidence-dag', 'deltas.json'),
+    'utf8'
+  )) as { chains: Array<{ threadId: string; records: Array<Record<string, unknown>> }> }
+  assert.deepEqual(events, [])
+  assert.equal(persisted.chains[0]?.threadId, 'codex:thread-1')
+  assert.deepEqual(persisted.chains[0]?.records[0]?.scope, {
+    runtimeId: 'codex',
+    threadId: 'codex:thread-1',
+    operationId: 'turn-1',
+    kind: 'turn',
+    workspaceRoot: '/workspace'
+  })
+  assert.equal(persisted.chains[0]?.records[0]?.committedWatermark, '7')
+  await runtime.close()
+})
 
-  assert.deepEqual(events.slice(0, 2), ['ensure', 'submit'])
+test('sealing a delta closure materializes the canonical committed Snapshot for Project', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-seal-'))
+  const requestTime = new Date()
+  const requestTimeIso = requestTime.toISOString()
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    now: () => requestTime,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (url, init) => {
+      const path = new URL(String(url)).pathname
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : undefined
+      requests.push({ path, ...(body ? { body } : {}) })
+      if (path === '/audits') {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: {
+            completed_at: requestTimeIso,
+            risk_digest: {
+              status: 'clean',
+              total_findings: 0,
+              counts_by_severity: { blocker: 0, major: 0, minor: 0, info: 0 },
+              highest_severity: 'none'
+            }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          snapshot: {
+            threadId: 'codex:thread-seal',
+            version: 1,
+            digest: `sha256:${'b'.repeat(64)}`,
+            // Formal Snapshot materialization must bind the exact closure
+            // barrier/head rather than a later cumulative watermark.
+            inputWatermark: '7',
+            schemaVersion: 'evidence.v3',
+            extractorVersion: 'extractor.v3',
+            verifierVersion: 'verifier.v3',
+            artifactDigests: [],
+            createdAt: '2026-07-26T06:00:00.000Z',
+            status: 'committed'
+          }
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir, '/workspace'))
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'turn-completed',
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    turnId: 'turn-seal',
+    targetWatermark: '7',
+    occurredAt: '2026-07-26T06:00:00.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{
+      id: 'answer-seal',
+      claimId: 'claim:seal',
+      kind: 'assistant_message',
+      text: 'Evidence.'
+    }]
+  })
+  const before = await runtime.snapshotStatus({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace'
+  })
+  const head = before.authoritativeHead?.headDigest
+  assert.ok(head)
+  const closure = await runtime.sealClosure({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-closure-thread-seal',
+    policy: {
+      version: 'EvidenceClosurePolicyV1',
+      targetClaimIds: ['claim:seal'],
+      expectedHeadDigest: head,
+      barrierWatermark: '7',
+      edgeFamilies: [],
+      directions: ['inbound'],
+      maxDepth: 0,
+      termination: 'depth',
+      expandEquivalent: false,
+      expandRefinement: false,
+      cycleHandling: 'allow',
+      unknownEdgeHandling: 'ignore',
+      requiredRecords: [],
+      requiredExternalRefs: []
+    }
+  })
+  assert.equal(closure.headDigest, head)
+  const after = await runtime.snapshotStatus({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace'
+  })
+  assert.ok(after.committed)
+  assert.equal(after.committed.digest, `sha256:${'b'.repeat(64)}`)
+  assert.equal(after.committed.inputWatermark, '7')
+  const exportGate = await runtime.guardWriteExport({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace'
+  })
+  assert.equal(exportGate.allowed, true, JSON.stringify(exportGate))
+  const metadata = exportGate.metadata as { auditState?: unknown } | undefined
+  assert.equal(metadata?.auditState, 'fresh')
+  assert.deepEqual(requests.map(({ path }) => path), ['/updates', '/audits'])
+  assert.equal(requests[0]?.body?.threadId, 'codex:thread-seal')
+  assert.equal(requests[0]?.body?.targetWatermark, '7')
+  assert.equal(requests[0]?.body?.reason, 'seal_closure')
+  assert.equal(requests[0]?.body?.idempotencyKey, 'seal-closure-thread-seal')
+  const sealedTrace = requests[0]?.body?.trace as Array<Record<string, unknown>> | undefined
+  assert.equal(sealedTrace?.length, 1)
+  assert.equal(sealedTrace?.[0]?.kind, 'sciforge.evidence-delta-envelope.v1')
+  const sealedDelta = sealedTrace?.[0]?.delta as Record<string, unknown> | undefined
+  assert.match(String(sealedDelta?.payloadDigest), /^sha256:[0-9a-f]{64}$/u)
+  const sealedPayload = sealedDelta?.payload as Record<string, unknown> | undefined
+  const embeddedTrace = sealedPayload?.trace as Array<Record<string, unknown>> | undefined
+  assert.equal(embeddedTrace?.[0]?.id, 'answer-seal')
+  assert.equal(requests[1]?.body?.targetDigest, `sha256:${'b'.repeat(64)}`)
+  const sealed = await runtime.sealClosure({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-closure-thread-seal',
+    policy: {
+      version: 'EvidenceClosurePolicyV1',
+      targetClaimIds: ['claim:seal'],
+      expectedHeadDigest: head,
+      barrierWatermark: '7',
+      edgeFamilies: [],
+      directions: ['inbound'],
+      maxDepth: 0,
+      termination: 'depth',
+      expandEquivalent: false,
+      expandRefinement: false,
+      cycleHandling: 'allow',
+      unknownEdgeHandling: 'ignore',
+      requiredRecords: [],
+      requiredExternalRefs: []
+    }
+  })
+  assert.deepEqual(requests.map(({ path }) => path), ['/updates', '/audits'])
+  await runtime.close()
+})
+
+test('retries Snapshot materialization after a sidecar failure without duplicating the closure', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-seal-retry-'))
+  let attempts = 0
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (url, init) => {
+      attempts += 1
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : undefined
+      requests.push({ path: new URL(String(url)).pathname, ...(body ? { body } : {}) })
+      if (attempts === 1) throw new Error('temporary sidecar failure')
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          snapshot: {
+            threadId: 'codex:thread-seal-retry',
+            version: 1,
+            digest: `sha256:${'c'.repeat(64)}`,
+            inputWatermark: '7',
+            schemaVersion: 'evidence.v3',
+            extractorVersion: 'extractor.v3',
+            verifierVersion: 'verifier.v3',
+            artifactDigests: [],
+            createdAt: '2026-07-26T06:00:00.000Z',
+            status: 'committed'
+          }
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir, '/workspace'))
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'turn-completed',
+    runtimeId: 'codex',
+    threadId: 'thread-seal-retry',
+    turnId: 'turn-seal-retry',
+    targetWatermark: '7',
+    occurredAt: '2026-07-26T06:00:00.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{
+      id: 'answer-seal-retry',
+      claimId: 'claim:seal-retry',
+      kind: 'assistant_message',
+      text: 'Evidence.'
+    }]
+  })
+  const head = (await runtime.snapshotStatus({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace'
+  })).authoritativeHead?.headDigest
+  assert.ok(head)
+  const policy = {
+    version: 'EvidenceClosurePolicyV1' as const,
+    targetClaimIds: ['claim:seal-retry'],
+    expectedHeadDigest: head,
+    barrierWatermark: '7',
+    edgeFamilies: [],
+    directions: ['inbound'] as ('inbound' | 'outbound')[],
+    maxDepth: 0,
+    termination: 'depth' as const,
+    expandEquivalent: false,
+    expandRefinement: false,
+    cycleHandling: 'allow' as const,
+    unknownEdgeHandling: 'ignore' as const,
+    requiredRecords: [],
+    requiredExternalRefs: []
+  }
+  await assert.rejects(() => runtime.sealClosure({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-retry-key', policy
+  }), /service is unavailable/u)
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'turn-completed',
+    runtimeId: 'codex',
+    threadId: 'thread-seal-retry',
+    turnId: 'turn-seal-retry-2',
+    targetWatermark: '8',
+    occurredAt: '2026-07-26T06:00:01.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{
+      id: 'answer-seal-retry-2',
+      kind: 'assistant_message',
+      text: 'Later evidence.'
+    }]
+  })
+  const retry = await runtime.sealClosure({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-retry-key', policy
+  })
+  assert.equal(retry.headDigest, head)
+  assert.equal((await runtime.snapshotStatus({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace'
+  })).committed?.digest, `sha256:${'c'.repeat(64)}`)
+  assert.equal(requests[1]?.body?.targetWatermark, '7')
+  await runtime.close()
+})
+
+test('materializes every closure delta, including correction and assessment records', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-seal-deltas-'))
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+  const deltaStore = new EvidenceDagDeltaStore(join(userDataDir, 'evidence-dag', 'deltas.json'))
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    deltaStore,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (url, init) => {
+      const path = new URL(String(url)).pathname
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : undefined
+      requests.push({ path, ...(body ? { body } : {}) })
+      return new Response(JSON.stringify({ ok: true, data: {
+        snapshot: {
+          threadId: 'codex:thread-seal-deltas', version: 1,
+          digest: `sha256:${'d'.repeat(64)}`, inputWatermark: '8',
+          schemaVersion: 'evidence.v3', extractorVersion: 'extractor.v3',
+          verifierVersion: 'verifier.v3', artifactDigests: [],
+          createdAt: '2026-07-26T06:00:00.000Z', status: 'committed'
+        }
+      } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir, '/workspace'))
+  const initial = await deltaStore.append(evidenceDagDeltaInputFromTrace({
+    runtimeId: 'codex', threadId: 'codex:thread-seal-deltas', workspaceRoot: '/workspace',
+    operationId: 'turn-seal-deltas', kind: 'turn', requestedWatermark: '7',
+    idempotencyKey: 'turn-seal-deltas', trace: [{ id: 'answer-seal-deltas', sourceRef: 'shared:seal-deltas', text: 'Evidence.' }]
+  }))
+  const scope = {
+    runtimeId: 'codex', threadId: 'codex:thread-seal-deltas', operationId: 'correction',
+    kind: 'correction' as const, workspaceRoot: '/workspace'
+  }
+  assert.equal((await deltaStore.head('codex:thread-seal-deltas')).headDigest, initial.delta.deltaDigest)
+  await deltaStore.appendCorrection({
+    scope, requestedWatermark: '8', idempotencyKey: 'correction-seal-deltas',
+    sourceRefs: ['shared:seal-deltas'],
+    correction: {
+      recordId: 'correction:seal-deltas', targetRecordId: 'claim:seal-deltas',
+      relation: 'corrects', reason: 'Corrected extraction.', producerIdentity: 'agent:producer',
+      reviewerIdentity: null, createdAt: '2026-07-26T06:00:01.000Z'
+    }, predecessorDigest: initial.delta.deltaDigest
+  })
+  await deltaStore.append({
+    scope: { ...scope, operationId: 'assessment', kind: 'assessment' },
+    requestedWatermark: '8', committedWatermark: '8', schemaVersion: 'evidence.delta.v1',
+    extractorVersion: 'assessment', verifierVersion: 'assessment',
+    idempotencyKey: 'assessment-seal-deltas', sourceRefs: ['shared:seal-deltas'],
+    payload: { recordType: 'assessment', assessment: { assessmentId: 'assessment:seal-deltas' } },
+    predecessorDigest: (await deltaStore.head('codex:thread-seal-deltas')).headDigest
+  })
+  const head = (await deltaStore.head('codex:thread-seal-deltas')).headDigest
+  assert.ok(head)
+  const sealed = await runtime.sealClosure({
+    runtimeId: 'codex', threadId: 'thread-seal-deltas', workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-closure-deltas',
+    policy: {
+      version: 'EvidenceClosurePolicyV1', targetClaimIds: ['answer-seal-deltas'],
+      expectedHeadDigest: head, barrierWatermark: '8', edgeFamilies: [], directions: ['inbound'],
+      maxDepth: 0, termination: 'fixed_point', expandEquivalent: false, expandRefinement: false,
+      cycleHandling: 'allow', unknownEdgeHandling: 'ignore',
+      requiredRecords: ['correction:seal-deltas'], requiredExternalRefs: []
+    }
+  })
+  assert.equal(sealed.status, 'complete', JSON.stringify(sealed))
+  assert.equal(requests.length, 1, JSON.stringify(sealed))
+  const envelopes = requests[0]?.body?.trace as Array<Record<string, unknown>>
+  assert.equal(envelopes.length, 3)
+  assert.deepEqual(
+    envelopes.map((item) => (item.delta as Record<string, unknown>).payload)
+      .map((payload) => (payload as Record<string, unknown>).recordType ?? 'trace'),
+    ['trace', 'correction', 'assessment']
+  )
+  await runtime.close()
+})
+
+test('replays an identical completed event idempotently in the durable delta chain', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-replay-'))
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir))
+  const event = {
+    contractVersion: 1 as const,
+    kind: 'turn-completed' as const,
+    runtimeId: 'codex',
+    threadId: 'thread-replay',
+    turnId: 'turn-replay',
+    targetWatermark: '9',
+    occurredAt: '2026-09-01T00:00:00.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{ id: 'answer-replay', kind: 'assistant_message', text: 'same' }]
+  }
+  await runtime.consume(event)
+  await runtime.consume({
+    ...event,
+    turnId: 'turn-replay-newer',
+    targetWatermark: '10',
+    artifacts: [{ id: 'answer-replay-newer', kind: 'assistant_message', text: 'newer' }]
+  })
+  await runtime.consume(event)
+  const persisted = JSON.parse(await readFile(
+    join(userDataDir, 'evidence-dag', 'deltas.json'),
+    'utf8'
+  )) as { chains: Array<{ records: Array<Record<string, unknown>>; provisional?: Record<string, unknown> }> }
+  assert.equal(persisted.chains[0]?.records.length, 2)
+  assert.equal(
+    persisted.chains[0]?.provisional?.desiredHeadDigest,
+    persisted.chains[0]?.records[1]?.deltaDigest
+  )
   await runtime.close()
 })
 
@@ -180,41 +583,28 @@ test('does not enqueue an artifact event that has no workspace scope', async () 
   await runtime.close()
 })
 
-test('reads snapshot status without waiting for the Evidence sidecar', async () => {
+test('reads the local delta head and provisional view without waiting for the Evidence sidecar', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-status-'))
   const runtimeId = 'domain:sciforge.create-loop'
   const threadId = 'execution:execution-1'
-  const engineThreadId = `${runtimeId}:${threadId}`
-  const queue = new EvidenceDagQueue({
-    storagePath: join(userDataDir, 'evidence-status-queue.json'),
-    submit: async (input) => ({
-      threadId: input.engineThreadId,
-      version: 1,
-      digest: `sha256:${'a'.repeat(64)}`,
-      inputWatermark: input.targetWatermark,
-      schemaVersion: '1',
-      extractorVersion: '1',
-      verifierVersion: '1',
-      artifactDigests: [],
-      createdAt: '2026-07-26T06:00:00.000Z'
-    })
-  })
-  await queue.start(false)
-  await queue.enqueue({
+  const deltaStore = new EvidenceDagDeltaStore(join(userDataDir, 'evidence-deltas.json'))
+  await deltaStore.append(evidenceDagDeltaInputFromTrace({
     runtimeId,
-    threadId,
-    engineThreadId,
-    targetWatermark: '1:event-1',
-    reason: 'execution_completed',
-    priority: 'background',
+    // Synthetic execution scopes are keyed by the same canonical identity
+    // used by the runtime status reader.
+    threadId: evidenceDagThreadId(runtimeId, threadId),
+    operationId: 'execution-1',
+    kind: 'execution',
+    requestedWatermark: '1:event-1',
+    idempotencyKey: 'execution-status-1',
     workspaceRoot: '/workspace',
     trace: [{ id: 'execution-1' }]
-  })
+  }))
   let ensureCalls = 0
   let fetchCalls = 0
   const runtime = new EvidenceDagRuntime({
     userDataDir,
-    queue,
+    deltaStore,
     sidecar: {
       configure: () => undefined,
       endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
@@ -247,44 +637,44 @@ test('reads snapshot status without waiting for the Evidence sidecar', async () 
     threadId,
     workspaceRoot: '/workspace'
   })
-  assert.equal(Boolean(status.committed || status.pending), true)
+  assert.equal(status.authoritativeHead?.headDigest, (await deltaStore.head(
+    evidenceDagThreadId(runtimeId, threadId)
+  )).headDigest)
+  assert.equal(status.provisional?.summary.freshness, 'fresh')
+  assert.equal(status.committed, null)
+  assert.equal(status.pending, null)
   assert.equal(Number.isNaN(Date.parse(status.updatedAt)), false)
   assert.equal(ensureCalls, activationEnsureCalls)
   assert.equal(fetchCalls, 0)
-  await assert.rejects(
-    () => runtime.snapshotStatus({
-      runtimeId,
-      threadId,
-      workspaceRoot: '/different-workspace'
-    }),
-    /does not match/
-  )
+  const mismatched = await runtime.snapshotStatus({
+    runtimeId,
+    threadId,
+    workspaceRoot: '/different-workspace'
+  })
+  assert.equal(mismatched.authoritativeHead, undefined)
+  assert.equal(mismatched.provisional, undefined)
+  assert.equal(mismatched.committed, null)
+  assert.equal(mismatched.pending, null)
   assert.equal(ensureCalls, activationEnsureCalls)
   await runtime.close()
 })
 
-test('does not leak queue state when Agent authority has no workspace binding', async () => {
+test('does not leak local delta state when Agent authority has no workspace binding', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-unbound-status-'))
-  const queue = new EvidenceDagQueue({
-    storagePath: join(userDataDir, 'evidence-unbound-status-queue.json'),
-    submit: async () => {
-      throw new Error('The adversarial status test must not submit queue work.')
-    }
-  })
-  await queue.start(false)
-  await queue.enqueue({
+  const deltaStore = new EvidenceDagDeltaStore(join(userDataDir, 'evidence-deltas.json'))
+  await deltaStore.append(evidenceDagDeltaInputFromTrace({
     runtimeId: 'codex',
     threadId: 'thread-1',
-    engineThreadId: 'codex:thread-1',
-    targetWatermark: '7',
-    reason: 'turn_committed',
-    priority: 'background',
+    operationId: 'turn-1',
+    kind: 'turn',
+    requestedWatermark: '7',
+    idempotencyKey: 'unbound-status-1',
     workspaceRoot: '/workspace/a',
     trace: [{ id: 'workspace-a-artifact' }]
-  })
+  }))
   const runtime = new EvidenceDagRuntime({
     userDataDir,
-    queue,
+    deltaStore,
     sidecar: {
       configure: () => undefined,
       endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
@@ -301,12 +691,19 @@ test('does not leak queue state when Agent authority has no workspace binding', 
   })
   assert.equal(status.committed, null)
   assert.equal(status.pending, null)
+  const sameWorkspaceWithoutAuthority = await runtime.snapshotStatus({
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    workspaceRoot: '/workspace/a'
+  })
+  assert.equal(sameWorkspaceWithoutAuthority.authoritativeHead, undefined)
+  assert.equal(sameWorkspaceWithoutAuthority.provisional, undefined)
+  assert.equal(sameWorkspaceWithoutAuthority.committed, null)
   await runtime.close()
 })
 
-test('routes a threadless completed execution through the canonical synthetic scope', async () => {
+test('appends a threadless execution delta through the canonical synthetic scope', async () => {
   const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-execution-'))
-  const submissions: Record<string, unknown>[] = []
   const runtime = new EvidenceDagRuntime({
     userDataDir,
     sidecar: {
@@ -315,28 +712,8 @@ test('routes a threadless completed execution through the canonical synthetic sc
       ensureReady: async () => undefined,
       stop: async () => undefined
     },
-    fetchImpl: async (_url, init) => {
-      submissions.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
-      return new Response(JSON.stringify({
-        ok: true,
-        data: {
-          snapshot: {
-            threadId: 'domain:sciforge.create-loop:execution:workflow-9',
-            version: 1,
-            digest: `sha256:${'a'.repeat(64)}`,
-            inputWatermark: 'event-9',
-            schemaVersion: 'evidence.v3',
-            extractorVersion: 'extractor.v3',
-            verifierVersion: 'verifier.v3',
-            artifactDigests: [],
-            createdAt: '2026-08-05T00:00:00.000Z',
-            status: 'committed'
-          }
-        }
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      })
+    fetchImpl: async () => {
+      throw new Error('Automatic execution capture must not publish a full Snapshot.')
     }
   })
   await runtime.activate(runtimeContext(userDataDir))
@@ -355,257 +732,16 @@ test('routes a threadless completed execution through the canonical synthetic sc
       phase: 'run_completed'
     }]
   })
-  await waitFor(() => submissions.length === 1)
+  const persisted = JSON.parse(await readFile(
+    join(userDataDir, 'evidence-dag', 'deltas.json'),
+    'utf8'
+  )) as { chains: Array<{ threadId: string; records: Array<Record<string, unknown>> }> }
   assert.equal(
-    submissions[0]!.threadId,
+    persisted.chains[0]?.threadId,
     'domain:sciforge.create-loop:execution:workflow-9'
   )
-  assert.equal(submissions[0]!.reason, 'execution_completed')
-  assert.equal(
-    (submissions[0]!.trace as Array<Record<string, unknown>>)[0]!.id,
-    'execution:workflow-9:run-9:artifact:0'
-  )
-  await runtime.close()
-})
-
-test('stops an owned sidecar before the durable queue retries a timed-out POST', async () => {
-  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-timeout-'))
-  const events: string[] = []
-  const runtime = new EvidenceDagRuntime({
-    userDataDir,
-    sidecar: {
-      configure: () => undefined,
-      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
-      ensureReady: async () => {
-        events.push('ensure')
-      },
-      stop: async () => {
-        events.push('stop')
-      }
-    },
-    fetchImpl: async (url) => {
-      const path = new URL(String(url)).pathname
-      if (path === '/updates/status') {
-        return new Response(JSON.stringify({ ok: true, data: {} }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' }
-        })
-      }
-      events.push('submit')
-      return new Response(JSON.stringify({
-        ok: false,
-        error: {
-          code: 'upstream_timeout',
-          message: 'The model request timed out.',
-          retryable: true
-        }
-      }), {
-        status: 503,
-        headers: { 'content-type': 'application/json' }
-      })
-    }
-  })
-  await runtime.activate(runtimeContext(userDataDir, undefined, true))
-  events.length = 0
-
-  await runtime.update({
-    runtimeId: 'codex',
-    threadId: 'thread-1',
-    workspaceRoot: '/workspace'
-  })
-  await waitFor(() => events.includes('stop'))
-
-  assert.deepEqual(events.slice(0, 4), ['ensure', 'ensure', 'submit', 'stop'])
-  await runtime.close()
-})
-
-test('manual update carries the panel workspace through the queue to the service', async () => {
-  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-manual-'))
-  const submitted: Record<string, unknown>[] = []
-  const runtime = new EvidenceDagRuntime({
-    userDataDir,
-    sidecar: {
-      configure: () => undefined,
-      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
-      ensureReady: async () => undefined,
-      stop: async () => undefined
-    },
-    fetchImpl: async (url, init) => {
-      if (new URL(String(url)).pathname === '/updates/status') {
-        return new Response(JSON.stringify({ ok: true, data: {} }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' }
-        })
-      }
-      submitted.push(JSON.parse(String(init?.body)))
-      return new Response(JSON.stringify({
-        ok: true,
-        data: {
-          snapshot: {
-            threadId: 'codex:thread-1',
-            version: 1,
-            digest: `sha256:${'a'.repeat(64)}`,
-            inputWatermark: '7',
-            schemaVersion: '1',
-            extractorVersion: '1',
-            verifierVersion: '1',
-            artifactDigests: [],
-            createdAt: '2026-07-26T06:00:00.000Z'
-          }
-        }
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      })
-    }
-  })
-  await runtime.activate(runtimeContext(userDataDir, undefined, true))
-  await runtime.update({
-    runtimeId: 'codex',
-    threadId: 'thread-1',
-    workspaceRoot: '/workspace/from-panel'
-  })
-  await waitFor(() => submitted.length === 1)
-  assert.equal(submitted[0]?.workspaceRoot, '/workspace/from-panel')
-  assert.equal('projectKey' in submitted[0]!, false)
-  await runtime.close()
-})
-
-test('activation proactively consumes ArtifactVersion lifecycle into a new queued snapshot', async () => {
-  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-lifecycle-'))
-  const bytes = Buffer.from('dataset bytes', 'utf8')
-  const ref: ArtifactVersionRefV1 = {
-    artifactId: 'artifact:dataset',
-    versionId: 'artifact-version:dataset-1',
-    contentDigest: createHash('sha256').update(bytes).digest('hex'),
-    byteLength: bytes.byteLength,
-    mediaType: 'text/csv',
-    availability: 'available',
-    retention: 'reference',
-    accessPolicy: { visibility: 'workspace', principals: [], allowExport: true }
-  }
-  const submitted: Record<string, unknown>[] = []
-  const runtime = new EvidenceDagRuntime({
-    userDataDir,
-    sidecar: {
-      configure: () => undefined,
-      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
-      ensureReady: async () => undefined,
-      stop: async () => undefined
-    },
-    artifactVersionCommitPort: {
-      commit: async () => { throw new Error('Explicit refs must not commit.') }
-    },
-    artifactVersionReadPort: {
-      read: async () => ({
-        ok: true,
-        value: {
-          artifact: {
-            artifactId: ref.artifactId,
-            kind: 'dataset',
-            createdAt: '2026-08-06T08:00:00.000Z',
-            updatedAt: '2026-08-06T08:00:00.000Z',
-            currentVersionId: ref.versionId,
-            versionCount: 1
-          },
-          version: {
-            schemaVersion: 1,
-            versionId: ref.versionId,
-            artifactId: ref.artifactId,
-            sequence: 1,
-            transactionId: 'artifact-commit:dataset',
-            createdAt: '2026-08-06T08:00:00.000Z',
-            intent: 'observe',
-            storage: {
-              mode: 'reference',
-              locator: 'workspace:data/dataset.csv',
-              contentDigest: ref.contentDigest,
-              byteLength: ref.byteLength,
-              mediaType: ref.mediaType,
-              availability: ref.availability
-            },
-            dependencies: [],
-            accessPolicy: ref.accessPolicy,
-            metadata: {}
-          },
-          ref,
-          dataBase64: bytes.toString('base64')
-        }
-      })
-    },
-    artifactVersionEventListPort: {
-      listEvents: async (input) => input.afterSequence === 1
-        ? { ok: true, value: { events: [], lastSequence: 1 } }
-        : {
-            ok: true,
-            value: {
-              events: [{
-                schemaVersion: 1,
-                eventId: 'artifact-event:moved-1',
-                sequence: 1,
-                type: 'artifact-moved',
-                artifactId: ref.artifactId,
-                versionId: ref.versionId,
-                createdAt: '2026-08-06T08:00:00.000Z',
-                detail: { locator: 'workspace:data/moved.csv' }
-              }],
-              lastSequence: 1
-            }
-          }
-    },
-    artifactVersionLifecyclePollIntervalMs: 60_000,
-    fetchImpl: async (_url, init) => {
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
-      submitted.push(body)
-      return new Response(JSON.stringify({
-        ok: true,
-        data: {
-          snapshot: {
-            threadId: 'codex:thread-1',
-            version: 2,
-            digest: `sha256:${'b'.repeat(64)}`,
-            inputWatermark: body.targetWatermark,
-            schemaVersion: '1',
-            extractorVersion: '1',
-            verifierVersion: '1',
-            artifactDigests: [ref.contentDigest],
-            createdAt: '2026-08-06T08:00:01.000Z'
-          }
-        }
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      })
-    }
-  })
-  const base = runtimeContext(userDataDir)
-  await runtime.activate({
-    ...base,
-    agentThreads: {
-      list: async () => [{
-        id: 'thread-1', runtimeId: 'codex', workspaceRoot: '/workspace'
-      }],
-      read: async () => ({
-        id: 'thread-1',
-        runtimeId: 'codex',
-        workspaceRoot: '/workspace',
-        watermark: '7',
-        turns: [],
-        artifacts: [{ id: 'dataset', artifactVersionRef: ref }]
-      }),
-      subscribeMessages: async function* () {},
-      hasActiveTurns: () => false
-    }
-  })
-  await waitFor(() => submitted.length === 1)
-
-  assert.equal(submitted[0]?.reason, 'artifact_version_lifecycle')
-  assert.equal(submitted[0]?.targetWatermark, '7:artifact-lifecycle:1')
-  const trace = submitted[0]?.trace as Array<Record<string, unknown>>
-  const projection = trace[0]?.evidenceArtifactVersions as {
-    lifecycleEvents: Array<{ type: string }>
-  }
-  assert.deepEqual(projection.lifecycleEvents.map((event) => event.type), ['artifact-moved'])
+  assert.deepEqual(persisted.chains[0]?.records[0]?.runRefs, ['run-9'])
+  assert.equal(persisted.chains[0]?.records[0]?.committedWatermark, 'event-9')
   await runtime.close()
 })
 

@@ -68,10 +68,16 @@ test('lazily activates one runtime shared by every Evidence contribution', async
         url: 'http://127.0.0.1:3897/',
         threadId: 'codex:thread-1',
         itemCount: 1,
-        jobId: 'job-1',
-        coalesced: false,
+        deltaDigest: `sha256:${'a'.repeat(64)}`,
+        idempotent: false,
         status
       }
+    },
+    sealClosure: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
+    },
+    appendSidechain: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
     },
     priority: async () => {
       calls.push(`${instance}:priority`)
@@ -244,10 +250,16 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
       url: 'http://127.0.0.1:3897/',
       threadId: 'codex:thread-1',
       itemCount: 1,
-      jobId: 'job-1',
-      coalesced: false,
+      deltaDigest: `sha256:${'a'.repeat(64)}`,
+      idempotent: false,
       status
     }),
+    sealClosure: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
+    },
+    appendSidechain: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
+    },
     priority: async () => status,
     preview: async () => ({
       ok: false,
@@ -313,10 +325,16 @@ test('keeps the dedicated system snapshot path read-only and reports no global c
       url: 'http://127.0.0.1:3897/',
       threadId: 'codex:thread-1',
       itemCount: 1,
-      jobId: 'job-1',
-      coalesced: false,
+      deltaDigest: `sha256:${'a'.repeat(64)}`,
+      idempotent: false,
       status
     }),
+    sealClosure: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
+    },
+    appendSidechain: async () => {
+      throw new Error('Not exercised by this lifecycle test.')
+    },
     priority: async () => status,
     preview: async () => ({
       ok: false,
@@ -362,7 +380,7 @@ test('keeps the dedicated system snapshot path read-only and reports no global c
   )!
 
   assert.deepEqual(view.audiences, ['ui', 'agent'])
-  assert.deepEqual(snapshotStatus.audiences, ['system'])
+  assert.deepEqual(snapshotStatus.audiences, ['ui', 'system'])
   assert.deepEqual(update.audiences, ['ui', 'agent'])
   assert.deepEqual(priority.audiences, ['ui', 'agent'])
   assert.deepEqual(await update.handler({
@@ -373,8 +391,8 @@ test('keeps the dedicated system snapshot path read-only and reports no global c
       url: 'http://127.0.0.1:3897/',
       threadId: 'codex:thread-1',
       itemCount: 1,
-      jobId: 'job-1',
-      coalesced: false,
+      deltaDigest: `sha256:${'a'.repeat(64)}`,
+      idempotent: false,
       status
     }
   })

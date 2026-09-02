@@ -15,25 +15,13 @@ import {
 
 export type ResearchDossierLoadedV1 = Readonly<{
   record: ResearchDossierExactRecord
-  /** Reserved for a future exact Evidence owner contract; currently fail-closed. */
-  evidence: null
-  review: ResearchDossierVisualReviewSummaryV1 | null
   issues: ResearchDossierSectionIssuesV1
 }>
 
 export type ResearchDossierSectionIssuesV1 = Readonly<Partial<Record<
-  'versions' | 'checkpoint' | 'reproduction' | 'evidence' | 'review',
+  'versions' | 'checkpoint' | 'reproduction',
   string
 >>>
-
-export type ResearchDossierVisualReviewSummaryV1 = Readonly<{
-  documentId: string
-  revisionId: string
-  status: 'candidate' | 'accepted' | 'rejected'
-  reviewDigest: string
-  reviewedAt: string
-  score: number
-}>
 
 export type ResearchDossierLoadResultV1 =
   | Readonly<{ ok: true; value: ResearchDossierLoadedV1 }>
@@ -176,7 +164,7 @@ export async function loadExactResearchDossier(
       history = { items: [described.value] }
       versionsIssue = errorMessage(error)
     }
-    const issues: Partial<Record<'versions' | 'checkpoint' | 'reproduction' | 'evidence' | 'review', string>> = {}
+    const issues: Partial<Record<'versions' | 'checkpoint' | 'reproduction', string>> = {}
     if (versionsIssue) issues.versions = versionsIssue
 
     let checkpoint: ResearchCheckpointRecordV1 | undefined
@@ -232,21 +220,10 @@ export async function loadExactResearchDossier(
         }
       }
     }
-    // Evidence is intentionally omitted until upstream exposes an exact, scoped
-    // summary contract. Never infer it from unrelated or ambient receipts.
-    const reviewTask = loadVisualReviewSummary(client, workspaceRoot, described.value)
-    const reviewResult = await settleSecondaryOwner(
-      reviewTask,
-      secondaryOwnerTimeoutMs,
-      'Visual Review'
-    )
-    if (reviewResult.issue) issues.review = reviewResult.issue
     return {
       ok: true,
       value: {
         record,
-        evidence: null,
-        review: reviewResult.value,
         issues
       }
     }
@@ -258,63 +235,6 @@ export async function loadExactResearchDossier(
       code: 'compute-owner-unavailable',
       message: 'The formal Compute owner is unavailable; this legacy run target cannot be verified.'
     }
-  }
-}
-
-async function loadVisualReviewSummary(
-  client: ResearchDossierCapabilityClient,
-  workspaceRoot: string,
-  descriptor: ArtifactVersionDescribeV2
-): Promise<SecondaryOwnerResultV1<ResearchDossierVisualReviewSummaryV1>> {
-  const metadata = descriptor.version.metadata
-  if (metadataString(metadata.producer) !== 'visual-review') {
-    return { value: null }
-  }
-  const documentId = metadataString(metadata.documentId)
-  const revisionId = metadataString(metadata.revisionId)
-  const recordedDigest = metadataString(metadata.reviewEvidenceDigest)
-  if (!documentId || !revisionId || !recordedDigest) {
-    return { value: null, issue: 'The Visual Review owner link is incomplete.' }
-  }
-  try {
-    const opened = await client.readVisualReviewDocument(workspaceRoot, { documentId })
-    if (opened.workspaceRoot !== workspaceRoot || opened.document.documentId !== documentId) {
-      return {
-        value: null,
-        issue: 'The Visual Review owner returned a document outside the exact workspace/document scope.'
-      }
-    }
-    const revision = opened.document.revisions.find((candidate) => candidate.id === revisionId)
-    if (!revision || !revision.versionRef) {
-      return {
-        value: null,
-        issue: 'The exact Visual Review revision or its committed VersionRef is unavailable.'
-      }
-    }
-    if (!sameArtifactVersionRef(revision.versionRef, descriptor.ref)) {
-      return {
-        value: null,
-        issue: 'The Visual Review revision does not match the full exact ArtifactVersionRef.'
-      }
-    }
-    if (revision.reviewEvidence.reviewedArtifactHash !== recordedDigest) {
-      return {
-        value: null,
-        issue: 'The Visual Review evidence digest does not match the Artifact metadata.'
-      }
-    }
-    return {
-      value: {
-        documentId,
-        revisionId,
-        status: revision.status,
-        reviewDigest: `sha256:${recordedDigest}`,
-        reviewedAt: revision.decidedAt ?? revision.reviewEvidence.reviewedAt,
-        score: revision.reviewEvidence.score.overall
-      }
-    }
-  } catch (error) {
-    return { value: null, issue: errorMessage(error) }
   }
 }
 

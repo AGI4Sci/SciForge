@@ -1,20 +1,20 @@
 import React, { lazy, type ReactElement } from 'react'
-import { GitMerge } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
-  type DomainRendererCommandHandler,
+  type DomainRendererResourceNavigationValue,
+  type DomainRendererResearchSummaryValue,
   type DomainRendererWorkbenchRightPanelValue,
-  type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 import {
-  PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
   PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRACT,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRACT,
+  PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRACT,
   domainPackageDefinition
 } from '../definition'
 import { createProjectDagCapabilityClient } from './project-dag-capability-client'
@@ -22,6 +22,7 @@ import {
   projectDagI18nResourceContribution,
   type ProjectDagI18nResourceContribution
 } from './project-dag-messages'
+import { projectDagCanonicalSessionId } from './project-dag-session'
 
 const ProjectDagPanel = lazy(() =>
   import('./ProjectDagPanel').then((module) => ({
@@ -32,13 +33,10 @@ const ProjectDagPanel = lazy(() =>
 export type ProjectDagRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
 
-export type ProjectDagToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof GitMerge>
-
 export type ProjectDagRendererContribution =
   | ProjectDagRightPanelContribution
-  | DomainRendererCommandHandler
-  | ProjectDagToolbarActionContribution
+  | DomainRendererResearchSummaryValue
+  | DomainRendererResourceNavigationValue
   | ProjectDagI18nResourceContribution
 
 export function createProjectDagRightPanelContribution(
@@ -65,15 +63,73 @@ export function createProjectDagRightPanelContribution(
   })
 }
 
-export function createProjectDagCommand(
+export function createProjectDagResearchSummaryContribution(
   host: DomainRendererHost
-): DomainRendererCommandHandler {
-  return createOpenRightPanelCommand(host, PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id)
+): DomainRendererResearchSummaryValue {
+  const client = createProjectDagCapabilityClient(host.capabilityInvoker)
+  return Object.freeze({
+    provide: async ({ session, scope }) => {
+      if (scope.kind !== 'workspace' || !scope.id.trim()) {
+        return { status: 'unavailable' as const, reason: 'Project scope is unavailable.' }
+      }
+      try {
+        const sessionId = projectDagCanonicalSessionId(
+          session.id,
+          session.runtimeId
+        )
+        const result = await client.view({
+          workspaceRoot: scope.id,
+          projectRoot: scope.id,
+          ...(sessionId ? { sessions: [sessionId] } : {}),
+          view: 'home'
+        })
+        if (!result.ok) return { status: 'unavailable' as const, reason: result.error.message }
+        const goal = result.data.goal
+        const status = result.data.status
+        const scopeCount = status.scope.includedSessions.length
+        return {
+          status: 'available' as const,
+          title: goal?.title ?? 'Research project',
+          items: [
+            { label: 'Goal', value: goal?.title ?? 'Not set', tone: goal ? 'positive' as const : 'warning' as const },
+            { label: 'Scope', value: `${scopeCount} included session${scopeCount === 1 ? '' : 's'}`, tone: scopeCount ? 'positive' as const : 'warning' as const },
+            { label: 'Attention', value: String(status.attentionCount), tone: status.attentionCount ? 'warning' as const : 'neutral' as const }
+          ],
+          actions: [{
+            label: 'Open project',
+            resource: {
+              resourceKind: 'project-dag',
+              resourceId: scope.id
+            }
+          }]
+        }
+      } catch {
+        return { status: 'unavailable' as const, reason: 'Project owner is unavailable.' }
+      }
+    }
+  })
 }
 
-export function createProjectDagToolbarActionContribution():
-ProjectDagToolbarActionContribution {
-  return Object.freeze({ icon: GitMerge })
+export function createProjectDagResourceNavigationContribution(): DomainRendererResourceNavigationValue {
+  return Object.freeze({
+    resolve: ({ resource }) => {
+      const resourceId = resource.resourceId.trim()
+      if (!resourceId) return null
+      if (resource.resourceKind === 'project-goal') {
+        return Object.freeze({ activation: Object.freeze({
+          revision: 1, payload: { view: 'goals' as const, focus: { nodeId: resourceId } }
+        }) })
+      }
+      if (resource.resourceKind === 'project-snapshot') {
+        return Object.freeze({ activation: Object.freeze({
+          revision: 1, payload: { view: 'graph' as const, focus: { nodeId: resourceId } }
+        }) })
+      }
+      return Object.freeze({ activation: Object.freeze({
+        revision: 1, payload: { view: 'home' as const }
+      }) })
+    }
+  })
 }
 
 export function createDomainRendererEntry(
@@ -88,40 +144,19 @@ export function createDomainRendererEntry(
         value: createProjectDagRightPanelContribution(host)
       },
       {
-        ...PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
-        value: createProjectDagCommand(host)
+        ...PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+        contract: PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRACT,
+        value: createProjectDagResearchSummaryContribution(host)
       },
       {
-        ...PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
-        contract: PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
-        value: createProjectDagToolbarActionContribution()
+        ...PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
+        contract: PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRACT,
+        value: createProjectDagResourceNavigationContribution()
       },
       {
         ...PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,
         value: projectDagI18nResourceContribution
       }
     ]
-  })
-}
-
-function createOpenRightPanelCommand(
-  host: DomainRendererHost,
-  contributionId: string
-): DomainRendererCommandHandler {
-  return Object.freeze({
-    execute: ({ sessionId, payload }) => {
-      if (!sessionId || !host.workbench) return
-      host.workbench.openRightPanel({
-        contributionId,
-        sessionId,
-        ...(payload === undefined ? {} : {
-          activation: { contributionId, revision: 1, payload }
-        })
-      })
-    },
-    isAvailable: () => Boolean(host.workbench),
-    isActive: ({ activeSurface }) =>
-      activeSurface?.kind === 'right-panel' &&
-      activeSurface.contributionId === contributionId
   })
 }

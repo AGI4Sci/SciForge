@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
@@ -50,8 +51,10 @@ class RecordingLLM:
         return self.extracts.pop(0)
 
 
-def _command(workspace: str, *, watermark: str, trace: list[dict]) -> dict:
-    return {
+def _command(
+    workspace: str, *, watermark: str, trace: list[dict], idempotency_key: str | None = None,
+) -> dict:
+    command = {
         "thread_id": "thread",
         "target_watermark": watermark,
         "reason": "turn_committed",
@@ -60,9 +63,193 @@ def _command(workspace: str, *, watermark: str, trace: list[dict]) -> dict:
         "workspace_root": workspace,
         "project_root": workspace,
     }
+    if idempotency_key is not None:
+        command["idempotency_key"] = idempotency_key
+    return command
+
+
+def _delta_envelope(*, digest_fields: dict, predecessor: str | None) -> dict:
+    delta = {
+        **digest_fields,
+        "predecessorDigest": predecessor,
+    }
+    payload_digest = "sha256:" + hashlib.sha256(json.dumps(
+        delta["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    delta["payloadDigest"] = payload_digest
+    # The immutable digest covers every field except deltaDigest itself.
+    delta_digest = "sha256:" + hashlib.sha256(json.dumps(
+        delta, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    delta["deltaDigest"] = delta_digest
+    return {
+        "kind": "sciforge.evidence-delta-envelope.v1",
+        "schemaVersion": "sciforge.evidence-delta-envelope.v1",
+        "delta": delta,
+    }
 
 
 class IncrementalTracePipelineTests(unittest.TestCase):
+    def test_sidecar_rejects_cross_scope_and_out_of_bound_delta_envelopes(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            engine = Engine(
+                StubLLM(extract_response=_extract("unused", "unused"), nli_handler=lambda _p, _h: 0.9),
+                storage_dir=os.path.join(workspace, ".edag"),
+            )
+            base = {
+                "sequence": 1,
+                "scope": {
+                    "runtimeId": "codex", "threadId": "other", "operationId": "turn",
+                    "kind": "turn", "workspaceRoot": workspace,
+                },
+                "requestedWatermark": "1", "committedWatermark": "1",
+                "schemaVersion": "evidence.delta.v1", "extractorVersion": "extractor.v3",
+                "verifierVersion": "verifier.v3", "idempotencyKey": "envelope-cross-scope",
+                "sourceRefs": [], "artifactRefs": [], "runRefs": [],
+                "payload": {"trace": [{"id": "cross", "type": "message", "content": "x"}]},
+                "createdAt": "2026-09-01T00:00:00Z",
+            }
+            with self.assertRaisesRegex(ValueError, "thread scope"):
+                engine.update(**_command(
+                    workspace, watermark="1", trace=[_delta_envelope(digest_fields=base, predecessor=None)],
+                ))
+
+            base["scope"] = {**base["scope"], "threadId": "thread"}
+            base["requestedWatermark"] = "2"
+            base["committedWatermark"] = "2"
+            with self.assertRaisesRegex(ValueError, "outside the requested closure barrier"):
+                engine.update(**_command(
+                    workspace, watermark="1", trace=[_delta_envelope(digest_fields=base, predecessor=None)],
+                ))
+
+    def test_sidecar_rejects_malformed_embedded_trace_and_replay_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            engine = Engine(
+                StubLLM(extract_response=_extract("unused", "unused"), nli_handler=lambda _p, _h: 0.9),
+                storage_dir=os.path.join(workspace, ".edag"),
+            )
+            malformed = {
+                "sequence": 1,
+                "scope": {
+                    "runtimeId": "codex", "threadId": "thread", "operationId": "turn",
+                    "kind": "turn", "workspaceRoot": workspace,
+                },
+                "requestedWatermark": "1", "committedWatermark": "1",
+                "schemaVersion": "evidence.delta.v1", "extractorVersion": "extractor.v3",
+                "verifierVersion": "verifier.v3", "idempotencyKey": "envelope-malformed",
+                "sourceRefs": [], "artifactRefs": [], "runRefs": [],
+                "payload": {"trace": [{"id": "ok"}, "not-an-object"]},
+                "createdAt": "2026-09-01T00:00:00Z",
+            }
+            malformed_envelope = _delta_envelope(digest_fields=malformed, predecessor=None)
+            with self.assertRaisesRegex(ValueError, "invalid embedded trace"):
+                engine.update(**_command(
+                    workspace, watermark="1", trace=[malformed_envelope],
+                ))
+
+            first = engine.update(**_command(
+                workspace, watermark="1", trace=[{"id": "one", "type": "message", "content": "one"}],
+                idempotency_key="replay-drift-key",
+            ))
+            with self.assertRaisesRegex(ValueError, "idempotency key .*different content"):
+                engine.update(**_command(
+                    workspace, watermark="1", trace=[{"id": "two", "type": "message", "content": "two"}],
+                    idempotency_key="replay-drift-key",
+                ))
+            self.assertEqual(engine.latest_snapshot("thread").digest, first["snapshot"]["digest"])
+
+    def test_formal_closure_materialization_does_not_replace_live_latest_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            engine = Engine(
+                StubLLM(extract_response=_extract("unused", "unused"), nli_handler=lambda _p, _h: 0.9),
+                storage_dir=os.path.join(workspace, ".edag"),
+            )
+            first = engine.update(**_command(
+                workspace, watermark="1", trace=[{"id": "one", "type": "message", "content": "one"}],
+            ))
+            second = engine.update(**_command(
+                workspace, watermark="2", trace=[{"id": "two", "type": "message", "content": "two"}],
+            ))
+            latest_before = engine.latest_snapshot("thread")
+            self.assertEqual(latest_before.digest, second["snapshot"]["digest"])
+            envelope = _delta_envelope(
+                digest_fields={
+                    "sequence": 1,
+                    "scope": {
+                        "runtimeId": "codex", "threadId": "thread", "operationId": "one",
+                        "kind": "turn", "workspaceRoot": workspace,
+                    },
+                    "requestedWatermark": "1", "committedWatermark": "1",
+                    "schemaVersion": "evidence.delta.v1", "extractorVersion": "extractor.v3",
+                    "verifierVersion": "verifier.v3", "idempotencyKey": "formal-one",
+                    "sourceRefs": [], "artifactRefs": [], "runRefs": [],
+                    "payload": {"trace": [{"id": "one", "type": "message", "content": "one"}]},
+                    "createdAt": "2026-09-01T00:00:00Z",
+                }, predecessor=None,
+            )
+            formal = engine.update(
+                thread_id="thread", target_watermark="1", reason="seal_closure", priority="immediate",
+                trace=[envelope], workspace_root=workspace, project_root=workspace,
+                idempotency_key="formal-one-key",
+            )
+            self.assertEqual(formal["snapshot"]["inputWatermark"], "1")
+            self.assertEqual(engine.latest_snapshot("thread").digest, latest_before.digest)
+            self.assertEqual(engine.latest_snapshot("thread").input_watermark, "2")
+
+    def test_closure_delta_envelopes_preserve_correction_and_assessment_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            storage = os.path.join(workspace, ".edag")
+            engine = Engine(
+                StubLLM(
+                    extract_response=_extract("unused", "unused"),
+                    nli_handler=lambda _p, _h: 0.9,
+                ),
+                storage_dir=storage,
+            )
+            scope = {
+                "runtimeId": "codex", "threadId": "thread", "operationId": "correction",
+                "kind": "correction", "workspaceRoot": workspace,
+            }
+            correction = _delta_envelope(
+                digest_fields={
+                    "sequence": 1, "scope": scope, "requestedWatermark": "1",
+                    "committedWatermark": "1", "schemaVersion": "evidence.delta.v1",
+                    "extractorVersion": "correction", "verifierVersion": "correction",
+                    "idempotencyKey": "correction-envelope", "sourceRefs": [],
+                    "artifactRefs": [], "runRefs": [], "payload": {
+                        "recordType": "correction",
+                        "correction": {"recordId": "correction:1", "targetRecordId": "claim:1"},
+                    }, "createdAt": "2026-09-01T00:00:00Z",
+                },
+                predecessor=None,
+            )
+            first = engine.update(**_command(workspace, watermark="1", trace=[correction]))
+            self.assertEqual(first["snapshot"]["inputWatermark"], "1")
+            first_digest = correction["delta"]["deltaDigest"]
+            assessment = _delta_envelope(
+                digest_fields={
+                    "sequence": 2, "scope": {**scope, "operationId": "assessment", "kind": "assessment"},
+                    "requestedWatermark": "2", "committedWatermark": "2",
+                    "schemaVersion": "evidence.delta.v1", "extractorVersion": "assessment",
+                    "verifierVersion": "assessment", "idempotencyKey": "assessment-envelope",
+                    "sourceRefs": [], "artifactRefs": [], "runRefs": [], "payload": {
+                        "recordType": "assessment", "assessment": {"assessmentId": "assessment:1"},
+                    }, "createdAt": "2026-09-01T00:00:01Z",
+                },
+                predecessor=first_digest,
+            )
+            second = engine.update(**_command(workspace, watermark="2", trace=[assessment]))
+            self.assertEqual(second["snapshot"]["inputWatermark"], "2")
+            records = engine.require("thread").meta["evidenceDeltaRecords"]
+            self.assertEqual(
+                [record["payload"]["recordType"] for record in records],
+                ["correction", "assessment"],
+            )
+            self.assertEqual(len(engine.require("thread").nodes), 0)
+            replay = engine.update(**_command(workspace, watermark="2", trace=[assessment]))
+            self.assertTrue(replay["idempotent"])
+            self.assertEqual(len(engine.require("thread").meta["evidenceDeltaRecords"]), 2)
+
     def test_composite_and_batch_watermarks_are_monotonic_under_reordering(self) -> None:
         self.assertEqual(compare_watermarks("20:event-new", "19:event-old"), 1)
         self.assertTrue(watermark_regresses("20:event-new", "19:event-old"))

@@ -5,7 +5,10 @@ import {
   domainPackageJsonValueSchema,
   type DomainPackageJsonValue
 } from './contract.js'
-import type { DomainWorkbenchOpenResourceInput } from './host.js'
+import type {
+  DomainWorkbenchExactResource,
+  DomainWorkbenchOpenResourceInput
+} from './host.js'
 
 export const RENDERER_COMMAND_CONTRIBUTION_KIND = 'renderer.command' as const
 export const RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND =
@@ -22,7 +25,19 @@ export const RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND =
   'renderer.chat-result-panel' as const
 export const RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND =
   'renderer.resource-navigation' as const
+/** Bounded, read-only owner summaries consumed by the primary Research surface. */
+export const RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND =
+  'renderer.research-summary.v1' as const
 export const RENDERER_EXTENSION_CONTRIBUTION_KIND = 'renderer.extension' as const
+
+export const RESEARCH_SUMMARY_SLOTS = [
+  'goal',
+  'scope',
+  'status',
+  'artifacts',
+  'attention'
+] as const
+export type DomainRendererResearchSummarySlot = typeof RESEARCH_SUMMARY_SLOTS[number]
 
 export const WORKBENCH_TOPBAR_LOCATION = 'workbench.topbar' as const
 export const WORKBENCH_RIGHT_PANEL_LOCATION = 'workbench.right-panel' as const
@@ -483,6 +498,96 @@ export type DomainRendererResourceNavigationValue = Readonly<{
     DomainRendererResourceNavigationTarget | null
 }>
 
+/**
+ * Generic metadata for a bounded Research summary. The contribution id and
+ * contract order provide stable identity and ordering; this contract only
+ * describes the applicable scope/resource kinds and the researcher-facing label.
+ */
+export const domainRendererResearchSummaryContractSchema = z.object({
+  slot: z.enum(RESEARCH_SUMMARY_SLOTS),
+  label: z.string().trim().min(1).max(160),
+  order: z.number().int().min(-10_000).max(10_000),
+  scopeKinds: z.array(z.string().trim().min(1).max(192)).min(1).max(32),
+  resourceKinds: z.array(z.string().trim().min(1).max(192)).max(64).default([])
+}).strict().superRefine((contract, context) => {
+  for (const field of ['scopeKinds', 'resourceKinds'] as const) {
+    const seen = new Set<string>()
+    for (const [index, value] of contract[field].entries()) {
+      if (seen.has(value)) {
+        context.addIssue({
+          code: 'custom',
+          path: [field, index],
+          message: `${field} entry ${value} is duplicated.`
+        })
+      }
+      seen.add(value)
+    }
+  }
+})
+
+export type DomainRendererResearchSummaryContract = z.infer<
+  typeof domainRendererResearchSummaryContractSchema
+>
+
+export type DomainRendererResearchSummaryRequest = Readonly<{
+  session: DomainRendererWorkbenchSession
+  scope: Readonly<{
+    kind: string
+    id: string
+  }>
+  resource?: DomainWorkbenchExactResource
+}>
+
+/** Exact, domain-neutral resource action returned by an owner summary. */
+export const domainRendererResearchSummaryNavigationSchema = z.object({
+  label: z.string().trim().min(1).max(160),
+  resource: z.object({
+    resourceKind: z.string().trim().min(1).max(192),
+    resourceId: z.string().trim().min(1).max(512),
+    resourceRef: z.string().trim().regex(/^res_[A-Za-z0-9_-]{20,}$/u).optional(),
+    integrity: z.object({
+      algorithm: z.literal('sha256'),
+      expectedDigest: z.string().trim().toLowerCase()
+        .regex(/^sha256:[0-9a-f]{64}$/u)
+    }).strict().optional()
+  }).strict()
+}).strict()
+
+export const domainRendererResearchSummaryResultSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('available'),
+    title: z.string().trim().min(1).max(160).optional(),
+    items: z.array(z.object({
+      label: z.string().trim().min(1).max(160),
+      value: z.string().trim().min(1).max(2_000),
+      tone: z.enum(['neutral', 'positive', 'warning', 'critical']).default('neutral')
+    }).strict()).max(16),
+    actions: z.array(domainRendererResearchSummaryNavigationSchema).max(16)
+  }).strict(),
+  z.object({
+    status: z.literal('unavailable'),
+    reason: z.string().trim().min(1).max(500).optional()
+  }).strict()
+])
+
+export type DomainRendererResearchSummaryNavigation = z.infer<
+  typeof domainRendererResearchSummaryNavigationSchema
+>
+export type DomainRendererResearchSummaryResult = z.infer<
+  typeof domainRendererResearchSummaryResultSchema
+>
+export type DomainRendererResearchSummaryValue = Readonly<{
+  provide: (
+    request: DomainRendererResearchSummaryRequest
+  ) => DomainRendererResearchSummaryResult | Promise<DomainRendererResearchSummaryResult>
+}>
+
+export function isDomainRendererResearchSummaryValue(
+  value: unknown
+): value is DomainRendererResearchSummaryValue {
+  return hasOnlyKeys(value, ['provide']) && typeof value.provide === 'function'
+}
+
 export function isDomainRendererResourceNavigationValue(
   value: unknown
 ): value is DomainRendererResourceNavigationValue {
@@ -580,6 +685,26 @@ export function defineDomainRendererComposerContextProviderContract(
   input: DomainRendererComposerContextProviderContract
 ): DomainRendererComposerContextProviderContract {
   return Object.freeze(domainRendererComposerContextProviderContractSchema.parse(input))
+}
+
+export function defineDomainRendererResearchSummaryContract(
+  input: DomainRendererResearchSummaryContract
+): DomainRendererResearchSummaryContract {
+  return Object.freeze(domainRendererResearchSummaryContractSchema.parse(input))
+}
+
+/** Parse owner output at the host boundary and return unavailable on errors. */
+export async function resolveDomainRendererResearchSummary(
+  contribution: DomainRendererResearchSummaryValue,
+  request: DomainRendererResearchSummaryRequest
+): Promise<DomainRendererResearchSummaryResult> {
+  try {
+    return domainRendererResearchSummaryResultSchema.parse(
+      await contribution.provide(request)
+    )
+  } catch {
+    return { status: 'unavailable' }
+  }
 }
 
 function hasOnlyKeys(

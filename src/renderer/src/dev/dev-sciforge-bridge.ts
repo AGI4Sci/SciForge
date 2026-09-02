@@ -340,12 +340,6 @@ function createApi(): SciForgeApi {
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)
     },
-    researchCards: {
-      list: (input) => invoke('researchCards:list', input ?? {}),
-      create: (input) => invoke('researchCards:create', input),
-      update: (input) => invoke('researchCards:update', input),
-      archive: (input) => invoke('researchCards:archive', input)
-    },
     agentRuntime: {
       connect: (runtimeId) => invoke('agentRuntime:connect', { runtimeId }),
       capabilities: (runtimeId) => invoke('agentRuntime:capabilities', { runtimeId }),

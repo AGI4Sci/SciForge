@@ -414,7 +414,7 @@ class WorkflowTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def enqueue(self, snapshots: list[dict], *, project: str | None = None,
-                reason: str = "evidence_snapshot_committed", mode: str = "autonomous") -> dict:
+                reason: str = "manual_immediate", mode: str = "autonomous") -> dict:
         vector = [{"threadId": s["threadId"], "digest": s["digest"]} for s in snapshots]
         return self.engine.enqueue_update({
             "projectKey": project or self.project,
@@ -947,12 +947,10 @@ class WorkflowTests(unittest.TestCase):
                 "reason": "manual_update",
             })
 
-    def test_evidence_commit_merges_persisted_membership_and_isolates_projects(self):
+    def test_explicit_scope_keeps_project_membership_and_isolates_projects(self):
         s1 = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
-        self.enqueue([s1]); self.drain()
         s2 = write_snapshot(self.sessions, "s2", [("claim two", "source two")])
-        # Incremental event carries only the changed session. Persisted s1 is retained.
-        self.enqueue([s2]); self.drain()
+        self.enqueue([s1, s2]); self.drain()
         latest = self.engine.workflow.latest_snapshot(self.project)
         self.assertEqual({v["threadId"] for v in latest["evidenceVector"]}, {"s1", "s2"})
 
@@ -1066,7 +1064,11 @@ class WorkflowTests(unittest.TestCase):
 
         changed_s2 = write_snapshot(
             self.sessions, "s2", [("changed claim", "changed source")], version=2)
-        self.enqueue([changed_s2]); self.drain()
+        self.engine.mark_invalidation({
+            "projectKey": self.project,
+            "reason": "upstream_changed",
+            "changedFields": ["evidenceVector"],
+        })
         after_auto = self.engine.workflow.latest_snapshot(self.project)
         self.assertEqual(after_auto["evidenceVector"],
                          [{"threadId": "s1", "digest": s1["digest"]}])
@@ -1310,14 +1312,17 @@ class WorkflowTests(unittest.TestCase):
         snapshot = write_snapshot(self.sessions, "s1", [("fragile claim", "one source")])
         self.enqueue([snapshot]); self.engine.process_updates(self.project)
         self.engine.process_audits(self.project)
+        self.engine.process_updates(self.project)
+        self.engine.process_audits(self.project)
         prior = self.engine.store.q1(
             "SELECT * FROM decision_event WHERE project_key=? ORDER BY created_at LIMIT 1",
             (self.project,))
+        current = self.engine.workflow.latest_snapshot(self.project)
         decision = self.engine.record_decision({
             "projectKey": self.project, "action": "supersede", "decidedBy": "human",
             "actorId": "researcher", "autonomyMode": "autonomous",
             "rationale": "new expert assessment", "alternatives": ["endorse"],
-            "evidenceDigest": prior["evidence_digest"], "confidence": 0.95,
+            "evidenceDigest": current["digest"], "confidence": 0.95,
             "reversibility": "reversible", "supersedesId": prior["id"],
         })
         self.assertEqual(decision["supersedes_id"], prior["id"])
@@ -1827,6 +1832,15 @@ class WorkflowTests(unittest.TestCase):
         finally:
             held.release()
 
+    def test_compiler_rejects_implicit_workspace_wide_scope(self):
+        compiler = self.engine.workflow.compiler
+        with self.assertRaisesRegex(ValueError, "explicit Session list"):
+            with compiler.compile_transaction(project_key=self.project):
+                pass
+        with self.assertRaisesRegex(ValueError, "explicit Session list"):
+            with compiler.compile_transaction("scheduled", "all", project_key=self.project):
+                pass
+
     def test_audit_sidechain_is_persistent_and_failure_does_not_fail_project_job(self):
         snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
         self.enqueue([snapshot])
@@ -2268,14 +2282,25 @@ class WorkflowTests(unittest.TestCase):
         })
         audit = self.engine.process_audits(self.project)["audit"]
         self.assertEqual(audit["id"], queued["id"])
+        self.engine.workflow.seal_snapshot(
+            self.project, expected_head_digest=latest["digest"])
+        with self.assertRaisesRegex(ValueError, "action class"):
+            self.engine.workflow.create_release(
+                project_key=self.project, project_snapshot_digest=latest["digest"],
+                expected_head_digest=latest["digest"], audit_digest=audit["digest"],
+                created_by="research-lead", output_artifacts=[], requested_status="certified",
+                action_class="draft_internal_reversible",
+            )
         with self.assertRaises(PermissionError):
             self.engine.workflow.create_release(
                 project_key=self.project, project_snapshot_digest=latest["digest"],
-                audit_digest=audit["digest"], created_by="agent", output_artifacts=[],
+                expected_head_digest=latest["digest"], audit_digest=audit["digest"],
+                created_by="agent", output_artifacts=[],
                 external_action=True)
         release = self.engine.workflow.create_release(
             project_key=self.project, project_snapshot_digest=latest["digest"],
-            audit_digest=audit["digest"], created_by="agent", output_artifacts=[],
+            expected_head_digest=latest["digest"], audit_digest=audit["digest"],
+            created_by="agent", output_artifacts=[],
             requested_status="candidate", external_action=True,
             runtime_authorization={"granted": True, "permissionId": "runtime:permit:1"})
         self.assertEqual(release["certification_status"], "candidate")
@@ -2367,7 +2392,8 @@ class WorkflowTests(unittest.TestCase):
         blocked_release = self.engine.workflow.create_release(
             project_key=self.project,
             project_snapshot_digest=graph_view["snapshot"]["digest"],
-            audit_digest=audit["digest"], created_by="research-lead",
+            expected_head_digest=graph_view["snapshot"]["digest"], audit_digest=audit["digest"],
+            created_by="research-lead",
             output_artifacts=[], requested_status="certified",
         )
         self.assertEqual(blocked_release["certification_status"], "blocked")
@@ -2401,7 +2427,8 @@ class WorkflowTests(unittest.TestCase):
         certified_release = self.engine.workflow.create_release(
             project_key=self.project,
             project_snapshot_digest=graph_view["snapshot"]["digest"],
-            audit_digest=audit["digest"], created_by="research-lead",
+            expected_head_digest=graph_view["snapshot"]["digest"], audit_digest=audit["digest"],
+            created_by="research-lead",
             output_artifacts=[], requested_status="certified",
         )
         self.assertEqual(certified_release["certification_status"], "certified")

@@ -41,7 +41,6 @@ test('dossier reads exact owner identities and controls recording policy only th
     limit: 25,
     beforeSequence: 20
   })
-  await client.readVisualReviewDocument('/workspace/lab', { documentId: 'figure-review' })
   await client.readResearchRecordingStatus('/workspace/lab', {
     runtimeId: 'codex',
     threadId: 'thread-1'
@@ -91,11 +90,6 @@ test('dossier reads exact owner identities and controls recording policy only th
     {
       actionId: 'artifact-versions.list-v2',
       input: { artifactId: 'artifact:figure', limit: 25, beforeSequence: 20 },
-      workspaceId: '/workspace/lab'
-    },
-    {
-      actionId: 'visual-review.read-document',
-      input: { documentId: 'figure-review' },
       workspaceId: '/workspace/lab'
     },
     {

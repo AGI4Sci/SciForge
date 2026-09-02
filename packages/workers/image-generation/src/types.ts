@@ -394,6 +394,16 @@ export type DiagramLayerManifest = {
 export type ImageGenerationProvider = 'image-endpoint' | 'placeholder'
 export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
 
+export type ImageGenerationReferenceV1 = Readonly<{
+  path: string
+  contentDigest?: string
+}>
+
+export type ImageGenerationReviewRefV1 = Readonly<{
+  kind: 'visual-document'
+  id: string
+}>
+
 /**
  * Persisted model-side execution inputs captured beside every generated
  * image.  Model rendering is stochastic, so replay means repeating the same
@@ -409,6 +419,8 @@ export type ImageGenerationModelExecutionV1 = {
   }
   effectivePrompt: string
   effectivePromptHash: string
+  references?: readonly ImageGenerationReferenceV1[]
+  reviewRefs?: readonly ImageGenerationReviewRefV1[]
   parameters: {
     mode: ImageGenerationMode
     size: ImageSize
@@ -417,6 +429,7 @@ export type ImageGenerationModelExecutionV1 = {
     stylePreset?: string
     referencePath?: string
     promptProfile?: ImageGenerationRecipe['promptProfile']
+    seed?: number
   }
   renderer: {
     id: 'sciforge-image-generation-mcp'
@@ -425,6 +438,7 @@ export type ImageGenerationModelExecutionV1 = {
   replay: {
     supported: true
     recipeHash: string
+    /** True only when the provider contract proves byte-identical output. */
     exactOutputExpected: boolean
   }
 }
@@ -436,6 +450,7 @@ export type ImageGenerationRecipe = {
   size: ImageSize
   stylePreset?: string
   referencePath?: string
+  seed?: number
   outputFormat?: ImageOutputFormat
   intent?: ImageDrawingIntent
   drawingBrief?: DrawingBrief
@@ -494,6 +509,7 @@ export type ImageGenerationPlanRequest = {
   size?: Partial<ImageSize>
   stylePreset?: string
   referencePath?: string
+  seed?: number
   visualPlan: VisualProductionHandoff
 }
 
@@ -630,6 +646,7 @@ export type ImageGenerationEditFromVisualReviewPacketResult =
         manifestPath: string
         artifactManifestPath: string
         provider: ImageGenerationProvider
+        modelExecution?: ImageGenerationModelExecutionV1
       }>
       warnings: string[]
     }

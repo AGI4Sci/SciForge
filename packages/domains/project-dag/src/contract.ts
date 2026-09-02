@@ -22,6 +22,8 @@ export const PROJECT_DAG_SERVICE_URL_ENV = 'SCIFORGE_PROJECT_DAG_SERVICE_URL'
 export const PROJECT_DAG_API_KEY_ENV = 'SCIFORGE_PROJECT_DAG_API_KEY'
 export const DEFAULT_PROJECT_DAG_SERVICE_URL = 'http://127.0.0.1:3898'
 export const PROJECT_DAG_SERVICE_VERSION = '1.0.0'
+export const PROJECT_INVALIDATION_POLICY_V1 = 'project-invalidation-policy/v1'
+export const DECISION_POLICY_V1 = 'decision-policy/v1'
 
 export const PROJECT_DAG_CAPABILITY_IDS = Object.freeze({
   view: 'project-dag.view',
@@ -68,11 +70,13 @@ const sessionListSchema = z.array(trimmedIdSchema).max(MAX_SESSIONS)
 export const projectDagCapturedScopeSchema = z.object({
   includedSessions: sessionListSchema,
   excludedSessions: sessionListSchema,
-  isolatedSessions: sessionListSchema
+  isolatedSessions: sessionListSchema,
+  reasons: z.record(trimmedIdSchema, z.string().trim().min(1).max(MAX_MESSAGE_LENGTH)).optional()
 }).strict().superRefine((scope, context) => {
   const included = new Set(scope.includedSessions)
   const excluded = new Set(scope.excludedSessions)
   const isolated = new Set(scope.isolatedSessions)
+  const reasons = new Set(Object.keys(scope.reasons ?? {}))
   const duplicate = scope.includedSessions.find((sessionId) =>
     excluded.has(sessionId) || isolated.has(sessionId)
   )
@@ -103,12 +107,22 @@ export const projectDagCapturedScopeSchema = z.object({
       message: 'Captured scope session lists must not contain duplicates.'
     })
   }
+  for (const sessionId of reasons) {
+    if (!included.has(sessionId) && !excluded.has(sessionId) && !isolated.has(sessionId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['reasons', sessionId],
+        message: `Scope reason references unknown session ${sessionId}.`
+      })
+    }
+  }
 })
 
-export const projectDagRequestedScopeSchema = z.union([
-  z.literal('all'),
-  sessionListSchema
-])
+/** Updates must carry an explicit, caller-selected Session scope. */
+export const projectDagRequestedScopeSchema = sessionListSchema.min(
+  1,
+  'Project updates require at least one explicitly selected Session.'
+)
 
 export const projectDagTargetSchema = z.object({
   workspaceRoot: optionalPathSchema,
@@ -236,7 +250,17 @@ export const projectDagStatusSchema = z.object({
   autonomyMode: projectDagAutonomyModeSchema,
   attentionCount: z.number().int().nonnegative(),
   auditTargetDigest: prefixedDigestSchema.nullable().optional(),
-  auditStale: z.boolean().optional()
+  auditStale: z.boolean().optional(),
+  invalidation: z.lazy(() => projectDagInvalidationSchema).nullable().optional(),
+  scopeRevisions: z.array(z.object({
+    revision: z.number().int().positive(),
+    includedSessions: sessionListSchema,
+    excludedSessions: sessionListSchema,
+    isolatedSessions: sessionListSchema,
+    reasons: z.record(trimmedIdSchema, z.string().trim().min(1).max(MAX_MESSAGE_LENGTH)).optional(),
+    createdBy: trimmedIdSchema.optional(),
+    createdAt: timestampSchema.optional()
+  }).strict()).optional()
 }).strict()
 
 export const projectDagGoalSchema = z.object({
@@ -279,6 +303,108 @@ export const projectDagSaveGoalInputSchema = projectDagTargetSchema.extend({
 export const projectDagSaveGoalOutputSchema = z.object({
   goal: projectDagGoalSchema,
   status: projectDagStatusSchema
+}).strict()
+
+export const projectDagScopeDraftSchema = z.object({
+  includedSessions: sessionListSchema,
+  excludedSessions: sessionListSchema,
+  isolatedSessions: sessionListSchema,
+  reasons: z.record(trimmedIdSchema, z.string().trim().min(1).max(MAX_MESSAGE_LENGTH)).optional(),
+  baseRevision: z.number().int().nonnegative().nullable().optional(),
+  updatedBy: trimmedIdSchema.optional(),
+  updatedAt: timestampSchema.optional()
+}).strict()
+
+export const projectDagDecisionActionClassSchema = z.enum([
+  'draft_internal_reversible', 'certified_internal', 'public_external',
+  'specialized_high_impact'
+])
+
+export const projectDagDecisionRuleSchema = z.object({
+  agentOnly: z.boolean(),
+  requiredRoles: z.array(z.object({
+    role: trimmedIdSchema,
+    count: z.number().int().positive()
+  }).strict()).max(32),
+  quorum: z.number().int().nonnegative(),
+  allowCertification: z.boolean(),
+  trustedRoleSource: trimmedIdSchema.nullable()
+}).strict()
+
+export const projectDagDecisionPolicySchema = z.object({
+  version: z.literal('decision-policy/v1'),
+  rules: z.record(projectDagDecisionActionClassSchema, projectDagDecisionRuleSchema)
+}).strict()
+
+export const projectDagInvalidationSchema = z.object({
+  projectKey: trimmedIdSchema,
+  desiredFingerprint: prefixedDigestSchema.nullable().optional(),
+  appliedFingerprint: prefixedDigestSchema.nullable().optional(),
+  stale: z.boolean(),
+  reason: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH).nullable().optional(),
+  changedFields: z.array(trimmedIdSchema).max(128),
+  updatedAt: timestampSchema
+}).strict()
+
+export const projectDagDecisionV1Schema = z.object({
+  decisionId: trimmedIdSchema,
+  projectSnapshot: prefixedDigestSchema,
+  actionClass: projectDagDecisionActionClassSchema,
+  action: trimmedIdSchema,
+  target: z.string().trim().max(MAX_MESSAGE_LENGTH).optional(),
+  actor: z.object({
+    type: z.enum(['agent', 'human', 'tool']),
+    id: trimmedIdSchema
+  }).strict(),
+  rationale: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+  alternatives: z.array(z.string().trim().min(1).max(MAX_MESSAGE_LENGTH)).max(100).optional(),
+  reversibility: z.string().trim().min(1).max(256),
+  policyRef: trimmedIdSchema,
+  createdAt: timestampSchema,
+  supersedesDecisionId: trimmedIdSchema.nullable().optional()
+}).strict()
+
+export const projectDagApprovalV1Schema = z.object({
+  approvalId: trimmedIdSchema,
+  decisionRef: trimmedIdSchema,
+  projectSnapshot: prefixedDigestSchema,
+  attestor: trimmedIdSchema,
+  trustedRoleAssertionRef: trimmedIdSchema.nullable().optional(),
+  attestation: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+  policyRef: trimmedIdSchema,
+  createdAt: timestampSchema,
+  expiresAt: timestampSchema.nullable().optional(),
+  revokesApprovalId: trimmedIdSchema.nullable().optional(),
+  status: z.enum(['effective', 'expired', 'revoked'])
+}).strict()
+
+export const projectDagReleaseArtifactVersionRefSchema = z.object({
+  artifactVersionId: trimmedIdSchema,
+  contentDigest: prefixedDigestSchema,
+  artifactId: trimmedIdSchema.optional(),
+  mediaType: z.string().trim().min(1).max(500).optional()
+}).strict().superRefine((reference, context) => {
+  if (reference.artifactVersionId === 'latest' || reference.artifactVersionId === 'current') {
+    context.addIssue({
+      code: 'custom',
+      path: ['artifactVersionId'],
+      message: 'Release outputs must reference an exact Artifact Version identity.'
+    })
+  }
+})
+
+export const projectDagReleaseV1Schema = z.object({
+  releaseId: trimmedIdSchema,
+  projectSnapshot: prefixedDigestSchema,
+  classification: z.enum(['internal', 'certified', 'public']),
+  target: z.string().trim().max(MAX_MESSAGE_LENGTH),
+  outputArtifactVersions: z.array(projectDagReleaseArtifactVersionRefSchema).max(MAX_SESSIONS),
+  auditRefs: z.array(trimmedIdSchema).max(100),
+  decisionRefs: z.array(trimmedIdSchema).max(100),
+  approvalRefs: z.array(trimmedIdSchema).max(100),
+  attemptOutcome: z.string().trim().min(1).max(256),
+  createdAt: timestampSchema,
+  supersedesReleaseId: trimmedIdSchema.nullable().optional()
 }).strict()
 
 export const projectDagSourceSelectorSchema = z.object({
@@ -422,6 +548,17 @@ export type ProjectDagUpdateInput = z.infer<typeof projectDagUpdateInputSchema>
 export type ProjectDagUpdateOutput = z.infer<typeof projectDagUpdateOutputSchema>
 export type ProjectDagSaveGoalInput = z.infer<typeof projectDagSaveGoalInputSchema>
 export type ProjectDagSaveGoalOutput = z.infer<typeof projectDagSaveGoalOutputSchema>
+export type ProjectDagScopeDraft = z.infer<typeof projectDagScopeDraftSchema>
+export type ProjectDagDecisionActionClass = z.infer<typeof projectDagDecisionActionClassSchema>
+export type ProjectDagDecisionRule = z.infer<typeof projectDagDecisionRuleSchema>
+export type ProjectDagDecisionPolicy = z.infer<typeof projectDagDecisionPolicySchema>
+export type ProjectDagInvalidation = z.infer<typeof projectDagInvalidationSchema>
+export type ProjectDagDecisionV1 = z.infer<typeof projectDagDecisionV1Schema>
+export type ProjectDagApprovalV1 = z.infer<typeof projectDagApprovalV1Schema>
+export type ProjectDagReleaseV1 = z.infer<typeof projectDagReleaseV1Schema>
+export type ProjectDagReleaseArtifactVersionRef = z.infer<
+  typeof projectDagReleaseArtifactVersionRefSchema
+>
 export type ProjectDagSourceSelector = z.infer<typeof projectDagSourceSelectorSchema>
 export type ProjectDagResolveEvidencePreviewInput = z.infer<
   typeof projectDagResolveEvidencePreviewInputSchema

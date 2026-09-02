@@ -117,7 +117,7 @@ test('requires typed incomplete metadata to be bounded and rejects opaque parser
   }).success, false)
 })
 
-test('enforces coherent thread scopes and explicit rebuild intent', () => {
+test('enforces coherent thread scopes for the canonical delta capture action', () => {
   assert.equal(evidenceDagViewInputSchema.safeParse({}).success, true)
   assert.equal(evidenceDagViewInputSchema.safeParse({
     runtimeId: 'codex',
@@ -131,16 +131,11 @@ test('enforces coherent thread scopes and explicit rebuild intent', () => {
   assert.equal(evidenceDagSnapshotStatusInputSchema.safeParse({}).success, false)
   assert.equal(evidenceDagUpdateInputSchema.safeParse({
     runtimeId: 'codex',
-    threadId: 'thread-1',
-    operation: 'rebuild'
-  }).success, false)
-  assert.equal(evidenceDagUpdateInputSchema.safeParse({
-    runtimeId: 'codex',
-    threadId: 'thread-1',
-    operation: 'rebuild',
-    rebuildKind: 'corruption_recovery',
-    rebuildRationale: 'The committed snapshot failed integrity verification.'
+    threadId: 'thread-1'
   }).success, true)
+  assert.equal(evidenceDagUpdateInputSchema.safeParse({
+    runtimeId: 'codex', threadId: 'thread-1', operation: 'update'
+  }).success, false)
 })
 
 test('validates preview provenance output and JSON-safe panel activation data', () => {

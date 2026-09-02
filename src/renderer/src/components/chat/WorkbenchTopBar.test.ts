@@ -9,6 +9,7 @@ describe('WorkbenchTopBar toolbar contributions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
     i18n.addResourceBundle('en', 'common', {
+      rightPanelResearch: 'Research',
       rightPanelEvidenceDag: 'Evidence DAG',
       rightPanelProjectDag: 'Project DAG'
     }, true, true)
@@ -47,6 +48,25 @@ describe('WorkbenchTopBar toolbar contributions', () => {
 
     expect(html).toContain('aria-label="Identity"')
     expect(html).not.toContain('aria-label="Sign in"')
+  })
+
+  it('renders Research through its registered toolbar contribution', () => {
+    const researchAction = installedRendererContributions.toolbarActions.list()
+      .find(({ id }) => id === 'research-dossier.workbench-toolbar-action')
+    expect(researchAction).toBeDefined()
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      focusedRightPanelMode: null,
+      onToggleFocusedRightPanelMode: vi.fn(),
+      toolbarActions: [researchAction!],
+      toolbarCommandInvocation: {
+        sessionId: 'thread-1',
+        workspaceRoot: '/workspace/lab'
+      },
+      onExecuteToolbarCommand: vi.fn()
+    }))
+
+    expect(html).toContain('aria-label="Research"')
+    expect(html).toContain('title="Research"')
   })
 
   it('renders and marks a registered toolbar action from its metadata', () => {
@@ -93,7 +113,7 @@ describe('WorkbenchTopBar toolbar contributions', () => {
     })
   })
 
-  it('shows Evidence DAG as a right panel item', () => {
+  it('does not expose Evidence DAG as a peer toolbar item', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       focusedRightPanelMode: 'evidence-dag',
       onToggleFocusedRightPanelMode: vi.fn(),
@@ -107,11 +127,10 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       onExecuteToolbarCommand: vi.fn()
     }))
 
-    expect(html).toContain('Evidence DAG')
-    expect(html).toContain('aria-pressed="true"')
+    expect(html).not.toContain('Evidence DAG')
   })
 
-  it('shows Project DAG as a right panel item', () => {
+  it('does not expose Project DAG as a peer toolbar item', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       focusedRightPanelMode: 'project-dag',
       onToggleFocusedRightPanelMode: vi.fn(),
@@ -125,8 +144,7 @@ describe('WorkbenchTopBar toolbar contributions', () => {
       onExecuteToolbarCommand: vi.fn()
     }))
 
-    expect(html).toContain('Project DAG')
-    expect(html).toContain('aria-pressed="true"')
+    expect(html).not.toContain('Project DAG')
   })
 
   it('shows Create Loop only through its registered toolbar contribution', () => {

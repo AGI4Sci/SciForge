@@ -25,8 +25,8 @@ test('invokes only the package-owned Evidence DAG capability contracts', async (
               url: 'http://127.0.0.1:8000/',
               threadId: 'thread-1',
               itemCount: 3,
-              jobId: 'job-1',
-              coalesced: false,
+              deltaDigest: digest,
+              idempotent: false,
               status
             }
           : contract.actionId === evidenceDagCapabilityContracts.priority.actionId
@@ -49,8 +49,7 @@ test('invokes only the package-owned Evidence DAG capability contracts', async (
   await client.update({
     runtimeId: 'codex',
     threadId: 'thread-1',
-    workspaceRoot: '/workspace',
-    operation: 'update'
+    workspaceRoot: '/workspace'
   })
   await client.priority({
     runtimeId: 'codex',
@@ -76,8 +75,7 @@ test('invokes only the package-owned Evidence DAG capability contracts', async (
   assert.deepEqual(calls[1]?.input, {
     runtimeId: 'codex',
     threadId: 'thread-1',
-    workspaceRoot: '/workspace',
-    operation: 'update'
+    workspaceRoot: '/workspace'
   })
   assert.equal(evidenceDagCapabilityContracts.view.effect, 'read')
   assert.equal(evidenceDagCapabilityContracts.update.effect, 'compute')

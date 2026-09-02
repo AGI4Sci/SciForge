@@ -36,22 +36,26 @@ export const EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT =
   domainPackageDefinition.contributionContracts[
     EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
   ]!
-export const EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
-  'renderer',
-  'renderer.command'
-)
-export const EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION = contributionFor(
-  'renderer',
-  'renderer.workbench-toolbar-action'
-)
-export const EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT =
-  domainPackageDefinition.contributionContracts[
-    EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
-  ]!
 export const EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.i18n-resource'
 )
+export const EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.research-summary.v1'
+)
+export const EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    'evidence-dag.research-summary'
+  ]!
+export const EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.resource-navigation'
+)
+export const EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION.id
+  ]!
 
 function contributionFor(process: DomainPackageProcess, kind: string) {
   const contribution = domainPackageDefinition.entrypoints

@@ -2,29 +2,33 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ReactElement } from 'react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
-import type { DomainRendererCommandHandler } from '@sciforge/domain-sdk/renderer'
 import {
-  SCIENTIFIC_PLOTTING_RENDERER_COMMAND_CONTRIBUTION,
   SCIENTIFIC_PLOTTING_RENDERER_I18N_CONTRIBUTION,
   SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRACT,
-  SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  SCIENTIFIC_PLOTTING_RENDERER_TOOLBAR_ACTION_CONTRIBUTION
+  SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION
 } from '../definition.js'
 import {
   createDomainRendererEntry,
+  createScientificPlottingResourceNavigationContribution,
   type ScientificPlottingRightPanelContribution
 } from './index.js'
 import type { ScientificPlottingI18nResourceContribution } from './scientific-plotting-messages.js'
 
-test('renderer installs provenance panel, command, toolbar, and translations', () => {
+test('renderer installs contextual provenance panel and translations', () => {
   const opened: unknown[] = []
   const host = {
     capabilityInvoker: {},
     openExternal: () => undefined,
-    workbench: { openRightPanel: (input: unknown) => opened.push(input) }
+    workbench: {
+      openRightPanel: (input: unknown) => opened.push(input),
+      openResource: (input: unknown) => {
+        opened.push(input)
+        return true
+      }
+    }
   } as unknown as DomainRendererHost
   const entry = createDomainRendererEntry(host)
-  assert.equal(entry.contributions.length, 4)
+  assert.equal(entry.contributions.length, 3)
 
   const panelRuntime = entry.contributions.find(
     ({ id }) => id === SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
@@ -46,42 +50,69 @@ test('renderer installs provenance panel, command, toolbar, and translations', (
   assert.equal(rendered.props.workspaceRoot, '/workspace')
   assert.equal(rendered.props.preferredManifestVersionId, 'artifact-version:manifest-v2')
   assert.equal(typeof rendered.props.onOpenArtifactHistory, 'function')
-  ;(rendered.props.onOpenArtifactHistory as () => void)()
+  const exactFigureRef = {
+    artifactId: 'artifact:figure:1',
+    versionId: 'artifact-version:figure:1',
+    contentDigest: 'a'.repeat(64),
+    byteLength: 12,
+    mediaType: 'image/png',
+    availability: 'available',
+    retention: 'snapshot',
+    accessPolicy: { visibility: 'workspace', principals: [], allowExport: true }
+  } as const
+  ;(rendered.props.onOpenArtifactHistory as (ref: typeof exactFigureRef) => void)(exactFigureRef)
   assert.deepEqual(opened, [{
-    contributionId: 'artifact-versions.workbench-right-panel',
     sessionId: 'session-1',
-    surfaceId: 'surface-plot-a'
-  }])
-  opened.length = 0
-
-  const command = entry.contributions.find(
-    ({ id }) => id === SCIENTIFIC_PLOTTING_RENDERER_COMMAND_CONTRIBUTION.id
-  )!.value as DomainRendererCommandHandler
-  assert.equal(command.isAvailable?.({
-    sessionId: 'session-1',
-    workspaceRoot: '/workspace'
-  }), true)
-  command.execute({
-    sessionId: 'session-1',
-    workspaceRoot: '/workspace',
-    payload: { manifestVersionId: 'artifact-version:manifest-v2' }
-  })
-  assert.deepEqual(opened, [{
-    contributionId: SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-    sessionId: 'session-1',
-    activation: {
-      contributionId: SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-      revision: 1,
-      payload: { manifestVersionId: 'artifact-version:manifest-v2' }
+    surfaceId: 'surface-plot-a',
+    resource: {
+      resourceKind: 'artifact-version',
+      resourceId: exactFigureRef.versionId,
+      integrity: {
+        algorithm: 'sha256',
+        expectedDigest: `sha256:${exactFigureRef.contentDigest}`
+      }
     }
   }])
-
-  assert.ok(entry.contributions.some(
-    ({ id }) => id === SCIENTIFIC_PLOTTING_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id
-  ))
   const translations = entry.contributions.find(
     ({ id }) => id === SCIENTIFIC_PLOTTING_RENDERER_I18N_CONTRIBUTION.id
   )?.value as ScientificPlottingI18nResourceContribution
   assert.equal(translations.resources.en.rightPanelScientificPlotting, 'Plot provenance')
   assert.equal(translations.resources.zh.rightPanelScientificPlotting, '图表溯源')
+})
+
+test('resolves exact Figure and render-manifest resources to Plot-owned activation', () => {
+  const navigation = createScientificPlottingResourceNavigationContribution()
+  const digest = `sha256:${'a'.repeat(64)}`
+  assert.deepEqual(navigation.resolve({
+    sessionId: 'session-1',
+    resource: {
+      resourceKind: 'scientific-plot',
+      resourceId: 'artifact-version:figure:1',
+      integrity: { algorithm: 'sha256', expectedDigest: digest }
+    }
+  }), {
+    activation: {
+      revision: 1,
+      payload: {
+        figureVersionId: 'artifact-version:figure:1',
+        expectedDigest: digest
+      }
+    }
+  })
+  assert.deepEqual(navigation.resolve({
+    sessionId: 'session-1',
+    resource: {
+      resourceKind: 'scientific-plot-render-manifest',
+      resourceId: 'artifact-version:manifest:1'
+    }
+  }), {
+    activation: {
+      revision: 1,
+      payload: { manifestVersionId: 'artifact-version:manifest:1' }
+    }
+  })
+  assert.equal(navigation.resolve({
+    sessionId: 'session-1',
+    resource: { resourceKind: 'artifact-version', resourceId: 'artifact-version:figure:1' }
+  }), null)
 })

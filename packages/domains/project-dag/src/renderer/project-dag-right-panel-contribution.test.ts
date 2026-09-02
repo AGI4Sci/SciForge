@@ -3,18 +3,18 @@ import test from 'node:test'
 import type { ReactElement } from 'react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
-  PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION,
   PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRACT,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import {
   createDomainRendererEntry,
+  createProjectDagResearchSummaryContribution,
+  createProjectDagResourceNavigationContribution,
   type ProjectDagRightPanelContribution,
-  type ProjectDagToolbarActionContribution
 } from './project-dag-right-panel-contribution'
 import type { ProjectDagI18nResourceContribution } from './project-dag-messages'
 
@@ -72,23 +72,92 @@ test('contributes the package-owned Project panel and translations', () => {
   assert.equal(props.workbench, host.workbench)
   assert.equal(typeof props.client, 'object')
 
-  const command = entry.contributions.find(({ kind }) =>
-    kind === PROJECT_DAG_RENDERER_COMMAND_CONTRIBUTION.kind
-  )!.value as { execute: unknown; isAvailable?: unknown; isActive?: unknown }
-  assert.equal(typeof command.execute, 'function')
-  assert.equal(typeof command.isAvailable, 'function')
-  assert.equal(typeof command.isActive, 'function')
-
-  const toolbarRuntime = entry.contributions.find(({ kind }) =>
-    kind === PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.kind
+  const summaryRuntime = entry.contributions.find(({ kind }) =>
+    kind === PROJECT_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION.kind
   )!
-  const toolbar = toolbarRuntime.value as ProjectDagToolbarActionContribution
-  assert.deepEqual(toolbarRuntime.contract, PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT)
-  assert.equal(typeof toolbar.icon, 'object')
+  assert.equal(typeof (summaryRuntime.value as { provide?: unknown }).provide, 'function')
+  const navigationRuntime = entry.contributions.find(({ kind }) =>
+    kind === PROJECT_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION.kind
+  )!
+  assert.equal(typeof (navigationRuntime.value as { resolve?: unknown }).resolve, 'function')
 
   const translations = entry.contributions.find(({ kind }) =>
     kind === PROJECT_DAG_RENDERER_I18N_CONTRIBUTION.kind
   )?.value as ProjectDagI18nResourceContribution
   assert.equal(translations.resources.en.rightPanelProjectDag, 'Project DAG')
   assert.equal(translations.resources.zh.rightPanelProjectDag, '项目 DAG')
+})
+
+test('preserves exact Project resource identities during contextual navigation', () => {
+  const resolve = createProjectDagResourceNavigationContribution().resolve
+  assert.deepEqual(resolve({
+    sessionId: 'session-1',
+    resource: { resourceKind: 'project-goal', resourceId: 'goal-7' }
+  }), {
+    activation: {
+      revision: 1,
+      payload: { view: 'goals', focus: { nodeId: 'goal-7' } }
+    }
+  })
+  assert.deepEqual(resolve({
+    sessionId: 'session-1',
+    resource: { resourceKind: 'project-snapshot', resourceId: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+  }), {
+    activation: {
+      revision: 1,
+      payload: {
+        view: 'graph',
+        focus: { nodeId: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
+      }
+    }
+  })
+})
+
+test('scopes Research summary reads to the current canonical Session', async () => {
+  const calls: unknown[] = []
+  const host: DomainRendererHost = {
+    capabilityInvoker: {
+      observe: async () => {
+        throw new Error('not observed')
+      },
+      invoke: async <TInput, TOutput>(_contract: unknown, input: TInput): Promise<TOutput> => {
+        calls.push(input)
+        return {
+          ok: true,
+          data: {
+            url: 'http://127.0.0.1:3898/',
+            status: {
+              projectKey: 'path:/workspace/lab',
+              committed: null,
+              pending: null,
+              scope: {
+                includedSessions: ['codex:thread-1'],
+                excludedSessions: [],
+                isolatedSessions: []
+              },
+              autonomyMode: 'checkpointed',
+              attentionCount: 0
+            },
+            goal: undefined
+          }
+        } as TOutput
+      }
+    },
+    openExternal: () => undefined,
+    workspacePreview: { open: () => undefined },
+    workbench: { openRightPanel: () => undefined }
+  }
+  const summary = createProjectDagResearchSummaryContribution(host)
+  const result = await summary.provide({
+    session: { id: 'thread-1', runtimeId: 'codex' },
+    scope: { kind: 'workspace', id: '/workspace/lab' }
+  })
+
+  assert.equal(result.status, 'available')
+  assert.deepEqual(calls, [{
+    workspaceRoot: '/workspace/lab',
+    projectRoot: '/workspace/lab',
+    sessions: ['codex:thread-1'],
+    view: 'home'
+  }])
 })

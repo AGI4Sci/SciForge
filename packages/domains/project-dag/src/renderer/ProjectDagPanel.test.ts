@@ -8,6 +8,7 @@ import {
   projectDagPanelTarget,
   projectDagUpdateScope
 } from './ProjectDagPanel'
+import { projectDagCanonicalSessionId } from './project-dag-session'
 import {
   projectDagPendingIsActive,
   projectDagPollInterval
@@ -116,6 +117,43 @@ test('derives update scope and polls failed attempts only while visible', () => 
   assert.equal(projectDagPendingIsActive(failed), false)
   assert.equal(projectDagPollInterval(true, failed), 10_000)
   assert.equal(projectDagPollInterval(false, failed), null)
+})
+
+test('initializes Project updates with the current canonical Session', () => {
+  assert.equal(
+    projectDagCanonicalSessionId('thread-1', 'codex'),
+    'codex:thread-1'
+  )
+  assert.equal(
+    projectDagCanonicalSessionId('codex:thread-1', 'codex'),
+    'codex:codex:thread-1'
+  )
+  assert.equal(
+    projectDagCanonicalSessionId('workflow:stable', 'sciforge'),
+    'sciforge:workflow:stable'
+  )
+  assert.equal(
+    projectDagCanonicalSessionId('codex:thread-1', 'runtime-with-colon'),
+    'runtime-with-colon:codex:thread-1'
+  )
+  assert.equal(projectDagCanonicalSessionId('thread-1'), null)
+  assert.equal(projectDagCanonicalSessionId('thread:with:colon'), null)
+  assert.deepEqual(projectDagUpdateScope(undefined, 'codex:thread-1'), [
+    'codex:thread-1'
+  ])
+  assert.deepEqual(projectDagUpdateScope({
+    projectKey: 'lab',
+    committed: null,
+    pending: null,
+    scope: {
+      includedSessions: [],
+      excludedSessions: [],
+      isolatedSessions: []
+    },
+    autonomyMode: 'autonomous',
+    attentionCount: 0
+  }, 'codex:thread-1'), ['codex:thread-1'])
+  assert.deepEqual(projectDagUpdateScope(undefined), [])
 })
 
 test('keeps durable receipt state in the progressive update view', () => {

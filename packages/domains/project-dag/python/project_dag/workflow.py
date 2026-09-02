@@ -17,6 +17,12 @@ from .contracts import (
     remediation_candidate,
     select_a3_action,
     validate_autonomy_mode,
+    DECISION_POLICY_V1,
+    PROJECT_INVALIDATION_POLICY_V1,
+    project_input_fingerprint,
+    classify_project_invalidation,
+    DECISION_ACTION_CLASSES,
+    normalize_decision_rules,
 )
 from .reader import SessionReader
 from .store import Store, new_id, now_iso
@@ -113,6 +119,9 @@ class ProjectWorkflow:
                 "version": int(snapshot.version),
                 "digest": snapshot.digest,
                 "inputWatermark": snapshot.input_watermark,
+                "schemaVersion": snapshot.schema_version,
+                "extractorVersion": snapshot.extractor_version,
+                "verifierVersion": snapshot.verifier_version,
             })
         return sorted(identities, key=lambda item: item["threadId"])
 
@@ -187,11 +196,14 @@ class ProjectWorkflow:
     def _present_policy(row: dict) -> dict:
         row["checkpoints"] = _loads(row["checkpoints"], [])
         row["allowAgentCriticalOverride"] = bool(row.pop("allow_agent_critical_override"))
+        row["decisionRules"] = normalize_decision_rules(_loads(row.get("decision_rules"), None))
+        row.pop("decision_rules", None)
         return row
 
     def configure_policy(self, project_key: str, *, autonomy_mode: Optional[str] = None,
                          checkpoints: Optional[list[str]] = None,
                          allow_agent_critical_override: Optional[bool] = None,
+                         decision_rules: Optional[dict] = None,
                          actor: str = "human") -> dict:
         current = self.policy(project_key)
         mode = validate_autonomy_mode(autonomy_mode or current["autonomy_mode"])
@@ -200,20 +212,215 @@ class ProjectWorkflow:
             raise ValueError("checkpoints must be a string array")
         allow = (current["allowAgentCriticalOverride"]
                  if allow_agent_critical_override is None else allow_agent_critical_override)
+        rules = normalize_decision_rules(
+            decision_rules if decision_rules is not None else current.get("decisionRules"))
         version = int(current["policy_version"]) + 1
         t = now_iso()
         self.store.x(
             "UPDATE project_policy SET autonomy_mode=?,policy_version=?,checkpoints=?,"
-            "allow_agent_critical_override=?,updated_at=? WHERE project_key=?",
-            (mode, version, canonical_json(sorted(set(points))), int(bool(allow)), t, project_key),
+            "allow_agent_critical_override=?,decision_rules=?,updated_at=? WHERE project_key=?",
+            (mode, version, canonical_json(sorted(set(points))), int(bool(allow)),
+             canonical_json(rules), t, project_key),
         )
         self._event(project_key, "ProjectPolicyChanged", actor, {
             "autonomyMode": mode, "policyVersion": version,
             "checkpoints": sorted(set(points)),
             "allowAgentCriticalOverride": bool(allow),
+            "decisionRules": rules,
         })
         self.store.conn.commit()
         return self.policy(project_key)
+
+    def mark_stale(self, project_key: str, *, desired_fingerprint: Optional[str] = None,
+                   reason: str = "upstream_changed", changed_fields: Optional[list[str]] = None,
+                   formal_gate: bool = False) -> dict:
+        """Record freshness without compiling or creating a Snapshot."""
+        changed = sorted(set(changed_fields or []))
+        material = any(
+            classify_project_invalidation(field, formal_gate=formal_gate) == "material"
+            for field in changed
+        )
+        current = self.store.q1(
+            "SELECT applied_fingerprint FROM project_invalidation WHERE project_key=?",
+            (project_key,),
+        )
+        now = now_iso()
+        self.store.x(
+            "INSERT INTO project_invalidation"
+            " (project_key,desired_fingerprint,applied_fingerprint,stale,reason,changed_fields,updated_at)"
+            " VALUES (?,?,?,?,?,?,?) ON CONFLICT(project_key) DO UPDATE SET"
+            " desired_fingerprint=excluded.desired_fingerprint,stale=excluded.stale,"
+            " reason=excluded.reason,changed_fields=excluded.changed_fields,updated_at=excluded.updated_at",
+            (project_key, desired_fingerprint, (current or {}).get("applied_fingerprint"),
+             int(material or bool(desired_fingerprint and desired_fingerprint != (current or {}).get("applied_fingerprint"))),
+             reason, canonical_json(changed), now),
+        )
+        self.store.conn.commit()
+        return self.invalidation(project_key) or {"projectKey": project_key, "stale": material}
+
+    def invalidation(self, project_key: str) -> Optional[dict]:
+        row = self.store.q1("SELECT * FROM project_invalidation WHERE project_key=?", (project_key,))
+        if row is None:
+            return None
+        row["stale"] = bool(row["stale"])
+        row["projectKey"] = row.pop("project_key")
+        row["changedFields"] = _loads(row.pop("changed_fields"), [])
+        row["desiredFingerprint"] = row.pop("desired_fingerprint")
+        row["appliedFingerprint"] = row.pop("applied_fingerprint")
+        return row
+
+    def scope_revisions(self, project_key: str) -> list[dict]:
+        rows = self.store.q(
+            "SELECT * FROM project_scope_revision WHERE project_key=? ORDER BY revision", (project_key,))
+        for row in rows:
+            row["revision"] = int(row["revision"])
+            row["includedSessions"] = _loads(row.pop("included_sessions"), [])
+            row["excludedSessions"] = _loads(row.pop("excluded_sessions"), [])
+            row["isolatedSessions"] = _loads(row.pop("isolated_sessions"), [])
+            row["reasons"] = _loads(row.pop("reasons"), {})
+            row["createdBy"] = row.pop("created_by")
+            row["createdAt"] = row.pop("created_at")
+        return rows
+
+    def save_goal_draft(self, project_key: str, *, title: str,
+                        description: str = "", root_goal_id: Optional[str] = None,
+                        actor: str = "human") -> dict:
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("Goal draft title is required")
+        current = self.store.q1(
+            "SELECT version FROM goal WHERE project_key=? AND root_id=? AND t_expired IS NULL",
+            (project_key, root_goal_id),
+        ) if root_goal_id else None
+        if root_goal_id and current is None:
+            raise KeyError(root_goal_id)
+        now = now_iso()
+        self.store.x(
+            "INSERT INTO project_goal_draft"
+            " (project_key,root_goal_id,title,description,base_version,updated_by,updated_at)"
+            " VALUES (?,?,?,?,?,?,?) ON CONFLICT(project_key) DO UPDATE SET"
+            " root_goal_id=excluded.root_goal_id,title=excluded.title,description=excluded.description,"
+            " base_version=excluded.base_version,updated_by=excluded.updated_by,updated_at=excluded.updated_at",
+            (project_key, root_goal_id, title.strip(), (description or "").strip(),
+             current["version"] if current else None, actor, now),
+        )
+        self.store.conn.commit()
+        return self.goal_draft(project_key) or {}
+
+    def goal_draft(self, project_key: str) -> Optional[dict]:
+        row = self.store.q1("SELECT * FROM project_goal_draft WHERE project_key=?", (project_key,))
+        if row is None:
+            return None
+        row["baseVersion"] = row.pop("base_version")
+        row["rootGoalId"] = row.pop("root_goal_id")
+        row["updatedBy"] = row.pop("updated_by")
+        row["updatedAt"] = row.pop("updated_at")
+        return row
+
+    def save_scope_draft(self, project_key: str, scope: dict, *, actor: str = "human") -> dict:
+        """Persist desired membership without changing the applied Scope."""
+        normalized = normalize_scope(scope)
+        prior = self.store.q1(
+            "SELECT MAX(revision) AS revision FROM project_scope_revision WHERE project_key=?",
+            (project_key,),
+        )
+        now = now_iso()
+        self.store.x(
+            "INSERT INTO project_scope_draft"
+            " (project_key,included_sessions,excluded_sessions,isolated_sessions,reasons,"
+            "base_revision,updated_by,updated_at) VALUES (?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(project_key) DO UPDATE SET included_sessions=excluded.included_sessions,"
+            "excluded_sessions=excluded.excluded_sessions,isolated_sessions=excluded.isolated_sessions,"
+            "reasons=excluded.reasons,base_revision=excluded.base_revision,updated_by=excluded.updated_by,"
+            "updated_at=excluded.updated_at",
+            (project_key, canonical_json(normalized["includedSessions"]),
+             canonical_json(normalized["excludedSessions"]),
+             canonical_json(normalized["isolatedSessions"]), canonical_json(normalized["reasons"]),
+             int((prior or {}).get("revision") or 0), actor, now),
+        )
+        self.store.conn.commit()
+        return self.scope_draft(project_key) or {}
+
+    def scope_draft(self, project_key: str) -> Optional[dict]:
+        row = self.store.q1("SELECT * FROM project_scope_draft WHERE project_key=?", (project_key,))
+        if row is None:
+            return None
+        row["includedSessions"] = _loads(row.pop("included_sessions"), [])
+        row["excludedSessions"] = _loads(row.pop("excluded_sessions"), [])
+        row["isolatedSessions"] = _loads(row.pop("isolated_sessions"), [])
+        row["reasons"] = _loads(row.pop("reasons"), {})
+        row["baseRevision"] = row.pop("base_revision")
+        row["updatedBy"] = row.pop("updated_by")
+        row["updatedAt"] = row.pop("updated_at")
+        return row
+
+    def apply_scope_draft(self, project_key: str, *, actor: str = "human") -> dict:
+        draft = self.scope_draft(project_key)
+        if draft is None:
+            raise ValueError("Scope draft is not initialized")
+        latest_job = self.store.q1(
+            "SELECT desired_vector FROM project_update_job WHERE project_key=?"
+            " AND status IN ('queued','running','retry_scheduled','failed')",
+            (project_key,),
+        )
+        latest = self.latest_snapshot(project_key)
+        vector = _loads(latest_job["desired_vector"], []) if latest_job else (
+            latest["evidenceVector"] if latest else [])
+        included = set(draft["includedSessions"])
+        by_thread = {entry["threadId"]: entry for entry in vector}
+        missing = included - set(by_thread)
+        if missing:
+            raise ValueError(
+                f"Scope includes Sessions without exact Evidence heads: {sorted(missing)}")
+        selected = normalize_evidence_vector(by_thread[session] for session in sorted(included))
+        scope = {
+            "includedSessions": sorted(included),
+            "excludedSessions": draft["excludedSessions"],
+            "isolatedSessions": draft["isolatedSessions"],
+            "reasons": draft["reasons"],
+        }
+        result = self.enqueue_update(
+            project_key=project_key, evidence_vector=selected, captured_scope=scope,
+            reason="scope_applied", actor=actor,
+        )
+        self.store.x("DELETE FROM project_scope_draft WHERE project_key=?", (project_key,))
+        self._event(project_key, "ScopeDraftApplied", actor, {
+            "scopeRevision": self.scope_revisions(project_key)[-1]["revision"],
+        })
+        self.store.conn.commit()
+        return result
+
+    def apply_goal_draft(self, project_key: str, *, actor_type: str = "human",
+                         actor_id: str = "user", reframe: bool = False) -> dict:
+        draft = self.goal_draft(project_key)
+        if draft is None:
+            raise ValueError("Goal draft is not initialized")
+        root_id = draft.get("rootGoalId")
+        if root_id:
+            current = self.store.q1(
+                "SELECT * FROM goal WHERE project_key=? AND root_id=? AND t_expired IS NULL",
+                (project_key, root_id),
+            )
+            if current is None:
+                raise KeyError(root_id)
+            material = any(draft[key] != (current.get(column) or "")
+                           for key, column in (("title", "title"), ("description", "description"))
+                           ) and current.get("parent_id") is None
+            if material and actor_type == "agent" and not reframe:
+                return {"proposal": True, "impact": "root_goal_reframe_required", "draft": draft}
+            if material and not reframe and actor_type != "human":
+                raise ValueError("root reframe requires an accountable human")
+            goal = self.store.update_goal(root_id, title=draft["title"],
+                                          description=draft["description"])
+        else:
+            goal = self.store.create_goal(draft["title"], description=draft["description"],
+                                          project_key=project_key)
+        self.store.x("DELETE FROM project_goal_draft WHERE project_key=?", (project_key,))
+        self._event(project_key, "GoalDraftApplied", actor_id, {
+            "goalVersion": goal["id"], "rootGoalId": goal["root_id"],
+            "version": goal["version"],
+        })
+        self.store.conn.commit()
+        return goal
 
     def _desired_identity(self, project_key: str, vector: list[dict], scope: dict,
                           autonomy_mode: str, *,
@@ -238,8 +445,9 @@ class ProjectWorkflow:
             "policyVersion": int(policy["policy_version"]),
             "decisionVersion": [row["id"] for row in decisions],
             "compilerVersion": COMPILER_VERSION,
+            "invalidationPolicyVersion": PROJECT_INVALIDATION_POLICY_V1,
         }
-        return context, digest_json(context, "project-update-desired")
+        return context, project_input_fingerprint(context, "project-update-desired")
 
     def _validate_evidence_monotonic(
             self, project_key: str, evidence_snapshots: list[dict], *,
@@ -299,50 +507,6 @@ class ProjectWorkflow:
         project_key = project_key.strip()
         vector = normalize_evidence_vector(evidence_vector)
         scope = normalize_scope(captured_scope, (x["threadId"] for x in vector))
-        if reason == "evidence_snapshot_committed":
-            # Runtime may notify with only the changed session. Merge it into
-            # the already-persisted membership/vector; never widen by scanning
-            # the global Evidence store and never shrink another workspace.
-            membership = self.store.q(
-                "SELECT session_id,disposition FROM project_scope WHERE project_key=?",
-                (project_key,),
-            )
-            previous_scope = {
-                "includedSessions": [r["session_id"] for r in membership
-                                     if r["disposition"] == "included"],
-                "excludedSessions": [r["session_id"] for r in membership
-                                     if r["disposition"] == "excluded"],
-                "isolatedSessions": [r["session_id"] for r in membership
-                                     if r["disposition"] == "isolated"],
-            }
-            previous_vector: list[dict] = []
-            active_job = self.store.q1(
-                "SELECT desired_vector FROM project_update_job WHERE project_key=?"
-                " AND status IN ('queued','running','retry_scheduled','failed')",
-                (project_key,),
-            )
-            if active_job:
-                previous_vector = _loads(active_job["desired_vector"], [])
-            else:
-                latest = self.latest_snapshot(project_key)
-                previous_vector = latest["evidenceVector"] if latest else []
-            merged_vector = {e["threadId"]: e["digest"] for e in previous_vector}
-            merged_vector.update({e["threadId"]: e["digest"] for e in vector})
-            included = set(previous_scope["includedSessions"]) | set(scope["includedSessions"])
-            excluded = set(previous_scope["excludedSessions"]) | set(scope["excludedSessions"])
-            isolated = set(previous_scope["isolatedSessions"]) | set(scope["isolatedSessions"])
-            included -= excluded | isolated
-            scope = {
-                "includedSessions": sorted(included),
-                "excludedSessions": sorted(excluded),
-                "isolatedSessions": sorted(isolated),
-            }
-            missing = included - set(merged_vector)
-            if missing:
-                raise ValueError(
-                    f"persisted project membership lacks Evidence digests: {sorted(missing)}")
-            vector = normalize_evidence_vector(
-                {"threadId": tid, "digest": merged_vector[tid]} for tid in included)
         if set(scope["includedSessions"]) != {x["threadId"] for x in vector}:
             raise ValueError("capturedScope.includedSessions must exactly match evidenceVector")
 
@@ -359,6 +523,9 @@ class ProjectWorkflow:
                     "version": int(snapshot.version),
                     "digest": snapshot.digest,
                     "inputWatermark": snapshot.input_watermark,
+                    "schemaVersion": snapshot.schema_version,
+                    "extractorVersion": snapshot.extractor_version,
+                    "verifierVersion": snapshot.verifier_version,
                 })
             except OSError as exc:
                 raise ValueError(
@@ -385,6 +552,19 @@ class ProjectWorkflow:
                 desired_context, desired_fingerprint = self._desired_identity(
                     project_key, vector, scope, mode,
                     evidence_snapshots=evidence_snapshots)
+                prior_snapshot = self.latest_snapshot(project_key)
+                prior_input = (prior_snapshot or {}).get("inputFingerprint")
+                self.store.x(
+                    "INSERT INTO project_invalidation"
+                    " (project_key,desired_fingerprint,applied_fingerprint,stale,reason,changed_fields,updated_at)"
+                    " VALUES (?,?,?,?,?,?,?) ON CONFLICT(project_key) DO UPDATE SET"
+                    " desired_fingerprint=excluded.desired_fingerprint,stale=excluded.stale,"
+                    " reason=excluded.reason,changed_fields=excluded.changed_fields,updated_at=excluded.updated_at",
+                    (project_key, desired_fingerprint, prior_input,
+                     int(prior_input != desired_fingerprint), reason, canonical_json([
+                         "evidenceVector", "capturedScope", "goalIntent", "projectPolicyVersion"
+                     ]), now_iso()),
+                )
                 job = self.store.q1(
                     "SELECT * FROM project_update_job WHERE project_key=?"
                     " AND status IN ('queued','running','retry_scheduled','failed')",
@@ -459,9 +639,7 @@ class ProjectWorkflow:
                          canonical_json(desired_context),
                          canonical_json(vector), canonical_json(scope), t, t),
                     )
-                event_type = ("EvidenceSnapshotCommitted" if reason == "evidence_snapshot_committed"
-                              else "ProjectCompileQueued")
-                self._event(project_key, event_type, actor, {
+                self._event(project_key, "ProjectCompileQueued", actor, {
                     "jobId": job_id, "acceptedRequestVersion": generation,
                     "desiredFingerprint": desired_fingerprint,
                     "evidenceVector": vector, "capturedScope": scope,
@@ -476,6 +654,7 @@ class ProjectWorkflow:
     def _replace_scope(self, project_key: str, scope: dict) -> None:
         self.store.x("DELETE FROM project_scope WHERE project_key=?", (project_key,))
         t = now_iso()
+        reasons = scope.get("reasons") or {}
         for disposition, key in (
             ("included", "includedSessions"),
             ("excluded", "excludedSessions"),
@@ -483,8 +662,22 @@ class ProjectWorkflow:
         ):
             for session_id in scope[key]:
                 self.store.x(
-                    "INSERT INTO project_scope (project_key,session_id,disposition,updated_at)"
-                    " VALUES (?,?,?,?)", (project_key, session_id, disposition, t))
+                    "INSERT INTO project_scope (project_key,session_id,disposition,reason,updated_at)"
+                    " VALUES (?,?,?,?,?)", (project_key, session_id, disposition,
+                                               reasons.get(session_id, ""), t))
+        latest = self.store.q1(
+            "SELECT MAX(revision) AS revision FROM project_scope_revision WHERE project_key=?",
+            (project_key,),
+        )
+        revision = int((latest or {}).get("revision") or 0) + 1
+        self.store.x(
+            "INSERT INTO project_scope_revision"
+            " (project_key,revision,included_sessions,excluded_sessions,isolated_sessions,reasons,created_by,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (project_key, revision, canonical_json(scope["includedSessions"]),
+             canonical_json(scope["excludedSessions"]), canonical_json(scope["isolatedSessions"]),
+             canonical_json(reasons), "project-domain", t),
+        )
 
     def _enqueue_from_committed_snapshot(self, project_key: str, reason: str) -> dict:
         snapshot = self.latest_snapshot(project_key)
@@ -500,6 +693,67 @@ class ProjectWorkflow:
             }, reason=reason, priority=5, autonomy_mode=snapshot["autonomyMode"],
             actor="project-governance",
         )
+
+    def seal_snapshot(self, project_key: str, *, expected_head_digest: str,
+                      reason: str = "formal_barrier") -> dict:
+        """Compare-and-set the exact current head for a formal consumer."""
+        if not isinstance(expected_head_digest, str) or not expected_head_digest.strip():
+            raise ValueError("expectedHeadDigest is required; latest is not an identity")
+        with self.store.transaction_lock:
+            self.store.x("BEGIN IMMEDIATE")
+            try:
+                latest = self.latest_snapshot(project_key)
+                if latest is None or latest["digest"] != expected_head_digest:
+                    self.store.conn.rollback()
+                    raise ValueError("Project Snapshot head changed; reload before sealing")
+                invalidation = self.invalidation(project_key)
+                active = self.store.q1(
+                    "SELECT id FROM project_update_job WHERE project_key=?"
+                    " AND status IN ('queued','running','retry_scheduled','failed')",
+                    (project_key,),
+                )
+                if (invalidation and invalidation.get("stale")) or active:
+                    self.store.conn.rollback()
+                    raise ValueError("Project Snapshot is stale; derive the current exact inputs first")
+                self._record_snapshot_seal(project_key, expected_head_digest, reason)
+                self.store.conn.commit()
+                return latest
+            except Exception:
+                if self.store.conn.in_transaction:
+                    self.store.conn.rollback()
+                raise
+
+    def _record_snapshot_seal(self, project_key: str, snapshot_digest: str,
+                              reason: str) -> None:
+        self.store.x(
+            "INSERT OR IGNORE INTO project_snapshot_seal"
+            " (project_key,snapshot_digest,reason,sealed_by,sealed_at)"
+            " VALUES (?,?,?,?,?)",
+            (project_key, snapshot_digest, reason, "project-governance", now_iso()),
+        )
+        self._event(project_key, "ProjectSnapshotSealed", "project-governance", {
+            "projectSnapshot": snapshot_digest, "reason": reason,
+        })
+
+    def _require_sealed_snapshot(self, project_key: str,
+                                 snapshot_digest: str) -> dict:
+        snapshot = self.snapshot(snapshot_digest)
+        if snapshot is None or snapshot["projectKey"] != project_key:
+            raise ValueError("Project Snapshot is required for formal use")
+        latest = self.latest_snapshot(project_key)
+        if latest is None or latest["digest"] != snapshot_digest:
+            raise ValueError("Project Snapshot is stale; reload the latest Project Snapshot")
+        invalidation = self.invalidation(project_key)
+        if invalidation and invalidation.get("stale"):
+            raise ValueError("Project Snapshot is stale; derive the current exact inputs first")
+        seal = self.store.q1(
+            "SELECT 1 FROM project_snapshot_seal"
+            " WHERE project_key=? AND snapshot_digest=?",
+            (project_key, snapshot_digest),
+        )
+        if seal is None:
+            raise ValueError("Project Snapshot must be sealed before formal use")
+        return snapshot
 
     # --------------------------------------------------------------- worker
     def process_next(self, project_key: Optional[str] = None) -> Optional[dict]:
@@ -665,6 +919,7 @@ class ProjectWorkflow:
         goals = self.store.active_goals(project_key=project_key, scoped=True)
         return digest_json([{
             "rootId": g["root_id"], "version": g["version"], "status": g["status"],
+            "title": g["title"], "description": g.get("description") or "",
         } for g in sorted(goals, key=lambda x: x["root_id"])], "goal")
 
     def _snapshot_graph(self, project_key: str, included: list[str]) -> dict:
@@ -854,6 +1109,7 @@ class ProjectWorkflow:
             "evidenceVector": vector,
             "excludedSessions": scope["excludedSessions"],
             "isolatedSessions": scope["isolatedSessions"],
+            "capturedScope": scope,
             "compilerVersion": COMPILER_VERSION,
             "createdAt": created_at,
             "status": "committed",
@@ -866,6 +1122,10 @@ class ProjectWorkflow:
                 "acceptedRequestVersion": request_version,
                 "desiredFingerprint": desired_fingerprint,
             },
+            "scopeRevision": (self.store.q1(
+                "SELECT MAX(revision) AS revision FROM project_scope_revision WHERE project_key=?",
+                (project_key,)) or {}).get("revision"),
+            "inputFingerprint": desired_fingerprint,
         }
         payload["assessments"] = review_result["assessments"]
         payload["digest"] = digest_json(payload, "project")
@@ -879,12 +1139,20 @@ class ProjectWorkflow:
             self.store.x(
                 "INSERT INTO project_snapshot (project_key,version,digest,goal_version,policy_version,"
                 "evidence_vector,excluded_sessions,isolated_sessions,compiler_version,created_at,"
-                "status,payload) VALUES (?,?,?,?,?,?,?,?,?,?,'committed',?)",
+                "status,payload,scope_revision,input_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,'committed',?,?,?)",
                 (project_key, version, payload["digest"], payload["goalVersion"],
                  payload["policyVersion"],
                  canonical_json(vector), canonical_json(scope["excludedSessions"]),
                  canonical_json(scope["isolatedSessions"]), COMPILER_VERSION, created_at,
-                 canonical_json(payload)),
+                 canonical_json(payload),
+                 (self.store.q1("SELECT MAX(revision) AS revision FROM project_scope_revision WHERE project_key=?",
+                                (project_key,)) or {}).get("revision"),
+                 desired_fingerprint),
+            )
+            self.store.x(
+                "UPDATE project_invalidation SET applied_fingerprint=?,stale=0,reason=NULL,"
+                "changed_fields='[]',updated_at=? WHERE project_key=?",
+                (desired_fingerprint, created_at, project_key),
             )
             updated = self.store.conn.execute(
                 "UPDATE project_update_receipt SET state='committed',"
@@ -1221,6 +1489,11 @@ class ProjectWorkflow:
         policy = self.policy(job["project_key"])
         if int(policy["policy_version"]) != int(job["policy_version"]):
             raise RuntimeError("audit policy changed while the job was running")
+        # Seal through the canonical CAS path before audit-sidechain writes so
+        # A3 cannot create formal records against an unsealed snapshot.
+        self.seal_snapshot(
+            job["project_key"], expected_head_digest=job["target_digest"],
+            reason=f"audit:{job['level']}")
         findings: list[str] = []
         l0_findings_after_semantic_verification: list[str] = []
         if job["level"] == "L0":
@@ -1496,6 +1769,12 @@ class ProjectWorkflow:
             "findingType": finding_type, "subjectId": subject_id, "severity": severity,
             "status": status, "inheritedDecisionId": (inherited or {}).get("decisionId"),
         })
+        self.store.x(
+            "INSERT INTO finding_event (id,project_key,finding_id,event_type,actor,payload,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (new_id("finding-event"), project_key, finding_id, "FindingOpened", "project-auditor",
+             canonical_json({"status": status, "severity": severity, "targetDigest": target_digest}), now_iso()),
+        )
         return finding_id
 
     def _inherited_disposition(self, project_key: str, target_digest: str,
@@ -1580,6 +1859,10 @@ class ProjectWorkflow:
                 "UPDATE review SET checkpoint=?,payload=? WHERE id=?",
                 (checkpoint, canonical_json(payload), existing["id"]),
             )
+            self._append_review_event(finding["project_key"], existing["id"],
+                                      "ReviewCandidateRefreshed", "project-review-policy", {
+                                          "findingId": finding["id"], "checkpoint": checkpoint,
+                                      })
             return existing["id"]
         review_id = new_id("review")
         self.store.x(
@@ -1588,6 +1871,10 @@ class ProjectWorkflow:
             (review_id, finding["project_key"], finding["id"], finding["subject_id"],
              finding["finding_type"], checkpoint, canonical_json(payload), now_iso()),
         )
+        self._append_review_event(finding["project_key"], review_id, "ReviewCandidateCreated",
+                                  "project-review-policy", {
+                                      "findingId": finding["id"], "checkpoint": checkpoint,
+                                  })
         return review_id
 
     def _same_input_decision(self, finding: dict, target_digest: str) -> bool:
@@ -1624,6 +1911,11 @@ class ProjectWorkflow:
             "UPDATE finding SET status=?,resolved_at=? WHERE id=?",
             (status, now_iso() if status != "open" else None, finding["id"]),
         )
+        self._append_finding_event(finding["project_key"], finding["id"],
+                                   "FindingDispositionRecorded", actor_id, {
+                                       "status": status, "decisionId": decision_id,
+                                       "action": action,
+                                   })
         if review_id:
             review_status = "deferred" if action == "defer" else "resolved"
             review = self.store.q1("SELECT payload FROM review WHERE id=?", (review_id,))
@@ -1635,6 +1927,11 @@ class ProjectWorkflow:
                 "UPDATE review SET status=?,payload=?,resolved_at=? WHERE id=?",
                 (review_status, canonical_json(payload), now_iso(), review_id),
             )
+            self._append_review_event(finding["project_key"], review_id,
+                                      "ReviewDispositionRecorded", actor_id, {
+                                          "status": review_status, "decisionId": decision_id,
+                                          "action": action,
+                                      })
         if action == "override":
             self._create_override(
                 finding["project_key"], finding, decision_id, decided_by,
@@ -1764,20 +2061,30 @@ class ProjectWorkflow:
                         alternatives: list[str], evidence_digest: str, confidence: float,
                         reversibility: str, review_id: Optional[str] = None,
                         finding_id: Optional[str] = None,
-                        supersedes_id: Optional[str] = None) -> dict:
+                        supersedes_id: Optional[str] = None,
+                        action_class: str = "draft_internal_reversible",
+                        target: str = "",
+                        policy_ref: str = DECISION_POLICY_V1) -> dict:
         mode = validate_autonomy_mode(autonomy_mode)
         if action not in DECISION_ACTIONS:
             raise ValueError(f"invalid decision action: {action}")
+        if action_class not in DECISION_ACTION_CLASSES:
+            raise ValueError(f"invalid decision action class: {action_class}")
         if decided_by not in {"agent", "human", "tool"}:
             raise ValueError("decidedBy must be agent, human or tool")
         if not rationale.strip() or not actor_id.strip() or not reversibility.strip():
             raise ValueError("actorId, rationale and reversibility are required")
+        policy = self.policy(project_key)
+        rule = policy["decisionRules"][action_class]
+        if decided_by == "agent" and not rule["agentOnly"] and action_class in {
+                "certified_internal", "public_external", "specialized_high_impact"}:
+            raise ValueError("this action class requires accountable human governance")
+        if action_class == "specialized_high_impact" and not rule.get("trustedRoleSource"):
+            raise ValueError("specialized_high_impact is blocked_by_policy: trusted role source unavailable")
         if not isinstance(alternatives, list) or not all(
                 isinstance(item, str) and item.strip() for item in alternatives):
             raise ValueError("alternatives must be a string array")
-        snapshot = self.snapshot(evidence_digest)
-        if snapshot is None or snapshot["projectKey"] != project_key:
-            raise ValueError("evidenceDigest must identify a committed Project Snapshot")
+        snapshot = self._require_sealed_snapshot(project_key, evidence_digest)
         finding = None
         if finding_id:
             finding = self.store.q1("SELECT * FROM finding WHERE id=?", (finding_id,))
@@ -1819,6 +2126,7 @@ class ProjectWorkflow:
                 autonomy_mode=mode, rationale=rationale, alternatives=alternatives,
                 evidence_digest=evidence_digest, confidence=confidence,
                 reversibility=reversibility, supersedes_id=supersedes_id,
+                action_class=action_class, target=target.strip(), policy_ref=policy_ref,
             )
             if finding:
                 self._apply_decision_disposition(
@@ -1833,6 +2141,13 @@ class ProjectWorkflow:
                 "decisionId": decision_id, "findingId": finding_id,
                 "reviewId": review_id, "action": action,
             })
+            self.store.x(
+                "INSERT INTO review_event (id,project_key,review_id,event_type,actor,payload,created_at)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (new_id("review-event"), project_key, review_id or "project",
+                 "ReviewDecisionRecorded", actor_id,
+                 canonical_json({"decisionId": decision_id, "snapshot": evidence_digest}), now_iso()),
+            ) if review_id else None
             self.store.conn.commit()
         except Exception:
             self.store.conn.rollback()
@@ -1844,15 +2159,17 @@ class ProjectWorkflow:
                              decided_by: str, actor_id: str, autonomy_mode: str,
                              rationale: str, alternatives: list[str], evidence_digest: str,
                              confidence: float, reversibility: str,
-                             supersedes_id: Optional[str]) -> str:
+                             supersedes_id: Optional[str], action_class: str = "draft_internal_reversible",
+                             target: str = "", policy_ref: str = DECISION_POLICY_V1) -> str:
         decision_id = new_id("decision")
         self.store.x(
             "INSERT INTO decision_event (id,project_key,review_id,finding_id,action,decided_by,agent_id,"
             "autonomy_mode,rationale,alternatives,evidence_digest,confidence,reversibility,"
-            "supersedes_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "supersedes_id,action_class,target,policy_ref,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (decision_id, project_key, review_id, finding_id, action, decided_by, actor_id,
              autonomy_mode, rationale, canonical_json(alternatives), evidence_digest,
-             max(0.0, min(1.0, float(confidence))), reversibility, supersedes_id, now_iso()),
+             max(0.0, min(1.0, float(confidence))), reversibility, supersedes_id,
+             action_class, target, policy_ref, now_iso()),
         )
         return decision_id
 
@@ -1949,16 +2266,89 @@ class ProjectWorkflow:
             )
         self.store.conn.commit()
 
+    def record_approval(self, *, project_key: str, decision_id: str,
+                        attestor: str, attestation: str,
+                        trusted_role_assertion_ref: Optional[str] = None,
+                        expires_at: Optional[str] = None,
+                        revokes_approval_id: Optional[str] = None,
+                        policy_ref: str = DECISION_POLICY_V1) -> dict:
+        """Append an ApprovalV1 bound to one exact Decision and Snapshot."""
+        if not attestor.strip() or not attestation.strip():
+            raise ValueError("attestor and attestation are required")
+        if attestor.lower().startswith("agent") or attestor.lower().startswith("tool"):
+            raise ValueError("an Agent cannot occupy the accountable-human approval role")
+        decision = self.store.q1("SELECT * FROM decision_event WHERE id=?", (decision_id,))
+        if decision is None or decision["project_key"] != project_key:
+            raise KeyError(decision_id)
+        snapshot = self._require_sealed_snapshot(project_key, decision["evidence_digest"])
+        if revokes_approval_id:
+            prior = self.store.q1("SELECT * FROM approval_record WHERE id=?", (revokes_approval_id,))
+            if prior is None or prior["project_key"] != project_key:
+                raise KeyError(revokes_approval_id)
+        approval_id = new_id("approval")
+        now = now_iso()
+        self.store.x(
+            "INSERT INTO approval_record"
+            " (id,project_key,decision_id,project_snapshot_digest,attestor,"
+            "trusted_role_assertion_ref,attestation,policy_ref,created_at,expires_at,revokes_approval_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (approval_id, project_key, decision_id, snapshot["digest"], attestor.strip(),
+             trusted_role_assertion_ref, attestation.strip(), policy_ref, now, expires_at,
+             revokes_approval_id),
+        )
+        self._event(project_key, "ApprovalRecorded", attestor, {
+            "approvalId": approval_id, "decisionId": decision_id,
+            "projectSnapshot": snapshot["digest"], "policyRef": policy_ref,
+        })
+        self.store.conn.commit()
+        return self.approval(approval_id) or {}
+
+    def approval(self, approval_id: str) -> Optional[dict]:
+        row = self.store.q1("SELECT * FROM approval_record WHERE id=?", (approval_id,))
+        if row is None:
+            return None
+        row.update({
+            "approvalId": row.pop("id"), "decisionRef": row.pop("decision_id"),
+            "projectSnapshot": row.pop("project_snapshot_digest"),
+            "trustedRoleAssertionRef": row.pop("trusted_role_assertion_ref"),
+            "policyRef": row.pop("policy_ref"), "createdAt": row.pop("created_at"),
+            "expiresAt": row.pop("expires_at"), "revokesApprovalId": row.pop("revokes_approval_id"),
+        })
+        revoked = self.store.q1(
+            "SELECT 1 FROM approval_record WHERE revokes_approval_id=?", (row["approvalId"],))
+        expired = bool(row.get("expiresAt") and row["expiresAt"] <= now_iso())
+        latest = self.latest_snapshot(row["project_key"])
+        if latest is None or latest["digest"] != row["projectSnapshot"]:
+            # An approval is a scoped attestation, never a reusable permission.
+            # A newer Project input expires it without rewriting its record.
+            expired = True
+        row["status"] = "revoked" if revoked else "expired" if expired else "effective"
+        return row
+
+    def approvals(self, project_key: str, snapshot_digest: Optional[str] = None) -> list[dict]:
+        sql = "SELECT id FROM approval_record WHERE project_key=?"
+        args: list[Any] = [project_key]
+        if snapshot_digest:
+            sql += " AND project_snapshot_digest=?"; args.append(snapshot_digest)
+        return [item for row in self.store.q(sql + " ORDER BY created_at", args)
+                if (item := self.approval(row["id"])) is not None]
+
     def create_release(self, *, project_key: str, project_snapshot_digest: str,
-                       audit_digest: str, created_by: str,
+                       expected_head_digest: str, audit_digest: str, created_by: str,
                        output_artifacts: list[dict], requested_status: str = "candidate",
                        runtime_authorization: Optional[dict] = None,
-                       external_action: bool = False) -> dict:
+                       external_action: bool = False,
+                       target: str = "", classification: str = "internal",
+                       decision_refs: Optional[list[str]] = None,
+                       approval_refs: Optional[list[str]] = None,
+                       action_class: Optional[str] = None) -> dict:
         if requested_status not in {"candidate", "certified"}:
             raise ValueError("requestedStatus must be candidate or certified")
-        snapshot = self.snapshot(project_snapshot_digest)
-        if snapshot is None or snapshot["projectKey"] != project_key:
-            raise KeyError(project_snapshot_digest)
+        if not isinstance(expected_head_digest, str) or not expected_head_digest.strip():
+            raise ValueError("expectedHeadDigest is required")
+        if expected_head_digest != project_snapshot_digest:
+            raise ValueError("Project Snapshot head changed; reload before release")
+        snapshot = self._require_sealed_snapshot(project_key, expected_head_digest)
         audit = self.store.q1(
             "SELECT * FROM audit_run WHERE project_key=? AND target_digest=? AND digest=?"
             " AND status='completed' AND level='L2'",
@@ -1969,7 +2359,31 @@ class ProjectWorkflow:
             auth = runtime_authorization or {}
             if auth.get("granted") is not True or not auth.get("permissionId"):
                 raise PermissionError("external release requires Runtime authorization")
+            if requested_status == "certified" or classification == "public":
+                required_runtime = {
+                    "principalId", "purpose", "consentRevision", "aclRevision", "target",
+                }
+                missing_runtime = sorted(key for key in required_runtime if not auth.get(key))
+                if missing_runtime:
+                    raise PermissionError(
+                        "Runtime authorization is missing current exact fields: "
+                        + ", ".join(missing_runtime))
+                if target and auth.get("target") != target:
+                    raise PermissionError("Runtime authorization target does not match release target")
         policy = self.policy(project_key)
+        if not isinstance(output_artifacts, list) or any(
+                not isinstance(item, dict) for item in output_artifacts):
+            raise ValueError("outputArtifacts must be typed Artifact Version references")
+        for artifact in output_artifacts:
+            if not any(isinstance(artifact.get(key), str) and artifact[key].strip()
+                       for key in ("artifactVersionId", "versionId")):
+                raise ValueError("each output Artifact must identify an exact Version")
+            if not isinstance(artifact.get("contentDigest"), str) \
+                    or not artifact["contentDigest"].startswith("sha256:"):
+                raise ValueError("each output Artifact must include its exact content digest")
+            if any(str(artifact.get(key, "")).lower() in {"latest", "current"}
+                   for key in ("artifactVersionId", "versionId")):
+                raise ValueError("output Artifact refs cannot use latest or current")
         critical = self.store.q(
             "SELECT * FROM finding WHERE project_key=? AND target_digest=?"
             " AND severity='critical' AND status IN ('open','deferred')",
@@ -1989,20 +2403,95 @@ class ProjectWorkflow:
                 "pending", "rejected", "deferred",
             }
         ]
+        decision_refs = list(decision_refs or [])
+        approval_refs = list(approval_refs or [])
+        decisions = []
+        for ref in decision_refs:
+            decision = self.decision(ref)
+            if decision is None or decision.get("project_key") != project_key \
+                    or decision.get("projectSnapshot") != project_snapshot_digest:
+                raise ValueError("Release decisions must bind the exact Project Snapshot")
+            decisions.append(decision)
+        if classification not in {"internal", "certified", "public"}:
+            raise ValueError("classification must be internal, certified or public")
+        action_classes = {item.get("actionClass", "draft_internal_reversible") for item in decisions}
+        required_class = "public_external" if classification == "public" else (
+            "certified_internal" if requested_status == "certified" else None)
+        if required_class and action_class is not None and action_class != required_class:
+            raise ValueError(
+                "release action class must match the requested certified/public release")
+        if required_class:
+            action_classes.add(required_class)
+        selected_action_class = action_class or (
+            "public_external" if classification == "public" else
+            "certified_internal" if requested_status == "certified" else None)
+        if selected_action_class:
+            if selected_action_class not in DECISION_ACTION_CLASSES:
+                raise ValueError("invalid release action class")
+            action_classes.add(selected_action_class)
+        if "specialized_high_impact" in action_classes:
+            specialized = policy["decisionRules"]["specialized_high_impact"]
+            if not specialized.get("trustedRoleSource") or not specialized.get("requiredRoles"):
+                policy_block = True
+            else:
+                policy_block = False
+        else:
+            policy_block = False
+        if requested_status == "certified":
+            rule = policy["decisionRules"][selected_action_class or required_class or "certified_internal"]
+            if not rule.get("allowCertification"):
+                policy_block = True
+        approvals = [self.approval(ref) for ref in approval_refs]
+        if any(item is None or item.get("projectSnapshot") != project_snapshot_digest
+               or item.get("status") != "effective" for item in approvals):
+            raise ValueError("Release approvals must bind the exact Project Snapshot")
+        if requested_status == "certified" and not approval_refs:
+            approval_refs = [item["approvalId"] for item in self.approvals(
+                project_key, project_snapshot_digest)
+                if item.get("status") == "effective"
+                and not str(item.get("attestor", "")).lower().startswith("agent")
+                and (decision := self.decision(item["decisionRef"])) is not None
+                and decision.get("actionClass") == selected_action_class]
+            approvals = [self.approval(ref) for ref in approval_refs]
+        if requested_status == "certified":
+            selected_class = selected_action_class or required_class or "certified_internal"
+            for approval in approvals:
+                if approval is None:
+                    raise ValueError("Release approvals must bind the exact Project Snapshot")
+                decision = self.decision(approval["decisionRef"])
+                if decision is None or decision.get("projectSnapshot") != project_snapshot_digest:
+                    raise ValueError("Release approvals must bind an exact Decision")
+                if decision.get("actionClass") != selected_class:
+                    raise ValueError(
+                        "Release approvals must bind the requested release action class")
+                if decision["decisionId"] not in decision_refs:
+                    decision_refs.append(decision["decisionId"])
+        if requested_status == "certified":
+            rule = policy["decisionRules"][selected_action_class or required_class or "certified_internal"]
+            human_approvals = [item for item in self.approvals(
+                project_key, project_snapshot_digest)
+                if item.get("status") == "effective"
+                and not str(item.get("attestor", "")).lower().startswith(("agent", "tool"))]
+            if len({item["approvalId"] for item in human_approvals
+                    if item["approvalId"] in approval_refs}) < int(rule.get("quorum", 1)):
+                policy_block = True
         gates_pass = not critical and pending is None and not blocking_review_packets
         certification = requested_status
-        if requested_status == "certified" and not gates_pass:
+        if requested_status == "certified" and (not gates_pass or not approval_refs or policy_block):
             certification = "blocked"
         release_id = new_id("release")
         self.store.x(
             "INSERT INTO release_record (id,project_key,project_snapshot_digest,evidence_vector,"
             "audit_run_digest,policy_version,critical_findings,overrides,created_by,created_at,"
-            "output_artifacts,certification_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "output_artifacts,certification_status,classification,target,attempt_outcome,"
+            "audit_refs,decision_refs,approval_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (release_id, project_key, project_snapshot_digest,
              canonical_json(snapshot["evidenceVector"]), audit_digest, policy["policy_version"],
              canonical_json([f["id"] for f in critical]),
              canonical_json([o["id"] for o in overrides]), created_by, now_iso(),
-             canonical_json(output_artifacts), certification),
+             canonical_json(output_artifacts), certification, classification, target,
+             "accepted" if certification != "blocked" else "blocked_by_policy",
+             canonical_json([audit_digest]), canonical_json(decision_refs), canonical_json(approval_refs)),
         )
         self._event(project_key, "ReleaseRecordCreated", created_by, {
             "releaseId": release_id, "certificationStatus": certification,
@@ -2030,6 +2519,10 @@ class ProjectWorkflow:
                 "UPDATE review SET status='resolved',payload=?,resolved_at=? WHERE id=?",
                 (canonical_json(payload), timestamp, row["id"]),
             )
+            self._append_review_event(project_key, row["id"], "ReviewExpired",
+                                      "project-review-policy", {
+                                          "snapshotDigest": snapshot_digest,
+                                      })
         if packet is None:
             return
         stored = self.store.q1("SELECT * FROM review WHERE id=?", (packet["id"],))
@@ -2043,6 +2536,10 @@ class ProjectWorkflow:
                 updated["completedAt"] = prior.get("completedAt") or timestamp
             self.store.x("UPDATE review SET payload=? WHERE id=?",
                          (canonical_json(updated), packet["id"]))
+            self._append_review_event(project_key, packet["id"],
+                                      "ReviewPacketRefreshed", "project-review-policy", {
+                                          "snapshotDigest": snapshot_digest,
+                                      })
             return
         persisted = {**packet, "snapshotDigest": snapshot_digest}
         self.store.x(
@@ -2050,8 +2547,13 @@ class ProjectWorkflow:
             "created_at) VALUES (?,?,?,'human_review_packet',?,'open',?,?)",
             (packet["id"], project_key, packet["id"],
              "human" if packet["blocking"] else "human_recommended",
-             canonical_json(persisted), timestamp),
+            canonical_json(persisted), timestamp),
         )
+        self._append_review_event(project_key, packet["id"], "ReviewPacketCreated",
+                                  "project-review-policy", {
+                                      "snapshotDigest": snapshot_digest,
+                                      "status": packet.get("status"),
+                                  })
         self._event(project_key, "HumanReviewPacketQueued", "project-review-policy", {
             "reviewPacketId": packet["id"], "snapshotDigest": snapshot_digest,
             "blocking": packet["blocking"], "subjectIds": packet["subjectIds"],
@@ -2117,9 +2619,7 @@ class ProjectWorkflow:
             raise ValueError("Review Packet does not identify a committed Project Snapshot")
         if expected_snapshot_digest and expected_snapshot_digest != digest:
             raise ValueError("Review Packet snapshot changed; reload before recording a decision")
-        latest = self.latest_snapshot(project_key)
-        if latest is None or latest["digest"] != digest:
-            raise ValueError("Review Packet is stale; reload the latest Project Snapshot")
+        self._require_sealed_snapshot(project_key, digest)
         decision_action, review_status, db_status = action_map[action]
         policy = self.policy(project_key)
         timestamp = now_iso()
@@ -2129,12 +2629,21 @@ class ProjectWorkflow:
             autonomy_mode=policy["autonomy_mode"], rationale=rationale,
             alternatives=sorted(set(action_map) - {action}), evidence_digest=digest,
             confidence=confidence, reversibility="fully_reversible", supersedes_id=None,
+            action_class=("certified_internal" if action == "approve"
+                          else "draft_internal_reversible"),
         )
+        approval = None
+        if action == "approve":
+            approval = self.record_approval(
+                project_key=project_key, decision_id=decision_id, attestor=actor_id,
+                attestation=rationale, policy_ref=DECISION_POLICY_V1,
+            )
         payload.update({
             "status": review_status, "updatedAt": timestamp,
             "humanResult": {"action": action, "decisionId": decision_id,
                             "actorId": actor_id, "rationale": rationale,
-                            "recordedAt": timestamp},
+                            "recordedAt": timestamp,
+                            **({"approvalId": approval["approvalId"]} if approval else {})},
         })
         if review_status != "pending":
             payload["completedAt"] = timestamp
@@ -2143,6 +2652,10 @@ class ProjectWorkflow:
             (db_status, canonical_json(payload),
              timestamp if db_status != "open" else None, packet_id),
         )
+        self._append_review_event(project_key, packet_id, "ReviewDecisionRecorded", actor_id, {
+            "status": review_status, "decisionId": decision_id, "action": action,
+            "snapshotDigest": digest,
+        })
         self._event(project_key, "HumanReviewResultRecorded", actor_id, {
             "reviewPacketId": packet_id, "decisionId": decision_id,
             "action": action, "snapshotDigest": digest,
@@ -2249,12 +2762,16 @@ class ProjectWorkflow:
             and job["status"] in active_states
             and latest_receipt["state"] in active_states
         ), None)
+        invalidation = self.invalidation(project_key)
+        derived_state = ("updating" if active and active["status"] == "running" else
+                         "retry_scheduled" if active and active["status"] == "retry_scheduled" else
+                         "update_failed" if active and active["status"] == "failed" else
+                         "pending" if active else
+                         "stale" if invalidation and invalidation.get("stale") else
+                         "fresh" if snapshot else "empty")
         return {
             "projectKey": project_key,
-            "state": ("updating" if active and active["status"] == "running" else
-                      "retry_scheduled" if active and active["status"] == "retry_scheduled" else
-                      "update_failed" if active and active["status"] == "failed" else
-                      "pending" if active else "fresh" if snapshot else "empty"),
+            "state": derived_state,
             "committedSnapshot": snapshot,
             "previousCommittedSnapshot": previous_snapshot,
             "desiredEvidenceVector": (self.job(active["id"])["desiredEvidenceVector"]
@@ -2280,6 +2797,8 @@ class ProjectWorkflow:
             "autonomy": self.policy(project_key),
             "humanReview": self.human_review_summary(
                 project_key, snapshot["digest"] if snapshot else None),
+            "invalidation": self.invalidation(project_key),
+            "scopeRevisions": self.scope_revisions(project_key),
         }
 
     def snapshot(self, digest: str) -> Optional[dict]:
@@ -2338,13 +2857,31 @@ class ProjectWorkflow:
         row = self.store.q1("SELECT * FROM decision_event WHERE id=?", (decision_id,))
         if row:
             row["alternatives"] = _loads(row["alternatives"], [])
+            row["decisionId"] = row["id"]
+            row["projectSnapshot"] = row["evidence_digest"]
+            row["actionClass"] = row.get("action_class", "draft_internal_reversible")
+            row["actor"] = {
+                "type": row["decided_by"], "id": row["agent_id"],
+            }
+            row["policyRef"] = row.get("policy_ref", DECISION_POLICY_V1)
+            row["target"] = row.get("target", "")
+            row["supersedesDecisionId"] = row["supersedes_id"]
         return row
 
     def release(self, release_id: str) -> Optional[dict]:
         row = self.store.q1("SELECT * FROM release_record WHERE id=?", (release_id,))
         if row:
-            for key in ("evidence_vector", "critical_findings", "overrides", "output_artifacts"):
+            for key in ("evidence_vector", "critical_findings", "overrides", "output_artifacts",
+                        "audit_refs", "decision_refs", "approval_refs"):
                 row[key] = _loads(row[key], [])
+            row["releaseId"] = row["id"]
+            row["projectSnapshot"] = row["project_snapshot_digest"]
+            row["classification"] = row.get("classification", "internal")
+            row["target"] = row.get("target", "")
+            row["attemptOutcome"] = row.get("attempt_outcome", "accepted")
+            row["auditRefs"] = row.get("audit_refs", [])
+            row["decisionRefs"] = row.get("decision_refs", [])
+            row["approvalRefs"] = row.get("approval_refs", [])
         return row
 
     def assessments(self, project_key: str, target_digest: Optional[str] = None) -> list[dict]:
@@ -2362,5 +2899,27 @@ class ProjectWorkflow:
             "INSERT OR IGNORE INTO domain_event (id,event_type,project_key,occurred_at,actor,payload)"
             " VALUES (?,?,?,?,?,?)",
             (event_id, event_type, project_key, now_iso(), actor, canonical_json(payload)),
+        )
+        return event_id
+
+    def _append_finding_event(self, project_key: str, finding_id: str,
+                              event_type: str, actor: str, payload: dict) -> str:
+        event_id = new_id("finding-event")
+        self.store.x(
+            "INSERT INTO finding_event (id,project_key,finding_id,event_type,actor,payload,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (event_id, project_key, finding_id, event_type, actor,
+             canonical_json(payload), now_iso()),
+        )
+        return event_id
+
+    def _append_review_event(self, project_key: str, review_id: str,
+                             event_type: str, actor: str, payload: dict) -> str:
+        event_id = new_id("review-event")
+        self.store.x(
+            "INSERT INTO review_event (id,project_key,review_id,event_type,actor,payload,created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (event_id, project_key, review_id, event_type, actor,
+             canonical_json(payload), now_iso()),
         )
         return event_id

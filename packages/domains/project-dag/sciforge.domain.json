@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.project-dag",
     "displayName": "Project DAG",
-    "version": "1.0.4",
+    "version": "1.0.6",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -36,10 +36,19 @@
       "title": "Project DAG",
       "resourceKind": "project-dag"
     },
-    "project-dag.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "project-dag.open",
-      "label": "rightPanelProjectDag"
+    "project-dag.research-summary": {
+      "slot": "goal",
+      "label": "Goal and scope",
+      "order": 10,
+      "scopeKinds": ["workspace"],
+      "resourceKinds": ["project-dag", "project-goal", "project-snapshot"]
+    },
+    "project-dag.resource-navigation": {
+      "resourceKinds": ["project-dag", "project-goal", "project-snapshot"],
+      "target": {
+        "surface": "right-panel",
+        "contributionId": "project-dag.workbench-right-panel"
+      }
     }
   },
   "entrypoints": [
@@ -70,12 +79,12 @@
           "id": "project-dag.workbench-right-panel"
         },
         {
-          "kind": "renderer.command",
-          "id": "project-dag.open"
+          "kind": "renderer.research-summary.v1",
+          "id": "project-dag.research-summary"
         },
         {
-          "kind": "renderer.workbench-toolbar-action",
-          "id": "project-dag.workbench-toolbar-action"
+          "kind": "renderer.resource-navigation",
+          "id": "project-dag.resource-navigation"
         },
         {
           "kind": "renderer.i18n-resource",

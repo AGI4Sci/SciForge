@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.scientific-plotting",
     "displayName": "Scientific Plotting",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -85,10 +85,15 @@
       "title": "Scientific Plot Provenance",
       "resourceKind": "scientific-plot"
     },
-    "scientific-plotting.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "scientific-plotting.open",
-      "label": "rightPanelScientificPlotting"
+    "scientific-plotting.resource-navigation": {
+      "resourceKinds": [
+        "scientific-plot",
+        "scientific-plot-render-manifest"
+      ],
+      "target": {
+        "surface": "right-panel",
+        "contributionId": "scientific-plotting.workbench-right-panel"
+      }
     }
   },
   "entrypoints": [
@@ -118,13 +123,8 @@
           "priority": 145
         },
         {
-          "kind": "renderer.command",
-          "id": "scientific-plotting.open",
-          "priority": 145
-        },
-        {
-          "kind": "renderer.workbench-toolbar-action",
-          "id": "scientific-plotting.workbench-toolbar-action",
+          "kind": "renderer.resource-navigation",
+          "id": "scientific-plotting.resource-navigation",
           "priority": 145
         },
         {

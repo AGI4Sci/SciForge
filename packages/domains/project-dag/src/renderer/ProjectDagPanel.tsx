@@ -43,6 +43,7 @@ import {
   handleProjectDagPreviewMessage,
   normalizeProjectDagGraphNodeId
 } from './project-dag-preview-bridge'
+import { projectDagCanonicalSessionId } from './project-dag-session'
 
 export type ProjectDagPanelProps = Readonly<{
   active: boolean
@@ -105,15 +106,20 @@ export function projectDagCommittedFrameKey(
 }
 
 export function projectDagUpdateScope(
-  status: ProjectDagStatus | undefined
-): 'all' | string[] {
-  if (!status) return 'all'
+  status: ProjectDagStatus | undefined,
+  currentSessionId?: string | null
+): string[] {
+  if (!status) return currentSessionId ? [currentSessionId] : []
   const sessions = [...new Set([
     ...status.scope.includedSessions,
     ...status.scope.excludedSessions,
     ...status.scope.isolatedSessions
   ])].sort()
-  return sessions.length > 0 ? sessions : 'all'
+  return sessions.length > 0
+    ? sessions
+    : currentSessionId
+      ? [currentSessionId]
+      : []
 }
 
 export function ProjectDagPanel({
@@ -255,9 +261,13 @@ export function ProjectDagPanel({
     setSubmitting(true)
     setError(null)
     setSummary(null)
+    const currentSessionId = projectDagCanonicalSessionId(
+      session.id,
+      session.runtimeId
+    )
     void client.update({
       ...projectTarget(target),
-      scope: projectDagUpdateScope(status),
+      scope: projectDagUpdateScope(status, currentSessionId),
       excludedSessions: status?.scope.excludedSessions ?? [],
       isolatedSessions: status?.scope.isolatedSessions ?? [],
       autonomyMode

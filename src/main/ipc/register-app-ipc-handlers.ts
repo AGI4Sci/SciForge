@@ -87,10 +87,6 @@ import {
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
-  researchCardArchivePayloadSchema,
-  researchCardCreatePayloadSchema,
-  researchCardListPayloadSchema,
-  researchCardUpdatePayloadSchema,
   traceExportPayloadSchema,
   traceReadPayloadSchema,
   traceSummariesPayloadSchema,
@@ -179,7 +175,6 @@ import type {
   SpeechTranscriptionRequest,
   SpeechTranscriptionResult
 } from '../../shared/speech-to-text'
-import type { ResearchCardService } from '../services/research-card-service'
 import type { WorkspacePlacementRouter } from '../services/workspace-placement-router'
 import type { MainActionGuardEvaluator } from '../modules/runtime-contributions'
 import type {
@@ -362,7 +357,6 @@ export type RegisterAppIpcHandlersOptions = {
     discardSurfaceBinding?: (callerId: string, bindingId: string) => Promise<void>
   }
   getScheduleRuntime: () => ScheduleRuntime | null
-  researchCards?: ResearchCardService
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>
@@ -859,34 +853,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       ? { ok: true, snapshot, mainSnapshot }
       : { ok: false, message: 'Renderer performance monitor is not available.', mainSnapshot }
   })
-
-  const requireResearchCardService = (): ResearchCardService => {
-    if (!options.researchCards) {
-      throw new Error('Research card service is not initialized.')
-    }
-    return options.researchCards
-  }
-
-  handleInvoke('researchCards:list', async (_, payload: unknown) =>
-    requireResearchCardService().list(
-      parseIpcPayload('researchCards:list', researchCardListPayloadSchema, payload ?? {})
-    )
-  )
-  handleInvoke('researchCards:create', async (_, payload: unknown) =>
-    requireResearchCardService().create(
-      parseIpcPayload('researchCards:create', researchCardCreatePayloadSchema, payload)
-    )
-  )
-  handleInvoke('researchCards:update', async (_, payload: unknown) =>
-    requireResearchCardService().update(
-      parseIpcPayload('researchCards:update', researchCardUpdatePayloadSchema, payload)
-    )
-  )
-  handleInvoke('researchCards:archive', async (_, payload: unknown) =>
-    requireResearchCardService().archive(
-      parseIpcPayload('researchCards:archive', researchCardArchivePayloadSchema, payload)
-    )
-  )
 
   handleInvoke('visibleContext:publish', async (event, payload: unknown) => {
     const snapshot = parseIpcPayload('visibleContext:publish', visibleContextPublishPayloadSchema, payload)

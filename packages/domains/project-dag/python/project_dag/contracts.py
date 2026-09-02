@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 
 AUTONOMY_MODES = {"autonomous", "checkpointed", "supervised"}
@@ -14,6 +14,109 @@ DECISION_ACTIONS = {
 A3_AUTOMATED_ACTIONS = {
     "resolve", "defer", "request_evidence", "challenge", "override",
 }
+
+# Stage 4 governance contracts.  These are deliberately data-only so the
+# compiler, service and any future UI can share one deterministic policy.
+PROJECT_INVALIDATION_POLICY_V1 = "project-invalidation-policy/v1"
+DECISION_POLICY_V1 = "decision-policy/v1"
+DECISION_ACTION_CLASSES = {
+    "draft_internal_reversible",
+    "certified_internal",
+    "public_external",
+    "specialized_high_impact",
+}
+DEFAULT_DECISION_RULES = {
+    "draft_internal_reversible": {
+        "agentOnly": True,
+        "requiredRoles": [],
+        "quorum": 0,
+        "allowCertification": False,
+        "trustedRoleSource": None,
+    },
+    "certified_internal": {
+        "agentOnly": False,
+        "requiredRoles": [{"role": "accountable_human", "count": 1}],
+        "quorum": 1,
+        "allowCertification": True,
+        "trustedRoleSource": "project-governance",
+    },
+    "public_external": {
+        "agentOnly": False,
+        "requiredRoles": [{"role": "accountable_human", "count": 1}],
+        "quorum": 1,
+        "allowCertification": True,
+        "trustedRoleSource": "project-governance",
+    },
+    # No discipline-specific role source is installed by default.  This rule
+    # therefore fails closed until a workspace governance authority installs it.
+    "specialized_high_impact": {
+        "agentOnly": False,
+        "requiredRoles": [],
+        "quorum": 1,
+        "allowCertification": False,
+        "trustedRoleSource": None,
+    },
+}
+MATERIAL_PROJECT_INPUT_FIELDS = frozenset({
+    "goalIntent", "capturedScope", "evidenceVector", "evidenceClosures",
+    "evidenceSchemaVersion", "evidenceExtractorVersion",
+    "evidenceVerifierVersion", "evidenceClosurePolicyVersion",
+    "projectCompilerVersion", "projectPolicyVersion", "sourceLifecycleRevision",
+    "artifactLifecycleRevision", "aclRevision", "consentRevision",
+    "retentionRevision", "actionTarget", "outputArtifactVersions", "risk",
+})
+NON_MATERIAL_PROJECT_INPUT_FIELDS = frozenset({
+    "layout", "presentation", "selectedTab", "displayLabel",
+})
+
+
+def classify_project_invalidation(field: str, *, formal_gate: bool = False) -> str:
+    """Classify one changed fingerprint field, failing closed for unknowns."""
+    if field in MATERIAL_PROJECT_INPUT_FIELDS:
+        return "material"
+    if field in NON_MATERIAL_PROJECT_INPUT_FIELDS:
+        return "non_material"
+    return "material" if formal_gate else "unknown"
+
+
+def project_input_fingerprint(context: Mapping[str, Any], prefix: str = "project-input") -> str:
+    """Hash the complete authorized Project input context."""
+    return digest_json(dict(context), prefix)
+
+
+def default_decision_rules() -> dict[str, dict]:
+    """Return a copy so policy callers cannot mutate the shared defaults."""
+    return json.loads(canonical_json(DEFAULT_DECISION_RULES))
+
+
+def normalize_decision_rules(value: Any) -> dict[str, dict]:
+    rules = default_decision_rules()
+    if value is None:
+        return rules
+    if not isinstance(value, Mapping):
+        raise ValueError("decisionRules must be an object")
+    for action_class, raw in value.items():
+        if action_class not in DECISION_ACTION_CLASSES:
+            raise ValueError(f"unknown decision action class: {action_class}")
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"decisionRules.{action_class} must be an object")
+        merged = {**rules[action_class], **dict(raw)}
+        roles = merged.get("requiredRoles")
+        if not isinstance(roles, list) or any(
+                not isinstance(item, Mapping)
+                or not isinstance(item.get("role"), str)
+                or not item["role"].strip()
+                or not isinstance(item.get("count"), int)
+                or item["count"] <= 0
+                for item in roles):
+            raise ValueError(f"decisionRules.{action_class}.requiredRoles is invalid")
+        if not isinstance(merged.get("quorum"), int) or merged["quorum"] < 0:
+            raise ValueError(f"decisionRules.{action_class}.quorum is invalid")
+        if not isinstance(merged.get("agentOnly"), bool) \
+                or not isinstance(merged.get("allowCertification"), bool):
+            raise ValueError(f"decisionRules.{action_class} flags are invalid")
+        rules[action_class] = merged
+    return rules
 
 _A3_CHALLENGE_MARKERS = (
     "conflict", "contradict", "cycle", "merge", "entailment", "methodology",
@@ -138,10 +241,26 @@ def normalize_scope(value: dict | None, default_sessions: Iterable[str] = ()) ->
     overlap = set(included) & (set(excluded) | set(isolated))
     if overlap:
         raise ValueError(f"capturedScope includes excluded/isolated sessions: {sorted(overlap)}")
+    raw_reasons = raw.get("reasons", {})
+    if raw_reasons is None:
+        raw_reasons = {}
+    if not isinstance(raw_reasons, dict):
+        raise ValueError("capturedScope.reasons must be an object")
+    reasons = {
+        key.strip(): value.strip()
+        for key, value in raw_reasons.items()
+        if isinstance(key, str) and key.strip()
+        and isinstance(value, str) and value.strip()
+    }
+    unknown_reasons = set(reasons) - (set(included) | set(excluded) | set(isolated))
+    if unknown_reasons:
+        raise ValueError(
+            f"capturedScope.reasons reference unknown sessions: {sorted(unknown_reasons)}")
     return {
         "includedSessions": included,
         "excludedSessions": excluded,
         "isolatedSessions": isolated,
+        "reasons": dict(sorted(reasons.items())),
     }
 
 

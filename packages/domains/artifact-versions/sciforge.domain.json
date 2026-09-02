@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.artifact-versions",
     "displayName": "Artifact Versions",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "hostApi": {
       "minimum": "1.1.0",
       "maximumExclusive": "2.0.0"
@@ -17,15 +17,12 @@
     "priority": 170
   },
   "contributionContracts": {
-    "artifact-versions.workbench-right-panel": {
-      "location": "workbench.right-panel",
-      "title": "Artifact Versions",
-      "resourceKind": "artifact-version"
-    },
-    "artifact-versions.workbench-toolbar-action": {
-      "location": "workbench.topbar",
-      "commandId": "artifact-versions.open",
-      "label": "rightPanelArtifactVersions"
+    "artifact-versions.research-summary": {
+      "slot": "artifacts",
+      "label": "Artifacts",
+      "order": 20,
+      "scopeKinds": ["workspace"],
+      "resourceKinds": ["artifact-version"]
     }
   },
   "entrypoints": [
@@ -55,23 +52,8 @@
       "export": "./renderer",
       "contributions": [
         {
-          "kind": "renderer.workbench-right-panel",
-          "id": "artifact-versions.workbench-right-panel",
-          "priority": 170
-        },
-        {
-          "kind": "renderer.command",
-          "id": "artifact-versions.open",
-          "priority": 170
-        },
-        {
-          "kind": "renderer.workbench-toolbar-action",
-          "id": "artifact-versions.workbench-toolbar-action",
-          "priority": 170
-        },
-        {
-          "kind": "renderer.i18n-resource",
-          "id": "artifact-versions.translations",
+          "kind": "renderer.research-summary.v1",
+          "id": "artifact-versions.research-summary",
           "priority": 170
         }
       ]

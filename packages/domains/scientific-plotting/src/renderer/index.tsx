@@ -1,24 +1,18 @@
 import { lazy, type ReactElement } from 'react'
-import { BarChart3 } from 'lucide-react'
 import { z } from 'zod'
-import {
-  ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION
-} from '@sciforge/domain-artifact-versions/definition'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
-  type DomainRendererCommandHandler,
+  type DomainRendererResourceNavigationValue,
   type DomainRendererWorkbenchRightPanelValue,
-  type DomainRendererWorkbenchToolbarActionValue,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
 import {
-  SCIENTIFIC_PLOTTING_RENDERER_COMMAND_CONTRIBUTION,
   SCIENTIFIC_PLOTTING_RENDERER_I18N_CONTRIBUTION,
+  SCIENTIFIC_PLOTTING_RENDERER_RESOURCE_NAVIGATION_CONTRACT,
+  SCIENTIFIC_PLOTTING_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
   SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRACT,
   SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  SCIENTIFIC_PLOTTING_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  SCIENTIFIC_PLOTTING_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
 import { createScientificPlottingCapabilityClient } from './scientific-plotting-capability-client.js'
@@ -34,23 +28,59 @@ const ScientificPlottingProvenancePanel = lazy(() =>
 )
 
 export const scientificPlottingActivationSchema = z.object({
-  manifestVersionId: z.string().startsWith('artifact-version:').optional()
-}).strict()
+  manifestVersionId: z.string().startsWith('artifact-version:').optional(),
+  figureVersionId: z.string().startsWith('artifact-version:').optional(),
+  expectedDigest: z.string().trim().toLowerCase()
+    .regex(/^sha256:[0-9a-f]{64}$/u)
+    .optional()
+}).strict().refine(
+  (value) => Boolean(value.manifestVersionId || value.figureVersionId),
+  { message: 'Scientific Plotting activation requires an exact manifest or Figure version.' }
+)
 
 export type ScientificPlottingRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
-export type ScientificPlottingToolbarActionContribution =
-  DomainRendererWorkbenchToolbarActionValue<typeof BarChart3>
 export type ScientificPlottingRendererContribution =
   | ScientificPlottingRightPanelContribution
-  | DomainRendererCommandHandler
-  | ScientificPlottingToolbarActionContribution
+  | DomainRendererResourceNavigationValue
   | ScientificPlottingI18nResourceContribution
+
+export function createScientificPlottingResourceNavigationContribution(): DomainRendererResourceNavigationValue {
+  return Object.freeze({
+    resolve: ({ resource }) => {
+      const resourceId = resource.resourceId.trim()
+      if (!resourceId) return null
+      const payload = resource.resourceKind === 'scientific-plot-render-manifest'
+        ? {
+            manifestVersionId: resourceId,
+            ...(resource.integrity?.expectedDigest
+              ? { expectedDigest: resource.integrity.expectedDigest }
+              : {})
+          }
+        : resource.resourceKind === 'scientific-plot'
+          ? {
+              figureVersionId: resourceId,
+              ...(resource.integrity?.expectedDigest
+                ? { expectedDigest: resource.integrity.expectedDigest }
+                : {})
+            }
+          : null
+      if (!payload) return null
+      return Object.freeze({
+        activation: Object.freeze({
+          revision: 1,
+          payload: Object.freeze(payload)
+        })
+      })
+    }
+  })
+}
 
 export function createScientificPlottingRightPanelContribution(
   host: DomainRendererHost
 ): ScientificPlottingRightPanelContribution {
   const client = createScientificPlottingCapabilityClient(host.capabilityInvoker)
+  const openResource = host.workbench?.openResource
   return Object.freeze({
     render: ({ activation, className, onCollapse, session, surfaceId }) => {
       const parsedActivation = scientificPlottingActivationSchema.safeParse(activation?.payload)
@@ -63,48 +93,34 @@ export function createScientificPlottingRightPanelContribution(
           {...(parsedActivation.success && parsedActivation.data.manifestVersionId
             ? { preferredManifestVersionId: parsedActivation.data.manifestVersionId }
             : {})}
-          {...(host.workbench
+          {...(parsedActivation.success && parsedActivation.data.figureVersionId
+            ? { preferredFigureVersionId: parsedActivation.data.figureVersionId }
+            : {})}
+          {...(parsedActivation.success && parsedActivation.data.expectedDigest
+            ? { preferredResourceDigest: parsedActivation.data.expectedDigest }
+            : {})}
+          {...(openResource
             ? {
-                onOpenArtifactHistory: () => host.workbench?.openRightPanel({
-                  contributionId: ARTIFACT_VERSIONS_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-                  sessionId: session.id,
-                  surfaceId
-                })
+                onOpenArtifactHistory: (ref) => {
+                  if (!ref) return
+                  openResource({
+                    sessionId: session.id,
+                    surfaceId,
+                    resource: {
+                      resourceKind: 'artifact-version',
+                      resourceId: ref.versionId,
+                      integrity: {
+                        algorithm: 'sha256',
+                        expectedDigest: `sha256:${ref.contentDigest}`
+                      }
+                    }
+                  })
+                }
               }
             : {})}
         />
       )
     }
-  })
-}
-
-export function createScientificPlottingCommand(
-  host: DomainRendererHost
-): DomainRendererCommandHandler {
-  return Object.freeze({
-    execute: ({ sessionId, payload }) => {
-      if (!sessionId || !host.workbench) return
-      host.workbench.openRightPanel({
-        contributionId: SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-        sessionId,
-        ...(payload === undefined
-          ? {}
-          : {
-              activation: {
-                contributionId: SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
-                revision: 1,
-                payload
-              }
-            })
-      })
-    },
-    isAvailable: ({ sessionId, workspaceRoot }) => Boolean(
-      host.workbench && sessionId?.trim() && workspaceRoot?.trim()
-    ),
-    isActive: ({ activeSurface }) =>
-      activeSurface?.kind === 'right-panel' &&
-      activeSurface.contributionId ===
-        SCIENTIFIC_PLOTTING_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
   })
 }
 
@@ -120,13 +136,9 @@ export function createDomainRendererEntry(
         value: createScientificPlottingRightPanelContribution(host)
       },
       {
-        ...SCIENTIFIC_PLOTTING_RENDERER_COMMAND_CONTRIBUTION,
-        value: createScientificPlottingCommand(host)
-      },
-      {
-        ...SCIENTIFIC_PLOTTING_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
-        contract: SCIENTIFIC_PLOTTING_RENDERER_TOOLBAR_ACTION_CONTRACT,
-        value: Object.freeze({ icon: BarChart3 })
+        ...SCIENTIFIC_PLOTTING_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
+        contract: SCIENTIFIC_PLOTTING_RENDERER_RESOURCE_NAVIGATION_CONTRACT,
+        value: createScientificPlottingResourceNavigationContribution()
       },
       {
         ...SCIENTIFIC_PLOTTING_RENDERER_I18N_CONTRIBUTION,

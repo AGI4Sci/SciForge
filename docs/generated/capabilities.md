@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **304**
+Registered actions: **306**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -168,10 +168,12 @@ Registered actions: **304**
 | `dataset-api.structure-validate` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.transform` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `dataset-api.validate` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `evidence-dag.append-sidechain` | 1.0.0 | system | workspace-write | none | workspace |
 | `evidence-dag.export-snapshot-products` | 1.0.0 | ui, agent | workspace-write | none | workspace |
 | `evidence-dag.priority` | 1.0.0 | ui, agent | compute | none | workspace |
 | `evidence-dag.resolve-evidence-preview` | 1.0.0 | ui, agent | read | none | workspace |
-| `evidence-dag.snapshot-status` | 1.0.0 | system | read | none | workspace |
+| `evidence-dag.seal-closure` | 1.0.0 | ui, agent | compute | none | workspace |
+| `evidence-dag.snapshot-status` | 1.0.0 | ui, system | read | none | workspace |
 | `evidence-dag.update` | 1.0.0 | ui, agent | compute | none | workspace |
 | `evidence-dag.view` | 1.0.0 | ui, agent | read | none | workspace |
 | `git-checkpoints.create` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
@@ -67272,6 +67274,224 @@ Validates schema, record, range, uniqueness, missingness, and FASTA integrity co
 }
 ```
 
+## `evidence-dag.append-sidechain`
+
+Appends an audit, finding, review, decision, or approval record bound to one sealed closure.
+
+- Version: `1.0.0`
+- Audiences: system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "closureDigest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "createdAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "idempotencyKey": {
+        "maxLength": 512,
+        "minLength": 8,
+        "type": "string"
+      },
+      "payload": {
+        "additionalProperties": {},
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "producerIdentity": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "recordId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "recordType": {
+        "enum": [
+          "audit",
+          "finding",
+          "review",
+          "decision",
+          "approval"
+        ],
+        "type": "string"
+      },
+      "reviewerIdentity": {
+        "anyOf": [
+          {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "runtimeId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "runtimeId",
+      "threadId",
+      "recordId",
+      "recordType",
+      "closureDigest",
+      "idempotencyKey",
+      "payload",
+      "producerIdentity"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "idempotent": {
+        "type": "boolean"
+      },
+      "record": {
+        "additionalProperties": false,
+        "properties": {
+          "closureDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "maxLength": 512,
+            "minLength": 8,
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "producerIdentity": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "recordDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "recordId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "recordType": {
+            "enum": [
+              "audit",
+              "finding",
+              "review",
+              "decision",
+              "approval"
+            ],
+            "type": "string"
+          },
+          "reviewerIdentity": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sequence": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "threadId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "recordDigest",
+          "threadId",
+          "sequence",
+          "recordId",
+          "recordType",
+          "closureDigest",
+          "idempotencyKey",
+          "payload",
+          "producerIdentity",
+          "reviewerIdentity",
+          "createdAt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "record",
+      "idempotent"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "evidence",
+    "dag",
+    "provenance"
+  ],
+  "title": "Append Evidence audit sidechain"
+}
+```
+
 ## `evidence-dag.export-snapshot-products`
 
 Projects one pinned snapshot to PROV, RO-Crate, DataCite, audit, and reproduction artifacts in one atomic version commit.
@@ -67870,6 +68090,90 @@ Adjusts scheduling priority without creating another update path.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
+      "appliedHeadDigest": {
+        "anyOf": [
+          {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "authoritativeHead": {
+        "additionalProperties": false,
+        "properties": {
+          "committedWatermark": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "headDigest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "legacyRootStatus": {
+            "anyOf": [
+              {
+                "enum": [
+                  "legacy/complete",
+                  "legacy/incomplete"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rootKind": {
+            "enum": [
+              "empty",
+              "legacy_checkpoint_root",
+              "delta"
+            ],
+            "type": "string"
+          },
+          "sequence": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "headDigest",
+          "sequence",
+          "committedWatermark",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "committed": {
         "anyOf": [
           {
@@ -67945,6 +68249,138 @@ Adjusts scheduling priority without creating another update path.
             "type": "null"
           }
         ]
+      },
+      "coverage": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "gapCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "complete",
+          "gapCount"
+        ],
+        "type": "object"
+      },
+      "desiredHeadDigest": {
+        "anyOf": [
+          {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "failure": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "code": {
+                "enum": [
+                  "model_output_incomplete",
+                  "model_output_empty",
+                  "model_output_invalid_json",
+                  "upstream_timeout",
+                  "upstream_rate_limited",
+                  "upstream_unavailable",
+                  "snapshot_corrupt",
+                  "access_restricted",
+                  "internal_error"
+                ],
+                "type": "string"
+              },
+              "incompleteReason": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxOutputTokens": {
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "integer"
+              },
+              "message": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "requestId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "responseStatus": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "upstreamStatus": {
+                "maximum": 599,
+                "minimum": 100,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable",
+              "occurredAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "freshness": {
+        "enum": [
+          "fresh",
+          "stale",
+          "pending",
+          "failed",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "lastSuccessAt": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "materialRiskCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
       },
       "pending": {
         "anyOf": [
@@ -68320,6 +68756,250 @@ Adjusts scheduling priority without creating another update path.
                 "type": "object"
               }
             ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "provisional": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "appliedHeadDigest": {
+                "anyOf": [
+                  {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "compilerVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "desiredHeadDigest": {
+                "anyOf": [
+                  {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "inputFingerprint": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "lastGood": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "policyVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "summary": {
+                "additionalProperties": false,
+                "properties": {
+                  "appliedHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "coverage": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "complete": {
+                        "type": "boolean"
+                      },
+                      "gapCount": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "complete",
+                      "gapCount"
+                    ],
+                    "type": "object"
+                  },
+                  "desiredHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failure": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 100,
+                            "type": "integer"
+                          },
+                          "code": {
+                            "enum": [
+                              "model_output_incomplete",
+                              "model_output_empty",
+                              "model_output_invalid_json",
+                              "upstream_timeout",
+                              "upstream_rate_limited",
+                              "upstream_unavailable",
+                              "snapshot_corrupt",
+                              "access_restricted",
+                              "internal_error"
+                            ],
+                            "type": "string"
+                          },
+                          "incompleteReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxOutputTokens": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000,
+                            "type": "integer"
+                          },
+                          "message": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "responseStatus": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "type": "boolean"
+                          },
+                          "upstreamStatus": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable",
+                          "occurredAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "freshness": {
+                    "enum": [
+                      "fresh",
+                      "stale",
+                      "pending",
+                      "failed",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  },
+                  "lastSuccessAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "materialRiskCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "desiredHeadDigest",
+                  "appliedHeadDigest",
+                  "freshness",
+                  "coverage",
+                  "materialRiskCount",
+                  "lastSuccessAt",
+                  "failure"
+                ],
+                "type": "object"
+              },
+              "threadId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "desiredHeadDigest",
+              "appliedHeadDigest",
+              "inputFingerprint",
+              "compilerVersion",
+              "policyVersion",
+              "summary",
+              "lastGood",
+              "updatedAt"
+            ],
+            "type": "object"
           },
           {
             "type": "null"
@@ -68615,12 +69295,419 @@ Resolves a pinned provenance tuple to a verified workspace-local file.
 }
 ```
 
+## `evidence-dag.seal-closure`
+
+Seals one exact Evidence claim closure using an expected-head compare-and-set.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `compute`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 3,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "idempotencyKey": {
+        "maxLength": 512,
+        "minLength": 8,
+        "type": "string"
+      },
+      "policy": {
+        "additionalProperties": false,
+        "properties": {
+          "barrierWatermark": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "cycleHandling": {
+            "enum": [
+              "allow",
+              "record_gap",
+              "fail"
+            ],
+            "type": "string"
+          },
+          "directions": {
+            "items": {
+              "enum": [
+                "inbound",
+                "outbound"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          },
+          "edgeFamilies": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "expandEquivalent": {
+            "type": "boolean"
+          },
+          "expandRefinement": {
+            "type": "boolean"
+          },
+          "expectedHeadDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxDepth": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requiredExternalRefs": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "requiredRecords": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "targetClaimIds": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "termination": {
+            "enum": [
+              "depth",
+              "fixed_point",
+              "required_records"
+            ],
+            "type": "string"
+          },
+          "unknownEdgeHandling": {
+            "enum": [
+              "ignore",
+              "record_gap",
+              "fail"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "const": "EvidenceClosurePolicyV1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "targetClaimIds",
+          "expectedHeadDigest",
+          "barrierWatermark",
+          "edgeFamilies",
+          "directions",
+          "maxDepth",
+          "termination",
+          "expandEquivalent",
+          "expandRefinement",
+          "cycleHandling",
+          "unknownEdgeHandling",
+          "requiredRecords",
+          "requiredExternalRefs"
+        ],
+        "type": "object"
+      },
+      "runtimeId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "runtimeId",
+      "threadId",
+      "idempotencyKey",
+      "policy"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "closureDigest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "gapCodes": {
+        "items": {
+          "enum": [
+            "missing_delta",
+            "unsupported_edge_family",
+            "access_restricted",
+            "source_unavailable",
+            "lineage_incomplete",
+            "independence_unknown",
+            "contradiction_unresolved",
+            "negative_result_missing",
+            "failed_replication_missing",
+            "shared_ancestry_unknown"
+          ],
+          "type": "string"
+        },
+        "maxItems": 128,
+        "type": "array"
+      },
+      "headDigest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "includedDeltaDigests": {
+        "items": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "maxItems": 100000,
+        "type": "array"
+      },
+      "includedExternalRefs": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 10000,
+        "type": "array"
+      },
+      "includedLegacyRootDigests": {
+        "items": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "maxItems": 16,
+        "type": "array"
+      },
+      "legacyRootStatus": {
+        "anyOf": [
+          {
+            "enum": [
+              "legacy/complete",
+              "legacy/incomplete"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "policy": {
+        "additionalProperties": false,
+        "properties": {
+          "barrierWatermark": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "cycleHandling": {
+            "enum": [
+              "allow",
+              "record_gap",
+              "fail"
+            ],
+            "type": "string"
+          },
+          "directions": {
+            "items": {
+              "enum": [
+                "inbound",
+                "outbound"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          },
+          "edgeFamilies": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "expandEquivalent": {
+            "type": "boolean"
+          },
+          "expandRefinement": {
+            "type": "boolean"
+          },
+          "expectedHeadDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "maxDepth": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requiredExternalRefs": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          },
+          "requiredRecords": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "targetClaimIds": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "termination": {
+            "enum": [
+              "depth",
+              "fixed_point",
+              "required_records"
+            ],
+            "type": "string"
+          },
+          "unknownEdgeHandling": {
+            "enum": [
+              "ignore",
+              "record_gap",
+              "fail"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "const": "EvidenceClosurePolicyV1",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "targetClaimIds",
+          "expectedHeadDigest",
+          "barrierWatermark",
+          "edgeFamilies",
+          "directions",
+          "maxDepth",
+          "termination",
+          "expandEquivalent",
+          "expandRefinement",
+          "cycleHandling",
+          "unknownEdgeHandling",
+          "requiredRecords",
+          "requiredExternalRefs"
+        ],
+        "type": "object"
+      },
+      "policyDigest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "sealedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "complete",
+          "lagging",
+          "incomplete"
+        ],
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "closureDigest",
+      "headDigest",
+      "policyDigest",
+      "policy",
+      "status",
+      "includedDeltaDigests",
+      "includedExternalRefs",
+      "gapCodes",
+      "sealedAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "evidence",
+    "dag",
+    "provenance"
+  ],
+  "title": "Seal Evidence closure"
+}
+```
+
 ## `evidence-dag.snapshot-status`
 
 Reads durable Evidence snapshot state without requiring the UI sidecar.
 
 - Version: `1.0.0`
-- Audiences: system
+- Audiences: ui, system
 - Effect: `read`
 - Approval: none
 - Scope: workspace
@@ -68664,6 +69751,90 @@ Reads durable Evidence snapshot state without requiring the UI sidecar.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
+      "appliedHeadDigest": {
+        "anyOf": [
+          {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "authoritativeHead": {
+        "additionalProperties": false,
+        "properties": {
+          "committedWatermark": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "headDigest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "legacyRootStatus": {
+            "anyOf": [
+              {
+                "enum": [
+                  "legacy/complete",
+                  "legacy/incomplete"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rootKind": {
+            "enum": [
+              "empty",
+              "legacy_checkpoint_root",
+              "delta"
+            ],
+            "type": "string"
+          },
+          "sequence": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threadId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId",
+          "headDigest",
+          "sequence",
+          "committedWatermark",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "committed": {
         "anyOf": [
           {
@@ -68739,6 +69910,138 @@ Reads durable Evidence snapshot state without requiring the UI sidecar.
             "type": "null"
           }
         ]
+      },
+      "coverage": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "gapCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "complete",
+          "gapCount"
+        ],
+        "type": "object"
+      },
+      "desiredHeadDigest": {
+        "anyOf": [
+          {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "failure": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "attempts": {
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "code": {
+                "enum": [
+                  "model_output_incomplete",
+                  "model_output_empty",
+                  "model_output_invalid_json",
+                  "upstream_timeout",
+                  "upstream_rate_limited",
+                  "upstream_unavailable",
+                  "snapshot_corrupt",
+                  "access_restricted",
+                  "internal_error"
+                ],
+                "type": "string"
+              },
+              "incompleteReason": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxOutputTokens": {
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "integer"
+              },
+              "message": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "occurredAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "requestId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "responseStatus": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "upstreamStatus": {
+                "maximum": 599,
+                "minimum": 100,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable",
+              "occurredAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "freshness": {
+        "enum": [
+          "fresh",
+          "stale",
+          "pending",
+          "failed",
+          "unknown"
+        ],
+        "type": "string"
+      },
+      "lastSuccessAt": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "materialRiskCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
       },
       "pending": {
         "anyOf": [
@@ -69120,6 +70423,250 @@ Reads durable Evidence snapshot state without requiring the UI sidecar.
           }
         ]
       },
+      "provisional": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "appliedHeadDigest": {
+                "anyOf": [
+                  {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "compilerVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "desiredHeadDigest": {
+                "anyOf": [
+                  {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "inputFingerprint": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "lastGood": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "policyVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "summary": {
+                "additionalProperties": false,
+                "properties": {
+                  "appliedHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "coverage": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "complete": {
+                        "type": "boolean"
+                      },
+                      "gapCount": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "complete",
+                      "gapCount"
+                    ],
+                    "type": "object"
+                  },
+                  "desiredHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failure": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 100,
+                            "type": "integer"
+                          },
+                          "code": {
+                            "enum": [
+                              "model_output_incomplete",
+                              "model_output_empty",
+                              "model_output_invalid_json",
+                              "upstream_timeout",
+                              "upstream_rate_limited",
+                              "upstream_unavailable",
+                              "snapshot_corrupt",
+                              "access_restricted",
+                              "internal_error"
+                            ],
+                            "type": "string"
+                          },
+                          "incompleteReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxOutputTokens": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000,
+                            "type": "integer"
+                          },
+                          "message": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "responseStatus": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "type": "boolean"
+                          },
+                          "upstreamStatus": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable",
+                          "occurredAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "freshness": {
+                    "enum": [
+                      "fresh",
+                      "stale",
+                      "pending",
+                      "failed",
+                      "unknown"
+                    ],
+                    "type": "string"
+                  },
+                  "lastSuccessAt": {
+                    "anyOf": [
+                      {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "materialRiskCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "desiredHeadDigest",
+                  "appliedHeadDigest",
+                  "freshness",
+                  "coverage",
+                  "materialRiskCount",
+                  "lastSuccessAt",
+                  "failure"
+                ],
+                "type": "object"
+              },
+              "threadId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "desiredHeadDigest",
+              "appliedHeadDigest",
+              "inputFingerprint",
+              "compilerVersion",
+              "policyVersion",
+              "summary",
+              "lastGood",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "updatedAt": {
         "format": "date-time",
         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -69166,27 +70713,6 @@ Queues one durable Evidence-only update for a completed agent thread.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
-      "operation": {
-        "default": "update",
-        "enum": [
-          "update",
-          "rebuild"
-        ],
-        "type": "string"
-      },
-      "rebuildKind": {
-        "enum": [
-          "schema_upgrade",
-          "corruption_recovery",
-          "reinterpretation"
-        ],
-        "type": "string"
-      },
-      "rebuildRationale": {
-        "maxLength": 1000,
-        "minLength": 1,
-        "type": "string"
-      },
       "runtimeId": {
         "maxLength": 128,
         "minLength": 1,
@@ -69205,8 +70731,7 @@ Queues one durable Evidence-only update for a completed agent thread.
     },
     "required": [
       "runtimeId",
-      "threadId",
-      "operation"
+      "threadId"
     ],
     "type": "object"
   },
@@ -69214,7 +70739,11 @@ Queues one durable Evidence-only update for a completed agent thread.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
     "properties": {
-      "coalesced": {
+      "deltaDigest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "idempotent": {
         "type": "boolean"
       },
       "itemCount": {
@@ -69222,14 +70751,93 @@ Queues one durable Evidence-only update for a completed agent thread.
         "minimum": 0,
         "type": "integer"
       },
-      "jobId": {
-        "maxLength": 512,
-        "minLength": 1,
-        "type": "string"
-      },
       "status": {
         "additionalProperties": false,
         "properties": {
+          "appliedHeadDigest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authoritativeHead": {
+            "additionalProperties": false,
+            "properties": {
+              "committedWatermark": {
+                "anyOf": [
+                  {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "headDigest": {
+                "anyOf": [
+                  {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "legacyRootStatus": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "legacy/complete",
+                      "legacy/incomplete"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rootKind": {
+                "enum": [
+                  "empty",
+                  "legacy_checkpoint_root",
+                  "delta"
+                ],
+                "type": "string"
+              },
+              "sequence": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "threadId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "headDigest",
+              "sequence",
+              "committedWatermark",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
           "committed": {
             "anyOf": [
               {
@@ -69305,6 +70913,138 @@ Queues one durable Evidence-only update for a completed agent thread.
                 "type": "null"
               }
             ]
+          },
+          "coverage": {
+            "additionalProperties": false,
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "gapCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "complete",
+              "gapCount"
+            ],
+            "type": "object"
+          },
+          "desiredHeadDigest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 100,
+                    "type": "integer"
+                  },
+                  "code": {
+                    "enum": [
+                      "model_output_incomplete",
+                      "model_output_empty",
+                      "model_output_invalid_json",
+                      "upstream_timeout",
+                      "upstream_rate_limited",
+                      "upstream_unavailable",
+                      "snapshot_corrupt",
+                      "access_restricted",
+                      "internal_error"
+                    ],
+                    "type": "string"
+                  },
+                  "incompleteReason": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxOutputTokens": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000,
+                    "type": "integer"
+                  },
+                  "message": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "requestId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "responseStatus": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "upstreamStatus": {
+                    "maximum": 599,
+                    "minimum": 100,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "occurredAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "pending",
+              "failed",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "lastSuccessAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "materialRiskCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
           "pending": {
             "anyOf": [
@@ -69686,6 +71426,250 @@ Queues one durable Evidence-only update for a completed agent thread.
               }
             ]
           },
+          "provisional": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "appliedHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "compilerVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "desiredHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "inputFingerprint": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "lastGood": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "policyVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "summary": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliedHeadDigest": {
+                        "anyOf": [
+                          {
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "coverage": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "complete": {
+                            "type": "boolean"
+                          },
+                          "gapCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "complete",
+                          "gapCount"
+                        ],
+                        "type": "object"
+                      },
+                      "desiredHeadDigest": {
+                        "anyOf": [
+                          {
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "failure": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempts": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 100,
+                                "type": "integer"
+                              },
+                              "code": {
+                                "enum": [
+                                  "model_output_incomplete",
+                                  "model_output_empty",
+                                  "model_output_invalid_json",
+                                  "upstream_timeout",
+                                  "upstream_rate_limited",
+                                  "upstream_unavailable",
+                                  "snapshot_corrupt",
+                                  "access_restricted",
+                                  "internal_error"
+                                ],
+                                "type": "string"
+                              },
+                              "incompleteReason": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxOutputTokens": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 1000000,
+                                "type": "integer"
+                              },
+                              "message": {
+                                "maxLength": 4000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "occurredAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "requestId": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "responseStatus": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "retryable": {
+                                "type": "boolean"
+                              },
+                              "upstreamStatus": {
+                                "maximum": 599,
+                                "minimum": 100,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message",
+                              "retryable",
+                              "occurredAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "freshness": {
+                        "enum": [
+                          "fresh",
+                          "stale",
+                          "pending",
+                          "failed",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      },
+                      "lastSuccessAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "materialRiskCount": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "desiredHeadDigest",
+                      "appliedHeadDigest",
+                      "freshness",
+                      "coverage",
+                      "materialRiskCount",
+                      "lastSuccessAt",
+                      "failure"
+                    ],
+                    "type": "object"
+                  },
+                  "threadId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "threadId",
+                  "desiredHeadDigest",
+                  "appliedHeadDigest",
+                  "inputFingerprint",
+                  "compilerVersion",
+                  "policyVersion",
+                  "summary",
+                  "lastGood",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updatedAt": {
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
@@ -69714,8 +71698,8 @@ Queues one durable Evidence-only update for a completed agent thread.
       "url",
       "threadId",
       "itemCount",
-      "jobId",
-      "coalesced",
+      "deltaDigest",
+      "idempotent",
       "status"
     ],
     "type": "object"
@@ -69778,6 +71762,90 @@ Reads the last committed Evidence graph and its separate pending delta.
       "status": {
         "additionalProperties": false,
         "properties": {
+          "appliedHeadDigest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authoritativeHead": {
+            "additionalProperties": false,
+            "properties": {
+              "committedWatermark": {
+                "anyOf": [
+                  {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "headDigest": {
+                "anyOf": [
+                  {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "legacyRootStatus": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "legacy/complete",
+                      "legacy/incomplete"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rootKind": {
+                "enum": [
+                  "empty",
+                  "legacy_checkpoint_root",
+                  "delta"
+                ],
+                "type": "string"
+              },
+              "sequence": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "threadId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "updatedAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "headDigest",
+              "sequence",
+              "committedWatermark",
+              "updatedAt"
+            ],
+            "type": "object"
+          },
           "committed": {
             "anyOf": [
               {
@@ -69853,6 +71921,138 @@ Reads the last committed Evidence graph and its separate pending delta.
                 "type": "null"
               }
             ]
+          },
+          "coverage": {
+            "additionalProperties": false,
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "gapCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "complete",
+              "gapCount"
+            ],
+            "type": "object"
+          },
+          "desiredHeadDigest": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 100,
+                    "type": "integer"
+                  },
+                  "code": {
+                    "enum": [
+                      "model_output_incomplete",
+                      "model_output_empty",
+                      "model_output_invalid_json",
+                      "upstream_timeout",
+                      "upstream_rate_limited",
+                      "upstream_unavailable",
+                      "snapshot_corrupt",
+                      "access_restricted",
+                      "internal_error"
+                    ],
+                    "type": "string"
+                  },
+                  "incompleteReason": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxOutputTokens": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000,
+                    "type": "integer"
+                  },
+                  "message": {
+                    "maxLength": 4000,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "occurredAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "requestId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "responseStatus": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "upstreamStatus": {
+                    "maximum": 599,
+                    "minimum": 100,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "retryable",
+                  "occurredAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "pending",
+              "failed",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "lastSuccessAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "materialRiskCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
           },
           "pending": {
             "anyOf": [
@@ -70228,6 +72428,250 @@ Reads the last committed Evidence graph and its separate pending delta.
                     "type": "object"
                   }
                 ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provisional": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "appliedHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "compilerVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "desiredHeadDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "inputFingerprint": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "lastGood": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "policyVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "summary": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliedHeadDigest": {
+                        "anyOf": [
+                          {
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "coverage": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "complete": {
+                            "type": "boolean"
+                          },
+                          "gapCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "complete",
+                          "gapCount"
+                        ],
+                        "type": "object"
+                      },
+                      "desiredHeadDigest": {
+                        "anyOf": [
+                          {
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "failure": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "attempts": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 100,
+                                "type": "integer"
+                              },
+                              "code": {
+                                "enum": [
+                                  "model_output_incomplete",
+                                  "model_output_empty",
+                                  "model_output_invalid_json",
+                                  "upstream_timeout",
+                                  "upstream_rate_limited",
+                                  "upstream_unavailable",
+                                  "snapshot_corrupt",
+                                  "access_restricted",
+                                  "internal_error"
+                                ],
+                                "type": "string"
+                              },
+                              "incompleteReason": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxOutputTokens": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 1000000,
+                                "type": "integer"
+                              },
+                              "message": {
+                                "maxLength": 4000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "occurredAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "requestId": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "responseStatus": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "retryable": {
+                                "type": "boolean"
+                              },
+                              "upstreamStatus": {
+                                "maximum": 599,
+                                "minimum": 100,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message",
+                              "retryable",
+                              "occurredAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "freshness": {
+                        "enum": [
+                          "fresh",
+                          "stale",
+                          "pending",
+                          "failed",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      },
+                      "lastSuccessAt": {
+                        "anyOf": [
+                          {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "materialRiskCount": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "desiredHeadDigest",
+                      "appliedHeadDigest",
+                      "freshness",
+                      "coverage",
+                      "materialRiskCount",
+                      "lastSuccessAt",
+                      "failure"
+                    ],
+                    "type": "object"
+                  },
+                  "threadId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "threadId",
+                  "desiredHeadDigest",
+                  "appliedHeadDigest",
+                  "inputFingerprint",
+                  "compilerVersion",
+                  "policyVersion",
+                  "summary",
+                  "lastGood",
+                  "updatedAt"
+                ],
+                "type": "object"
               },
               {
                 "type": "null"
@@ -187007,6 +189451,81 @@ Creates or updates the Project research goal and schedules canonical recompilati
                       }
                     ]
                   },
+                  "invalidation": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "appliedFingerprint": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "changedFields": {
+                            "items": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 128,
+                            "type": "array"
+                          },
+                          "desiredFingerprint": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectKey": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "maxLength": 4000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stale": {
+                            "type": "boolean"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "projectKey",
+                          "stale",
+                          "changedFields",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "latestReceipt": {
                     "anyOf": [
                       {
@@ -187051,6 +189570,19 @@ Creates or updates the Project research goal and schedules canonical recompilati
                                 },
                                 "maxItems": 500,
                                 "type": "array"
+                              },
+                              "reasons": {
+                                "additionalProperties": {
+                                  "maxLength": 4000,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "propertyNames": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "object"
                               }
                             },
                             "required": [
@@ -187268,6 +189800,19 @@ Creates or updates the Project research goal and schedules canonical recompilati
                                     },
                                     "maxItems": 500,
                                     "type": "array"
+                                  },
+                                  "reasons": {
+                                    "additionalProperties": {
+                                      "maxLength": 4000,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "propertyNames": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "object"
                                   }
                                 },
                                 "required": [
@@ -187406,6 +189951,19 @@ Creates or updates the Project research goal and schedules canonical recompilati
                         },
                         "maxItems": 500,
                         "type": "array"
+                      },
+                      "reasons": {
+                        "additionalProperties": {
+                          "maxLength": 4000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "propertyNames": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "object"
                       }
                     },
                     "required": [
@@ -187414,6 +189972,76 @@ Creates or updates the Project research goal and schedules canonical recompilati
                       "isolatedSessions"
                     ],
                     "type": "object"
+                  },
+                  "scopeRevisions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "createdBy": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "excludedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "includedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "isolatedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "reasons": {
+                          "additionalProperties": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "propertyNames": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "revision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "includedSessions",
+                        "excludedSessions",
+                        "isolatedSessions"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -187594,21 +190222,14 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
         "type": "string"
       },
       "scope": {
-        "anyOf": [
-          {
-            "const": "all",
-            "type": "string"
-          },
-          {
-            "items": {
-              "maxLength": 512,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 500,
-            "type": "array"
-          }
-        ]
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "minItems": 1,
+        "type": "array"
       },
       "sessions": {
         "items": {
@@ -187678,6 +190299,19 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
                         },
                         "maxItems": 500,
                         "type": "array"
+                      },
+                      "reasons": {
+                        "additionalProperties": {
+                          "maxLength": 4000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "propertyNames": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "object"
                       }
                     },
                     "required": [
@@ -187840,6 +190474,81 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
                       }
                     ]
                   },
+                  "invalidation": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "appliedFingerprint": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "changedFields": {
+                            "items": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 128,
+                            "type": "array"
+                          },
+                          "desiredFingerprint": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectKey": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "maxLength": 4000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stale": {
+                            "type": "boolean"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "projectKey",
+                          "stale",
+                          "changedFields",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "latestReceipt": {
                     "anyOf": [
                       {
@@ -187884,6 +190593,19 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
                                 },
                                 "maxItems": 500,
                                 "type": "array"
+                              },
+                              "reasons": {
+                                "additionalProperties": {
+                                  "maxLength": 4000,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "propertyNames": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "object"
                               }
                             },
                             "required": [
@@ -188101,6 +190823,19 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
                                     },
                                     "maxItems": 500,
                                     "type": "array"
+                                  },
+                                  "reasons": {
+                                    "additionalProperties": {
+                                      "maxLength": 4000,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "propertyNames": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "object"
                                   }
                                 },
                                 "required": [
@@ -188239,6 +190974,19 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
                         },
                         "maxItems": 500,
                         "type": "array"
+                      },
+                      "reasons": {
+                        "additionalProperties": {
+                          "maxLength": 4000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "propertyNames": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "object"
                       }
                     },
                     "required": [
@@ -188247,6 +190995,76 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
                       "isolatedSessions"
                     ],
                     "type": "object"
+                  },
+                  "scopeRevisions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "createdBy": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "excludedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "includedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "isolatedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "reasons": {
+                          "additionalProperties": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "propertyNames": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "revision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "includedSessions",
+                        "excludedSessions",
+                        "isolatedSessions"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [
@@ -188558,6 +191376,81 @@ Reads the canonical committed Project graph and current update state.
                       }
                     ]
                   },
+                  "invalidation": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "appliedFingerprint": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "changedFields": {
+                            "items": {
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 128,
+                            "type": "array"
+                          },
+                          "desiredFingerprint": {
+                            "anyOf": [
+                              {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectKey": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "maxLength": 4000,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stale": {
+                            "type": "boolean"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "projectKey",
+                          "stale",
+                          "changedFields",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "latestReceipt": {
                     "anyOf": [
                       {
@@ -188602,6 +191495,19 @@ Reads the canonical committed Project graph and current update state.
                                 },
                                 "maxItems": 500,
                                 "type": "array"
+                              },
+                              "reasons": {
+                                "additionalProperties": {
+                                  "maxLength": 4000,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "propertyNames": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "object"
                               }
                             },
                             "required": [
@@ -188819,6 +191725,19 @@ Reads the canonical committed Project graph and current update state.
                                     },
                                     "maxItems": 500,
                                     "type": "array"
+                                  },
+                                  "reasons": {
+                                    "additionalProperties": {
+                                      "maxLength": 4000,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "propertyNames": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "object"
                                   }
                                 },
                                 "required": [
@@ -188957,6 +191876,19 @@ Reads the canonical committed Project graph and current update state.
                         },
                         "maxItems": 500,
                         "type": "array"
+                      },
+                      "reasons": {
+                        "additionalProperties": {
+                          "maxLength": 4000,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "propertyNames": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "object"
                       }
                     },
                     "required": [
@@ -188965,6 +191897,76 @@ Reads the canonical committed Project graph and current update state.
                       "isolatedSessions"
                     ],
                     "type": "object"
+                  },
+                  "scopeRevisions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createdAt": {
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                          "type": "string"
+                        },
+                        "createdBy": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "excludedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "includedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "isolatedSessions": {
+                          "items": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 500,
+                          "type": "array"
+                        },
+                        "reasons": {
+                          "additionalProperties": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "propertyNames": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "revision": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "revision",
+                        "includedSessions",
+                        "excludedSessions",
+                        "isolatedSessions"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
                   }
                 },
                 "required": [

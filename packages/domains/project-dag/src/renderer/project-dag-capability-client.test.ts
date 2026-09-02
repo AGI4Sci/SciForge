@@ -36,7 +36,10 @@ test('invokes only the package-owned Project DAG capability contracts', async ()
   })
 
   await client.view({ workspaceRoot: '/workspace/view', view: 'home' })
-  await client.update({ projectRoot: '/workspace/update', scope: 'all' })
+  await client.update({
+    projectRoot: '/workspace/update',
+    scope: ['codex:thread-1']
+  })
   await client.saveGoal({
     workspaceRoot: '/workspace/goal',
     projectRoot: '/workspace/goal/project',

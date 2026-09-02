@@ -476,8 +476,8 @@ Federated Research 应作为独立 domain package 拥有合同、Cloud/Site 后�
 
 - [Remote Workspace 架构](../../../docs/remote-workspace.zh-CN.md)
 - [领域 Package 与扩展架构](../../../docs/domain-package-architecture.zh-CN.md)
-- [Evidence DAG 与 Project DAG 设计](../../../docs/evidence-project-dag-design.zh-CN.md)
-- [Research Memory 与 DAG 融合架构](../../../docs/research-memory-dag-architecture.zh-CN.md)
+- [Evidence 图谱与正式基线 ADR](../../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md)
+- [Research Artifacts 领域上下文](../../../docs/contexts/research-artifacts/CONTEXT.md)
 - [GA4GH Task Execution Service](https://www.ga4gh.org/product/task-execution-service-tes/)
 - [GA4GH Data Repository Service](https://ga4gh.github.io/data-repository-service-schemas/preview/develop/docs/)
 - [GA4GH AAI OIDC Profile](https://ga4gh.github.io/data-security/aai-openid-connect-profile)

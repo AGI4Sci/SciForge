@@ -44,8 +44,8 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
       return '/host-private-user-data'
     },
     defineCapability: (definition) => definition,
-    createProjectDagRuntime: (options) => {
-      calls.push(`create:${options?.userDataDir}`)
+    createProjectDagRuntime: () => {
+      calls.push('create')
       return fakeRuntime
     }
   })
@@ -93,14 +93,14 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
     data: { marker: 'view' }
   })
   assert.deepEqual(calls, [
-    'create:/lifecycle-user-data',
+    'create',
     'activate',
     'view'
   ])
 
   await consumer.consume({})
   assert.deepEqual(calls, [
-    'create:/lifecycle-user-data',
+    'create',
     'activate',
     'view',
     'consume'
@@ -109,7 +109,7 @@ test('main entry lazily owns one lifecycle runtime shared by capabilities and co
   await deactivate()
   await entry.contributions[1]!.onDispose?.()
   assert.deepEqual(calls, [
-    'create:/lifecycle-user-data',
+    'create',
     'activate',
     'view',
     'consume',
@@ -171,4 +171,56 @@ test('capability failures preserve stable typed Project errors', async () => {
     { caller: { workspaceId: '/workspace' } }
   )
   assert.deepEqual(result.output, { ok: false, error: expected })
+})
+
+test('Project capabilities require and enforce the Host caller workspace', async () => {
+  const runtime = {
+    view: async () => ({ marker: 'view' }),
+    update: async () => ({ marker: 'update' }),
+    saveGoal: async () => ({ marker: 'goal' }),
+    resolveEvidencePreview: async () => ({ marker: 'preview' })
+  } as unknown as ProjectDagRuntime
+  const definitions = createProjectDagCapabilityFactory<ProjectDagCapabilityOptions>({
+    defineCapability: (value) => value,
+    getRuntime: () => runtime
+  }).createDefinitions()
+
+  for (const definition of definitions) {
+    const unscoped = await definition.handler({}, { caller: {} })
+    assert.deepEqual(unscoped.output, {
+      ok: false,
+      error: {
+        code: 'access_restricted',
+        message: 'Project DAG capability requires a workspace-scoped caller.',
+        retryable: false
+      }
+    })
+  }
+
+  const view = definitions.find(({ id }) => id === PROJECT_DAG_CAPABILITY_IDS.view)!
+  const mismatched = await view.handler(
+    { workspaceRoot: '/workspace/other' },
+    { caller: { workspaceId: '/workspace/current' } }
+  )
+  assert.deepEqual(mismatched.output, {
+    ok: false,
+    error: {
+      code: 'access_restricted',
+      message: 'Project DAG target must match the caller workspace.',
+      retryable: false
+    }
+  })
+
+  const alternateProject = await view.handler(
+    { project: 'project:another-workspace' },
+    { caller: { workspaceId: '/workspace/current' } }
+  )
+  assert.deepEqual(alternateProject.output, {
+    ok: false,
+    error: {
+      code: 'access_restricted',
+      message: 'Project DAG accepts only the canonical caller Workspace identity.',
+      retryable: false
+    }
+  })
 })

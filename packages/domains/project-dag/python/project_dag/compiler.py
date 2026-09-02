@@ -156,7 +156,7 @@ class Compiler:
             return _PROJECT_LOCKS.setdefault(key, threading.Lock())
 
     @contextmanager
-    def compile_transaction(self, trigger: str = "scheduled", scope: Any = "all",
+    def compile_transaction(self, trigger: str = "scheduled", scope: Any = None,
                             *, project_key: str,
                             evidence_vector: Optional[list[dict]] = None) -> Iterator[dict]:
         """Parallel model preparation followed by one short serial commit.
@@ -165,6 +165,8 @@ class Compiler:
         duplicate work for one project, while ``Store.transaction_lock`` only
         covers mutation plus immutable Project Snapshot insertion.
         """
+        if not isinstance(scope, (list, tuple)):
+            raise ValueError("compile scope must be an explicit Session list")
         lock = self._project_lock(project_key)
         if not lock.acquire(blocking=False):
             yield {"skipped": True, "reason": "compile already running for project"}
@@ -244,7 +246,7 @@ class Compiler:
                     "active_goals": goal_view,
                 }, 0))
 
-            session_ids = (self.reader.list_sessions() if scope == "all" else list(scope))
+            session_ids = list(scope)
             expected = {
                 entry["threadId"]: entry["digest"] for entry in (evidence_vector or [])
             }
@@ -348,8 +350,7 @@ class Compiler:
         self._collect_decision_outputs(project_key, diff)
         touched |= self._rematch_goals(project_key, run_id, diff)
 
-        session_ids = (self.reader.list_sessions() if scope == "all"
-                       else list(scope))
+        session_ids = list(scope)
         expected = {entry["threadId"]: entry["digest"] for entry in (evidence_vector or [])}
         if evidence_vector is not None and set(session_ids) != set(expected):
             raise ValueError("compile scope must exactly match the captured evidence vector")
@@ -554,6 +555,14 @@ class Compiler:
                 self.store.x(
                     "UPDATE review SET status='resolved',payload=?,resolved_at=? WHERE id=?",
                     (json.dumps(payload, ensure_ascii=False), now_iso(), review["id"]),
+                )
+                self.store.x(
+                    "INSERT INTO review_event (id,project_key,review_id,event_type,actor,payload,created_at)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (new_id("review-event"), project_key, review["id"],
+                     "ReviewCandidateResolved", "project-compiler",
+                     json.dumps({"reason": "all materialized claims assigned or invalidated"},
+                                ensure_ascii=False), now_iso()),
                 )
 
     # -------------------------------------------------------------- per session

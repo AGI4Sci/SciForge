@@ -4,6 +4,7 @@ import {
   RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
   RENDERER_EXTENSION_CONTRIBUTION_KIND,
   RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND,
+  RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
   RENDERER_COMPOSER_CONTEXT_PROVIDER_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_BOTTOM_PANEL_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
@@ -11,6 +12,7 @@ import {
   WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION,
   WORKBENCH_NAVIGATION_SECTION_LOCATION,
   type DomainRendererResourceNavigationContract,
+  type DomainRendererResearchSummaryContract,
   type DomainRendererWorkbenchRightPanelContract
 } from '@sciforge/domain-sdk/renderer'
 import { describe, expect, it, vi } from 'vitest'
@@ -18,6 +20,7 @@ vi.mock('../workspace-preview/PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: 
 import { installedRendererDomainEntrySet } from './installed-domain-renderer'
 import {
   createInstalledRendererContributions,
+  ResearchSummaryContributionRegistry,
   RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND,
   type RendererI18nResourceContribution,
   type RendererTranslationHost
@@ -133,11 +136,42 @@ describe('installed renderer contributions', () => {
             kind: 'artifact-version',
             versionId: 'artifact-version:checkpoint:2'
           },
-          page: 'overview',
+          page: 'versions',
           expectedDigest: `sha256:${'a'.repeat(64)}`
         }
       }
     })
+    const expectedResearchSummaries = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND
+      )
+      .map((installed) => ({
+        installed,
+        contract: installed.contract as unknown as DomainRendererResearchSummaryContract
+      }))
+      .sort((left, right) =>
+        left.contract.order - right.contract.order ||
+        left.installed.owner.moduleId.localeCompare(right.installed.owner.moduleId) ||
+        left.installed.declaration.id.localeCompare(right.installed.declaration.id)
+      )
+      .map(({ installed, contract }) => ({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        slot: contract.slot,
+        label: contract.label,
+        order: contract.order,
+        scopeKinds: contract.scopeKinds,
+        resourceKinds: contract.resourceKinds
+      }))
+    expect(runtime.researchSummaries.list().map(({ id, ownerId, contract }) => ({
+      id,
+      ownerId,
+      slot: contract.slot,
+      label: contract.label,
+      order: contract.order,
+      scopeKinds: contract.scopeKinds,
+      resourceKinds: contract.resourceKinds
+    }))).toEqual(expectedResearchSummaries)
     const expectedCommands = installedRendererDomainEntrySet.contributions
       .filter(({ declaration }) =>
         declaration.kind === RENDERER_COMMAND_CONTRIBUTION_KIND
@@ -202,6 +236,7 @@ describe('installed renderer contributions', () => {
     expect(runtime.rightPanels.list()).toEqual([])
     expect(runtime.chatResultPanels.list()).toEqual([])
     expect(runtime.resourceNavigations.list()).toEqual([])
+    expect(runtime.researchSummaries.list()).toEqual([])
     expect(runtime.bottomPanels.list()).toEqual([])
     expect(runtime.globalOverlays.list()).toEqual([])
     expect(runtime.composerContexts.list()).toEqual([])
@@ -306,6 +341,24 @@ describe('installed renderer contributions', () => {
             })
           },
           onDispose: () => disposalOrder.push('composer')
+        },
+        {
+          ...template,
+          owner: { moduleId: 'fixture.summary', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.summary.research',
+            kind: RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
+            priority: 35
+          },
+          contract: {
+            slot: 'attention',
+            label: 'Fixture summary',
+            order: 50,
+            scopeKinds: ['workspace'],
+            resourceKinds: []
+          },
+          value: { provide: () => ({ status: 'unavailable' as const, reason: 'Fixture unavailable.' }) },
+          onDispose: () => disposalOrder.push('summary')
         }
       ]
     } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
@@ -325,6 +378,13 @@ describe('installed renderer contributions', () => {
       id: 'fixture.navigation.section',
       ownerId: 'fixture.navigation'
     }))
+    expect(runtime.researchSummaries.list()).toContainEqual(expect.objectContaining({
+      id: 'fixture.summary.research',
+      ownerId: 'fixture.summary',
+      contract: expect.objectContaining({ slot: 'attention' })
+    }))
+    expect(runtime.researchSummaries.list().find(({ id }) => id === 'fixture.summary.research'))
+      .not.toHaveProperty('onDispose')
     const composer = runtime.composerContexts.resolve('fixture.composer.context')
     expect(composer).toMatchObject({ ownerId: 'fixture.composer' })
     await expect(composer!.contribution.provide({
@@ -339,11 +399,79 @@ describe('installed renderer contributions', () => {
     })
 
     runtime.dispose()
-    expect(disposalOrder).toEqual(['composer', 'navigation', 'overlay', 'bottom'])
+    expect(disposalOrder).toEqual(['summary', 'composer', 'navigation', 'overlay', 'bottom'])
     expect(runtime.bottomPanels.list()).toEqual([])
     expect(runtime.globalOverlays.list()).toEqual([])
     expect(runtime.composerContexts.list()).toEqual([])
     expect(runtime.navigationSections.list()).toEqual([])
+  })
+
+  it('keeps Research summary registry ordering deterministic and rejects duplicate IDs', () => {
+    const registry = new ResearchSummaryContributionRegistry()
+    const value = { provide: () => ({ status: 'unavailable' as const }) }
+    const contribution = (id: string, ownerId: string, order: number) => ({
+      id,
+      ownerId,
+      order,
+      contract: {
+        slot: 'status' as const,
+        label: id,
+        order,
+        scopeKinds: ['workspace'],
+        resourceKinds: []
+      },
+      value
+    })
+
+    const unregisterB = registry.register(contribution('fixture.b', 'owner.b', 20))
+    registry.register(contribution('fixture.a', 'owner.a', 20))
+    registry.register(contribution('fixture.c', 'owner.a', 30))
+    expect(registry.list().map(({ id }) => id)).toEqual([
+      'fixture.a',
+      'fixture.b',
+      'fixture.c'
+    ])
+    expect(Object.isFrozen(registry.list()[0])).toBe(true)
+    expect(() => registry.register(contribution('fixture.a', 'owner.other', 1))).toThrow(
+      'Duplicate Research summary contribution "fixture.a"'
+    )
+
+    unregisterB()
+    expect(registry.list().map(({ id }) => id)).toEqual(['fixture.a', 'fixture.c'])
+    registry.dispose()
+    expect(registry.list()).toEqual([])
+  })
+
+  it('rejects an invalid Research summary before any renderer registration occurs', () => {
+    const translations = new MemoryTranslationHost()
+    const template = installedRendererDomainEntrySet.contributions[0]!
+    const entrySet = {
+      ...installedRendererDomainEntrySet,
+      contributions: [
+        ...installedRendererDomainEntrySet.contributions,
+        {
+          ...template,
+          owner: { moduleId: 'fixture.invalid-summary', moduleVersion: '1.0.0' },
+          declaration: {
+            id: 'fixture.invalid-summary.research',
+            kind: RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
+            priority: 10
+          },
+          contract: {
+            slot: 'status',
+            label: 'Invalid summary',
+            order: 10,
+            scopeKinds: ['workspace'],
+            resourceKinds: []
+          },
+          value: { provide: true }
+        }
+      ]
+    } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+
+    expect(() => createInstalledRendererContributions({ entrySet, translations }))
+      .toThrow('failed host validation')
+    expect(translations.mutations).toEqual([])
   })
 
   it('rejects an invalid Workbench navigation value atomically', () => {

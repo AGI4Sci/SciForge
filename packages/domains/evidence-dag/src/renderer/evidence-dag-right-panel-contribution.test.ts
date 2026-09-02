@@ -3,18 +3,16 @@ import test from 'node:test'
 import type { ReactElement } from 'react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
-  EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
-  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
-  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import {
   createDomainRendererEntry,
   type EvidenceDagRightPanelContribution,
-  type EvidenceDagToolbarActionContribution
 } from './evidence-dag-right-panel-contribution'
 import type { EvidenceDagI18nResourceContribution } from './evidence-dag-messages'
 
@@ -72,19 +70,14 @@ test('contributes the package-owned Evidence panel and translations', () => {
   assert.equal(props.workspacePreview, host.workspacePreview)
   assert.equal(typeof props.client, 'object')
 
-  const command = entry.contributions.find(({ kind }) =>
-    kind === EVIDENCE_DAG_RENDERER_COMMAND_CONTRIBUTION.kind
-  )!.value as { execute: unknown; isAvailable?: unknown; isActive?: unknown }
-  assert.equal(typeof command.execute, 'function')
-  assert.equal(typeof command.isAvailable, 'function')
-  assert.equal(typeof command.isActive, 'function')
-
-  const toolbarRuntime = entry.contributions.find(({ kind }) =>
-    kind === EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.kind
+  const summaryRuntime = entry.contributions.find(({ kind }) =>
+    kind === EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION.kind
   )!
-  const toolbar = toolbarRuntime.value as EvidenceDagToolbarActionContribution
-  assert.deepEqual(toolbarRuntime.contract, EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT)
-  assert.equal(typeof toolbar.icon, 'object')
+  assert.equal(typeof (summaryRuntime.value as { provide?: unknown }).provide, 'function')
+  const navigationRuntime = entry.contributions.find(({ kind }) =>
+    kind === EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION.kind
+  )!
+  assert.equal(typeof (navigationRuntime.value as { resolve?: unknown }).resolve, 'function')
 
   const translations = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION.kind

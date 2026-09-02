@@ -72,6 +72,8 @@ type ProviderRenderInput = {
   workspaceRoot: string
   outputPath: string
   recipe?: ImageGenerationRecipe
+  /** Recipe used only to persist a replay receipt for an edit intent. */
+  receiptRecipe?: ImageGenerationRecipe
   editIntent?: ImageEditIntent
 }
 
@@ -170,6 +172,7 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
     size,
     ...(request.stylePreset?.trim() ? { stylePreset: request.stylePreset.trim() } : {}),
     ...(request.referencePath?.trim() ? { referencePath: request.referencePath.trim() } : {}),
+    ...(request.seed !== undefined ? { seed: request.seed } : {}),
     outputFormat: 'png',
     intent,
     ...(drawingBrief ? { drawingBrief, promptProfile: 'flowchart-light-v1' as const } : {}),
@@ -251,7 +254,13 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     await mkdir(outputDir, { recursive: true })
     const outputPath = join(outputDir, imageId + '.' + (recipe.outputFormat ?? 'png'))
     const providerResult = await renderWithProvider({ workspaceRoot, outputPath, recipe })
-    const modelExecution = requireModelExecution(providerResult)
+    const modelExecution = withReviewReference(
+      await enrichModelExecutionReferences(
+      requireModelExecution(providerResult),
+      workspaceRoot
+      ),
+      request.visualDocumentId
+    )
     warnings.push(...providerResult.warnings)
     const outputHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
     const manifestPath = join(outputDir, imageId + '.manifest.json')
@@ -1005,6 +1014,12 @@ export async function editFrameworkComponentsWithImage2(
         visualPlan: request.visualPlan
       }
     })
+    const modelExecution = providerResult.modelExecution
+      ? withReviewReference(
+          await enrichModelExecutionReferences(providerResult.modelExecution, workspaceRoot),
+          request.visualDocumentId
+        )
+      : undefined
     warnings.push(...providerResult.warnings)
     await recomposeEditedRegion({
       sourceImagePath,
@@ -1046,7 +1061,7 @@ export async function editFrameworkComponentsWithImage2(
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
       visualPlan: request.visualPlan,
       provider: providerResult.provider,
-      ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {}),
+      ...(modelExecution ? { modelExecution } : {}),
       warnings
     }
     await writeJson(manifestPath, manifestRecord)
@@ -1069,7 +1084,7 @@ export async function editFrameworkComponentsWithImage2(
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
       visualPlan: request.visualPlan,
-      ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {})
+      ...(modelExecution ? { modelExecution } : {})
     })
     return {
       ok: true,
@@ -2283,11 +2298,27 @@ export async function editImageFromVisualReviewPacket(
       manifestPath: string
       artifactManifestPath: string
       provider: ImageGenerationProvider
+      modelExecution?: ImageGenerationModelExecutionV1
     }> = []
     for (const [index, intent] of intents.entries()) {
       const imageId = slugForId(request.imageId ?? 'edited-image-' + new Date().toISOString() + '-' + (index + 1))
       const outputPath = join(outputDir, imageId + '.' + (intent.outputFormat ?? 'png'))
-      const providerResult = await renderWithProvider({ workspaceRoot, outputPath, editIntent: intent })
+      const sourceImage = await loadImage(await resolveWorkspacePath(workspaceRoot, intent.sourcePath))
+      const providerResult = await renderWithProvider({
+        workspaceRoot,
+        outputPath,
+        editIntent: intent,
+        receiptRecipe: imageEditReceiptRecipe(intent, request.visualPlan, {
+          width: sourceImage.width,
+          height: sourceImage.height
+        })
+      })
+      const modelExecution = providerResult.modelExecution
+        ? withReviewReference(
+            await enrichModelExecutionReferences(providerResult.modelExecution, workspaceRoot),
+            visualDocumentId
+          )
+        : undefined
       warnings.push(...providerResult.warnings)
       const outputHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
       const manifestPath = join(outputDir, imageId + '.manifest.json')
@@ -2306,7 +2337,7 @@ export async function editImageFromVisualReviewPacket(
         editIntent: intent,
         visualPlan: request.visualPlan,
         provider: providerResult.provider,
-        ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {}),
+        ...(modelExecution ? { modelExecution } : {}),
         warnings
       }
       await writeJson(manifestPath, manifest)
@@ -2327,9 +2358,16 @@ export async function editImageFromVisualReviewPacket(
         ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
         visualPlan: request.visualPlan,
-        ...(providerResult.modelExecution ? { modelExecution: providerResult.modelExecution } : {})
+        ...(modelExecution ? { modelExecution } : {})
       })
-      outputs.push({ workspaceRoot, outputPath, manifestPath, artifactManifestPath, provider: providerResult.provider })
+      outputs.push({
+        workspaceRoot,
+        outputPath,
+        manifestPath,
+        artifactManifestPath,
+        provider: providerResult.provider,
+        ...(modelExecution ? { modelExecution } : {})
+      })
     }
     return {
       ok: true,
@@ -2642,14 +2680,15 @@ function providerKindForReadOnly(warnings: string[]): 'image-endpoint' | 'placeh
 }
 
 async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderRenderResult> {
+  const receiptRecipe = input.recipe ?? input.receiptRecipe
   if (providerKind() === 'image-endpoint') {
     try {
       await renderWithConfiguredImageEndpoint(input)
       return {
         provider: 'image-endpoint',
         placeholder: false,
-        ...(input.recipe
-          ? { modelExecution: imageModelExecution(input.recipe, 'image-endpoint') }
+        ...(receiptRecipe
+          ? { modelExecution: imageModelExecution(receiptRecipe, 'image-endpoint') }
           : {}),
         warnings: []
       }
@@ -2671,8 +2710,8 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
   return {
     provider: 'placeholder',
     placeholder: true,
-    ...(input.recipe
-      ? { modelExecution: imageModelExecution(input.recipe, 'placeholder') }
+    ...(receiptRecipe
+      ? { modelExecution: imageModelExecution(receiptRecipe, 'placeholder') }
       : {}),
     warnings: ['Rendered with placeholder provider because SCIFORGE_IMAGE_ALLOW_PLACEHOLDER=1 is set and no Model Router image endpoint is configured.']
   }
@@ -2681,6 +2720,28 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
 function requireModelExecution(result: ProviderRenderResult): ImageGenerationModelExecutionV1 {
   if (result.modelExecution) return result.modelExecution
   throw new Error('Generated image render did not capture its model execution recipe.')
+}
+
+async function enrichModelExecutionReferences(
+  execution: ImageGenerationModelExecutionV1,
+  workspaceRoot: string
+): Promise<ImageGenerationModelExecutionV1> {
+  if (!execution.references?.length) return execution
+  const references = await Promise.all(execution.references.map(async (reference) => {
+    const contentDigest = await hashWorkspaceFileIfAvailable(workspaceRoot, reference.path)
+    return contentDigest ? { ...reference, contentDigest } : reference
+  }))
+  return { ...execution, references }
+}
+
+function withReviewReference(
+  execution: ImageGenerationModelExecutionV1,
+  visualDocumentId: string | undefined
+): ImageGenerationModelExecutionV1 {
+  const id = visualDocumentId?.trim()
+  return id
+    ? { ...execution, reviewRefs: [{ kind: 'visual-document', id }] }
+    : execution
 }
 
 function imageModelExecution(
@@ -2700,6 +2761,7 @@ function imageModelExecution(
     },
     effectivePrompt,
     effectivePromptHash: createHash('sha256').update(effectivePrompt).digest('hex'),
+    ...(recipe.referencePath ? { references: [{ path: recipe.referencePath }] } : {}),
     parameters: {
       mode: recipe.mode,
       size: structuredClone(recipe.size),
@@ -2707,7 +2769,8 @@ function imageModelExecution(
       ...(recipe.negativePrompt ? { negativePrompt: recipe.negativePrompt } : {}),
       ...(recipe.stylePreset ? { stylePreset: recipe.stylePreset } : {}),
       ...(recipe.referencePath ? { referencePath: recipe.referencePath } : {}),
-      ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {})
+      ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
+      ...(recipe.seed !== undefined ? { seed: recipe.seed } : {})
     },
     renderer: {
       id: 'sciforge-image-generation-mcp',
@@ -2716,8 +2779,25 @@ function imageModelExecution(
     replay: {
       supported: true,
       recipeHash: hashValue(recipe),
-      exactOutputExpected: provider === 'placeholder'
+      // Neither the local placeholder nor the configured model endpoint has a
+      // provider contract that proves byte-identical output on replay.
+      exactOutputExpected: false
     }
+  }
+}
+
+function imageEditReceiptRecipe(
+  intent: ImageEditIntent,
+  visualPlan: ImageGenerationRecipe['visualPlan'],
+  size: ImageSize
+): ImageGenerationRecipe {
+  return {
+    mode: 'image_to_image',
+    prompt: intent.instruction,
+    size,
+    outputFormat: intent.outputFormat ?? 'png',
+    referencePath: intent.sourcePath,
+    visualPlan
   }
 }
 
@@ -2752,7 +2832,8 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
         model: endpoint.model,
         prompt,
         size,
-        outputPath: input.outputPath
+        outputPath: input.outputPath,
+        ...(input.recipe?.seed !== undefined ? { seed: input.recipe.seed } : {})
       }
       if (input.editIntent?.sourcePath && editSourcePath) {
         const maskPath = input.editIntent.maskPath
@@ -2793,6 +2874,7 @@ async function renderWithImageEditEndpoint(
     prompt: string
     size: ImageSize
     outputPath: string
+    seed?: number
     sourcePath: string
     maskPath?: string
     generatedMask?: File
@@ -2807,6 +2889,7 @@ async function renderWithImageEditEndpoint(
   ].join('\n'))
   form.set('size', input.size.width + 'x' + input.size.height)
   form.set('n', '1')
+  if (input.seed !== undefined) form.set('seed', String(input.seed))
   form.set('input_fidelity', 'high')
   form.set('quality', 'high')
   form.set('image', await imageFileForForm(input.sourcePath))
@@ -3046,6 +3129,7 @@ async function renderWithImageEndpoint(
     prompt: string
     size: ImageSize
     outputPath: string
+    seed?: number
   }
 ): Promise<void> {
   let response = await fetchOpenAiImagesEndpoint(baseUrl, input, 'prompt')
@@ -3069,6 +3153,7 @@ async function fetchOpenAiImagesEndpoint(
     model: string
     prompt: string
     size: ImageSize
+    seed?: number
   },
   promptField: 'prompt' | 'text'
 ): Promise<Response> {
@@ -3082,7 +3167,8 @@ async function fetchOpenAiImagesEndpoint(
       model: input.model,
       [promptField]: input.prompt,
       size: input.size.width + 'x' + input.size.height,
-      n: 1
+      n: 1,
+      ...(input.seed !== undefined ? { seed: input.seed } : {})
     })
   })
 }
@@ -3249,6 +3335,7 @@ function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): Ima
     size: normalizeSize(recipe.size, warnings),
     ...(recipe.stylePreset?.trim() ? { stylePreset: recipe.stylePreset.trim() } : {}),
     ...(recipe.referencePath?.trim() ? { referencePath: recipe.referencePath.trim() } : {}),
+    ...(recipe.seed !== undefined ? { seed: recipe.seed } : {}),
     outputFormat: recipe.outputFormat ?? 'png',
     ...(recipe.intent ? { intent: recipe.intent } : {}),
     ...(recipe.drawingBrief ? { drawingBrief: recipe.drawingBrief } : {}),

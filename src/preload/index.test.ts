@@ -459,27 +459,6 @@ describe('preload agentRuntime bridge', () => {
     expect(api.capabilities?.invoke).toBeTypeOf('function')
   })
 
-  it('exposes Research Cards IPC methods through the preload bridge', async () => {
-    const api = exposedApi as {
-      researchCards: {
-        list(payload?: unknown): Promise<unknown>
-        create(payload: unknown): Promise<unknown>
-        update(payload: unknown): Promise<unknown>
-        archive(payload: unknown): Promise<unknown>
-      }
-    }
-
-    await api.researchCards.list({ kind: 'claim' })
-    await api.researchCards.create({ kind: 'claim', title: 'SPO11 trigger claim' })
-    await api.researchCards.update({ cardId: 'rc-1', patch: { status: 'needs_evidence' } })
-    await api.researchCards.archive({ cardId: 'rc-1' })
-
-    expect(invoke).toHaveBeenCalledWith('researchCards:list', { kind: 'claim' })
-    expect(invoke).toHaveBeenCalledWith('researchCards:create', { kind: 'claim', title: 'SPO11 trigger claim' })
-    expect(invoke).toHaveBeenCalledWith('researchCards:update', { cardId: 'rc-1', patch: { status: 'needs_evidence' } })
-    expect(invoke).toHaveBeenCalledWith('researchCards:archive', { cardId: 'rc-1' })
-  })
-
   it('does not expose legacy PDF annotation IPC methods through the preload bridge', () => {
     const api = exposedApi as {
       pdfAnnotations?: unknown

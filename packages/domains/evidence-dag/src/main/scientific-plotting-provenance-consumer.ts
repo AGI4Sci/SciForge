@@ -15,10 +15,9 @@ import {
 } from '@sciforge/domain-artifact-versions/contract'
 import { z } from 'zod'
 import type {
-  EvidenceDagQueueEnqueueResult,
-  EvidenceDagQueueInput
-} from './queue.js'
-import { evidenceDagThreadId } from './client.js'
+  EvidenceDagAppendResult,
+  EvidenceDagTraceAppendInput
+} from './evidence-delta.js'
 
 const identifierSchema = z.string().trim().min(1).max(256)
 const operationIdSchema = z.string()
@@ -129,11 +128,13 @@ export const scientificPlottingEvidenceDeliveryReceiptV1Schema = z.object({
   consumer: z.literal('evidence-dag'),
   producer: z.literal('scientific-plotting'),
   operationId: operationIdSchema,
-  state: z.literal('enqueued'),
+  state: z.literal('committed'),
   createdAt: timestampSchema,
   runtimeId: identifierSchema,
   threadId: identifierSchema,
-  jobId: identifierSchema,
+  // Evidence delta identities use the public prefixed digest form while
+  // embedded Artifact content digests remain bare SHA-256 hex strings.
+  deltaDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
   sourceDigest: sha256Schema
 }).strict()
 
@@ -152,66 +153,30 @@ export type ScientificPlottingProvenancePreparation = Readonly<{
   trace: readonly Readonly<Record<string, unknown>>[]
 }>
 
-type DeliveryAttempt = {
-  key: string
-  operationId: string
-  workspaceRoot: string
-  runtimeId: string
-  threadId: string
-  sourceDigest: string
-  createdAt: string
-  updatedAt: string
-  jobId?: string
-}
-
-type ConsumerStateFile = {
-  version: 1
-  attempts: DeliveryAttempt[]
-}
-
-const consumerStateSchema = z.object({
-  version: z.literal(1),
-  attempts: z.array(z.object({
-    key: sha256Schema,
-    operationId: operationIdSchema,
-    workspaceRoot: z.string().trim().min(1).max(8_192),
-    runtimeId: identifierSchema,
-    threadId: identifierSchema,
-    sourceDigest: sha256Schema,
-    createdAt: timestampSchema,
-    updatedAt: timestampSchema,
-    jobId: identifierSchema.optional()
-  }).strict()).max(10_000)
-}).strict()
-
 const DEFAULT_POLL_INTERVAL_MS = 15_000
 
 /**
  * Durable, workspace-scoped bridge from Scientific Plotting into Evidence DAG.
  *
- * Plotting owns immutable pending producer receipts. Evidence owns both the
- * queue and delivery receipts. A prepared record is persisted before enqueue,
- * which makes the enqueue/delivery crash window replayable without accepting a
- * changed producer payload for the same operation.
+ * Plotting owns immutable pending producer receipts. Evidence owns the delta
+ * append and delivery receipt. If the process stops between those writes, the
+ * producer receipt is replayed and the delta idempotency key returns the same
+ * committed identity.
  */
 export class ScientificPlottingProvenanceConsumer {
-  private state: ConsumerStateFile = { version: 1, attempts: [] }
-  private loaded = false
   private enabled = false
   private closed = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private draining: Promise<void> | undefined
-  private writing: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: Readonly<{
-    storagePath: string
     discoverWorkspaces: () => Promise<readonly string[]>
     prepare: (
       workspaceRoot: string,
       receipt: ScientificPlottingProvenanceReceiptV1
     ) => Promise<ScientificPlottingProvenancePreparation>
-    enqueue: (input: EvidenceDagQueueInput) => Promise<EvidenceDagQueueEnqueueResult>
-    afterEnqueue?: (
+    append: (input: EvidenceDagTraceAppendInput) => Promise<EvidenceDagAppendResult>
+    afterAppend?: (
       prepared: ScientificPlottingProvenancePreparation,
       receipt: ScientificPlottingProvenanceReceiptV1
     ) => Promise<void>
@@ -221,13 +186,11 @@ export class ScientificPlottingProvenanceConsumer {
   }>) {}
 
   async start(enabled: boolean): Promise<void> {
-    await this.load()
     this.enabled = enabled
     if (enabled) this.schedule(0)
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
-    await this.load()
     this.enabled = enabled
     if (!enabled && this.timer) {
       clearTimeout(this.timer)
@@ -243,7 +206,6 @@ export class ScientificPlottingProvenanceConsumer {
   }
 
   async pollNow(): Promise<void> {
-    await this.load()
     if (!this.enabled || this.closed) return
     if (this.draining) return this.draining
     const work = this.drain()
@@ -262,7 +224,6 @@ export class ScientificPlottingProvenanceConsumer {
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
     await this.draining
-    await this.writing
   }
 
   private async drain(): Promise<void> {
@@ -322,64 +283,27 @@ export class ScientificPlottingProvenanceConsumer {
     const deliveryPath = scientificPlottingDeliveryReceiptPath(workspaceRoot, parsed.operationId)
     const existingDelivery = await optionalWorkspaceJson(workspaceRoot, deliveryPath)
     if (existingDelivery !== undefined) {
-      const delivery = scientificPlottingEvidenceDeliveryReceiptV1Schema.parse(existingDelivery)
-      assertDeliveryMatches(delivery, parsed, sourceDigest)
-      const deliveredKey = deliveryAttemptKey(workspaceRoot, parsed.operationId)
-      const staleAttempt = this.state.attempts.find((item) => item.key === deliveredKey)
-      if (staleAttempt) {
-        assertAttemptMatches(staleAttempt, workspaceRoot, parsed, sourceDigest)
-        this.state.attempts = this.state.attempts.filter((item) => item.key !== deliveredKey)
-        await this.persist()
+      const delivery = scientificPlottingEvidenceDeliveryReceiptV1Schema.safeParse(existingDelivery)
+      if (delivery.success) {
+        assertDeliveryMatches(delivery.data, parsed, sourceDigest)
+        return
       }
-      return
-    }
-
-    const key = deliveryAttemptKey(workspaceRoot, parsed.operationId)
-    let attempt = this.state.attempts.find((item) => item.key === key)
-    if (attempt) {
-      assertAttemptMatches(attempt, workspaceRoot, parsed, sourceDigest)
+      throw new Error('Evidence delivery receipt has an unsupported format.')
     }
     const prepared = await this.options.prepare(workspaceRoot, parsed)
     assertPreparedTarget(prepared, workspaceRoot, parsed)
-    if (!attempt) {
-      const createdAt = this.nowIso()
-      attempt = {
-        key,
-        operationId: parsed.operationId,
-        workspaceRoot: resolve(workspaceRoot),
-        runtimeId: parsed.runtimeId,
-        threadId: parsed.threadId,
-        sourceDigest,
-        createdAt,
-        updatedAt: createdAt
-      }
-      if (this.state.attempts.length >= 10_000) {
-        throw new Error('Scientific Plotting provenance prepared-delivery limit was reached.')
-      }
-      this.state.attempts.push(attempt)
-      await this.persist()
-    }
-
-    let jobId = attempt.jobId
-    if (!jobId) {
-      const queued = await this.options.enqueue({
-        idempotencyKey: `scientific-plotting/provenance-delivery:${key}`,
+    const appended = await this.options.append({
+        idempotencyKey: `scientific-plotting/provenance-delivery:${resolve(workspaceRoot)}:${parsed.operationId}`,
         runtimeId: prepared.runtimeId,
         threadId: prepared.threadId,
-        engineThreadId: evidenceDagThreadId(prepared.runtimeId, prepared.threadId),
-        targetWatermark: `${prepared.targetWatermark}:scientific-plotting/provenance:${sourceDigest.slice(0, 16)}`,
-        reason: 'scientific_plotting_provenance',
-        priority: 'background',
+        operationId: parsed.operationId,
+        kind: 'scientific_provenance',
+        requestedWatermark: `${prepared.targetWatermark}:scientific-plotting/provenance:${sourceDigest.slice(0, 16)}`,
+        eventKind: 'scientific_plotting_provenance',
         trace: prepared.trace,
         workspaceRoot: prepared.workspaceRoot
       })
-      jobId = queued.jobId
-      attempt.jobId = jobId
-      attempt.updatedAt = this.nowIso()
-      await this.persist()
-    }
-
-    await this.options.afterEnqueue?.(prepared, parsed)
+    await this.options.afterAppend?.(prepared, parsed)
     await writeWorkspaceJsonAtomic(
       workspaceRoot,
       deliveryPath,
@@ -388,16 +312,14 @@ export class ScientificPlottingProvenanceConsumer {
         consumer: 'evidence-dag',
         producer: 'scientific-plotting',
         operationId: parsed.operationId,
-        state: 'enqueued',
+        state: 'committed',
         createdAt: this.nowIso(),
         runtimeId: parsed.runtimeId,
         threadId: parsed.threadId,
-        jobId,
+        deltaDigest: appended.delta.deltaDigest,
         sourceDigest
       })
     )
-    this.state.attempts = this.state.attempts.filter((item) => item.key !== key)
-    await this.persist()
   }
 
   private schedule(delayMs: number, replace = false): void {
@@ -413,32 +335,6 @@ export class ScientificPlottingProvenanceConsumer {
       })
     }, Math.max(0, delayMs))
     this.timer.unref?.()
-  }
-
-  private async load(): Promise<void> {
-    if (this.loaded) return
-    this.loaded = true
-    try {
-      const parsed = consumerStateSchema.parse(
-        JSON.parse(await readFile(this.options.storagePath, 'utf8'))
-      )
-      this.state = {
-        version: 1,
-        attempts: parsed.attempts.map((attempt) => ({
-          ...attempt,
-          workspaceRoot: resolve(attempt.workspaceRoot)
-        }))
-      }
-    } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error
-      this.state = { version: 1, attempts: [] }
-    }
-  }
-
-  private persist(): Promise<void> {
-    const file = structuredClone(this.state)
-    this.writing = this.writing.then(() => writeJsonAtomic(this.options.storagePath, file))
-    return this.writing
   }
 
   private nowIso(): string {
@@ -586,23 +482,6 @@ function assertPreparedTarget(
   }
 }
 
-function assertAttemptMatches(
-  attempt: DeliveryAttempt,
-  workspaceRoot: string,
-  receipt: ScientificPlottingProvenanceReceiptV1,
-  sourceDigest: string
-): void {
-  if (
-    attempt.operationId !== receipt.operationId ||
-    attempt.workspaceRoot !== resolve(workspaceRoot) ||
-    attempt.runtimeId !== receipt.runtimeId ||
-    attempt.threadId !== receipt.threadId ||
-    attempt.sourceDigest !== sourceDigest
-  ) {
-    throw new Error('Scientific Plotting provenance operation conflicts with its prepared delivery.')
-  }
-}
-
 function assertDeliveryMatches(
   delivery: ScientificPlottingEvidenceDeliveryReceiptV1,
   receipt: ScientificPlottingProvenanceReceiptV1,
@@ -709,12 +588,6 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   const temporaryPath = `${path}.${randomUUID()}.tmp`
   await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
   await rename(temporaryPath, path)
-}
-
-function deliveryAttemptKey(workspaceRoot: string, operationId: string): string {
-  return createHash('sha256')
-    .update(`${resolve(workspaceRoot)}\0${operationId}`)
-    .digest('hex')
 }
 
 function uniqueResolved(values: readonly string[]): string[] {

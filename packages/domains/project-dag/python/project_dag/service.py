@@ -105,7 +105,34 @@ class Engine:
     def process_updates(self, project_key: Optional[str] = None) -> Optional[dict]:
         return self.workflow.process_next(project_key)
 
-    def retry_update(self, job_id: str, *, actor: str = "human") -> dict:
+    def derive_on_open(self, project_key: str) -> Optional[dict]:
+        """Queue demand-driven derivation when opening a stale Project view.
+
+        Opening a fresh view is read-only.  A stale view reuses the latest
+        explicit vector and Scope through the canonical update lane; it never
+        scans the Workspace or invokes the compiler directly.
+        """
+        latest = self.workflow.latest_snapshot(project_key)
+        invalidation = self.workflow.invalidation(project_key)
+        active = self.store.q1(
+            "SELECT id FROM project_update_job WHERE project_key=?"
+            " AND status IN ('queued','running','retry_scheduled','failed')",
+            (project_key,),
+        )
+        if latest is not None and not (invalidation and invalidation.get("stale")) \
+                and active is None:
+            return None
+        if latest is None and active is None:
+            return None
+        result = self._enqueue_after_domain_change(project_key, "project_open")
+        return self._project_response(project_key, "project-open-receipt", result)
+
+    def retry_update(self, job_id: str, *, actor: str = "human",
+                     project_key: Optional[str] = None) -> dict:
+        if project_key is not None:
+            row = self.workflow.job(job_id)
+            if row is None or row.get("project_key") != project_key:
+                raise KeyError(job_id)
         result = self.workflow.retry_update(job_id, actor=actor)
         return self._project_response(
             result["project_key"], "project-update-job", result)
@@ -159,9 +186,12 @@ class Engine:
         }
 
     def update_receipt_status(self, job_id: str, accepted_request_version: int,
-                              desired_fingerprint: str) -> dict:
+                              desired_fingerprint: str,
+                              project_key: Optional[str] = None) -> dict:
         receipt = self.workflow.receipt_status(
             job_id, accepted_request_version, desired_fingerprint)
+        if project_key is not None and receipt["projectKey"] != project_key:
+            raise KeyError(job_id)
         access = self._project_read_access(receipt["projectKey"])
         if access and access["redacted"]:
             return _restricted_project_ref("project-update-receipt", receipt)
@@ -310,16 +340,18 @@ class Engine:
             return [_restricted_project_ref("audit", item) for item in audits]
         return audits
 
-    def audit(self, audit_id: str) -> Optional[dict]:
+    def audit(self, audit_id: str, project_key: Optional[str] = None) -> Optional[dict]:
         audit = self.workflow.audit(audit_id)
         if audit is None:
             return None
-        project_key = audit.get("project_key")
-        if not isinstance(project_key, str):
+        audit_project_key = audit.get("project_key")
+        if not isinstance(audit_project_key, str):
             return _restricted_project_ref("audit", audit)
+        if project_key is not None and audit_project_key != project_key:
+            raise KeyError(audit_id)
         target_digest = audit.get("target_digest")
         access = self._project_read_access(
-            project_key, target_digest if isinstance(target_digest, str) else None)
+            audit_project_key, target_digest if isinstance(target_digest, str) else None)
         if access and access["redacted"]:
             return _restricted_project_ref("audit", audit)
         return audit
@@ -341,7 +373,12 @@ class Engine:
     def process_audits(self, project_key: Optional[str] = None) -> Optional[dict]:
         return self.workflow.process_next_audit(project_key)
 
-    def retry_audit(self, audit_id: str, *, actor: str = "human") -> dict:
+    def retry_audit(self, audit_id: str, *, actor: str = "human",
+                    project_key: Optional[str] = None) -> dict:
+        if project_key is not None:
+            row = self.workflow.audit(audit_id)
+            if row is None or row.get("project_key") != project_key:
+                raise KeyError(audit_id)
         result = self.workflow.retry_audit(audit_id, actor=actor)
         return self._project_response(
             result["project_key"], "audit", result, result.get("target_digest"))
@@ -889,6 +926,8 @@ class Engine:
             confidence=float(payload["confidence"]),
             reversibility=payload["reversibility"], review_id=payload.get("reviewId"),
             finding_id=payload.get("findingId"), supersedes_id=payload.get("supersedesId"),
+            action_class=payload.get("actionClass", "draft_internal_reversible"),
+            target=payload.get("target", ""), policy_ref=payload.get("policyRef", "decision-policy/v1"),
         )
         self._enqueue_after_domain_change(payload["projectKey"], "decision_recorded",
                                           payload["autonomyMode"])
@@ -899,6 +938,7 @@ class Engine:
             project_key, autonomy_mode=payload.get("autonomyMode"),
             checkpoints=payload.get("checkpoints"),
             allow_agent_critical_override=payload.get("allowAgentCriticalOverride"),
+            decision_rules=payload.get("decisionRules"),
             actor=payload.get("actorId", "human"),
         )
         self._enqueue_after_domain_change(
@@ -925,20 +965,149 @@ class Engine:
             requested_status=payload.get("requestedStatus", "candidate"),
             runtime_authorization=payload.get("runtimeAuthorization"),
             external_action=bool(payload.get("externalAction", False)),
+            target=payload.get("target", ""),
+            classification=payload.get("classification", "internal"),
+            decision_refs=payload.get("decisionRefs") or [],
+            approval_refs=payload.get("approvalRefs") or [],
+            expected_head_digest=payload["expectedHeadDigest"],
+            action_class=payload.get("actionClass"),
         )
         return self._project_response(
             payload["projectKey"], "release", result,
             payload["projectSnapshotDigest"])
+
+    def save_goal_draft(self, payload: dict) -> dict:
+        project_key = self.project_key(
+            payload.get("workspaceRoot"), payload.get("projectRoot"), payload.get("project"))
+        return self._project_response(project_key, "goal-draft", self.workflow.save_goal_draft(
+            project_key, title=payload["title"], description=payload.get("description", ""),
+            root_goal_id=payload.get("rootGoalId"), actor=payload.get("actorId", "human")))
+
+    def apply_goal_draft(self, payload: dict) -> dict:
+        project_key = self.project_key(
+            payload.get("workspaceRoot"), payload.get("projectRoot"), payload.get("project"))
+        result = self.workflow.apply_goal_draft(
+            project_key, actor_type=payload.get("actorType", "human"),
+            actor_id=payload.get("actorId", "user"), reframe=bool(payload.get("reframe", False)))
+        if result.get("proposal"):
+            return result
+        self._enqueue_after_domain_change(project_key, "goal_changed")
+        return self._project_response(project_key, "goal", result)
+
+    def goal_draft(self, project_key: str) -> Optional[dict]:
+        result = self.workflow.goal_draft(project_key)
+        return self._project_response(project_key, "goal-draft", result) if result else None
+
+    def scope_revisions(self, project_key: str) -> list[dict]:
+        return self.workflow.scope_revisions(project_key)
+
+    def scope_draft(self, project_key: str) -> Optional[dict]:
+        return self.workflow.scope_draft(project_key)
+
+    def save_scope_draft(self, payload: dict) -> dict:
+        project_key = self.project_key(
+            payload.get("workspaceRoot"), payload.get("projectRoot"), payload.get("project"))
+        scope_payload = payload.get("scope") or {
+            "includedSessions": payload.get("includedSessions") or [],
+            "excludedSessions": payload.get("excludedSessions") or [],
+            "isolatedSessions": payload.get("isolatedSessions") or [],
+            "reasons": payload.get("reasons") or {},
+        }
+        # Initialization from a visible Session is explicit and deterministic:
+        # only that Session is proposed, while related Sessions stay suggestions.
+        current_session = payload.get("currentSessionId")
+        if current_session and not any(scope_payload.get(key) for key in (
+                "includedSessions", "excludedSessions", "isolatedSessions")):
+            scope_payload = {**scope_payload,
+                             "includedSessions": [current_session]}
+        return self._project_response(project_key, "scope-draft", self.workflow.save_scope_draft(
+            project_key, scope_payload, actor=payload.get("actorId", "human")))
+
+    def apply_scope_draft(self, payload: dict) -> dict:
+        project_key = self.project_key(
+            payload.get("workspaceRoot"), payload.get("projectRoot"), payload.get("project"))
+        return self._project_response(project_key, "scope", self.workflow.apply_scope_draft(
+            project_key, actor=payload.get("actorId", "human")))
+
+    def invalidation(self, project_key: str) -> Optional[dict]:
+        return self.workflow.invalidation(project_key)
+
+    def mark_invalidation(self, payload: dict, *, actor: str = "runtime") -> dict:
+        """Persist upstream freshness without enqueueing Project compilation."""
+        project_key = payload.get("projectKey") or self.project_key(
+            payload.get("workspaceRoot"), payload.get("projectRoot"),
+            payload.get("project"))
+        changed_fields = payload.get("changedFields") or []
+        if not isinstance(changed_fields, list) or not all(
+                isinstance(field, str) and field.strip() for field in changed_fields):
+            raise ValueError("changedFields must be a string array")
+        result = self.workflow.mark_stale(
+            project_key,
+            desired_fingerprint=payload.get("desiredFingerprint"),
+            reason=payload.get("reason", "upstream_changed"),
+            changed_fields=changed_fields,
+            formal_gate=bool(payload.get("formalGate", False)),
+        )
+        self.workflow._event(project_key, "ProjectInvalidated", actor, {
+            "reason": payload.get("reason", "upstream_changed"),
+            "changedFields": sorted(set(changed_fields)),
+            "desiredFingerprint": payload.get("desiredFingerprint"),
+        })
+        self.store.conn.commit()
+        return self._project_response(project_key, "project-invalidation", result)
+
+    def record_approval(self, payload: dict) -> dict:
+        project_key = payload["projectKey"]
+        result = self.workflow.record_approval(
+            project_key=project_key, decision_id=payload["decisionId"],
+            attestor=payload["attestor"], attestation=payload["attestation"],
+            trusted_role_assertion_ref=payload.get("trustedRoleAssertionRef"),
+            expires_at=payload.get("expiresAt"),
+            revokes_approval_id=payload.get("revokesApprovalId"),
+            policy_ref=payload.get("policyRef", "decision-policy/v1"),
+        )
+        return self._project_response(project_key, "approval", result)
+
+    def approvals(self, project_key: str, snapshot_digest: Optional[str] = None) -> list[dict]:
+        return self.workflow.approvals(project_key, snapshot_digest)
+
+    def seal_snapshot(self, payload: dict) -> dict:
+        project_key = payload["projectKey"]
+        snapshot = self.workflow.seal_snapshot(
+            project_key, expected_head_digest=payload["expectedHeadDigest"],
+            reason=payload.get("reason", "formal_barrier"))
+        return self._project_response(project_key, "project-snapshot", snapshot,
+                                      snapshot["digest"])
 
     # --------------------------------------------------------------- helpers
     @staticmethod
     def project_key(workspace_root: Optional[str] = None,
                     project_root: Optional[str] = None,
                     project: Optional[str] = None) -> str:
-        path = project_root or workspace_root
-        if isinstance(path, str) and path.strip():
-            normalized = os.path.normcase(os.path.normpath(os.path.expanduser(path.strip())))
-            return f"path:{normalized.replace(os.sep, '/')}"
+        """Derive the sole Project identity from a canonical Workspace path.
+
+        ``project:<id>`` was an early transport convenience, but it is not
+        bound to a Workspace and therefore lets a caller select arbitrary
+        Project rows.  Project identity is now path-derived everywhere.  Both
+        roots are accepted only as alternate spellings of the same canonical
+        Workspace and relative paths are rejected because they depend on the
+        sidecar process working directory.
+        """
+        canonical: list[tuple[str, str]] = []
+        for field, value in (("workspaceRoot", workspace_root),
+                             ("projectRoot", project_root)):
+            if value is None or not isinstance(value, str) or not value.strip():
+                continue
+            expanded = os.path.expanduser(value.strip())
+            if not os.path.isabs(expanded):
+                raise ValueError(f"{field} must be an absolute workspace path")
+            normalized = os.path.normcase(os.path.normpath(expanded))
+            canonical.append((field, normalized.replace(os.sep, "/")))
         if isinstance(project, str) and project.strip():
-            return f"project:{project.strip()}"
-        raise ValueError("projectKey or workspace/project identity is required")
+            raise ValueError(
+                "project identity is unsupported; provide the canonical workspaceRoot")
+        if canonical and len({path for _, path in canonical}) != 1:
+            raise ValueError("workspaceRoot and projectRoot must identify the same workspace")
+        if canonical:
+            return f"path:{canonical[0][1]}"
+        raise ValueError("canonical workspaceRoot or projectRoot identity is required")

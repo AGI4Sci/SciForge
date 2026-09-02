@@ -96,7 +96,6 @@ import { RuntimeContextStateService } from './services/runtime-context-state-ser
 import { RuntimeContextLedgerService } from './services/runtime-context-ledger-service'
 import { SharedMemoryService } from './services/shared-memory-service'
 import { RuntimeGoalService } from './services/runtime-goal-service'
-import { ResearchCardService } from './services/research-card-service'
 import { WorkspaceReferenceService } from './services/workspace-reference-service'
 import {
   VisibleContextService,
@@ -1081,7 +1080,6 @@ app
     const contextLedgerService = new RuntimeContextLedgerService(app.getPath('userData'))
     const sharedMemoryService = new SharedMemoryService(app.getPath('userData'))
     const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
-    const researchCardService = new ResearchCardService(app.getPath('userData'))
     const workspaceReferenceService = new WorkspaceReferenceService()
     let domainSystemCapabilityInvokers: ReturnType<
       typeof createMainSystemCapabilityInvokerFactory
@@ -1883,7 +1881,6 @@ app
       fetchUpstreamModels: fetchModels,
       visibleContext: visibleContextService,
       getScheduleRuntime: () => scheduleRuntime,
-      researchCards: researchCardService,
       showTurnCompleteNotification,
       getAppVersion: () => app.getVersion(),
       readGuiUpdateState,

@@ -171,8 +171,6 @@ test('keeps a primary exact record when an optional owner section is unavailable
   if (!result.ok) return
   assert.equal(result.value.record.kind, 'artifact-version')
   assert.equal(result.value.issues.versions, 'history owner disabled')
-  assert.equal(result.value.issues.evidence, undefined)
-  assert.equal(result.value.issues.review, undefined)
 })
 
 test('propagates access denial and never substitutes another artifact version', async () => {
@@ -302,79 +300,6 @@ test('fails closed for a legacy formal Compute target when its owner is unavaila
   })
 })
 
-test('reads Visual Review owner state and requires the full exact revision ref', async () => {
-  const reviewDigest = 'b'.repeat(64)
-  const reviewedDescriptor = {
-    ...descriptor,
-    version: {
-      ...descriptor.version,
-      metadata: {
-        producer: 'visual-review',
-        documentId: 'figure-review',
-        revisionId: 'revision-2',
-        reviewEvidenceDigest: reviewDigest
-      }
-    }
-  }
-  const client = {
-    describeArtifactVersion: async () => ({ ok: true, value: reviewedDescriptor }),
-    listArtifactVersions: async () => ({ ok: true, value: { items: [reviewedDescriptor] } }),
-    readVisualReviewDocument: async () => ({
-      workspaceRoot: '/workspace/lab',
-      document: {
-        documentId: 'figure-review',
-        revisions: [{
-          id: 'revision-2', status: 'accepted', versionRef: ref,
-          decidedAt: '2026-08-11T01:00:00.000Z',
-          reviewEvidence: {
-            reviewedArtifactHash: reviewDigest,
-            reviewedAt: '2026-08-11T00:59:00.000Z',
-            score: { overall: 0.98 }
-          }
-        }]
-      }
-    })
-  }
-  const result = await loadExactResearchDossier(client as never, '/workspace/lab', {
-    contractVersion: 1,
-    target: { kind: 'artifact-version', versionId: ref.versionId },
-    page: 'evidence-review'
-  })
-  assert.equal(result.ok, true)
-  if (!result.ok) return
-  assert.deepEqual(result.value.review, {
-    documentId: 'figure-review', revisionId: 'revision-2', status: 'accepted',
-    reviewDigest: `sha256:${reviewDigest}`,
-    reviewedAt: '2026-08-11T01:00:00.000Z', score: 0.98
-  })
-
-  const mismatch = await loadExactResearchDossier({
-    ...client,
-    readVisualReviewDocument: async () => ({
-      workspaceRoot: '/workspace/lab',
-      document: {
-        documentId: 'figure-review',
-        revisions: [{
-          id: 'revision-2', status: 'accepted',
-          versionRef: { ...ref, contentDigest: 'c'.repeat(64) },
-          reviewEvidence: {
-            reviewedArtifactHash: reviewDigest,
-            reviewedAt: '2026-08-11T00:59:00.000Z', score: { overall: 0.98 }
-          }
-        }]
-      }
-    })
-  } as never, '/workspace/lab', {
-    contractVersion: 1,
-    target: { kind: 'artifact-version', versionId: ref.versionId },
-    page: 'evidence-review'
-  })
-  assert.equal(mismatch.ok, true)
-  if (!mismatch.ok) return
-  assert.equal(mismatch.value.review, null)
-  assert.match(mismatch.value.issues.review ?? '', /full exact ArtifactVersionRef/u)
-})
-
 test('loads an exact Research Checkpoint owner projection without scanning or latest fallback', async () => {
   const { checkpoint, checkpointDescriptor, checkpointRef } = checkpointFixture()
   const calls: unknown[] = []
@@ -401,8 +326,6 @@ test('loads an exact Research Checkpoint owner projection without scanning or la
   assert.equal(result.value.record.kind, 'artifact-version')
   if (result.value.record.kind !== 'artifact-version') return
   assert.equal(result.value.record.checkpoint?.manifest.narrative.canonicalText, 'The treatment increased the response.')
-  assert.equal(result.value.evidence, null)
-  assert.equal(result.value.issues.evidence, undefined)
   assert.deepEqual(calls, [
     ['describe', checkpointRef.versionId],
     ['history', { artifactId: checkpointRef.artifactId, limit: 25 }],
@@ -411,79 +334,6 @@ test('loads an exact Research Checkpoint owner projection without scanning or la
       versionId: checkpointRef.versionId
     }]
   ])
-})
-
-test('does not call an unavailable Evidence owner while loading an exact Checkpoint', async () => {
-  const { checkpoint, checkpointDescriptor, checkpointRef } = checkpointFixture()
-  let evidenceStarted = false
-  const startedAt = Date.now()
-  const result = await loadExactResearchDossier({
-    describeArtifactVersion: async () => ({ ok: true, value: checkpointDescriptor }),
-    listArtifactVersions: async () => ({ ok: true, value: { items: [checkpointDescriptor] } }),
-    readResearchCheckpoint: async () => ({ ok: true, value: checkpoint }),
-    readEvidenceDossierSummary: async () => {
-      evidenceStarted = true
-      return await new Promise<never>(() => undefined)
-    }
-  } as never, '/workspace/lab', {
-    contractVersion: 1,
-    target: { kind: 'artifact-version', versionId: checkpointRef.versionId },
-    page: 'overview', expectedDigest: `sha256:${checkpointRef.contentDigest}`
-  }, { secondaryOwnerTimeoutMs: 15 })
-  const elapsedMs = Date.now() - startedAt
-
-  assert.equal(evidenceStarted, false)
-  assert.ok(elapsedMs < 500, `exact Checkpoint load took ${elapsedMs} ms`)
-  assert.equal(result.ok, true)
-  if (!result.ok) return
-  assert.equal(result.value.record.kind, 'artifact-version')
-  if (result.value.record.kind !== 'artifact-version') return
-  assert.equal(
-    result.value.record.checkpoint?.manifest.narrative.canonicalText,
-    'The treatment increased the response.'
-  )
-  assert.equal(result.value.evidence, null)
-  assert.equal(result.value.issues.evidence, undefined)
-})
-
-test('returns the exact Artifact promptly when Visual Review never resolves', async () => {
-  const reviewDigest = 'b'.repeat(64)
-  const reviewedDescriptor = {
-    ...descriptor,
-    version: {
-      ...descriptor.version,
-      metadata: {
-        producer: 'visual-review',
-        documentId: 'figure-review',
-        revisionId: 'revision-2',
-        reviewEvidenceDigest: reviewDigest
-      }
-    }
-  }
-  let reviewStarted = false
-  const startedAt = Date.now()
-  const result = await loadExactResearchDossier({
-    describeArtifactVersion: async () => ({ ok: true, value: reviewedDescriptor }),
-    listArtifactVersions: async () => ({ ok: true, value: { items: [reviewedDescriptor] } }),
-    readVisualReviewDocument: async () => {
-      reviewStarted = true
-      return await new Promise<never>(() => undefined)
-    }
-  } as never, '/workspace/lab', {
-    contractVersion: 1,
-    target: { kind: 'artifact-version', versionId: ref.versionId },
-    page: 'overview', expectedDigest: `sha256:${digest}`
-  }, { secondaryOwnerTimeoutMs: 15 })
-  const elapsedMs = Date.now() - startedAt
-
-  assert.equal(reviewStarted, true)
-  assert.ok(elapsedMs < 500, `secondary Visual Review held the exact page for ${elapsedMs} ms`)
-  assert.equal(result.ok, true)
-  if (!result.ok) return
-  assert.equal(result.value.record.kind, 'artifact-version')
-  assert.equal(result.value.review, null)
-  assert.match(result.value.issues.review ?? '', /did not respond within 15 ms/u)
-  assert.match(result.value.issues.review ?? '', /exact primary record remains available/u)
 })
 
 test('fails closed when the Research Checkpoint owner returns another exact version', async () => {
@@ -653,7 +503,6 @@ test('loads a caught-up restored checkpoint whose Artifact metadata preserves ex
     describeArtifactVersion: async () => ({ ok: true, value: restored }),
     listArtifactVersions: async () => ({ ok: true, value: { items: [restored, checkpointDescriptor] } }),
     readResearchCheckpoint: async () => ({ ok: true, value: restoredCheckpoint }),
-    readEvidenceDossierSummary: async () => { throw new Error('Evidence owner disabled') }
   } as never, '/workspace/lab', {
     contractVersion: 1,
     target: { kind: 'artifact-version', versionId: restoredRef.versionId },
