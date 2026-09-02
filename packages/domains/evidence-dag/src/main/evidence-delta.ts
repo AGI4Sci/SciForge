@@ -15,6 +15,7 @@ import {
   evidenceDagSealedClosureSchema,
   evidenceDagSidechainRecordV1Schema,
   type EvidenceDagClosurePolicyV1,
+  type EvidenceDagCommittedSnapshot,
   type EvidenceDagCompactSummary,
   type EvidenceDagCorrectionRecordV1,
   type EvidenceDagDelta,
@@ -145,9 +146,13 @@ export class EvidenceDagSealError extends Error {
 
 type EvidenceDagChainOptions = Readonly<{
   legacyRoot?: EvidenceDagLegacyCheckpointRoot | null
+  committedSnapshot?: EvidenceDagCommittedSnapshot | null
+  committedSnapshotClosureDigest?: string | null
+  committedSnapshotClosures?: Readonly<Record<string, string>>
   provisional?: EvidenceDagProvisionalView | null
   closures?: readonly EvidenceDagSealedClosure[]
   sidechains?: readonly EvidenceDagSidechainRecordV1[]
+  sealIdempotency?: Readonly<Record<string, string>>
 }>
 
 /** The single append-only owner of one Evidence thread. */
@@ -155,8 +160,12 @@ export class EvidenceDeltaChain {
   private readonly records: EvidenceDagDelta[] = []
   private readonly closuresByDigest = new Map<string, EvidenceDagSealedClosure>()
   private readonly sidechains: EvidenceDagSidechainRecordV1[] = []
+  private readonly sealIdempotency = new Map<string, string>()
+  private readonly committedSnapshotClosures = new Map<string, string>()
   private scopeIdentity: Pick<EvidenceDagDelta['scope'], 'runtimeId' | 'workspaceRoot'> | undefined
   private legacyRoot: EvidenceDagLegacyCheckpointRoot | null
+  private committedSnapshot: EvidenceDagCommittedSnapshot | null
+  private committedSnapshotClosureDigest: string | null
   private provisionalState: EvidenceDagProvisionalView | null
 
   constructor(
@@ -167,6 +176,16 @@ export class EvidenceDeltaChain {
     this.legacyRoot = options.legacyRoot
       ? evidenceDagLegacyCheckpointRootSchema.parse(options.legacyRoot)
       : null
+    this.committedSnapshot = options.committedSnapshot
+      ? evidenceDagCommittedSnapshotSchema.parse(options.committedSnapshot)
+      : null
+    this.committedSnapshotClosureDigest = options.committedSnapshotClosureDigest ?? null
+    if (this.committedSnapshotClosureDigest && !this.committedSnapshot) {
+      throw new Error('Evidence committed Snapshot closure mapping has no Snapshot.')
+    }
+    if (this.committedSnapshot?.threadId !== undefined && this.committedSnapshot.threadId !== threadId) {
+      throw new Error('Evidence committed Snapshot scope does not match its chain thread.')
+    }
     this.provisionalState = options.provisional
       ? evidenceDagProvisionalViewSchema.parse(options.provisional)
       : null
@@ -184,7 +203,48 @@ export class EvidenceDeltaChain {
     }
     for (const record of records) this.appendExisting(record)
     for (const closure of this.closuresByDigest.values()) this.validateClosure(closure)
+    for (const [closureDigest, snapshotDigest] of Object.entries(options.committedSnapshotClosures ?? {})) {
+      const closure = this.closuresByDigest.get(closureDigest)
+      if (!closure) {
+        throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding points to an unknown closure.')
+      }
+      if (closure.status !== 'complete') {
+        throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding points to an incomplete closure.')
+      }
+      if (!/^sha256:[0-9a-f]{64}$/u.test(snapshotDigest)) {
+        throw new Error('Evidence committed Snapshot binding has an invalid Snapshot digest.')
+      }
+      this.committedSnapshotClosures.set(closureDigest, snapshotDigest)
+    }
+    if (this.committedSnapshot && this.committedSnapshotClosureDigest) {
+      if (!this.closuresByDigest.has(this.committedSnapshotClosureDigest)) {
+        throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding points to an unknown closure.')
+      }
+      const existing = this.committedSnapshotClosures.get(this.committedSnapshotClosureDigest)
+      if (existing && existing !== this.committedSnapshot.digest) {
+        throw new Error('Evidence committed Snapshot has a conflicting closure binding.')
+      }
+      this.committedSnapshotClosures.set(
+        this.committedSnapshotClosureDigest,
+        this.committedSnapshot.digest
+      )
+    }
+    if (this.committedSnapshot) {
+      if (!this.committedSnapshotClosureDigest) {
+        throw new Error('Evidence committed Snapshot must be bound to a sealed closure.')
+      }
+      this.validateCommittedSnapshotBinding(
+        this.committedSnapshot,
+        this.committedSnapshotClosureDigest
+      )
+    }
     for (const sidechain of options.sidechains ?? []) this.appendSidechainExisting(sidechain)
+    for (const [key, closureDigest] of Object.entries(options.sealIdempotency ?? {})) {
+      if (!this.closuresByDigest.has(closureDigest)) {
+        throw new EvidenceDagSealError('invalid_sidechain', 'Evidence seal idempotency points to an unknown closure.')
+      }
+      this.sealIdempotency.set(key, closureDigest)
+    }
   }
 
   get head(): EvidenceDagHead {
@@ -208,6 +268,104 @@ export class EvidenceDeltaChain {
     return this.legacyRoot ? structuredClone(this.legacyRoot) : null
   }
 
+  /** Exact immutable Snapshot identity last materialized by the Evidence owner. */
+  get committedEvidenceSnapshot(): EvidenceDagCommittedSnapshot | null {
+    return this.committedSnapshot ? structuredClone(this.committedSnapshot) : null
+  }
+
+  setCommittedEvidenceSnapshot(snapshot: EvidenceDagCommittedSnapshot, closureDigest: string): void {
+    const parsed = this.validateCommittedSnapshot(snapshot)
+    if (parsed.threadId !== this.threadId) {
+      throw new Error('Evidence committed Snapshot scope does not match its chain thread.')
+    }
+    this.validateCommittedSnapshotBinding(parsed, closureDigest)
+    // Snapshot replacement and closure binding are one in-memory transaction;
+    // the store persists both together after this method returns.
+    this.committedSnapshot = structuredClone(parsed)
+    this.committedSnapshotClosureDigest = closureDigest
+    this.committedSnapshotClosures.set(closureDigest, parsed.digest)
+  }
+
+  get committedSnapshotClosure(): string | null {
+    return this.committedSnapshotClosureDigest
+  }
+
+  private validateCommittedSnapshot(
+    snapshot: EvidenceDagCommittedSnapshot
+  ): EvidenceDagCommittedSnapshot {
+    const parsed = evidenceDagCommittedSnapshotSchema.parse(snapshot)
+    if (parsed.threadId !== this.threadId) {
+      throw new Error('Evidence committed Snapshot scope does not match its chain thread.')
+    }
+    const current = this.committedSnapshot
+    if (current && parsed.version < current.version) {
+      throw new Error('Evidence committed Snapshot version regressed.')
+    }
+    if (current && parsed.version === current.version && canonicalJson(parsed) !== canonicalJson(current)) {
+      throw new Error('Evidence committed Snapshot identity was mutated during replay.')
+    }
+    if (current && parsed.version > current.version) {
+      if (parsed.digest === current.digest) {
+        throw new Error('Evidence committed Snapshot digest was reused at a new version.')
+      }
+      const watermarkComparison = compareEvidenceDagWatermarks(parsed.inputWatermark, current.inputWatermark)
+      if (watermarkComparison === undefined || watermarkComparison < 0) {
+        throw new Error('Evidence committed Snapshot watermark regressed or cannot be compared.')
+      }
+    }
+    return parsed
+  }
+
+  private validateCommittedSnapshotBinding(
+    snapshot: EvidenceDagCommittedSnapshot,
+    closureDigest: string
+  ): void {
+    if (typeof closureDigest !== 'string' || !closureDigest.trim()) {
+      throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding requires a closure digest.')
+    }
+    const closure = this.closuresByDigest.get(closureDigest)
+    if (!closure) {
+      throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding points to an unknown closure.')
+    }
+    if (closure.threadId !== this.threadId || snapshot.threadId !== closure.threadId) {
+      throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding scope does not match its chain thread.')
+    }
+    if (closure.status !== 'complete') {
+      throw new EvidenceDagSealError('invalid_sidechain', 'Only a complete Evidence closure can bind a committed Snapshot.')
+    }
+    if (closure.policy.expectedHeadDigest !== closure.headDigest) {
+      throw new EvidenceDagSealError('invalid_sidechain', 'Evidence closure expected head does not match its sealed head.')
+    }
+    const headWatermark = this.watermarkForDigest(closure.headDigest)
+    if (!headWatermark) {
+      throw new EvidenceDagSealError('invalid_sidechain', 'Evidence committed Snapshot binding closure points to an unknown head.')
+    }
+    // A Snapshot is the materialized representation of this exact closure.
+    // Merely covering its barrier would permit a later cumulative Snapshot to
+    // be attached to an older closure whose membership it does not prove.
+    if (snapshot.inputWatermark !== closure.policy.barrierWatermark) {
+      throw new EvidenceDagSealError(
+        'invalid_sidechain',
+        'Evidence committed Snapshot watermark must exactly match the closure barrier.'
+      )
+    }
+    if (snapshot.inputWatermark !== headWatermark) {
+      throw new EvidenceDagSealError(
+        'invalid_sidechain',
+        'Evidence committed Snapshot watermark must exactly match the closure head.'
+      )
+    }
+    const existingSnapshotDigest = this.committedSnapshotClosures.get(closureDigest)
+    if (existingSnapshotDigest && existingSnapshotDigest !== snapshot.digest) {
+      throw new Error('Evidence closure is already bound to another committed Snapshot.')
+    }
+  }
+
+  private watermarkForDigest(digestValue: string): string | null {
+    if (this.legacyRoot?.snapshot.digest === digestValue) return this.legacyRoot.snapshot.inputWatermark
+    return this.records.find((record) => record.deltaDigest === digestValue)?.committedWatermark ?? null
+  }
+
   list(): readonly EvidenceDagDelta[] {
     return this.records.map((record) => structuredClone(record))
   }
@@ -218,6 +376,14 @@ export class EvidenceDeltaChain {
 
   sidechainRecords(): readonly EvidenceDagSidechainRecordV1[] {
     return this.sidechains.map((record) => structuredClone(record))
+  }
+
+  sealIdempotencyEntries(): readonly [string, string][] {
+    return [...this.sealIdempotency.entries()]
+  }
+
+  committedSnapshotClosureEntries(): readonly [string, string][] {
+    return [...this.committedSnapshotClosures.entries()]
   }
 
   importLegacyRoot(input: EvidenceDagLegacyRootInput): EvidenceDagLegacyCheckpointRoot {
@@ -346,10 +512,20 @@ export class EvidenceDeltaChain {
     if (input.threadId !== this.threadId) {
       throw new EvidenceDagSealError('invalid_sidechain', 'Evidence sidechain scope does not match its chain thread.')
     }
-    if (!this.closuresByDigest.has(input.closureDigest)) {
+    const closure = this.closuresByDigest.get(input.closureDigest)
+    if (!closure) {
       throw new EvidenceDagSealError(
         'invalid_sidechain',
         'Evidence sidechain must reference an existing sealed closure.'
+      )
+    }
+    if (sidechainRequiresCommittedSnapshot(input) && (
+      closure.status !== 'complete' ||
+      !this.committedSnapshotClosures.has(input.closureDigest)
+    )) {
+      throw new EvidenceDagSealError(
+        'invalid_sidechain',
+        'Approval or certification sidechains require a complete closure bound to a committed Snapshot.'
       )
     }
     if (this.sidechains.some((record) => record.recordId === input.recordId)) {
@@ -431,8 +607,29 @@ export class EvidenceDeltaChain {
     return structuredClone(view)
   }
 
-  seal(policyInput: EvidenceDagClosurePolicyV1): EvidenceDagSealedClosure {
+  seal(policyInput: EvidenceDagClosurePolicyV1, idempotencyKey?: string): EvidenceDagSealedClosure {
     const policy = canonicalizeClosurePolicy(evidenceDagClosurePolicyV1Schema.parse(policyInput))
+    const priorDigest = idempotencyKey ? this.sealIdempotency.get(idempotencyKey) : undefined
+    if (priorDigest) {
+      const existing = this.closuresByDigest.get(priorDigest)
+      if (!existing) {
+        throw new EvidenceDagSealError(
+          'invalid_sidechain',
+          `Evidence seal idempotency key ${idempotencyKey} points to a missing closure.`
+        )
+      }
+      if (canonicalJson(existing.policy) !== canonicalJson(policy)) {
+        throw new EvidenceDagSealError(
+          'invalid_sidechain',
+          `Evidence seal idempotency key ${idempotencyKey} was reused for a different closure.`
+        )
+      }
+      // The closure is an immutable historical boundary. A newer delta may
+      // have advanced the live head while a failed Snapshot materialization
+      // is being retried, so replay the original closure before CAS-checking
+      // the current head.
+      return structuredClone(existing)
+    }
     const head = this.head
     if (policy.expectedHeadDigest !== head.headDigest) {
       throw new EvidenceDagSealError('stale_head', `Evidence seal expected head ${policy.expectedHeadDigest} but authoritative head is ${head.headDigest ?? 'empty'}.`)
@@ -440,7 +637,10 @@ export class EvidenceDeltaChain {
     const content = this.deriveClosure(policy, head.headDigest)
     const closureDigest = content.closureDigest
     const existing = this.closuresByDigest.get(closureDigest)
-    if (existing) return structuredClone(existing)
+    if (existing) {
+      if (idempotencyKey) this.sealIdempotency.set(idempotencyKey, closureDigest)
+      return structuredClone(existing)
+    }
     const closure = evidenceDagSealedClosureSchema.parse({
       threadId: this.threadId,
       ...content,
@@ -448,6 +648,7 @@ export class EvidenceDeltaChain {
       ...(this.legacyRoot ? { legacyRootStatus: this.legacyRoot.status } : {})
     })
     this.closuresByDigest.set(closure.closureDigest, structuredClone(closure))
+    if (idempotencyKey) this.sealIdempotency.set(idempotencyKey, closureDigest)
     return closure
   }
 
@@ -474,11 +675,23 @@ export class EvidenceDeltaChain {
     const headWatermark = isLegacyHead
       ? this.legacyRoot?.snapshot.inputWatermark
       : this.records.find((record) => record.deltaDigest === headDigest)?.committedWatermark
+    const gaps: EvidenceDagSealedClosure['gapCodes'][number][] = []
+    // A closure may intentionally stop at an older comparable watermark, but
+    // an incomparable record cannot be classified as before or after the
+    // declared barrier. Keep the closure incomplete instead of silently
+    // dropping that ordered history from the formal baseline.
+    if (!isLegacyHead) {
+      for (const record of this.records) {
+        if (record.sequence > headSequence) continue
+        if (compareEvidenceDagWatermarks(record.committedWatermark, canonicalPolicy.barrierWatermark) === undefined) {
+          addGap(gaps, 'missing_delta')
+        }
+      }
+    }
     const eligible = this.records.filter((record) =>
       record.sequence <= (isLegacyHead ? 0 : headSequence) &&
       watermarkAtOrBefore(record.committedWatermark, canonicalPolicy.barrierWatermark)
     )
-    const gaps: EvidenceDagSealedClosure['gapCodes'][number][] = []
     const barrierCoverage = headWatermark
       ? compareEvidenceDagWatermarks(headWatermark, canonicalPolicy.barrierWatermark)
       : undefined
@@ -718,9 +931,13 @@ type EvidenceDeltaStoreFile = Readonly<{
     threadId: string
     records: readonly EvidenceDagDelta[]
     legacyRoot?: EvidenceDagLegacyCheckpointRoot | null
+    committedSnapshot?: EvidenceDagCommittedSnapshot | null
+    committedSnapshotClosureDigest?: string | null
+    committedSnapshotClosures?: Readonly<Record<string, string>>
     provisional?: EvidenceDagProvisionalView | null
     closures?: readonly EvidenceDagSealedClosure[]
     sidechains?: readonly EvidenceDagSidechainRecordV1[]
+    sealIdempotency?: Readonly<Record<string, string>>
   }>[]
 }>
 
@@ -759,9 +976,14 @@ export class EvidenceDagDeltaStore {
         }
         loadedChains.set(entry.threadId, new EvidenceDeltaChain(entry.threadId, entry.records as EvidenceDagDelta[], {
           legacyRoot: entry.legacyRoot as EvidenceDagLegacyCheckpointRoot | null | undefined,
+          committedSnapshot: entry.committedSnapshot as EvidenceDagCommittedSnapshot | null | undefined,
+          committedSnapshotClosureDigest: typeof entry.committedSnapshotClosureDigest === 'string'
+            ? entry.committedSnapshotClosureDigest : null,
+          committedSnapshotClosures: entry.committedSnapshotClosures as Readonly<Record<string, string>> | undefined,
           provisional: entry.provisional as EvidenceDagProvisionalView | null | undefined,
           closures: entry.closures as EvidenceDagSealedClosure[] | undefined,
-          sidechains: entry.sidechains as EvidenceDagSidechainRecordV1[] | undefined
+          sidechains: entry.sidechains as EvidenceDagSidechainRecordV1[] | undefined,
+          sealIdempotency: entry.sealIdempotency as Readonly<Record<string, string>> | undefined
         }))
       }
       this.chains.clear()
@@ -906,10 +1128,10 @@ export class EvidenceDagDeltaStore {
     })
   }
 
-  async seal(threadId: string, policy: EvidenceDagClosurePolicyV1): Promise<EvidenceDagSealedClosure> {
+  async seal(threadId: string, policy: EvidenceDagClosurePolicyV1, idempotencyKey?: string): Promise<EvidenceDagSealedClosure> {
     return this.mutate(async () => {
       const chain = this.chains.get(threadId) ?? new EvidenceDeltaChain(threadId)
-      const closure = chain.seal(policy)
+      const closure = chain.seal(policy, idempotencyKey)
       this.chains.set(threadId, chain)
       await this.persist()
       return closure
@@ -924,14 +1146,36 @@ export class EvidenceDagDeltaStore {
     // append/closure transaction and its durable file remain one owner path.
     return new EvidenceDeltaChain(threadId, chain.list(), {
       legacyRoot: chain.legacyCheckpointRoot,
+      committedSnapshot: chain.committedEvidenceSnapshot,
+      committedSnapshotClosureDigest: chain.committedSnapshotClosure,
+      committedSnapshotClosures: Object.fromEntries(chain.committedSnapshotClosureEntries()),
       provisional: chain.provisionalView,
       closures: chain.closures(),
-      sidechains: chain.sidechainRecords()
+      sidechains: chain.sidechainRecords(),
+      sealIdempotency: Object.fromEntries(chain.sealIdempotencyEntries())
     })
   }
 
   async head(threadId: string): Promise<EvidenceDagHead> {
     return (await this.chain(threadId)).head
+  }
+
+  async committedSnapshot(threadId: string): Promise<EvidenceDagCommittedSnapshot | null> {
+    return (await this.chain(threadId)).committedEvidenceSnapshot
+  }
+
+  async recordCommittedSnapshot(
+    threadId: string,
+    snapshot: EvidenceDagCommittedSnapshot,
+    closureDigest: string
+  ): Promise<EvidenceDagCommittedSnapshot> {
+    return this.mutate(async () => {
+      const chain = this.chains.get(threadId) ?? new EvidenceDeltaChain(threadId)
+      chain.setCommittedEvidenceSnapshot(snapshot, closureDigest)
+      this.chains.set(threadId, chain)
+      await this.persist()
+      return chain.committedEvidenceSnapshot!
+    })
   }
 
   async provisional(threadId: string): Promise<EvidenceDagProvisionalView | null> {
@@ -972,8 +1216,16 @@ export class EvidenceDagDeltaStore {
           threadId,
           records: chain.list(),
           ...(chain.legacyCheckpointRoot ? { legacyRoot: chain.legacyCheckpointRoot } : {}),
+          ...(chain.committedEvidenceSnapshot ? { committedSnapshot: chain.committedEvidenceSnapshot } : {}),
+          ...(chain.committedSnapshotClosure ? { committedSnapshotClosureDigest: chain.committedSnapshotClosure } : {}),
+          ...(chain.committedSnapshotClosureEntries().length
+            ? { committedSnapshotClosures: Object.fromEntries(chain.committedSnapshotClosureEntries()) }
+            : {}),
           ...(chain.provisionalView ? { provisional: chain.provisionalView } : {}),
           ...(chain.closures().length ? { closures: chain.closures() } : {}),
+          ...(chain.sealIdempotencyEntries().length
+            ? { sealIdempotency: Object.fromEntries(chain.sealIdempotencyEntries()) }
+            : {}),
           ...(chain.sidechainRecords().length ? { sidechains: chain.sidechainRecords() } : {})
         }))
       }
@@ -1001,9 +1253,13 @@ function cloneChains(
     threadId,
     new EvidenceDeltaChain(threadId, chain.list(), {
       legacyRoot: chain.legacyCheckpointRoot,
+      committedSnapshot: chain.committedEvidenceSnapshot,
+      committedSnapshotClosureDigest: chain.committedSnapshotClosure,
+      committedSnapshotClosures: Object.fromEntries(chain.committedSnapshotClosureEntries()),
       provisional: chain.provisionalView,
       closures: chain.closures(),
-      sidechains: chain.sidechainRecords()
+      sidechains: chain.sidechainRecords(),
+      sealIdempotency: Object.fromEntries(chain.sealIdempotencyEntries())
     })
   ]))
 }
@@ -1104,6 +1360,7 @@ function traverseClosure(records: readonly EvidenceDagDelta[], policy: EvidenceD
       if (policy.directions.includes('inbound') && edge.target === node) neighbors.push(edge.source)
       if (!neighbors.length) continue
       deltaDigests.add(record.deltaDigest)
+      for (const id of collectRecordIds(record)) reachedIds.add(id)
       if (isAcyclicClosureFamily(edge.family)) {
         const adjacency = acyclicEdges.get(edge.family) ?? new Map<string, Set<string>>()
         const targets = adjacency.get(edge.source) ?? new Set<string>()
@@ -1141,7 +1398,9 @@ function traverseClosure(records: readonly EvidenceDagDelta[], policy: EvidenceD
     }
   }
   for (const record of records) {
-    if (touches(record, reachedIds)) deltaDigests.add(record.deltaDigest)
+    if (!touches(record, reachedIds)) continue
+    deltaDigests.add(record.deltaDigest)
+    for (const id of collectRecordIds(record)) reachedIds.add(id)
   }
   for (const target of policy.targetClaimIds) {
     if (!records.some((record) => collectRecordIds(record).has(target))) addGap(gaps, 'missing_delta')
@@ -1254,10 +1513,10 @@ function extractEdges(value: unknown): Array<Readonly<{ source: string; target: 
 }
 
 function collectRecordIds(record: EvidenceDagDelta): Set<string> {
+  // External refs are reachability inputs, not record identities. Keeping
+  // them out of this set prevents a required record from being satisfied by a
+  // coincidentally equal source/artifact/run ref without a semantic node.
   return new Set([
-    ...record.sourceRefs,
-    ...record.artifactRefs,
-    ...record.runRefs,
     ...collectSemanticIds(record.payload),
     ...extractEdges(record.payload).flatMap((edge) => [edge.source, edge.target])
   ])
@@ -1265,7 +1524,7 @@ function collectRecordIds(record: EvidenceDagDelta): Set<string> {
 
 function collectSemanticIds(value: unknown, key?: string): string[] {
   if (typeof value === 'string') {
-    return !key || /^(id|recordId|claimId|sourceId|source_id|sourceRef|source_ref|artifactVersionId|artifact_version_id|runId|run_id|nodeId|target|source|src|dst|from|to)$/u.test(key)
+    return !key || /^(id|recordId|claimId|assessmentId|targetId|targetRecordId|correctionId|findingId|reviewId|decisionId|sourceId|source_id|sourceAnchorId|source_anchor_id|anchorId|anchor_id|artifactVersionId|artifact_version_id|runId|run_id|nodeId|target|source|src|dst|from|to)$/u.test(key)
       ? [value]
       : []
   }
@@ -1278,7 +1537,7 @@ function collectDeclaredRefs(value: unknown): string[] {
   if (!isRecord(value)) return []
   return collectByKey(
     value,
-    /^(sourceId|source_id|sourceRef|source_ref|sourceIds|source_refs|artifactRef|artifact_ref|artifactRefs|artifact_refs|artifactVersionId|artifact_version_id|artifactVersionIds|artifact_version_ids|versionId|version_id|runId|run_id|runRef|run_ref|runIds|run_ids|runRefs|run_refs)$/u
+    /^(sourceId|source_id|sourceRef|source_ref|sourceIds|source_ids|source_refs|sourceAnchorId|source_anchor_id|sourceAnchorIds|source_anchor_ids|anchorId|anchor_id|anchorIds|anchor_ids|artifactRef|artifact_ref|artifactRefs|artifact_refs|artifactVersionId|artifact_version_id|artifactVersionIds|artifact_version_ids|versionId|version_id|runId|run_id|runRef|run_ref|runIds|run_ids|runRefs|run_refs)$/u
   )
 }
 
@@ -1406,8 +1665,52 @@ function semanticGapsFor(value: unknown): EvidenceDagSealedClosure['gapCodes'] {
   if (text.includes('fail') && text.includes('replicat')) gaps.push('failed_replication_missing')
   if (text.includes('shared') && text.includes('ances')) gaps.push('shared_ancestry_unknown')
   if (text.includes('access') && text.includes('breakpoint')) gaps.push('access_restricted')
-  if (text.includes('independ')) gaps.push('independence_unknown')
+  // `independent` is a valid result, so do not infer an unknown gap from a
+  // substring match. Only explicit unknown/unassessed assessment metadata is
+  // a closure gap; contradictory metadata is rejected on append.
+  for (const metadata of collectIndependenceMetadata(value)) {
+    if (metadata.result === 'not_independently_assessed') gaps.push('independence_unknown')
+  }
   return uniqueSortedGapCodes(gaps)
+}
+
+function collectIndependenceMetadata(value: unknown): Array<Readonly<{ result: string }>> {
+  const found: Array<Readonly<{ result: string }>> = []
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) visit(item)
+      return
+    }
+    if (!isRecord(candidate)) return
+    const metadata = candidate.independenceMetadata ?? candidate.independence
+    if (typeof metadata === 'string') {
+      found.push({ result: metadata })
+    } else if (isRecord(metadata) && typeof metadata.result === 'string') {
+      found.push({ result: metadata.result })
+    }
+    for (const [key, child] of Object.entries(candidate)) {
+      if (/^independence(?:Status|Result)?$/u.test(key) && typeof child === 'string') {
+        found.push({ result: child })
+      }
+      visit(child)
+    }
+  }
+  visit(value)
+  return found
+}
+
+function sidechainRequiresCommittedSnapshot(input: EvidenceDagSidechainAppendInput): boolean {
+  if (input.recordType === 'approval') return true
+  const certifiedMarkers = new Set(['certified', 'public', 'public_external', 'certified_internal'])
+  const visit = (value: unknown, key?: string): boolean => {
+    if (typeof value === 'string') {
+      return Boolean(key && /^(classification|certificationStatus|requestedStatus|actionClass|status)$/u.test(key) && certifiedMarkers.has(value.toLowerCase()))
+    }
+    if (Array.isArray(value)) return value.some((item) => visit(item, key))
+    if (!isRecord(value)) return false
+    return Object.entries(value).some(([childKey, child]) => visit(child, childKey))
+  }
+  return visit(input.payload)
 }
 
 function handlePolicy(handling: 'ignore' | 'record_gap' | 'fail', gaps: EvidenceDagSealedClosure['gapCodes'][number][], gapCode: EvidenceDagSealedClosure['gapCodes'][number], errorCode: EvidenceDagSealErrorCode): void {

@@ -146,6 +146,17 @@ test('manual update reads committed Evidence through its public capability and p
             artifactDigests: [],
             createdAt: now
           },
+          // The local delta head is intentionally a different identity. The
+          // Project vector must pin the Evidence owner's committed Snapshot.
+          authoritativeHead: {
+            threadId: 'codex:thread-1',
+            headDigest: `sha256:${'d'.repeat(64)}`,
+            sequence: 4,
+            committedWatermark: '200',
+            updatedAt: now,
+            rootKind: 'delta',
+            legacyRootStatus: null
+          },
           pending: null,
           updatedAt: now
         } as TOutput
@@ -168,6 +179,172 @@ test('manual update reads committed Evidence through its public capability and p
     { threadId: 'codex:thread-1', digest: evidenceDigest }
   ])
   assert.equal(requests.filter(({ url, method }) => url.endsWith('/updates') && method === 'POST').length, 1)
+  await deactivate()
+})
+
+test('opening a stale Project requests demand-driven derivation once', async () => {
+  const requests: Array<{ url: string; method: string }> = []
+  const config = sidecarConfig()
+  let statusReads = 0
+  const staleStatus = {
+    ...emptyStatus(),
+    state: 'stale',
+    committedSnapshot: {
+      version: 1,
+      digest: projectDigest,
+      evidenceVector: [],
+      createdAt: now
+    },
+    invalidation: {
+      projectKey,
+      stale: true,
+      changedFields: ['evidenceVector'],
+      reason: 'upstream_changed',
+      updatedAt: now
+    }
+  }
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    fetchImpl: async (input, init) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      requests.push({ url, method })
+      if (url.includes('/updates/status')) {
+        statusReads += 1
+        return jsonResponse(statusReads === 1 ? staleStatus : emptyStatus())
+      }
+      if (url.endsWith('/updates/open') && method === 'POST') {
+        return jsonResponse({ derived: true })
+      }
+      if (url.includes('/goals')) return jsonResponse([])
+      throw new Error(`Unexpected request: ${method} ${url}`)
+    }
+  })
+  const deactivate = await runtime.activate(lifecycleContext())
+  const result = await runtime.view({ workspaceRoot: '/workspace' })
+  assert.equal(result.status.committed, null)
+  assert.equal(requests.filter(({ url }) => url.includes('/updates/status')).length, 2)
+  assert.equal(requests.filter(({ url, method }) => url.endsWith('/updates/open') && method === 'POST').length, 1)
+  await deactivate()
+})
+
+test('manual update resolves colons in runtime and Session IDs through Host authority', async () => {
+  const requests: Array<{ url: string; method: string; body?: unknown }> = []
+  const config = sidecarConfig()
+  const engineThreadId = 'domain:sciforge.create-loop:thread:with:colon'
+  const runtimeId = 'domain:sciforge.create-loop'
+  const threadId = 'thread:with:colon'
+  let statusReads = 0
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => config,
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    fetchImpl: async (input, init) => {
+      const url = String(input)
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      requests.push({ url, method: init?.method ?? 'GET', ...(body === undefined ? {} : { body }) })
+      if (url.includes('/updates/status')) {
+        statusReads += 1
+        return jsonResponse(statusReads === 1
+          ? emptyStatus()
+          : { ...emptyStatus(), state: 'pending', latestReceipt: receipt(), activeReceipt: receipt() })
+      }
+      if (url.endsWith('/updates') && init?.method === 'POST') return jsonResponse(receipt())
+      throw new Error(`Unexpected request: ${init?.method ?? 'GET'} ${url}`)
+    }
+  })
+  const invoked: Array<{ runtimeId: string; threadId: string }> = []
+  const base = lifecycleContext()
+  const deactivate = await runtime.activate(lifecycleContext({
+    agentThreads: {
+      ...base.agentThreads,
+      read: async (identity) => {
+        if (identity.runtimeId !== runtimeId || identity.threadId !== threadId) {
+          throw new Error('Candidate identity is not authoritative.')
+        }
+        return {
+          id: threadId,
+          runtimeId,
+          workspaceRoot: '/workspace',
+          watermark: '186',
+          turns: [],
+          artifacts: []
+        }
+      }
+    },
+    capabilities: {
+      ...base.capabilities,
+      invoke: async <TInput, TOutput>(
+        _contract: unknown,
+        input: TInput
+      ) => {
+        const identity = input as { runtimeId: string; threadId: string }
+        invoked.push(identity)
+        return {
+          committed: {
+            threadId: engineThreadId,
+            version: 3,
+            digest: evidenceDigest,
+            inputWatermark: '186',
+            schemaVersion: '1',
+            extractorVersion: '1',
+            verifierVersion: '1',
+            artifactDigests: [],
+            createdAt: now
+          },
+          pending: null,
+          updatedAt: now
+        } as TOutput
+      }
+    }
+  }))
+
+  await runtime.update({ workspaceRoot: '/workspace', scope: [engineThreadId] })
+
+  assert.deepEqual(invoked, [{ runtimeId, threadId }])
+  const post = requests.find(({ url, method }) => url.endsWith('/updates') && method === 'POST')
+  assert.deepEqual((post?.body as { capturedScope?: unknown }).capturedScope, {
+    includedSessions: [engineThreadId],
+    excludedSessions: [],
+    isolatedSessions: []
+  })
+  await deactivate()
+})
+
+test('manual update rejects ambiguous colon-delimited Session identities', async () => {
+  const runtime = new ProjectDagRuntime({
+    sidecar: {
+      ensure: async () => sidecarConfig(),
+      stop: async () => undefined
+    } as unknown as ProjectDagSidecar,
+    fetchImpl: async () => jsonResponse(emptyStatus())
+  })
+  const base = lifecycleContext()
+  const deactivate = await runtime.activate(lifecycleContext({
+    agentThreads: {
+      ...base.agentThreads,
+      read: async ({ runtimeId, threadId }) => ({
+        id: threadId,
+        runtimeId,
+        workspaceRoot: '/workspace',
+        watermark: '186',
+        turns: [],
+        artifacts: []
+      })
+    }
+  }))
+  await assert.rejects(
+    runtime.update({
+      workspaceRoot: '/workspace',
+      scope: ['domain:runtime:thread']
+    }),
+    (error: unknown) => error instanceof ProjectDagRuntimeError &&
+      error.error.code === 'access_restricted' && /ambiguous/u.test(error.error.message)
+  )
   await deactivate()
 })
 
@@ -261,7 +438,10 @@ test('manual updates reject implicit workspace-wide Session discovery', async ()
     }
   }))
   await assert.rejects(
-    runtime.update({ workspaceRoot: '/workspace', scope: 'all' }),
+    runtime.update({
+      workspaceRoot: '/workspace',
+      scope: 'all'
+    } as never),
     (error: unknown) => error instanceof ProjectDagRuntimeError && error.error.code === 'invalid_request'
   )
   assert.equal(listCalls, 0)

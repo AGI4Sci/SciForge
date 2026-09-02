@@ -6,6 +6,7 @@ import {
   projectDagCapturedScopeSchema,
   projectDagDurableReceiptSchema,
   projectDagReleaseV1Schema,
+  projectDagRequestedScopeSchema,
   projectDagStatusSchema,
   projectDagUpdateResultSchema
 } from './contract.js'
@@ -131,6 +132,14 @@ test('activation payload is process-neutral and rejects host-private extras', ()
     workspaceRoot: '/workspace',
     onCollapse: () => undefined
   }).success, false)
+})
+
+test('Project update scope is an explicit Session list', () => {
+  assert.equal(projectDagRequestedScopeSchema.safeParse([
+    'codex:thread-1'
+  ]).success, true)
+  assert.equal(projectDagRequestedScopeSchema.safeParse([]).success, false)
+  assert.equal(projectDagRequestedScopeSchema.safeParse('all').success, false)
 })
 
 test('operation failures expose stable typed errors', () => {

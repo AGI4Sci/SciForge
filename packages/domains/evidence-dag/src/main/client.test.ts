@@ -53,6 +53,56 @@ test('submits the canonical L0 manual audit request', async () => {
   })
 })
 
+test('materializes a committed Snapshot only through an explicit closure seal', async () => {
+  let body: Record<string, unknown> | undefined
+  const snapshotDigest = `sha256:${'d'.repeat(64)}`
+  const client = new EvidenceDagServiceClient({
+    endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'test-token' }),
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ ok: true, data: {
+        snapshot: {
+          threadId: 'codex:thread-1', version: 1, digest: snapshotDigest,
+          inputWatermark: '7', schemaVersion: 'evidence.v3',
+          extractorVersion: 'extractor.v3', verifierVersion: 'verifier.v3',
+          artifactDigests: [], createdAt: '2026-07-26T06:00:00.000Z', status: 'committed'
+        }
+      } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  const result = await client.commitSnapshot({
+    threadId: 'codex:thread-1', targetWatermark: '7', workspaceRoot: '/workspace',
+    trace: [{ id: 'answer-1' }], idempotencyKey: 'seal-key-client'
+  })
+  assert.equal(result.digest, snapshotDigest)
+  assert.deepEqual(body, {
+    threadId: 'codex:thread-1', targetWatermark: '7', reason: 'seal_closure',
+    priority: 'immediate', trace: [{ id: 'answer-1' }], workspaceRoot: '/workspace',
+    queuedAt: body?.queuedAt, correlationId: 'seal-key-client', idempotencyKey: 'seal-key-client'
+  })
+})
+
+test('rejects a committed Snapshot returned for a different Evidence thread', async () => {
+  const client = new EvidenceDagServiceClient({
+    endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'test-token' }),
+    fetchImpl: async () => new Response(JSON.stringify({ ok: true, data: {
+      snapshot: {
+        threadId: 'codex:other-thread', version: 1, digest: `sha256:${'e'.repeat(64)}`,
+        inputWatermark: '7', schemaVersion: 'evidence.v3',
+        extractorVersion: 'extractor.v3', verifierVersion: 'verifier.v3',
+        artifactDigests: [], createdAt: '2026-07-26T06:00:00.000Z', status: 'committed'
+      }
+    } }), { status: 200, headers: { 'content-type': 'application/json' } })
+  })
+  await assert.rejects(
+    () => client.commitSnapshot({
+      threadId: 'codex:thread-1', targetWatermark: '7', trace: [],
+      workspaceRoot: '/workspace', idempotencyKey: 'seal-key-thread-1'
+    }),
+    /different thread/u
+  )
+})
+
 test('requests deterministic products for only the caller-pinned snapshot', async () => {
   let path = ''
   let body: Record<string, unknown> | undefined

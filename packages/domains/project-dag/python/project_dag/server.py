@@ -23,7 +23,7 @@ _STATIC_ROUTE_SEGMENTS = {
     "analysis", "assessments", "attention", "audits", "claims", "decision",
     "decisions", "findings", "goals", "graph", "health", "history", "latest",
     "policy", "provenance", "releases", "retry", "reviews", "snapshots", "status",
-    "updates", "version", "scope", "invalidation", "approvals", "draft", "apply",
+    "updates", "version", "scope", "invalidation", "approvals", "draft", "apply", "open",
 }
 
 
@@ -162,18 +162,51 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, err("NOT_FOUND", parsed.path, op, rid, started))
         self._send(200, ok(data, op, rid, started))
 
+    @staticmethod
+    def _request_field(query: dict, body: dict | None, name: str) -> Any:
+        """Resolve one routing field without allowing query/body ambiguity."""
+        body_value = (body or {}).get(name)
+        query_value = query.get(name)
+        if body_value is not None and not isinstance(body_value, str):
+            raise ValueError(f"{name} must be a string")
+        if query_value is not None and not isinstance(query_value, str):
+            raise ValueError(f"{name} must be a string")
+        body_present = isinstance(body_value, str) and bool(body_value.strip())
+        query_present = isinstance(query_value, str) and bool(query_value.strip())
+        if body_present and query_present and body_value.strip() != query_value.strip():
+            raise ValueError(f"{name} differs between query and body")
+        return body_value if body_present else query_value if query_present else None
+
     def _project_key(self, query: dict, body: dict | None = None) -> str:
-        value = (body or {}).get("projectKey") or query.get("projectKey")
-        if isinstance(value, str) and value.strip():
-            value = value.strip()
-            if os.path.isabs(os.path.expanduser(value)):
-                return self.engine.project_key(workspace_root=value)
-            return value
-        return self.engine.project_key(
-            (body or {}).get("workspaceRoot") or query.get("workspaceRoot"),
-            (body or {}).get("projectRoot") or query.get("projectRoot"),
-            (body or {}).get("project") or query.get("project"),
-        )
+        workspace_root = self._request_field(query, body, "workspaceRoot")
+        project_root = self._request_field(query, body, "projectRoot")
+        project = self._request_field(query, body, "project")
+        if project is not None:
+            raise ValueError(
+                "project is unsupported; provide the canonical workspaceRoot")
+        canonical = None
+        if workspace_root is not None or project_root is not None:
+            canonical = self.engine.project_key(workspace_root, project_root)
+        value = self._request_field(query, body, "projectKey")
+        if value is None:
+            if canonical is None:
+                raise ValueError(
+                    "canonical workspaceRoot or projectRoot identity is required")
+            return canonical
+        if canonical is None:
+            raise ValueError(
+                "canonical workspaceRoot or projectRoot identity is required")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("projectKey must be a canonical path identity")
+        supplied = value.strip()
+        if supplied.startswith("path:"):
+            supplied = self.engine.project_key(workspace_root=supplied[5:])
+        else:
+            raise ValueError(
+                "projectKey must use the canonical path:<workspace> identity")
+        if supplied != canonical:
+            raise ValueError("projectKey does not match the canonical workspace identity")
+        return supplied
 
     def _dispatch(self, method: str, parts: list[str], query: dict) -> Any:
         engine = self.engine
@@ -184,6 +217,9 @@ class Handler(BaseHTTPRequestHandler):
                 body.pop(routing_field, None)
             body["projectKey"] = project_key
             return engine.enqueue_update(body)
+        if method == "POST" and parts == ["updates", "open"]:
+            body = self._body()
+            return engine.derive_on_open(self._project_key(query, body))
         if method == "GET" and parts == ["updates", "status"]:
             return engine.update_status(self._project_key(query))
         if method == "GET" and len(parts) == 3 and parts[0] == "updates" \
@@ -193,13 +229,17 @@ class Handler(BaseHTTPRequestHandler):
             if version is None or not fingerprint:
                 raise ValueError(
                     "acceptedRequestVersion and desiredFingerprint are required")
-            return engine.update_receipt_status(parts[1], int(version), fingerprint)
+            project_key = self._project_key(query)
+            return engine.update_receipt_status(
+                parts[1], int(version), fingerprint, project_key)
         if method == "GET" and parts == ["updates", "history"]:
             return engine.update_history(self._project_key(query), int(query.get("limit", 20)))
         if method == "POST" and len(parts) == 3 and parts[0] == "updates" \
                 and parts[2] == "retry":
             body = self._body()
-            return engine.retry_update(parts[1], actor=body.get("actorId", "human"))
+            project_key = self._project_key(query, body)
+            return engine.retry_update(
+                parts[1], actor=body.get("actorId", "human"), project_key=project_key)
         if method == "GET" and parts == ["snapshots", "latest"]:
             return engine.snapshot_view(self._project_key(query))
         if method == "POST" and parts == ["snapshots", "seal"]:
@@ -214,26 +254,12 @@ class Handler(BaseHTTPRequestHandler):
             return engine.goal_draft(self._project_key(query))
         if method == "POST" and parts == ["goals", "draft"]:
             body = self._body()
+            self._project_key(query, body)
             return engine.save_goal_draft(body)
         if method == "POST" and parts == ["goals", "apply"]:
-            return engine.apply_goal_draft(self._body())
-        if method == "POST" and parts == ["goals"]:
             body = self._body()
-            return engine.create_goal(
-                self._project_key(query, body), body["title"], body.get("description", ""),
-                body.get("parentRoot"), body.get("actorType", "human"),
-                body.get("actorId", "user"),
-            )
-        if method == "POST" and len(parts) == 3 and parts[0] == "goals" \
-                and parts[2] == "update":
-            body = self._body()
-            project_key = self._project_key(query, body)
-            actor_type = body.pop("actorType")
-            actor_id = body.pop("actorId")
-            reframe = bool(body.pop("reframe", False))
-            body.pop("projectKey", None)
-            return engine.update_goal(project_key, parts[1], actor_type=actor_type,
-                                      actor_id=actor_id, reframe=reframe, **body)
+            self._project_key(query, body)
+            return engine.apply_goal_draft(body)
         if method == "GET" and parts == ["claims"]:
             return engine.claims(self._project_key(query), query.get("goal"))
         if method == "GET" and len(parts) == 2 and parts[0] == "claims":
@@ -255,9 +281,13 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and parts == ["scope", "draft"]:
             return engine.scope_draft(self._project_key(query))
         if method == "POST" and parts == ["scope", "draft"]:
-            return engine.save_scope_draft(self._body())
+            body = self._body()
+            self._project_key(query, body)
+            return engine.save_scope_draft(body)
         if method == "POST" and parts == ["scope", "apply"]:
-            return engine.apply_scope_draft(self._body())
+            body = self._body()
+            self._project_key(query, body)
+            return engine.apply_scope_draft(body)
         if method == "GET" and parts == ["invalidation"]:
             return engine.invalidation(self._project_key(query))
         if method == "POST" and parts == ["invalidation"]:
@@ -278,7 +308,7 @@ class Handler(BaseHTTPRequestHandler):
             return engine.audits(
                 self._project_key(query), int(query.get("limit", 20)))
         if method == "GET" and len(parts) == 2 and parts[0] == "audits":
-            return engine.audit(parts[1])
+            return engine.audit(parts[1], self._project_key(query))
         if method == "POST" and parts == ["audits"]:
             body = self._body()
             body["projectKey"] = self._project_key(query, body)
@@ -286,13 +316,19 @@ class Handler(BaseHTTPRequestHandler):
         if method == "POST" and len(parts) == 3 and parts[0] == "audits" \
                 and parts[2] == "retry":
             body = self._body()
-            return engine.retry_audit(parts[1], actor=body.get("actorId", "human"))
+            project_key = self._project_key(query, body)
+            return engine.retry_audit(
+                parts[1], actor=body.get("actorId", "human"), project_key=project_key)
         if method == "POST" and parts == ["decisions"]:
-            return engine.record_decision(self._body())
+            body = self._body()
+            body["projectKey"] = self._project_key(query, body)
+            return engine.record_decision(body)
         if method == "GET" and parts == ["approvals"]:
             return engine.approvals(self._project_key(query), query.get("snapshotDigest"))
         if method == "POST" and parts == ["approvals"]:
-            return engine.record_approval(self._body())
+            body = self._body()
+            body["projectKey"] = self._project_key(query, body)
+            return engine.record_approval(body)
         if method == "POST" and parts == ["policy"]:
             body = self._body()
             return engine.configure_policy(self._project_key(query, body), body)

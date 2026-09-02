@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  evidenceDagCommittedSnapshotSchema,
   evidenceDagClosurePolicyV1Schema,
   evidenceDagIndependenceMetadataV1Schema
 } from '../contract.js'
@@ -41,6 +42,40 @@ function appendInput(overrides: Record<string, unknown> = {}) {
     createdAt,
     ...overrides
   }
+}
+
+function snapshotInput(overrides: Record<string, unknown> = {}) {
+  return evidenceDagCommittedSnapshotSchema.parse({
+    threadId: scope.threadId,
+    version: 1,
+    digest: `sha256:${'a'.repeat(64)}`,
+    inputWatermark: '1',
+    schemaVersion: 'evidence.v3',
+    extractorVersion: 'extractor.v3',
+    verifierVersion: 'verifier.v3',
+    artifactDigests: [],
+    createdAt,
+    ...overrides
+  })
+}
+
+function completeClosurePolicy(headDigest: string, barrierWatermark = '1') {
+  return evidenceDagClosurePolicyV1Schema.parse({
+    version: 'EvidenceClosurePolicyV1',
+    targetClaimIds: ['claim:1'],
+    expectedHeadDigest: headDigest,
+    barrierWatermark,
+    edgeFamilies: [],
+    directions: ['inbound'],
+    maxDepth: 0,
+    termination: 'depth',
+    expandEquivalent: false,
+    expandRefinement: false,
+    cycleHandling: 'allow',
+    unknownEdgeHandling: 'ignore',
+    requiredRecords: [],
+    requiredExternalRefs: []
+  })
 }
 
 test('appends immutable deltas and returns the same identity for an exact replay', () => {
@@ -303,6 +338,239 @@ test('preserves an immutable closure byte-for-byte on an exact re-seal', () => {
   assert.equal(chain.closures().length, 1)
 })
 
+test('binds seal idempotency keys to one immutable closure across restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'evidence-seal-idempotency-'))
+  const storagePath = join(directory, 'deltas.json')
+  const store = new EvidenceDagDeltaStore(storagePath)
+  const first = await store.append(appendInput())
+  const policy = evidenceDagClosurePolicyV1Schema.parse({
+    version: 'EvidenceClosurePolicyV1',
+    targetClaimIds: ['claim:1'],
+    expectedHeadDigest: first.delta.deltaDigest,
+    barrierWatermark: '1',
+    edgeFamilies: [],
+    directions: ['inbound'],
+    maxDepth: 0,
+    termination: 'depth',
+    expandEquivalent: false,
+    expandRefinement: false,
+    cycleHandling: 'allow',
+    unknownEdgeHandling: 'ignore',
+    requiredRecords: [],
+    requiredExternalRefs: []
+  })
+  const closure = await store.seal(scope.threadId, policy, 'seal-key-1')
+  const restarted = new EvidenceDagDeltaStore(storagePath)
+  const replay = await restarted.seal(scope.threadId, policy, 'seal-key-1')
+  assert.deepEqual(replay, closure)
+  await assert.rejects(() => restarted.seal(scope.threadId, {
+    ...policy,
+    targetClaimIds: ['claim:2']
+  }, 'seal-key-1'), /reused for a different closure/u)
+})
+
+test('retries an idempotent seal after a newer delta advances the live head', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const policy = evidenceDagClosurePolicyV1Schema.parse({
+    version: 'EvidenceClosurePolicyV1',
+    targetClaimIds: ['claim:1'],
+    expectedHeadDigest: first.deltaDigest,
+    barrierWatermark: '1',
+    edgeFamilies: [],
+    directions: ['inbound'],
+    maxDepth: 0,
+    termination: 'depth',
+    expandEquivalent: false,
+    expandRefinement: false,
+    cycleHandling: 'allow',
+    unknownEdgeHandling: 'ignore',
+    requiredRecords: [],
+    requiredExternalRefs: []
+  })
+  const closure = chain.seal(policy, 'seal-retry-after-head-advance')
+  chain.append(appendInput({
+    operationId: 'turn-2',
+    idempotencyKey: 'turn-2-idempotency',
+    requestedWatermark: '2',
+    committedWatermark: '2',
+    predecessorDigest: first.deltaDigest,
+    createdAt: '2026-09-01T00:00:01.000Z'
+  }))
+
+  assert.deepEqual(
+    chain.seal(policy, 'seal-retry-after-head-advance'),
+    closure
+  )
+  assert.throws(
+    () => chain.seal({ ...policy, barrierWatermark: '2' }, 'seal-retry-after-head-advance'),
+    (error: unknown) => error instanceof EvidenceDagSealError && error.code === 'invalid_sidechain'
+  )
+})
+
+test('persists the latest committed Snapshot while retaining historical closure bindings', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'evidence-snapshot-bindings-'))
+  const storagePath = join(directory, 'deltas.json')
+  const store = new EvidenceDagDeltaStore(storagePath)
+  const first = await store.append(appendInput())
+  const firstPolicy = evidenceDagClosurePolicyV1Schema.parse({
+    version: 'EvidenceClosurePolicyV1',
+    targetClaimIds: ['claim:1'],
+    expectedHeadDigest: first.delta.deltaDigest,
+    barrierWatermark: '1',
+    edgeFamilies: [],
+    directions: ['inbound'],
+    maxDepth: 0,
+    termination: 'depth',
+    expandEquivalent: false,
+    expandRefinement: false,
+    cycleHandling: 'allow',
+    unknownEdgeHandling: 'ignore',
+    requiredRecords: [],
+    requiredExternalRefs: []
+  })
+  const firstClosure = await store.seal(scope.threadId, firstPolicy, 'seal-binding-1')
+  const firstSnapshot = evidenceDagCommittedSnapshotSchema.parse({
+    threadId: scope.threadId,
+    version: 1,
+    digest: `sha256:${'1'.repeat(64)}`,
+    inputWatermark: '1',
+    schemaVersion: 'evidence.v3',
+    extractorVersion: 'extractor.v3',
+    verifierVersion: 'verifier.v3',
+    artifactDigests: [],
+    createdAt
+  })
+  await store.recordCommittedSnapshot(scope.threadId, firstSnapshot, firstClosure.closureDigest)
+
+  const second = await store.append(appendInput({
+    operationId: 'turn-2',
+    idempotencyKey: 'turn-2-idempotency',
+    requestedWatermark: '2',
+    committedWatermark: '2',
+    predecessorDigest: first.delta.deltaDigest,
+    createdAt: '2026-09-01T00:00:01.000Z'
+  }))
+  const secondClosure = await store.seal(scope.threadId, evidenceDagClosurePolicyV1Schema.parse({
+    ...firstPolicy,
+    expectedHeadDigest: second.delta.deltaDigest,
+    barrierWatermark: '2'
+  }), 'seal-binding-2')
+  const secondSnapshot = evidenceDagCommittedSnapshotSchema.parse({
+    ...firstSnapshot,
+    version: 2,
+    digest: `sha256:${'2'.repeat(64)}`,
+    inputWatermark: '2',
+    createdAt: '2026-09-01T00:00:01.000Z'
+  })
+  await store.recordCommittedSnapshot(scope.threadId, secondSnapshot, secondClosure.closureDigest)
+
+  const restarted = new EvidenceDagDeltaStore(storagePath)
+  const restored = await restarted.chain(scope.threadId)
+  assert.deepEqual(restored.committedEvidenceSnapshot, secondSnapshot)
+  assert.equal(restored.committedSnapshotClosure, secondClosure.closureDigest)
+  assert.deepEqual(restored.committedSnapshotClosureEntries(), [
+    [firstClosure.closureDigest, firstSnapshot.digest],
+    [secondClosure.closureDigest, secondSnapshot.digest]
+  ])
+})
+
+test('requires every committed Snapshot to bind to an existing complete closure', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'evidence-snapshot-binding-required-'))
+  const store = new EvidenceDagDeltaStore(join(directory, 'deltas.json'))
+  await store.append(appendInput())
+  const snapshot = snapshotInput()
+
+  await assert.rejects(
+    () => store.recordCommittedSnapshot(scope.threadId, snapshot, undefined as never),
+    (error: unknown) => error instanceof EvidenceDagSealError &&
+      error.code === 'invalid_sidechain' &&
+      /requires a closure digest/u.test(error.message)
+  )
+  await assert.rejects(
+    () => store.recordCommittedSnapshot(scope.threadId, snapshot, `sha256:${'f'.repeat(64)}`),
+    /unknown closure/u
+  )
+  assert.equal(await store.committedSnapshot(scope.threadId), null)
+})
+
+test('rejects a Snapshot whose watermark does not cover its closure barrier or head', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const barrierClosure = chain.seal(completeClosurePolicy(first.deltaDigest, '1'))
+
+  assert.throws(
+    () => chain.setCommittedEvidenceSnapshot(snapshotInput({ inputWatermark: '0' }), barrierClosure.closureDigest),
+    /(?:does not cover|must exactly match) the closure barrier/u
+  )
+
+  const second = chain.append(appendInput({
+    operationId: 'turn-2',
+    idempotencyKey: 'turn-2-idempotency',
+    requestedWatermark: '2',
+    committedWatermark: '2',
+    predecessorDigest: first.deltaDigest,
+    createdAt: '2026-09-01T00:00:01.000Z'
+  })).delta
+  const historicalBarrierClosure = chain.seal(completeClosurePolicy(second.deltaDigest, '1'))
+  assert.equal(historicalBarrierClosure.status, 'complete')
+  assert.throws(
+    () => chain.setCommittedEvidenceSnapshot(
+      snapshotInput({ inputWatermark: '1', digest: `sha256:${'b'.repeat(64)}` }),
+      historicalBarrierClosure.closureDigest
+    ),
+    /must exactly match the closure head/u
+  )
+})
+
+test('rejects a Snapshot watermark that only covers a closure barrier and head', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const closure = chain.seal(completeClosurePolicy(first.deltaDigest, '1'))
+
+  assert.throws(
+    () => chain.setCommittedEvidenceSnapshot(
+      snapshotInput({ inputWatermark: '2' }),
+      closure.closureDigest
+    ),
+    /must exactly match the closure barrier/u
+  )
+})
+
+test('accepts only a Snapshot watermark exactly equal to the closure barrier and head', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const closure = chain.seal(completeClosurePolicy(first.deltaDigest, '1'))
+
+  chain.setCommittedEvidenceSnapshot(snapshotInput({ inputWatermark: '1' }), closure.closureDigest)
+
+  assert.equal(chain.committedEvidenceSnapshot?.inputWatermark, '1')
+})
+
+test('rejects committed Snapshot version regressions and same-version identity drift', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const closure = chain.seal(completeClosurePolicy(first.deltaDigest))
+  const committed = snapshotInput()
+  chain.setCommittedEvidenceSnapshot(committed, closure.closureDigest)
+
+  assert.throws(
+    () => chain.setCommittedEvidenceSnapshot(
+      snapshotInput({ version: 0, digest: `sha256:${'c'.repeat(64)}` }),
+      closure.closureDigest
+    ),
+    /version regressed/u
+  )
+  assert.throws(
+    () => chain.setCommittedEvidenceSnapshot(
+      snapshotInput({ inputWatermark: '2' }),
+      closure.closureDigest
+    ),
+    /identity was mutated/u
+  )
+  assert.deepEqual(chain.committedEvidenceSnapshot, committed)
+})
+
 test('keeps a historical closure valid after appending a newer head', () => {
   const chain = new EvidenceDeltaChain(scope.threadId)
   const first = chain.append(appendInput()).delta
@@ -377,6 +645,33 @@ test('appends sidechain records without backfilling the sealed closure and repla
   assert.deepEqual(replay.record, firstAppend.record)
   assert.deepEqual(chain.closures(), [closure])
   assert.deepEqual(chain.sidechainRecords(), [firstAppend.record])
+})
+
+test('requires a complete closure Snapshot for approval and certification sidechains', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const closure = chain.seal(completeClosurePolicy(first.deltaDigest))
+  const approval = {
+    threadId: scope.threadId,
+    recordId: 'approval:1',
+    recordType: 'approval' as const,
+    closureDigest: closure.closureDigest,
+    idempotencyKey: 'approval-1-idempotency',
+    payload: { classification: 'certified' },
+    producerIdentity: 'researcher:1',
+    reviewerIdentity: 'reviewer:1',
+    createdAt: '2026-09-01T00:00:02.000Z'
+  }
+
+  assert.throws(
+    () => chain.appendSidechain(approval),
+    (error: unknown) => error instanceof EvidenceDagSealError &&
+      /require a complete closure bound to a committed Snapshot/u.test(error.message)
+  )
+  chain.setCommittedEvidenceSnapshot(snapshotInput(), closure.closureDigest)
+  const appended = chain.appendSidechain(approval)
+  assert.equal(appended.idempotent, false)
+  assert.equal(appended.record.recordType, 'approval')
 })
 
 test('canonicalizes closure policy sets before deriving the policy digest', () => {
@@ -576,6 +871,29 @@ test('fails closed when the head watermark cannot be compared to the barrier', (
   assert.deepEqual(closure.gapCodes, ['missing_delta'])
 })
 
+test('fails closed when an earlier delta watermark cannot be compared to the barrier', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput({
+    idempotencyKey: 'first-watermark-family',
+    payload: { claims: [{ id: 'claim:prior', text: 'Prior result.' }] }
+  }))
+  const second = chain.append(appendInput({
+    idempotencyKey: 'second-watermark-family',
+    requestedWatermark: 'opaque:head',
+    committedWatermark: 'opaque:head',
+    predecessorDigest: first.delta.deltaDigest,
+    payload: { claims: [{ id: 'claim:1', text: 'Current result.' }] }
+  }))
+
+  const closure = chain.seal(evidenceDagClosurePolicyV1Schema.parse({
+    ...completeClosurePolicy(second.delta.deltaDigest, 'opaque:head'),
+    expectedHeadDigest: second.delta.deltaDigest
+  }))
+
+  assert.equal(closure.status, 'incomplete')
+  assert.ok(closure.gapCodes.includes('missing_delta'))
+})
+
 test('requires explicit independence metadata for semantic assessments', () => {
   const valid = evidenceDagIndependenceMetadataV1Schema.parse({
     producerIdentity: 'agent:producer',
@@ -614,6 +932,93 @@ test('requires explicit independence metadata for semantic assessments', () => {
     }),
     /requires explicit independence metadata/u
   )
+})
+
+test('includes assessment and correction records reached only through target identifiers', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput()).delta
+  const correction = chain.appendCorrection({
+    scope: { ...scope, operationId: 'correction-target-id', kind: 'correction' },
+    requestedWatermark: '2',
+    idempotencyKey: 'correction-target-id-key',
+    correction: {
+      recordId: 'correction:target-id',
+      targetRecordId: 'claim:1',
+      relation: 'corrects',
+      reason: 'Corrected extraction.',
+      producerIdentity: 'researcher:1',
+      reviewerIdentity: null,
+      createdAt: '2026-09-01T00:00:01.000Z'
+    },
+    predecessorDigest: first.deltaDigest,
+    createdAt: '2026-09-01T00:00:01.000Z'
+  }).delta
+  const closure = chain.seal(evidenceDagClosurePolicyV1Schema.parse({
+    ...completeClosurePolicy(correction.deltaDigest, '2'),
+    expectedHeadDigest: correction.deltaDigest,
+    requiredRecords: ['correction:target-id']
+  }))
+
+  assert.equal(closure.status, 'complete', JSON.stringify(closure))
+  assert.deepEqual(closure.includedDeltaDigests, [first.deltaDigest, correction.deltaDigest].sort())
+})
+
+test('does not satisfy required records with an external ref of the same identity', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput({
+    sourceRefs: ['claim:required-only-as-ref'],
+    artifactRefs: [],
+    runRefs: []
+  })).delta
+  const closure = chain.seal(evidenceDagClosurePolicyV1Schema.parse({
+    ...completeClosurePolicy(first.deltaDigest),
+    requiredRecords: ['claim:required-only-as-ref']
+  }))
+
+  assert.equal(closure.status, 'incomplete')
+  assert.ok(closure.gapCodes.includes('lineage_incomplete'))
+})
+
+test('does not mark an explicitly independent assessment as independence unknown', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput({
+    sourceRefs: ['source:shared-assessment']
+  })).delta
+  const assessment = chain.appendAssessment({
+    scope: { ...scope, operationId: 'assessment-independent', kind: 'assessment' },
+    requestedWatermark: '2',
+    idempotencyKey: 'assessment-independent-key',
+    sourceRefs: ['source:shared-assessment'],
+    assessment: {
+      assessmentId: 'assessment:independent',
+      targetId: 'claim:1',
+      independenceMetadata: {
+        producerIdentity: 'agent:producer',
+        reviewerIdentity: 'tool:verifier',
+        producerInvocationId: 'invocation:producer',
+        reviewerInvocationId: 'invocation:reviewer',
+        producerPromptDigest: `sha256:${'a'.repeat(64)}`,
+        reviewerPromptDigest: null,
+        producerContextDigest: `sha256:${'b'.repeat(64)}`,
+        reviewerContextDigest: null,
+        effectiveContextDigest: `sha256:${'c'.repeat(64)}`,
+        modelOrToolVersion: 'verifier-1',
+        predicate: 'deterministic_tool',
+        result: 'independent',
+        assessedAt: createdAt
+      }
+    },
+    predecessorDigest: first.deltaDigest,
+    createdAt: '2026-09-01T00:00:01.000Z'
+  }).delta
+  const closure = chain.seal(evidenceDagClosurePolicyV1Schema.parse({
+    ...completeClosurePolicy(assessment.deltaDigest, '2'),
+    expectedHeadDigest: assessment.deltaDigest,
+    requiredRecords: ['assessment:independent']
+  }))
+
+  assert.equal(closure.status, 'complete', JSON.stringify(closure))
+  assert.ok(!closure.gapCodes.includes('independence_unknown'))
 })
 
 test('appends correction metadata as a new immutable delta', () => {

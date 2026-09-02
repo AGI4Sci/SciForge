@@ -118,10 +118,11 @@ export const projectDagCapturedScopeSchema = z.object({
   }
 })
 
-export const projectDagRequestedScopeSchema = z.union([
-  z.literal('all'),
-  sessionListSchema
-])
+/** Updates must carry an explicit, caller-selected Session scope. */
+export const projectDagRequestedScopeSchema = sessionListSchema.min(
+  1,
+  'Project updates require at least one explicitly selected Session.'
+)
 
 export const projectDagTargetSchema = z.object({
   workspaceRoot: optionalPathSchema,

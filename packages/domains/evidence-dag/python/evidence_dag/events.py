@@ -145,6 +145,19 @@ class EventStore:
                 actual = {key: existing.get(key) for key in expected}
                 if actual != expected:
                     raise RuntimeError(f"domain event identity collision: {event_id}")
+                expected_payload_digest = "sha256:" + hashlib.sha256(
+                    _canonical(payload).encode("utf-8")
+                ).hexdigest()
+                existing_payload_digest = existing.get("payloadDigest")
+                if not isinstance(existing_payload_digest, str):
+                    stored_payload = existing.get("payload")
+                    existing_payload_digest = "sha256:" + hashlib.sha256(
+                        _canonical(stored_payload).encode("utf-8")
+                    ).hexdigest()
+                if existing_payload_digest != expected_payload_digest:
+                    raise ValueError(
+                        f"domain event idempotency key {idempotency_key} was reused with different content"
+                    )
                 return dict(existing)
             created = {
                 "schemaVersion": SCHEMA_VERSION,
@@ -159,6 +172,9 @@ class EventStore:
                 "causationId": str(causation_id) if causation_id else None,
                 "persistent": self.persistent,
                 "payload": json.loads(_canonical(payload)),
+                "payloadDigest": "sha256:" + hashlib.sha256(
+                    _canonical(payload).encode("utf-8")
+                ).hexdigest(),
             }
             # Durable first: the event enters memory (and is returned) only
             # after the fsynced write succeeded.

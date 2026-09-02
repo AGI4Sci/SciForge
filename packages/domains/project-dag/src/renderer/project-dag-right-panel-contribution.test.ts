@@ -12,6 +12,7 @@ import {
 } from '../definition'
 import {
   createDomainRendererEntry,
+  createProjectDagResearchSummaryContribution,
   createProjectDagResourceNavigationContribution,
   type ProjectDagRightPanelContribution,
 } from './project-dag-right-panel-contribution'
@@ -110,4 +111,53 @@ test('preserves exact Project resource identities during contextual navigation',
       }
     }
   })
+})
+
+test('scopes Research summary reads to the current canonical Session', async () => {
+  const calls: unknown[] = []
+  const host: DomainRendererHost = {
+    capabilityInvoker: {
+      observe: async () => {
+        throw new Error('not observed')
+      },
+      invoke: async <TInput, TOutput>(_contract: unknown, input: TInput): Promise<TOutput> => {
+        calls.push(input)
+        return {
+          ok: true,
+          data: {
+            url: 'http://127.0.0.1:3898/',
+            status: {
+              projectKey: 'path:/workspace/lab',
+              committed: null,
+              pending: null,
+              scope: {
+                includedSessions: ['codex:thread-1'],
+                excludedSessions: [],
+                isolatedSessions: []
+              },
+              autonomyMode: 'checkpointed',
+              attentionCount: 0
+            },
+            goal: undefined
+          }
+        } as TOutput
+      }
+    },
+    openExternal: () => undefined,
+    workspacePreview: { open: () => undefined },
+    workbench: { openRightPanel: () => undefined }
+  }
+  const summary = createProjectDagResearchSummaryContribution(host)
+  const result = await summary.provide({
+    session: { id: 'thread-1', runtimeId: 'codex' },
+    scope: { kind: 'workspace', id: '/workspace/lab' }
+  })
+
+  assert.equal(result.status, 'available')
+  assert.deepEqual(calls, [{
+    workspaceRoot: '/workspace/lab',
+    projectRoot: '/workspace/lab',
+    sessions: ['codex:thread-1'],
+    view: 'home'
+  }])
 })

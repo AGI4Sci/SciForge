@@ -19,6 +19,7 @@ import {
   projectDagDurableReceiptSchema,
   projectDagErrorSchema,
   projectDagGoalSchema,
+  projectDagInvalidationSchema,
   projectDagResolveEvidencePreviewOutputSchema,
   projectDagStatusSchema,
   projectDagUiUrl,
@@ -182,11 +183,17 @@ export class ProjectDagRuntime {
 
   async view(input: ProjectDagViewInput): Promise<ProjectDagViewOutput> {
     const { config } = await this.#ready()
-    const [statusValue, goalsValue] = await Promise.all([
-      this.#requestProject(config, `/updates/status${projectQuery(input)}`, 'GET'),
-      this.#requestProject(config, `/goals${projectQuery(input)}`, 'GET')
-    ])
-    const status = normalizeProjectDagStatus(statusValue)
+    let statusValue = await this.#requestProject(
+      config, `/updates/status${projectQuery(input)}`, 'GET')
+    let status = normalizeProjectDagStatus(statusValue)
+    if (status.invalidation?.stale || (!status.committed && status.latestReceipt)) {
+      await this.#requestProject(config, '/updates/open', 'POST', projectRoutingBody(input))
+      statusValue = await this.#requestProject(
+        config, `/updates/status${projectQuery(input)}`, 'GET')
+      status = normalizeProjectDagStatus(statusValue)
+    }
+    const goalsValue = await this.#requestProject(
+      config, `/goals${projectQuery(input)}`, 'GET')
     const goal = firstGoal(goalsValue)
     return projectDagViewOutputSchema.parse({
       url: projectDagUiUrl({
@@ -206,7 +213,8 @@ export class ProjectDagRuntime {
 
   async update(input: ProjectDagUpdateInput): Promise<ProjectDagUpdateOutput> {
     const { context, config } = await this.#ready()
-    const candidateSessions = await projectSessionsForUpdate(input, context)
+    const candidateSessionRecords = await projectSessionsForUpdate(input, context)
+    const candidateSessions = candidateSessionRecords.map(({ engineId }) => engineId)
     const excludedSessions = uniqueSorted(input.excludedSessions ?? [])
     const isolatedSessions = uniqueSorted(input.isolatedSessions ?? [])
     const overlap = excludedSessions.filter((sessionId) =>
@@ -239,8 +247,23 @@ export class ProjectDagRuntime {
         false
       )
     }
-    const evidenceSnapshots = await Promise.all(includedSessions.map((sessionId) =>
-      this.#readEvidenceSnapshotImpl(sessionId, context).catch((error) => {
+    const sessionRecordsById = new Map(
+      candidateSessionRecords.map((record) => [record.engineId, record])
+    )
+    const evidenceSnapshots = await Promise.all(includedSessions.map((sessionId) => {
+      const session = sessionRecordsById.get(sessionId)
+      if (!session) {
+        throw projectError(
+          'access_restricted',
+          `Project session ${sessionId} is not an authoritative captured Session.`,
+          false
+        )
+      }
+      return this.#readEvidenceSnapshotImpl(sessionId, context, {
+        runtimeId: session.runtimeId,
+        threadId: session.threadId,
+        workspaceRoot: session.workspaceRoot
+      }).catch((error) => {
         if (error instanceof ProjectDagRuntimeError) throw error
         throw projectError(
           'evidence_snapshot_unavailable',
@@ -249,7 +272,7 @@ export class ProjectDagRuntime {
           { sessionId, cause: error instanceof Error ? error.message : String(error) }
         )
       })
-    ))
+    }))
     const evidenceVector: EvidenceDagSnapshotIdentity[] = evidenceSnapshots.map(
       ({ threadId, digest }) => ({ threadId, digest })
     )
@@ -290,16 +313,17 @@ export class ProjectDagRuntime {
 
   async saveGoal(input: ProjectDagSaveGoalInput): Promise<ProjectDagSaveGoalOutput> {
     const { config } = await this.#ready()
-    const route = input.rootGoalId
-      ? `/goals/${encodeURIComponent(input.rootGoalId)}/update`
-      : '/goals'
-    const goalValue = await this.#requestProject(config, route, 'POST', {
+    await this.#requestProject(config, '/goals/draft', 'POST', {
       ...projectRoutingBody(input),
       title: input.title,
       description: input.description ?? '',
+      ...(input.rootGoalId ? { rootGoalId: input.rootGoalId } : {})
+    })
+    const goalValue = await this.#requestProject(config, '/goals/apply', 'POST', {
+      ...projectRoutingBody(input),
       actorType: 'human',
       actorId: 'sciforge-project-dag-domain:user',
-      ...(input.rootGoalId ? { reframe: false } : {})
+      reframe: false
     })
     const goal = goalFromValue(goalValue)
     if (!goal) {
@@ -516,6 +540,18 @@ export function normalizeProjectDagStatus(value: unknown): ProjectDagStatus {
   const activeReceipt = source.activeReceipt
     ? normalizeReceipt(source.activeReceipt)
     : null
+  const invalidationValue = record(source.invalidation)
+  const invalidation = invalidationValue
+    ? projectDagInvalidationSchema.parse({
+        projectKey: invalidationValue.projectKey,
+        desiredFingerprint: invalidationValue.desiredFingerprint,
+        appliedFingerprint: invalidationValue.appliedFingerprint,
+        stale: invalidationValue.stale,
+        reason: invalidationValue.reason ?? null,
+        changedFields: invalidationValue.changedFields,
+        updatedAt: invalidationValue.updatedAt ?? invalidationValue.updated_at
+      })
+    : null
   const serviceState = text(source.state)
   const pendingState = serviceState === 'updating'
     ? 'running'
@@ -560,6 +596,7 @@ export function normalizeProjectDagStatus(value: unknown): ProjectDagStatus {
     committed,
     pending,
     latestReceipt,
+    ...(invalidation ? { invalidation } : {}),
     scope,
     autonomyMode: text(autonomy?.autonomy_mode) ??
       text(autonomy?.autonomyMode) ??
@@ -589,10 +626,17 @@ export function normalizeReceipt(value: unknown): ProjectDagDurableReceipt {
   })
 }
 
+type ProjectSessionIdentity = Readonly<{
+  engineId: string
+  runtimeId: string
+  threadId: string
+  workspaceRoot: string
+}>
+
 async function projectSessionsForUpdate(
   input: ProjectDagUpdateInput,
   context: DomainMainRuntimeLifecycleContext
-): Promise<string[]> {
+): Promise<readonly ProjectSessionIdentity[]> {
   const workspaceRoot = projectWorkspaceRoot(input)
   if (!workspaceRoot) {
     throw projectError(
@@ -613,10 +657,9 @@ async function projectSessionsForUpdate(
       false
     )
   }
-  await Promise.all(explicit.map((sessionId) =>
+  return Promise.all(explicit.map((sessionId) =>
     authoritativeProjectSession(sessionId, workspaceRoot, context)
   ))
-  return explicit
 }
 
 function projectWorkspaceRoot(input: ProjectDagTarget): string | undefined {
@@ -636,46 +679,80 @@ async function authoritativeProjectSession(
   engineId: string,
   workspaceRoot: string,
   context: DomainMainRuntimeLifecycleContext
-): Promise<void> {
-  const identity = splitEngineThreadId(engineId)
-  let thread: Awaited<ReturnType<DomainMainRuntimeLifecycleContext['agentThreads']['read']>>
-  try {
-    thread = await context.agentThreads.read(identity)
-  } catch (error) {
-    throw projectError(
-      'access_restricted',
-      `Project session ${engineId} has no authoritative Agent thread binding.`,
-      false,
-      { cause: error instanceof Error ? error.message : String(error) }
-    )
+): Promise<ProjectSessionIdentity> {
+  const normalized = engineId.trim()
+  if (!normalized) {
+    throw projectError('invalid_request', 'Project Session identity cannot be empty.', false)
   }
-  if (
-    thread.runtimeId.trim() !== identity.runtimeId ||
-    thread.id.trim() !== identity.threadId ||
-    !sameWorkspace(thread.workspaceRoot, workspaceRoot)
-  ) {
+
+  // The canonical identity is a display-safe `runtimeId:threadId` string, but
+  // both components may contain colons (for example `domain:sciforge.foo`).
+  // Try every delimiter candidate and let the Host-owned read validate the
+  // complete runtime/thread/workspace tuple. This keeps explicit Scope checks
+  // bounded to the selected Sessions and never scans the whole Workspace.
+  const matches: ProjectSessionIdentity[] = []
+  let workspaceMismatch = false
+  for (const identity of candidateSessionIdentities(normalized)) {
+    try {
+      const thread = await context.agentThreads.read(identity)
+      if (
+        thread.runtimeId.trim() === identity.runtimeId &&
+        thread.id.trim() === identity.threadId
+      ) {
+        if (!sameWorkspace(thread.workspaceRoot, workspaceRoot)) {
+          workspaceMismatch = true
+          continue
+        }
+        matches.push({
+          engineId: normalized,
+          runtimeId: identity.runtimeId,
+          threadId: identity.threadId,
+          workspaceRoot: thread.workspaceRoot!.trim()
+        })
+      }
+    } catch {
+      // Try the next delimiter candidate. The Host read is the authority.
+    }
+  }
+  if (workspaceMismatch) {
     throw projectError(
       'access_restricted',
       `Project session ${engineId} does not belong to the requested workspace.`,
       false
     )
   }
+  if (matches.length === 1) return matches[0]
+  if (matches.length > 1) {
+    throw projectError(
+      'access_restricted',
+      `Project session ${engineId} is ambiguous; use a structured Session identity.`,
+      false
+    )
+  }
+  throw projectError(
+    'access_restricted',
+    `Project session ${engineId} has no authoritative Agent thread binding.`,
+    false
+  )
 }
 
-function splitEngineThreadId(value: string): { runtimeId: string; threadId: string } {
-  const normalized = value.trim()
-  const separator = normalized.indexOf(':')
-  if (separator <= 0 || separator === normalized.length - 1) {
+function candidateSessionIdentities(value: string): readonly { runtimeId: string; threadId: string }[] {
+  const candidates: { runtimeId: string; threadId: string }[] = []
+  for (let separator = value.indexOf(':'); separator >= 0; separator = value.indexOf(':', separator + 1)) {
+    if (separator === 0 || separator === value.length - 1) continue
+    candidates.push({
+      runtimeId: value.slice(0, separator),
+      threadId: value.slice(separator + 1)
+    })
+  }
+  if (candidates.length === 0) {
     throw projectError(
       'invalid_request',
       `Project session ${value} is not a canonical runtime/thread identity.`,
       false
     )
   }
-  return {
-    runtimeId: normalized.slice(0, separator),
-    threadId: normalized.slice(separator + 1)
-  }
+  return candidates
 }
 
 function assertExecutionWorkspaceBinding(

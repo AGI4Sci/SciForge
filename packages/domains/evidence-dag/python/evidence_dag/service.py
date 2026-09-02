@@ -50,7 +50,7 @@ from .human_review import (
 from .events import EventStore, utc_now_iso
 from .extractor import ExtractionOutputError, extract_dag
 from .graph import ThreadGraph
-from .incremental import TraceStagingCache, watermark_regresses
+from .incremental import TraceStagingCache, compare_watermarks, watermark_regresses
 from .lineage import ingest_trace_lineage
 from .llm import LLM, LLMCallError
 from .model import EdgeRel, HumanReviewStatus, NodeStatus, NodeType
@@ -84,6 +84,8 @@ _RUN_MANIFEST_SCHEMA = "sciforge.create-loop.run.v2"
 _RERUN_SPEC_KIND = "sciforge.repro-spec"
 _RERUN_SPEC_SCHEMA = "sciforge.rerun.v1"
 _HOST_EXECUTION_BOUNDARY = "sciforge.host.execution-completed.v1"
+_EVIDENCE_DELTA_ENVELOPE_KIND = "sciforge.evidence-delta-envelope.v1"
+_EVIDENCE_DELTA_ENVELOPE_SCHEMA = "sciforge.evidence-delta-envelope.v1"
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _EVENT_KEYS = frozenset({
     "schemaVersion", "eventId", "phase", "producer", "executionId", "runId",
@@ -102,6 +104,162 @@ def _bounded_text(value: Any, maximum: int = 512) -> Optional[str]:
     if not isinstance(value, str) or not value.strip() or value != value.strip():
         return None
     return value if len(value) <= maximum else None
+
+
+def _valid_evidence_delta_envelope(item: Any) -> bool:
+    """Validate the lossless delta envelope used by closure materialization."""
+    if not isinstance(item, dict) or set(item) != {"kind", "schemaVersion", "delta"} \
+            or item.get("kind") != _EVIDENCE_DELTA_ENVELOPE_KIND \
+            or item.get("schemaVersion") != _EVIDENCE_DELTA_ENVELOPE_SCHEMA:
+        return False
+    delta = item.get("delta")
+    required = {
+        "deltaDigest", "payloadDigest", "predecessorDigest", "sequence", "scope",
+        "requestedWatermark", "committedWatermark", "schemaVersion",
+        "extractorVersion", "verifierVersion", "idempotencyKey", "sourceRefs",
+        "artifactRefs", "runRefs", "payload", "createdAt",
+    }
+    if not isinstance(delta, dict) or set(delta) != required:
+        return False
+    for key in ("deltaDigest", "payloadDigest"):
+        if not _SHA256_RE.fullmatch(str(delta.get(key) or "")):
+            return False
+    predecessor = delta.get("predecessorDigest")
+    if predecessor is not None and not _SHA256_RE.fullmatch(str(predecessor)):
+        return False
+    if isinstance(delta.get("sequence"), bool) or not isinstance(delta.get("sequence"), int) \
+            or delta["sequence"] < 1:
+        return False
+    for key in (
+        "requestedWatermark", "committedWatermark", "schemaVersion", "extractorVersion",
+        "verifierVersion", "idempotencyKey", "createdAt",
+    ):
+        if _bounded_text(delta.get(key), 512) is None:
+            return False
+    if len(delta["idempotencyKey"]) < 8 or not _valid_timestamp(delta["createdAt"]):
+        return False
+    scope = delta.get("scope")
+    if not isinstance(scope, dict) or set(scope) != {
+        "runtimeId", "threadId", "operationId", "kind", "workspaceRoot",
+    } or scope.get("kind") not in {
+        "turn", "execution", "artifact_lifecycle", "scientific_provenance", "manual",
+        "assessment", "correction",
+    } or any(_bounded_text(scope.get(key), 4096 if key == "workspaceRoot" else 512) is None for key in scope):
+        return False
+    for key in ("sourceRefs", "artifactRefs", "runRefs"):
+        values = delta.get(key)
+        if not isinstance(values, list) or len(values) > 10_000 \
+                or any(_bounded_text(value, 512) is None for value in values):
+            return False
+    if not isinstance(delta.get("payload"), dict):
+        return False
+    try:
+        json.dumps(item, ensure_ascii=False, allow_nan=False)
+        payload_digest = "sha256:" + hashlib.sha256(json.dumps(
+            delta["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    if payload_digest != delta["payloadDigest"]:
+        return False
+    immutable = {key: value for key, value in delta.items() if key != "deltaDigest"}
+    delta_digest = "sha256:" + hashlib.sha256(json.dumps(
+        immutable, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    return delta_digest == delta["deltaDigest"]
+
+
+def _partition_delta_envelopes(
+    trace: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate exact closure records and expand embedded ordinary traces."""
+    envelopes: list[dict[str, Any]] = []
+    semantic: list[dict[str, Any]] = []
+    for item in trace:
+        if isinstance(item, dict) and item.get("kind") == _EVIDENCE_DELTA_ENVELOPE_KIND:
+            if not _valid_evidence_delta_envelope(item):
+                raise ValueError("invalid Evidence delta envelope")
+            envelopes.append(item)
+            payload = item["delta"].get("payload")
+            if isinstance(payload, dict) and "trace" in payload:
+                embedded = payload.get("trace")
+                if not isinstance(embedded, list) or any(
+                    not isinstance(child, dict) for child in embedded
+                ):
+                    raise ValueError("Evidence delta envelope contains an invalid embedded trace")
+                semantic.extend(embedded)
+        else:
+            semantic.append(item)
+    return envelopes, semantic
+
+
+def _validate_delta_envelopes_for_request(
+    envelopes: list[dict[str, Any]],
+    *,
+    thread_id: str,
+    workspace_root: str,
+    target_watermark: str,
+    committed_scope: Any = None,
+) -> None:
+    """Bind closure envelopes to the authenticated update request.
+
+    A closure may intentionally select non-contiguous records, so a supplied
+    predecessor may point at a delta outside this exact closure.  We still
+    require deterministic order, unique sequence/digest identities, exact
+    scope binding, and a watermark comparison that the sidecar can prove.
+    """
+    canonical_workspace = os.path.realpath(os.path.abspath(workspace_root))
+    seen_digests: set[str] = set()
+    seen_sequences: set[int] = set()
+    by_digest: dict[str, tuple[int, Optional[str]]] = {}
+    previous_sequence = 0
+    runtime_id: Optional[str] = None
+    if isinstance(committed_scope, dict) and committed_scope.get("runtimeId") is not None:
+        committed_runtime = committed_scope.get("runtimeId")
+        if not isinstance(committed_runtime, str) or not committed_runtime.strip():
+            raise ValueError("committed Evidence thread has an invalid runtime authority")
+        runtime_id = committed_runtime
+    for envelope in envelopes:
+        delta = envelope["delta"]
+        digest = str(delta["deltaDigest"])
+        sequence = int(delta["sequence"])
+        scope = delta["scope"]
+        if digest in seen_digests or sequence in seen_sequences:
+            raise ValueError("Evidence delta envelope contains a duplicate identity")
+        if sequence <= previous_sequence:
+            raise ValueError("Evidence delta envelopes must be ordered by sequence")
+        previous_sequence = sequence
+        seen_digests.add(digest)
+        seen_sequences.add(sequence)
+        by_digest[digest] = (sequence, delta.get("predecessorDigest"))
+        if scope.get("threadId") != thread_id:
+            raise ValueError("Evidence delta envelope thread scope does not match the update request")
+        if os.path.realpath(str(scope.get("workspaceRoot"))) != canonical_workspace:
+            raise ValueError("Evidence delta envelope workspace scope does not match the update request")
+        if runtime_id is None:
+            runtime_id = str(scope["runtimeId"])
+        elif scope["runtimeId"] != runtime_id:
+            raise ValueError("Evidence delta envelope runtime scope does not match the request")
+        requested_comparison = compare_watermarks(str(delta["requestedWatermark"]), target_watermark)
+        if requested_comparison is None or requested_comparison > 0:
+            raise ValueError("Evidence delta envelope requested watermark is outside the requested closure barrier")
+        comparison = compare_watermarks(str(delta["committedWatermark"]), target_watermark)
+        if comparison is None or comparison > 0:
+            raise ValueError("Evidence delta envelope watermark is outside the requested closure barrier")
+    for digest, (sequence, predecessor) in by_digest.items():
+        # A root is the only record allowed to have no predecessor.  A
+        # non-root closure record may point to a predecessor outside this
+        # selected closure, but it must still carry that immutable identity so
+        # the omitted ancestry remains auditable rather than silently reset.
+        if sequence == 1:
+            if predecessor is not None:
+                raise ValueError("Evidence delta sequence one must have no predecessor")
+            continue
+        if predecessor is None:
+            raise ValueError("Evidence delta non-root is missing its predecessor")
+        supplied = by_digest.get(str(predecessor))
+        if supplied is not None and supplied[0] >= sequence:
+            raise ValueError("Evidence delta envelope predecessor is not earlier than the delta")
 
 
 def _valid_timestamp(value: Any) -> bool:
@@ -550,12 +708,18 @@ class Engine:
         if not rebuild and rebuild_rationale is not None:
             raise ValueError("rebuildRationale is only valid when rebuild=true")
 
+        # Closure materialization sends exact immutable delta envelopes. Keep
+        # them in staging/history and metadata, while only their embedded
+        # ordinary traces enter semantic extraction.
+        supplied_trace = trace or []
+        formal_closure = reason == "seal_closure"
+
         # Model extraction and verification can take minutes. A process-wide lock
         # made status reads and unrelated threads wait for the whole compile.
         with self._compile_lock(thread_id):
             current = self.latest_snapshot(thread_id)
             current_graph = self.get(thread_id) if current is not None else None
-            if current is not None and not rebuild and watermark_regresses(
+            if current is not None and not rebuild and not formal_closure and watermark_regresses(
                 current.input_watermark, str(target_watermark),
             ):
                 raise ValueError(
@@ -586,18 +750,27 @@ class Engine:
             staged = self._trace_staging.begin(
                 thread_id=thread_id,
                 target_watermark=str(target_watermark),
-                trace=trace,
-                committed_graph=current_graph,
-                rebuild=rebuild,
+                trace=supplied_trace,
+                committed_graph=None if formal_closure else current_graph,
+                rebuild=rebuild or formal_closure,
             )
             incremental_trace = list(staged.trace)
+            incremental_envelopes, semantic_trace = _partition_delta_envelopes(incremental_trace)
+            if incremental_envelopes:
+                _validate_delta_envelopes_for_request(
+                    incremental_envelopes,
+                    thread_id=thread_id,
+                    workspace_root=workspace,
+                    target_watermark=str(target_watermark),
+                    committed_scope=committed_scope,
+                )
             artifact_versions = ArtifactVersionProjectionClient(
-                incremental_trace, workspace_roots=(project,), locator_root=workspace,
+                semantic_trace, workspace_roots=(project,), locator_root=workspace,
             )
             committed_projection_digest = current_graph.meta.get(
                 "artifactVersionProjectionDigest"
             ) if current_graph is not None else None
-            projection_digest = artifact_versions.state_digest() if incremental_trace else (
+            projection_digest = artifact_versions.state_digest() if formal_closure or semantic_trace else (
                 committed_projection_digest or artifact_versions.state_digest()
             )
             no_op_against_committed = bool(
@@ -621,12 +794,22 @@ class Engine:
             prior_input_digest = (previous_status or {}).get("inputDigest") or (
                 current_graph.meta.get("inputDigest") if current_graph is not None else None
             )
-            event_key = str(
-                idempotency_key
-                or ((previous_status or {}).get("eventIdempotencyKey")
-                    if current is not None and prior_input_digest == input_digest else None)
-                or input_digest
-            )
+            if idempotency_key:
+                event_key = str(idempotency_key).strip()
+            else:
+                # Derived keys include the operation intent.  This keeps a
+                # harmless no-op replay idempotent while allowing a caller to
+                # change the reason without colliding with the prior queued
+                # event (explicit keys remain strict replay identities).
+                event_identity = json.dumps({
+                    "threadId": thread_id,
+                    "inputDigest": input_digest,
+                    "reason": reason,
+                    "priority": priority,
+                }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                event_key = "evidence-update:" + hashlib.sha256(
+                    event_identity.encode("utf-8")
+                ).hexdigest()[:32]
             queued_event = self._event_store.append(
                 "EvidenceUpdateQueued",
                 aggregate_type="EvidenceThread",
@@ -642,9 +825,43 @@ class Engine:
                     "workspaceRoot": workspace,
                     "projectRoot": project,
                     "inputDigest": input_digest,
-                    **staged.summary(),
                 },
             )
+            if (
+                formal_closure
+                and idempotency_key
+                and previous_status
+                and previous_status.get("eventIdempotencyKey") == event_key
+                and previous_status.get("inputDigest") == input_digest
+                and previous_status.get("snapshotDigest")
+            ):
+                # A formal closure is a historical materialization.  Retries
+                # must return that exact immutable Snapshot even if the live
+                # latest pointer has since advanced.
+                _historical_graph, historical_snapshot = self.snapshot_graph(
+                    thread_id, str(previous_status["snapshotDigest"])
+                )
+                replay = {
+                    **previous_status,
+                    "state": "fresh",
+                    "desiredWatermark": str(target_watermark),
+                    "currentWatermark": historical_snapshot.input_watermark,
+                    "snapshotDigest": historical_snapshot.digest,
+                    "queuedEventId": queued_event["eventId"],
+                    "completedAt": utc_now_iso(),
+                    "error": None,
+                }
+                self._updates[thread_id] = replay
+                self._persist_update_status(thread_id)
+                self._trace_staging.complete(staged)
+                return {
+                    "update": replay,
+                    "snapshot": historical_snapshot.to_dict(),
+                    "delta": {"new_nodes": [], "new_edges": []},
+                    "verification": None,
+                    "idempotent": True,
+                    "events": [queued_event],
+                }
             if current is not None and prior_input_digest == input_digest:
                 replay = {
                     "id": f"evidence-update:{uuid.uuid4().hex}", "threadId": thread_id,
@@ -683,7 +900,11 @@ class Engine:
             self._updates[thread_id] = status
             self._persist_update_status(thread_id)
             try:
-                base = None if rebuild else current_graph
+                # A formal closure is an exact historical baseline, not a
+                # successor of the latest disposable graph.  Starting from an
+                # empty graph prevents unrelated newer or out-of-policy records
+                # from being copied into the sealed Snapshot.
+                base = None if rebuild or formal_closure else current_graph
                 graph = ThreadGraph.from_dict(base.to_dict()) if base is not None else ThreadGraph(thread_id)
                 graph.meta["inputDigest"] = input_digest
                 graph.meta["scope"] = {
@@ -692,10 +913,33 @@ class Engine:
                     "scopeKey": scope_key,
                     "accessPolicy": dict(access_policy or {}),
                 }
+                if incremental_envelopes:
+                    graph.meta["scope"]["runtimeId"] = incremental_envelopes[0]["delta"]["scope"]["runtimeId"]
+                elif isinstance(committed_scope, dict) and committed_scope.get("runtimeId"):
+                    graph.meta["scope"]["runtimeId"] = committed_scope["runtimeId"]
+                if incremental_envelopes:
+                    prior_deltas = graph.meta.get("evidenceDeltaRecords")
+                    by_digest = {
+                        str(item.get("deltaDigest")): item
+                        for item in prior_deltas or []
+                        if isinstance(item, dict) and item.get("deltaDigest")
+                    }
+                    by_digest.update({
+                        str(item["deltaDigest"]): item
+                        for item in (envelope["delta"] for envelope in incremental_envelopes)
+                    })
+                    graph.meta["evidenceDeltaRecords"] = [
+                        by_digest[key] for key in sorted(
+                            by_digest,
+                            key=lambda digest: (
+                                int(by_digest[digest].get("sequence", 0)), digest,
+                            ),
+                        )
+                    ]
 
                 declared_execution_bundle = False
-                if incremental_trace:
-                    if _is_canonical_execution_bundle(incremental_trace):
+                if semantic_trace:
+                    if _is_canonical_execution_bundle(semantic_trace):
                         # Parse deterministic execution lineage against the cloned
                         # committed graph.  A rerun manifest can name a baseline
                         # run from an earlier snapshot; parsing it in an empty
@@ -704,10 +948,10 @@ class Engine:
                         before_nodes = set(graph.nodes)
                         before_edges = set(graph.edges)
                         lineage_delta = ingest_trace_lineage(
-                            graph, incremental_trace, artifact_versions,
+                            graph, semantic_trace, artifact_versions,
                             created_by="sdk-execution-lineage",
                             allowed_historical_rerun_refs=_historical_rerun_refs(
-                                incremental_trace
+                                semantic_trace
                             ),
                         )
                         declared_execution_bundle = lineage_delta["envelopes"] > 0
@@ -730,7 +974,7 @@ class Engine:
                                 "no independent Model Router client configured for extraction/review"
                             )
                         extracted = extract_dag(
-                            incremental_trace, self.llm, thread_id,
+                            semantic_trace, self.llm, thread_id,
                             artifact_versions=artifact_versions,
                         )
                         if rebuild or base is None:
@@ -864,11 +1108,12 @@ class Engine:
                     if edge is not None and assessment.assessment_id not in edge.assessment_ids:
                         edge.assessment_ids.append(assessment.assessment_id)
                 graph.meta["snapshot"] = candidate.to_dict()
-                self._commit_snapshot(graph, candidate)
-                self._graphs[thread_id] = graph
-                self._snapshots[thread_id] = candidate
-                self._last_delta[thread_id] = delta
-                self._updated[thread_id] = time.time()
+                self._commit_snapshot(graph, candidate, publish_latest=not formal_closure)
+                if not formal_closure:
+                    self._graphs[thread_id] = graph
+                    self._snapshots[thread_id] = candidate
+                    self._last_delta[thread_id] = delta
+                    self._updated[thread_id] = time.time()
                 status.update({
                     "state": "fresh", "completedAt": utc_now_iso(),
                     "currentWatermark": candidate.input_watermark,
@@ -949,8 +1194,7 @@ class Engine:
             "threadId": thread_id,
             "status": status.get("state", "fresh" if snapshot else "dirty"),
             "desiredWatermark": status.get("desiredWatermark"),
-            "currentWatermark": status.get("currentWatermark") or
-                (snapshot.input_watermark if snapshot else None),
+            "currentWatermark": snapshot.input_watermark if snapshot else status.get("currentWatermark"),
             "error": status.get("error"),
             "updateId": status.get("id"),
             "queuedEventId": status.get("queuedEventId"),
@@ -1294,15 +1538,22 @@ class Engine:
                     "authority": "override",
                 },
             }
-            event = self._event_store.append(
-                "HumanReviewDecisionRecorded",
-                aggregate_type="EvidenceThread",
-                aggregate_id=thread_id,
-                idempotency_key=event_key,
-                correlation_id=correlation_id,
-                payload=decision_payload,
-                occurred_at=decision_time,
-            )
+            try:
+                event = self._event_store.append(
+                    "HumanReviewDecisionRecorded",
+                    aggregate_type="EvidenceThread",
+                    aggregate_id=thread_id,
+                    idempotency_key=event_key,
+                    correlation_id=correlation_id,
+                    payload=decision_payload,
+                    occurred_at=decision_time,
+                )
+            except ValueError as exc:
+                if "idempotency key" in str(exc):
+                    raise ReviewDecisionConflict(
+                        "idempotency key was already used for a different review decision"
+                    ) from exc
+                raise
             if event.get("payload") != decision_payload:
                 raise ReviewDecisionConflict(
                     "idempotency key was already used for a different review decision"
@@ -1699,12 +1950,15 @@ class Engine:
                 "FindingOpened",
                 aggregate_type="AuditFinding",
                 aggregate_id=fingerprint,
-                idempotency_key=f"{run.get('target_digest')}|{fingerprint}",
+                # A finding occurrence belongs to one immutable audit run.  A
+                # later run may report the same fingerprint with different
+                # status, so its event identity must include the run rather
+                # than colliding with the earlier occurrence.
+                idempotency_key=f"{run.get('id')}|{fingerprint}",
                 occurred_at=run.get("completed_at"),
                 causation_id=completed["eventId"],
                 payload={
                     "threadId": run.get("thread_id"),
-                    "auditRunId": run.get("id"),
                     "targetDigest": run.get("target_digest"),
                     "findingId": finding.get("id"),
                     "fingerprint": fingerprint,
@@ -1753,7 +2007,9 @@ class Engine:
         return _export_snapshot_products(graph, snapshot, datacite_metadata)
 
     # --- atomic persistence -----------------------------------------------
-    def _commit_snapshot(self, graph: ThreadGraph, snapshot: EvidenceSnapshot) -> None:
+    def _commit_snapshot(
+        self, graph: ThreadGraph, snapshot: EvidenceSnapshot, *, publish_latest: bool = True
+    ) -> None:
         latest_path = self._path(graph.thread_id)
         if not latest_path:
             return
@@ -1769,7 +2025,8 @@ class Engine:
                 raise RuntimeError("immutable Evidence Snapshot collision")
         else:
             write_snapshot(immutable_path, content, storage_dir=self.storage_dir)
-        atomic_publish_latest(immutable_path, latest_path)
+        if publish_latest:
+            atomic_publish_latest(immutable_path, latest_path)
 
     @staticmethod
     def _atomic_write(path: str, content: str) -> None:

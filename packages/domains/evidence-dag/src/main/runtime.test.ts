@@ -114,7 +114,7 @@ test('appends a durable delta without publishing a per-turn full Snapshot', asyn
             threadId: 'codex:thread-1',
             version: 1,
             digest: `sha256:${'a'.repeat(64)}`,
-            inputWatermark: '7',
+            inputWatermark: '1',
             schemaVersion: '1',
             extractorVersion: '1',
             verifierVersion: '1',
@@ -158,6 +158,353 @@ test('appends a durable delta without publishing a per-turn full Snapshot', asyn
     workspaceRoot: '/workspace'
   })
   assert.equal(persisted.chains[0]?.records[0]?.committedWatermark, '7')
+  await runtime.close()
+})
+
+test('sealing a delta closure materializes the canonical committed Snapshot for Project', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-seal-'))
+  const requestTime = new Date()
+  const requestTimeIso = requestTime.toISOString()
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    now: () => requestTime,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (url, init) => {
+      const path = new URL(String(url)).pathname
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : undefined
+      requests.push({ path, ...(body ? { body } : {}) })
+      if (path === '/audits') {
+        return new Response(JSON.stringify({
+          ok: true,
+          data: {
+            completed_at: requestTimeIso,
+            risk_digest: {
+              status: 'clean',
+              total_findings: 0,
+              counts_by_severity: { blocker: 0, major: 0, minor: 0, info: 0 },
+              highest_severity: 'none'
+            }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          snapshot: {
+            threadId: 'codex:thread-seal',
+            version: 1,
+            digest: `sha256:${'b'.repeat(64)}`,
+            // Formal Snapshot materialization must bind the exact closure
+            // barrier/head rather than a later cumulative watermark.
+            inputWatermark: '7',
+            schemaVersion: 'evidence.v3',
+            extractorVersion: 'extractor.v3',
+            verifierVersion: 'verifier.v3',
+            artifactDigests: [],
+            createdAt: '2026-07-26T06:00:00.000Z',
+            status: 'committed'
+          }
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir, '/workspace'))
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'turn-completed',
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    turnId: 'turn-seal',
+    targetWatermark: '7',
+    occurredAt: '2026-07-26T06:00:00.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{
+      id: 'answer-seal',
+      claimId: 'claim:seal',
+      kind: 'assistant_message',
+      text: 'Evidence.'
+    }]
+  })
+  const before = await runtime.snapshotStatus({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace'
+  })
+  const head = before.authoritativeHead?.headDigest
+  assert.ok(head)
+  const closure = await runtime.sealClosure({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-closure-thread-seal',
+    policy: {
+      version: 'EvidenceClosurePolicyV1',
+      targetClaimIds: ['claim:seal'],
+      expectedHeadDigest: head,
+      barrierWatermark: '7',
+      edgeFamilies: [],
+      directions: ['inbound'],
+      maxDepth: 0,
+      termination: 'depth',
+      expandEquivalent: false,
+      expandRefinement: false,
+      cycleHandling: 'allow',
+      unknownEdgeHandling: 'ignore',
+      requiredRecords: [],
+      requiredExternalRefs: []
+    }
+  })
+  assert.equal(closure.headDigest, head)
+  const after = await runtime.snapshotStatus({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace'
+  })
+  assert.ok(after.committed)
+  assert.equal(after.committed.digest, `sha256:${'b'.repeat(64)}`)
+  assert.equal(after.committed.inputWatermark, '7')
+  const exportGate = await runtime.guardWriteExport({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace'
+  })
+  assert.equal(exportGate.allowed, true, JSON.stringify(exportGate))
+  const metadata = exportGate.metadata as { auditState?: unknown } | undefined
+  assert.equal(metadata?.auditState, 'fresh')
+  assert.deepEqual(requests.map(({ path }) => path), ['/updates', '/audits'])
+  assert.equal(requests[0]?.body?.threadId, 'codex:thread-seal')
+  assert.equal(requests[0]?.body?.targetWatermark, '7')
+  assert.equal(requests[0]?.body?.reason, 'seal_closure')
+  assert.equal(requests[0]?.body?.idempotencyKey, 'seal-closure-thread-seal')
+  const sealedTrace = requests[0]?.body?.trace as Array<Record<string, unknown>> | undefined
+  assert.equal(sealedTrace?.length, 1)
+  assert.equal(sealedTrace?.[0]?.kind, 'sciforge.evidence-delta-envelope.v1')
+  const sealedDelta = sealedTrace?.[0]?.delta as Record<string, unknown> | undefined
+  assert.match(String(sealedDelta?.payloadDigest), /^sha256:[0-9a-f]{64}$/u)
+  const sealedPayload = sealedDelta?.payload as Record<string, unknown> | undefined
+  const embeddedTrace = sealedPayload?.trace as Array<Record<string, unknown>> | undefined
+  assert.equal(embeddedTrace?.[0]?.id, 'answer-seal')
+  assert.equal(requests[1]?.body?.targetDigest, `sha256:${'b'.repeat(64)}`)
+  const sealed = await runtime.sealClosure({
+    runtimeId: 'codex',
+    threadId: 'thread-seal',
+    workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-closure-thread-seal',
+    policy: {
+      version: 'EvidenceClosurePolicyV1',
+      targetClaimIds: ['claim:seal'],
+      expectedHeadDigest: head,
+      barrierWatermark: '7',
+      edgeFamilies: [],
+      directions: ['inbound'],
+      maxDepth: 0,
+      termination: 'depth',
+      expandEquivalent: false,
+      expandRefinement: false,
+      cycleHandling: 'allow',
+      unknownEdgeHandling: 'ignore',
+      requiredRecords: [],
+      requiredExternalRefs: []
+    }
+  })
+  assert.deepEqual(requests.map(({ path }) => path), ['/updates', '/audits'])
+  await runtime.close()
+})
+
+test('retries Snapshot materialization after a sidecar failure without duplicating the closure', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-seal-retry-'))
+  let attempts = 0
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (url, init) => {
+      attempts += 1
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : undefined
+      requests.push({ path: new URL(String(url)).pathname, ...(body ? { body } : {}) })
+      if (attempts === 1) throw new Error('temporary sidecar failure')
+      return new Response(JSON.stringify({
+        ok: true,
+        data: {
+          snapshot: {
+            threadId: 'codex:thread-seal-retry',
+            version: 1,
+            digest: `sha256:${'c'.repeat(64)}`,
+            inputWatermark: '7',
+            schemaVersion: 'evidence.v3',
+            extractorVersion: 'extractor.v3',
+            verifierVersion: 'verifier.v3',
+            artifactDigests: [],
+            createdAt: '2026-07-26T06:00:00.000Z',
+            status: 'committed'
+          }
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir, '/workspace'))
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'turn-completed',
+    runtimeId: 'codex',
+    threadId: 'thread-seal-retry',
+    turnId: 'turn-seal-retry',
+    targetWatermark: '7',
+    occurredAt: '2026-07-26T06:00:00.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{
+      id: 'answer-seal-retry',
+      claimId: 'claim:seal-retry',
+      kind: 'assistant_message',
+      text: 'Evidence.'
+    }]
+  })
+  const head = (await runtime.snapshotStatus({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace'
+  })).authoritativeHead?.headDigest
+  assert.ok(head)
+  const policy = {
+    version: 'EvidenceClosurePolicyV1' as const,
+    targetClaimIds: ['claim:seal-retry'],
+    expectedHeadDigest: head,
+    barrierWatermark: '7',
+    edgeFamilies: [],
+    directions: ['inbound'] as ('inbound' | 'outbound')[],
+    maxDepth: 0,
+    termination: 'depth' as const,
+    expandEquivalent: false,
+    expandRefinement: false,
+    cycleHandling: 'allow' as const,
+    unknownEdgeHandling: 'ignore' as const,
+    requiredRecords: [],
+    requiredExternalRefs: []
+  }
+  await assert.rejects(() => runtime.sealClosure({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-retry-key', policy
+  }), /service is unavailable/u)
+  await runtime.consume({
+    contractVersion: 1,
+    kind: 'turn-completed',
+    runtimeId: 'codex',
+    threadId: 'thread-seal-retry',
+    turnId: 'turn-seal-retry-2',
+    targetWatermark: '8',
+    occurredAt: '2026-07-26T06:00:01.000Z',
+    workspaceRoot: '/workspace',
+    artifacts: [{
+      id: 'answer-seal-retry-2',
+      kind: 'assistant_message',
+      text: 'Later evidence.'
+    }]
+  })
+  const retry = await runtime.sealClosure({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-retry-key', policy
+  })
+  assert.equal(retry.headDigest, head)
+  assert.equal((await runtime.snapshotStatus({
+    runtimeId: 'codex', threadId: 'thread-seal-retry', workspaceRoot: '/workspace'
+  })).committed?.digest, `sha256:${'c'.repeat(64)}`)
+  assert.equal(requests[1]?.body?.targetWatermark, '7')
+  await runtime.close()
+})
+
+test('materializes every closure delta, including correction and assessment records', async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'evidence-runtime-seal-deltas-'))
+  const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+  const deltaStore = new EvidenceDagDeltaStore(join(userDataDir, 'evidence-dag', 'deltas.json'))
+  const runtime = new EvidenceDagRuntime({
+    userDataDir,
+    deltaStore,
+    sidecar: {
+      configure: () => undefined,
+      endpoint: () => ({ baseUrl: 'http://127.0.0.1:3897', apiKey: 'service-key' }),
+      ensureReady: async () => undefined,
+      stop: async () => undefined
+    },
+    fetchImpl: async (url, init) => {
+      const path = new URL(String(url)).pathname
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as Record<string, unknown>
+        : undefined
+      requests.push({ path, ...(body ? { body } : {}) })
+      return new Response(JSON.stringify({ ok: true, data: {
+        snapshot: {
+          threadId: 'codex:thread-seal-deltas', version: 1,
+          digest: `sha256:${'d'.repeat(64)}`, inputWatermark: '8',
+          schemaVersion: 'evidence.v3', extractorVersion: 'extractor.v3',
+          verifierVersion: 'verifier.v3', artifactDigests: [],
+          createdAt: '2026-07-26T06:00:00.000Z', status: 'committed'
+        }
+      } }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+  })
+  await runtime.activate(runtimeContext(userDataDir, '/workspace'))
+  const initial = await deltaStore.append(evidenceDagDeltaInputFromTrace({
+    runtimeId: 'codex', threadId: 'codex:thread-seal-deltas', workspaceRoot: '/workspace',
+    operationId: 'turn-seal-deltas', kind: 'turn', requestedWatermark: '7',
+    idempotencyKey: 'turn-seal-deltas', trace: [{ id: 'answer-seal-deltas', sourceRef: 'shared:seal-deltas', text: 'Evidence.' }]
+  }))
+  const scope = {
+    runtimeId: 'codex', threadId: 'codex:thread-seal-deltas', operationId: 'correction',
+    kind: 'correction' as const, workspaceRoot: '/workspace'
+  }
+  assert.equal((await deltaStore.head('codex:thread-seal-deltas')).headDigest, initial.delta.deltaDigest)
+  await deltaStore.appendCorrection({
+    scope, requestedWatermark: '8', idempotencyKey: 'correction-seal-deltas',
+    sourceRefs: ['shared:seal-deltas'],
+    correction: {
+      recordId: 'correction:seal-deltas', targetRecordId: 'claim:seal-deltas',
+      relation: 'corrects', reason: 'Corrected extraction.', producerIdentity: 'agent:producer',
+      reviewerIdentity: null, createdAt: '2026-07-26T06:00:01.000Z'
+    }, predecessorDigest: initial.delta.deltaDigest
+  })
+  await deltaStore.append({
+    scope: { ...scope, operationId: 'assessment', kind: 'assessment' },
+    requestedWatermark: '8', committedWatermark: '8', schemaVersion: 'evidence.delta.v1',
+    extractorVersion: 'assessment', verifierVersion: 'assessment',
+    idempotencyKey: 'assessment-seal-deltas', sourceRefs: ['shared:seal-deltas'],
+    payload: { recordType: 'assessment', assessment: { assessmentId: 'assessment:seal-deltas' } },
+    predecessorDigest: (await deltaStore.head('codex:thread-seal-deltas')).headDigest
+  })
+  const head = (await deltaStore.head('codex:thread-seal-deltas')).headDigest
+  assert.ok(head)
+  const sealed = await runtime.sealClosure({
+    runtimeId: 'codex', threadId: 'thread-seal-deltas', workspaceRoot: '/workspace',
+    idempotencyKey: 'seal-closure-deltas',
+    policy: {
+      version: 'EvidenceClosurePolicyV1', targetClaimIds: ['answer-seal-deltas'],
+      expectedHeadDigest: head, barrierWatermark: '8', edgeFamilies: [], directions: ['inbound'],
+      maxDepth: 0, termination: 'fixed_point', expandEquivalent: false, expandRefinement: false,
+      cycleHandling: 'allow', unknownEdgeHandling: 'ignore',
+      requiredRecords: ['correction:seal-deltas'], requiredExternalRefs: []
+    }
+  })
+  assert.equal(sealed.status, 'complete', JSON.stringify(sealed))
+  assert.equal(requests.length, 1, JSON.stringify(sealed))
+  const envelopes = requests[0]?.body?.trace as Array<Record<string, unknown>>
+  assert.equal(envelopes.length, 3)
+  assert.deepEqual(
+    envelopes.map((item) => (item.delta as Record<string, unknown>).payload)
+      .map((payload) => (payload as Record<string, unknown>).recordType ?? 'trace'),
+    ['trace', 'correction', 'assessment']
+  )
   await runtime.close()
 })
 
@@ -344,6 +691,14 @@ test('does not leak local delta state when Agent authority has no workspace bind
   })
   assert.equal(status.committed, null)
   assert.equal(status.pending, null)
+  const sameWorkspaceWithoutAuthority = await runtime.snapshotStatus({
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    workspaceRoot: '/workspace/a'
+  })
+  assert.equal(sameWorkspaceWithoutAuthority.authoritativeHead, undefined)
+  assert.equal(sameWorkspaceWithoutAuthority.provisional, undefined)
+  assert.equal(sameWorkspaceWithoutAuthority.committed, null)
   await runtime.close()
 })
 

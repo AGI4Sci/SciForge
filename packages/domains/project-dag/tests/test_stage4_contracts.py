@@ -20,15 +20,32 @@ class Stage4ContractTests(unittest.TestCase):
 
     def test_scope_draft_is_not_applied_until_explicit_apply(self):
         engine = self.make_engine()
-        project = "project:one-project"
+        workspace = "/workspace/one-project"
+        project = "path:" + workspace
         draft = engine.save_scope_draft({
-            "project": "one-project",
+            "workspaceRoot": workspace,
             "currentSessionId": "session-current",
             "actorId": "researcher",
         })
         self.assertEqual(draft["includedSessions"], ["session-current"])
         self.assertEqual(engine.workflow.scope_revisions(project), [])
         self.assertEqual(engine.workflow.scope_draft(project)["baseRevision"], 0)
+
+    def test_project_key_rejects_unbound_project_identity(self):
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            Engine.project_key(project="one-project")
+
+    def test_project_key_requires_matching_absolute_workspace_roots(self):
+        self.assertEqual(
+            Engine.project_key(workspace_root="/workspace/lab",
+                               project_root="/workspace/lab"),
+            "path:/workspace/lab",
+        )
+        with self.assertRaisesRegex(ValueError, "same workspace"):
+            Engine.project_key(workspace_root="/workspace/one",
+                               project_root="/workspace/two")
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            Engine.project_key(workspace_root="relative/workspace")
 
     def test_policy_rules_are_versioned_and_specialized_fails_closed(self):
         engine = self.make_engine()

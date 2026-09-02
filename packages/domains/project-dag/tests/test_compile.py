@@ -1829,6 +1829,15 @@ class WorkflowTests(unittest.TestCase):
         finally:
             held.release()
 
+    def test_compiler_rejects_implicit_workspace_wide_scope(self):
+        compiler = self.engine.workflow.compiler
+        with self.assertRaisesRegex(ValueError, "explicit Session list"):
+            with compiler.compile_transaction(project_key=self.project):
+                pass
+        with self.assertRaisesRegex(ValueError, "explicit Session list"):
+            with compiler.compile_transaction("scheduled", "all", project_key=self.project):
+                pass
+
     def test_audit_sidechain_is_persistent_and_failure_does_not_fail_project_job(self):
         snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
         self.enqueue([snapshot])

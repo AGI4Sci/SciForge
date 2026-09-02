@@ -22,6 +22,7 @@ import {
   projectDagI18nResourceContribution,
   type ProjectDagI18nResourceContribution
 } from './project-dag-messages'
+import { projectDagCanonicalSessionId } from './project-dag-session'
 
 const ProjectDagPanel = lazy(() =>
   import('./ProjectDagPanel').then((module) => ({
@@ -72,10 +73,14 @@ export function createProjectDagResearchSummaryContribution(
         return { status: 'unavailable' as const, reason: 'Project scope is unavailable.' }
       }
       try {
+        const sessionId = projectDagCanonicalSessionId(
+          session.id,
+          session.runtimeId
+        )
         const result = await client.view({
           workspaceRoot: scope.id,
           projectRoot: scope.id,
-          ...(session.id.trim() ? { sessions: [session.id.trim()] } : {}),
+          ...(sessionId ? { sessions: [sessionId] } : {}),
           view: 'home'
         })
         if (!result.ok) return { status: 'unavailable' as const, reason: result.error.message }

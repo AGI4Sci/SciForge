@@ -189882,21 +189882,14 @@ Submits one idempotent durable Project update from committed Evidence snapshots.
         "type": "string"
       },
       "scope": {
-        "anyOf": [
-          {
-            "const": "all",
-            "type": "string"
-          },
-          {
-            "items": {
-              "maxLength": 512,
-              "minLength": 1,
-              "type": "string"
-            },
-            "maxItems": 500,
-            "type": "array"
-          }
-        ]
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "minItems": 1,
+        "type": "array"
       },
       "sessions": {
         "items": {

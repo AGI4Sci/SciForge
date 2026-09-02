@@ -105,7 +105,34 @@ class Engine:
     def process_updates(self, project_key: Optional[str] = None) -> Optional[dict]:
         return self.workflow.process_next(project_key)
 
-    def retry_update(self, job_id: str, *, actor: str = "human") -> dict:
+    def derive_on_open(self, project_key: str) -> Optional[dict]:
+        """Queue demand-driven derivation when opening a stale Project view.
+
+        Opening a fresh view is read-only.  A stale view reuses the latest
+        explicit vector and Scope through the canonical update lane; it never
+        scans the Workspace or invokes the compiler directly.
+        """
+        latest = self.workflow.latest_snapshot(project_key)
+        invalidation = self.workflow.invalidation(project_key)
+        active = self.store.q1(
+            "SELECT id FROM project_update_job WHERE project_key=?"
+            " AND status IN ('queued','running','retry_scheduled','failed')",
+            (project_key,),
+        )
+        if latest is not None and not (invalidation and invalidation.get("stale")) \
+                and active is None:
+            return None
+        if latest is None and active is None:
+            return None
+        result = self._enqueue_after_domain_change(project_key, "project_open")
+        return self._project_response(project_key, "project-open-receipt", result)
+
+    def retry_update(self, job_id: str, *, actor: str = "human",
+                     project_key: Optional[str] = None) -> dict:
+        if project_key is not None:
+            row = self.workflow.job(job_id)
+            if row is None or row.get("project_key") != project_key:
+                raise KeyError(job_id)
         result = self.workflow.retry_update(job_id, actor=actor)
         return self._project_response(
             result["project_key"], "project-update-job", result)
@@ -159,9 +186,12 @@ class Engine:
         }
 
     def update_receipt_status(self, job_id: str, accepted_request_version: int,
-                              desired_fingerprint: str) -> dict:
+                              desired_fingerprint: str,
+                              project_key: Optional[str] = None) -> dict:
         receipt = self.workflow.receipt_status(
             job_id, accepted_request_version, desired_fingerprint)
+        if project_key is not None and receipt["projectKey"] != project_key:
+            raise KeyError(job_id)
         access = self._project_read_access(receipt["projectKey"])
         if access and access["redacted"]:
             return _restricted_project_ref("project-update-receipt", receipt)
@@ -310,16 +340,18 @@ class Engine:
             return [_restricted_project_ref("audit", item) for item in audits]
         return audits
 
-    def audit(self, audit_id: str) -> Optional[dict]:
+    def audit(self, audit_id: str, project_key: Optional[str] = None) -> Optional[dict]:
         audit = self.workflow.audit(audit_id)
         if audit is None:
             return None
-        project_key = audit.get("project_key")
-        if not isinstance(project_key, str):
+        audit_project_key = audit.get("project_key")
+        if not isinstance(audit_project_key, str):
             return _restricted_project_ref("audit", audit)
+        if project_key is not None and audit_project_key != project_key:
+            raise KeyError(audit_id)
         target_digest = audit.get("target_digest")
         access = self._project_read_access(
-            project_key, target_digest if isinstance(target_digest, str) else None)
+            audit_project_key, target_digest if isinstance(target_digest, str) else None)
         if access and access["redacted"]:
             return _restricted_project_ref("audit", audit)
         return audit
@@ -341,7 +373,12 @@ class Engine:
     def process_audits(self, project_key: Optional[str] = None) -> Optional[dict]:
         return self.workflow.process_next_audit(project_key)
 
-    def retry_audit(self, audit_id: str, *, actor: str = "human") -> dict:
+    def retry_audit(self, audit_id: str, *, actor: str = "human",
+                    project_key: Optional[str] = None) -> dict:
+        if project_key is not None:
+            row = self.workflow.audit(audit_id)
+            if row is None or row.get("project_key") != project_key:
+                raise KeyError(audit_id)
         result = self.workflow.retry_audit(audit_id, actor=actor)
         return self._project_response(
             result["project_key"], "audit", result, result.get("target_digest"))
@@ -1047,10 +1084,30 @@ class Engine:
     def project_key(workspace_root: Optional[str] = None,
                     project_root: Optional[str] = None,
                     project: Optional[str] = None) -> str:
-        path = project_root or workspace_root
-        if isinstance(path, str) and path.strip():
-            normalized = os.path.normcase(os.path.normpath(os.path.expanduser(path.strip())))
-            return f"path:{normalized.replace(os.sep, '/')}"
+        """Derive the sole Project identity from a canonical Workspace path.
+
+        ``project:<id>`` was an early transport convenience, but it is not
+        bound to a Workspace and therefore lets a caller select arbitrary
+        Project rows.  Project identity is now path-derived everywhere.  Both
+        roots are accepted only as alternate spellings of the same canonical
+        Workspace and relative paths are rejected because they depend on the
+        sidecar process working directory.
+        """
+        canonical: list[tuple[str, str]] = []
+        for field, value in (("workspaceRoot", workspace_root),
+                             ("projectRoot", project_root)):
+            if value is None or not isinstance(value, str) or not value.strip():
+                continue
+            expanded = os.path.expanduser(value.strip())
+            if not os.path.isabs(expanded):
+                raise ValueError(f"{field} must be an absolute workspace path")
+            normalized = os.path.normcase(os.path.normpath(expanded))
+            canonical.append((field, normalized.replace(os.sep, "/")))
         if isinstance(project, str) and project.strip():
-            return f"project:{project.strip()}"
-        raise ValueError("projectKey or workspace/project identity is required")
+            raise ValueError(
+                "project identity is unsupported; provide the canonical workspaceRoot")
+        if canonical and len({path for _, path in canonical}) != 1:
+            raise ValueError("workspaceRoot and projectRoot must identify the same workspace")
+        if canonical:
+            return f"path:{canonical[0][1]}"
+        raise ValueError("canonical workspaceRoot or projectRoot identity is required")

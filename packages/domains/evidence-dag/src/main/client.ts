@@ -6,6 +6,7 @@ import {
   evidenceDagDataCiteMetadataV1Schema,
   evidenceDagExportProductKindSchema,
   evidenceDagTypedErrorSchema,
+  type EvidenceDagCommittedSnapshot,
   type EvidenceDagDataCiteMetadataV1,
   type EvidenceDagExportProductKind,
   type EvidenceDagPreviewInput,
@@ -24,6 +25,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 600_000
 export type EvidenceDagServiceEndpoint = Readonly<{
   baseUrl: string
   apiKey: string
+}>
+
+/**
+ * Formal seal write submitted to the Evidence owner.  Ordinary completed
+ * turns never use this path; they append to the desktop delta chain instead.
+ */
+export type EvidenceDagSnapshotCommitInput = Readonly<{
+  threadId: string
+  targetWatermark: string
+  trace: readonly Readonly<Record<string, unknown>>[]
+  workspaceRoot: string
+  idempotencyKey: string
 }>
 
 const evidenceDagSnapshotProductProjectionSchema = z.object({
@@ -121,6 +134,49 @@ export class EvidenceDagServiceClient {
       { method: 'GET', cache: 'no-store' }
     )
     return record(data) ?? {}
+  }
+
+  /**
+   * Materialize one exact committed Snapshot through the package-owned
+   * Evidence sidecar. This is intentionally separate from `status`: the
+   * sidecar remains the canonical Snapshot writer while callers retain the
+   * returned immutable identity for downstream Project references.
+   */
+  async commitSnapshot(
+    input: EvidenceDagSnapshotCommitInput
+  ): Promise<EvidenceDagCommittedSnapshot> {
+    const data = record(await this.request('/updates', {
+      method: 'POST',
+      body: JSON.stringify({
+        threadId: input.threadId,
+        targetWatermark: input.targetWatermark,
+        reason: 'seal_closure',
+        priority: 'immediate',
+        trace: input.trace,
+        workspaceRoot: input.workspaceRoot,
+        queuedAt: this.now().toISOString(),
+        correlationId: input.idempotencyKey,
+        idempotencyKey: input.idempotencyKey
+      })
+    }))
+    const snapshot = normalizeSnapshot(data?.snapshot)
+    if (!snapshot) {
+      throw this.error({
+        code: 'internal_error',
+        message: 'Evidence closure seal returned no committed Snapshot.',
+        retryable: false,
+        occurredAt: this.now().toISOString()
+      })
+    }
+    if (snapshot.threadId !== input.threadId) {
+      throw this.error({
+        code: 'snapshot_corrupt',
+        message: 'Evidence closure seal returned a Snapshot for a different thread.',
+        retryable: false,
+        occurredAt: this.now().toISOString()
+      })
+    }
+    return snapshot
   }
 
   async evidencePreview(input: EvidenceDagPreviewInput): Promise<unknown> {
@@ -292,6 +348,23 @@ function record(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null
+}
+
+function normalizeSnapshot(value: unknown): EvidenceDagCommittedSnapshot | null {
+  const snapshot = record(value)
+  if (!snapshot || snapshot.status !== 'committed') return null
+  return evidenceDagCommittedSnapshotSchema.parse({
+    threadId: snapshot.threadId,
+    version: snapshot.version,
+    digest: snapshot.digest,
+    inputWatermark: snapshot.inputWatermark,
+    schemaVersion: snapshot.schemaVersion,
+    extractorVersion: snapshot.extractorVersion,
+    verifierVersion: snapshot.verifierVersion,
+    artifactDigests: snapshot.artifactDigests,
+    createdAt: snapshot.createdAt,
+    ...(typeof snapshot.url === 'string' ? { url: snapshot.url } : {})
+  })
 }
 
 function stringValue(value: unknown): string | undefined {

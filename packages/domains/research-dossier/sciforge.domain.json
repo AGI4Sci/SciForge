@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.research-dossier",
     "displayName": "Research",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "hostApi": {
       "minimum": "1.1.0",
       "maximumExclusive": "2.0.0"

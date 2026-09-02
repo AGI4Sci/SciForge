@@ -34,6 +34,7 @@ import {
   evidenceDagViewInputSchema,
   evidenceDagViewOutputSchema,
   type EvidenceDagCanonicalStatus,
+  type EvidenceDagDelta,
   type EvidenceDagExportSnapshotProductsInput,
   type EvidenceDagExportSnapshotProductsOutput,
   type EvidenceDagPreviewInput,
@@ -128,6 +129,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
   private readonly artifactVersionCommit: (workspaceRoot: string) => ArtifactVersionCommitPortV1
   private readonly artifactVersionRead: (workspaceRoot: string) => ArtifactVersionReadPortV1
   private readonly visibleSurfacesByThread = new Map<string, Set<string>>()
+  private readonly sealQueues = new Map<string, Promise<unknown>>()
 
   constructor(options: Readonly<{
     userDataDir: string
@@ -320,13 +322,21 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     const input = evidenceDagSnapshotStatusInputSchema.parse(raw)
     const context = await this.requireEnabled()
     let authoritativeWorkspaceRoot: string | undefined
+    const syntheticExecution = isSyntheticExecutionScope(input.runtimeId, input.threadId)
     try {
       authoritativeWorkspaceRoot = (await context.agentThreads.read({
         runtimeId: input.runtimeId,
         threadId: input.threadId
       })).workspaceRoot
     } catch {
-      authoritativeWorkspaceRoot = undefined
+      // Synthetic package executions have no Agent Thread by design. Their
+      // scope is still bound by the Host-produced domain:/execution: identity;
+      // ordinary Sessions must never fall back to a caller-supplied workspace
+      // when Host authority is unavailable.
+      if (!syntheticExecution) return this.emptyStatus()
+    }
+    if (!syntheticExecution && !authoritativeWorkspaceRoot?.trim()) {
+      return this.emptyStatus()
     }
     const workspaceRoot = evidenceDagWorkspaceRoot(
       input.workspaceRoot,
@@ -414,16 +424,69 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     raw: EvidenceDagSealClosureInput
   ): Promise<EvidenceDagSealClosureOutput> {
     const input = evidenceDagSealClosureInputSchema.parse(raw)
+    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const previous = this.sealQueues.get(engineThreadId) ?? Promise.resolve()
+    const current = previous.then(() => this.sealClosureLocked(input))
+    this.sealQueues.set(engineThreadId, current)
+    try {
+      return await current
+    } finally {
+      if (this.sealQueues.get(engineThreadId) === current) this.sealQueues.delete(engineThreadId)
+    }
+  }
+
+  private async sealClosureLocked(
+    input: EvidenceDagSealClosureInput
+  ): Promise<EvidenceDagSealClosureOutput> {
     const context = await this.requireEnabled()
     const thread = await context.agentThreads.read({
       runtimeId: input.runtimeId,
       threadId: input.threadId
     })
-    evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
-    const closure = await this.deltaStore.seal(
-      evidenceDagThreadId(input.runtimeId, input.threadId),
-      input.policy
+    const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
+    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const closure = await this.deltaStore.seal(engineThreadId, input.policy, input.idempotencyKey)
+    // A closure is the formal Evidence boundary. The delta chain remains the
+    // desktop capture authority, while the package-owned sidecar remains the
+    // canonical writer of the committed Snapshot consumed by Project/export.
+    const chain = await this.deltaStore.chain(engineThreadId)
+    // A pure legacy root already points at an immutable historical Snapshot.
+    // Once deltas are appended, a successor closure must materialize a new one.
+    const sealingLegacyRoot = Boolean(
+      chain.legacyCheckpointRoot &&
+      chain.list().length === 0 &&
+      closure.headDigest === chain.legacyCheckpointRoot.snapshot.digest
     )
+    if (closure.status === 'complete' && !sealingLegacyRoot) {
+      // `seal()` is durable before the sidecar call. A retry after a sidecar
+      // failure therefore sees the same closure and can safely materialize it.
+      // Once the exact closure/Snapshot binding is durable, replay is a pure
+      // read and must not fan out another `/updates` request.
+      if (
+        chain.committedEvidenceSnapshot &&
+        chain.committedSnapshotClosure === closure.closureDigest
+      ) {
+        return evidenceDagSealClosureOutputSchema.parse(closure)
+      }
+      await this.sidecar.ensureReady()
+      const includedDeltaDigests = new Set(closure.includedDeltaDigests)
+      const trace = chain.list().flatMap((record) => {
+        if (!includedDeltaDigests.has(record.deltaDigest)) return []
+        return evidenceDeltaTrace(record)
+      })
+      const targetWatermark = input.policy.barrierWatermark
+      const committed = await this.client.commitSnapshot({
+        threadId: engineThreadId,
+        targetWatermark,
+        trace,
+        workspaceRoot,
+        idempotencyKey: input.idempotencyKey
+      })
+      if (committed.inputWatermark !== targetWatermark) {
+        throw new Error('Evidence closure seal returned a Snapshot whose input watermark does not exactly match its barrier.')
+      }
+      await this.deltaStore.recordCommittedSnapshot(engineThreadId, committed, closure.closureDigest)
+    }
     return evidenceDagSealClosureOutputSchema.parse(closure)
   }
 
@@ -486,9 +549,17 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
     await this.sidecar.ensureReady()
     const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
+    const chain = await this.deltaStore.chain(engineThreadId)
+    const requestedDigest = input.snapshotDigest
+    const boundToClosure = chain.committedSnapshotClosureEntries().some(([, digest]) => digest === requestedDigest)
+    const legacyComplete = chain.legacyCheckpointRoot?.status === 'legacy/complete' &&
+      chain.legacyCheckpointRoot.snapshot.digest === requestedDigest
+    if (!boundToClosure && !legacyComplete) {
+      throw new Error('Evidence snapshot products require a Snapshot bound to a complete closure.')
+    }
     const projection = await this.client.snapshotProducts(
       engineThreadId,
-      input.snapshotDigest,
+      requestedDigest,
       input.datacite
     )
     return commitEvidenceSnapshotProducts({
@@ -528,7 +599,10 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
         threadId: input.threadId,
         ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {})
       })
-      const targetDigest = status.authoritativeHead?.headDigest ?? status.committed?.digest
+      // Audit/export operate on the Evidence owner's immutable Snapshot. The
+      // delta head is only a local capture identity and cannot be resolved by
+      // the sidecar snapshot reader.
+      const targetDigest = status.committed?.digest
       if (!targetDigest) {
         throw new Error('Evidence export requires an existing sealed or legacy snapshot audit target.')
       }
@@ -628,7 +702,11 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     )) return this.emptyStatus()
     const head = chain.head
     const provisional = chain.provisionalView
-    const committed = chain.legacyCheckpointRoot?.snapshot ?? null
+    const committed = chain.committedEvidenceSnapshot ?? (
+      chain.legacyCheckpointRoot?.status === 'legacy/complete'
+        ? chain.legacyCheckpointRoot.snapshot
+        : null
+    )
     const summary = provisional?.summary
     const updatedAt = [head.updatedAt, provisional?.updatedAt, committed?.createdAt]
       .filter((value): value is string => Boolean(value))
@@ -820,6 +898,36 @@ export function evidenceDagWorkspaceRoot(
     throw new Error('Evidence DAG update requires a workspace root.')
   }
   return workspaceRoot
+}
+
+function isSyntheticExecutionScope(runtimeId: string, threadId: string): boolean {
+  return runtimeId.startsWith('domain:') && threadId.startsWith('execution:')
+}
+
+/** Preserve the complete immutable delta at a formal Snapshot boundary. */
+function evidenceDeltaTrace(record: EvidenceDagDelta): readonly Readonly<Record<string, unknown>>[] {
+  return [{
+    kind: 'sciforge.evidence-delta-envelope.v1',
+    schemaVersion: 'sciforge.evidence-delta-envelope.v1',
+    delta: {
+      deltaDigest: record.deltaDigest,
+      payloadDigest: record.payloadDigest,
+      predecessorDigest: record.predecessorDigest,
+      sequence: record.sequence,
+      scope: structuredClone(record.scope),
+      requestedWatermark: record.requestedWatermark,
+      committedWatermark: record.committedWatermark,
+      schemaVersion: record.schemaVersion,
+      extractorVersion: record.extractorVersion,
+      verifierVersion: record.verifierVersion,
+      idempotencyKey: record.idempotencyKey,
+      sourceRefs: [...record.sourceRefs],
+      artifactRefs: [...record.artifactRefs],
+      runRefs: [...record.runRefs],
+      payload: structuredClone(record.payload),
+      createdAt: record.createdAt
+    }
+  }]
 }
 
 function genericGuardDecision(decision: ReturnType<typeof evaluateEvidenceDagHighImpactGate>) {

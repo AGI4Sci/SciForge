@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from http.server import ThreadingHTTPServer
@@ -500,6 +501,22 @@ class HttpActorSerializationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+        # Project routing is workspace-bound. Keep the historical fixtures
+        # readable while sending the explicit canonical root required by the
+        # HTTP contract.
+        if body is not None and isinstance(body.get("projectKey"), str):
+            key = body["projectKey"]
+            if key.startswith("path:") and "workspaceRoot" not in body:
+                body = {**body, "workspaceRoot": key[5:]}
+        if "projectKey=path:" in path and "workspaceRoot=" not in path:
+            marker = "projectKey=path:"
+            start = path.index(marker) + len(marker)
+            end = len(path)
+            for separator in ("&", "#"):
+                if separator in path[start:]:
+                    end = min(end, start + path[start:].index(separator))
+            root = path[start:end]
+            path = path.replace("?", f"?workspaceRoot=/{root.lstrip('/')}&", 1)
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.server.server_port}{path}",
@@ -512,6 +529,49 @@ class HttpActorSerializationTests(unittest.TestCase):
         )
         with urllib.request.urlopen(request, timeout=3) as response:
             return json.loads(response.read())
+
+    def _request_raw(self, method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.server.server_port}{path}",
+            method=method,
+            data=data,
+            headers={
+                "Authorization": "Bearer test-token",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_http_project_identity_requires_workspace_and_rejects_forgery(self) -> None:
+        status, response = self._request_raw(
+            "GET", "/updates/status?projectKey=project:another-workspace")
+        self.assertEqual(status, 400)
+        self.assertEqual(response["error"]["code"], "BAD_REQUEST")
+
+        status, response = self._request_raw(
+            "GET", "/updates/status?workspaceRoot=/workspace/a&projectRoot=/workspace/b")
+        self.assertEqual(status, 400)
+        self.assertIn("same workspace", response["error"]["message"])
+
+        status, response = self._request_raw(
+            "GET", "/updates/status?workspaceRoot=/workspace/a&projectKey=path:/workspace/b")
+        self.assertEqual(status, 400)
+        self.assertIn("does not match", response["error"]["message"])
+
+        status, response = self._request_raw(
+            "GET", "/updates/status?workspaceRoot=/workspace/a&projectKey=/workspace/a")
+        self.assertEqual(status, 400)
+        self.assertIn("canonical path", response["error"]["message"])
+
+        status, response = self._request_raw(
+            "GET", "/updates/status?projectKey=path:/workspace/a")
+        self.assertEqual(status, 400)
+        self.assertIn("canonical workspaceRoot", response["error"]["message"])
 
     def test_threaded_http_enqueue_and_status_are_serialized_on_api_connection(self) -> None:
         project = "path:/workspace/http"
@@ -607,7 +667,8 @@ class HttpActorSerializationTests(unittest.TestCase):
 
         suffix = f"?projectKey={project}"
         receipt_suffix = (
-            f"?acceptedRequestVersion={receipt['acceptedRequestVersion']}"
+            "?workspaceRoot=/workspace/http-restricted"
+            f"&acceptedRequestVersion={receipt['acceptedRequestVersion']}"
             f"&desiredFingerprint={receipt['desiredFingerprint']}"
         )
         responses = {
@@ -629,7 +690,8 @@ class HttpActorSerializationTests(unittest.TestCase):
             "assessments": self._request(
                 "GET", f"/assessments{suffix}&snapshotDigest={snapshot['digest']}"),
             "audits": self._request("GET", f"/audits{suffix}"),
-            "audit": self._request("GET", f"/audits/{audit_id}"),
+            "audit": self._request(
+                "GET", f"/audits/{audit_id}?workspaceRoot=/workspace/http-restricted"),
         }
         serialized = json.dumps(responses, ensure_ascii=False)
         self.assertNotIn("TOP-SECRET", serialized)
@@ -732,8 +794,9 @@ class HttpActorSerializationTests(unittest.TestCase):
             "receipt": self._request(
                 "GET", f"/updates/{receipt_row['job_id']}/status"
                 f"?acceptedRequestVersion={receipt_row['request_version']}"
-                f"&desiredFingerprint={receipt_row['desired_fingerprint']}"),
-            "mutation": self._request("POST", "/goals", {
+                f"&desiredFingerprint={receipt_row['desired_fingerprint']}"
+                "&workspaceRoot=/workspace/http-pending-restricted"),
+            "mutation": self._request("POST", "/goals/draft", {
                 "projectKey": project,
                 "title": "TOP-SECRET-HTTP-PENDING-GOAL",
                 "description": "TOP-SECRET-HTTP-PENDING-GOAL-DESCRIPTION",
@@ -776,7 +839,8 @@ class HttpActorSerializationTests(unittest.TestCase):
             self.actors.api, project, snapshot["digest"])
         suffix = f"?projectKey={project}"
         receipt_suffix = (
-            f"?acceptedRequestVersion={receipt['acceptedRequestVersion']}"
+            "?workspaceRoot=/workspace/http-downstream-restricted"
+            f"&acceptedRequestVersion={receipt['acceptedRequestVersion']}"
             f"&desiredFingerprint={receipt['desiredFingerprint']}"
         )
         responses = {
@@ -793,7 +857,8 @@ class HttpActorSerializationTests(unittest.TestCase):
             "assessments": self._request(
                 "GET", f"/assessments{suffix}&snapshotDigest={snapshot['digest']}"),
             "audits": self._request("GET", f"/audits{suffix}"),
-            "audit": self._request("GET", f"/audits/{audit_id}"),
+            "audit": self._request(
+                "GET", f"/audits/{audit_id}?workspaceRoot=/workspace/http-downstream-restricted"),
         }
         serialized = json.dumps(responses, ensure_ascii=False)
         self.assertNotIn("TOP-SECRET", serialized)
