@@ -60,6 +60,7 @@ type BrowserProfile = {
   startup: Promise<void>
   starting: boolean
   sessionIds: Set<string>
+  pageOwners: Map<Page, BrowserSession>
 }
 
 export type BrowserPreviewCaller = Readonly<{
@@ -146,6 +147,7 @@ export function createBrowserPreviewService(options: Readonly<{
 
   const closeBrowserSession = async (session: BrowserSession): Promise<void> => {
     session.status = 'closed'
+    if (session.page) session.profile.pageOwners.delete(session.page)
     await session.page?.close().catch(() => undefined)
     session.page = undefined
   }
@@ -192,7 +194,8 @@ export function createBrowserPreviewService(options: Readonly<{
           ),
           startup: Promise.resolve(),
           starting: false,
-          sessionIds: new Set()
+          sessionIds: new Set(),
+          pageOwners: new Map()
         }
         profiles.set(profileKey, profile)
       }
@@ -232,6 +235,28 @@ export function createBrowserPreviewService(options: Readonly<{
               context.setDefaultTimeout(ACTION_TIMEOUT_MS)
               context.setDefaultNavigationTimeout(LOAD_TIMEOUT_MS)
               await context.clearPermissions()
+              context.on('page', (candidate) => {
+                // Persistent contexts may restore tabs from a previous app
+                // process, and untrusted pages can request popups. A browser
+                // surface owns only the page explicitly registered below.
+                setTimeout(() => {
+                  if (profile.pageOwners.has(candidate)) return
+                  void candidate.close().catch(() => undefined)
+                }, 0)
+              })
+              await Promise.all(context.pages().map((candidate) =>
+                candidate.close().catch(() => undefined)
+              ))
+              await context.route('**/*', async (route) => {
+                const owner = profile.pageOwners.get(route.request().frame().page())
+                if (owner && isAllowedRequestUrl(
+                  route.request().url(), owner.allowedPrivateOrigins
+                )) {
+                  await route.continue()
+                } else {
+                  await route.abort('blockedbyclient')
+                }
+              })
             })().finally(() => {
               profile.starting = false
             })
@@ -241,6 +266,7 @@ export function createBrowserPreviewService(options: Readonly<{
           if (!context) throw new Error('The shared browser context is unavailable.')
           session.context = context
           const page = await context.newPage()
+          profile.pageOwners.set(page, session)
           await page.setViewportSize(session.viewport)
           await page.route('**/*', async (route) => {
             const requestUrl = route.request().url()
@@ -561,6 +587,7 @@ function installPageGuards(session: BrowserSession, page: Page): void {
     touch(session)
   })
   page.on('close', () => {
+    session.profile.pageOwners.delete(page)
     session.status = 'closed'
     touch(session)
   })
