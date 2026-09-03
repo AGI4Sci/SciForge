@@ -9,10 +9,10 @@ import { stageDomainMainNativeAddons } from './domain-main-native-addons.mjs'
 test('stages a domain-declared native addon into the generated main bundle', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-main-native-addon-'))
   const packageRoot = join(root, 'packages', 'domains', 'identity-fixture')
-  const sourceRelativePath = 'src/main/private-vault/native/build/Release/identity.node'
+  const sourceRelativePath = 'src/main/local-store/native/build/Release/identity.node'
   const bundleRelativePath = 'native/build/Release/identity.node'
   try {
-    await mkdir(join(packageRoot, 'src/main/private-vault/native/build/Release'), {
+    await mkdir(join(packageRoot, 'src/main/local-store/native/build/Release'), {
       recursive: true
     })
     await writeFile(join(packageRoot, sourceRelativePath), 'native-fixture')
@@ -47,20 +47,12 @@ test('stages a domain-declared native addon into the generated main bundle', asy
   }
 })
 
-test('Identity declares its private vault as a main-bundle native addon', async () => {
+test('the public identity package does not declare a native addon payload', async () => {
   const packageJson = JSON.parse(await readFile(new URL(
     '../packages/domains/identity-access/package.json',
     import.meta.url
   ), 'utf8'))
-  assert.deepEqual(packageJson.sciforgeMainNativeAddons, {
-    contractVersion: 1,
-    artifacts: [{
-      platforms: ['darwin'],
-      sourceRelativePath:
-        'src/main/private-vault/native/build/Release/identity_private_vault.node',
-      bundleRelativePath: 'native/build/Release/identity_private_vault.node'
-    }]
-  })
+  assert.equal(packageJson.sciforgeMainNativeAddons, undefined)
 })
 
 test('rejects a domain native addon path that escapes its package', async () => {

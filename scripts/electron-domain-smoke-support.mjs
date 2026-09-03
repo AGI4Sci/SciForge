@@ -30,75 +30,8 @@ export const IDENTITY_SMOKE_CAPABILITY_IDS = Object.freeze([
   'identity.local.dismiss-first-prompt',
   'identity.local.backup-and-reset'
 ])
-export const CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS = Object.freeze([
-  'identity.cloud.inspect',
-  'identity.cloud.login',
-  'identity.cloud.reauthenticate',
-  'identity.cloud.logout',
-  'identity.cloud.enroll-device',
-  'identity.cloud.refresh-devices',
-  'identity.cloud.revoke-device'
-])
-export const CONTENT_SPACE_SMOKE_CAPABILITY_IDS = Object.freeze([
-  'content-space.list-provider-instances',
-  'content-space.describe-capabilities',
-  'content-space.list-containers',
-  'content-space.list-entries',
-  'content-space.observe-entry',
-  'content-space.create-folder',
-  'content-space.upload-new',
-  'content-space.download',
-  'content-space.resolve-portal-target',
-  'content-space.open-portal-target',
-  'content-space.observe-immutable-version'
-])
-export const COLLABORATION_SMOKE_CAPABILITY_IDS = Object.freeze([
-  'collaboration.status.read',
-  'collaboration.connection.configure',
-  'collaboration.connection.connect',
-  'collaboration.endpoint.challenge.start',
-  'collaboration.endpoint.challenge.poll',
-  'collaboration.projection.link',
-  'collaboration.projection.update',
-  'collaboration.projection.share',
-  'collaboration.sync.retry',
-  'collaboration.task.list',
-  'collaboration.worker.acceptance-policy.update',
-  'collaboration.task.offer.decide',
-  'collaboration.managed-container.inspect',
-  'collaboration.managed-container.provision',
-  'collaboration.managed-container.archive'
-])
-export const PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS = Object.freeze([
-  'project-coordinator.workspace.read',
-  'project-coordinator.project.create',
-  'project-coordinator.project.delete',
-  'project-coordinator.plan-draft.read',
-  'project-coordinator.plan-draft.generate',
-  'project-coordinator.plan-draft.edit',
-  'project-coordinator.plan.submit',
-  'project-coordinator.plan.confirm',
-  'project-coordinator.workflow.prepare',
-  'project-coordinator.workflow.continue',
-  'project-coordinator.content-recovery.observe-link',
-  'project-coordinator.content-recovery.abandon',
-  'project-coordinator.task-offer.reassign',
-  'project-coordinator.membership.add',
-  'project-coordinator.membership.accept',
-  'project-coordinator.membership.remove',
-  'project-coordinator.human-needed.create',
-  'project-coordinator.human-needed.answer',
-  'project-coordinator.coordinator.transfer',
-  'project-coordinator.artifact-review.prepare',
-  'project-coordinator.result.review',
-  'project-coordinator.project.complete'
-])
 export const REQUIRED_CAPABILITY_IDS = Object.freeze([
   ...IDENTITY_SMOKE_CAPABILITY_IDS,
-  ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
-  ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
-  ...COLLABORATION_SMOKE_CAPABILITY_IDS,
-  ...PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS,
   'browser-preview.open',
   'browser-preview.read',
   'browser-preview.navigate',
@@ -234,7 +167,6 @@ export async function runElectronDomainSmoke({
   executablePath,
   applicationPath,
   expectedRendererUrl,
-  expectedDeployment,
   label,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   loadElectron = loadPlaywrightElectron,
@@ -292,10 +224,6 @@ export async function runElectronDomainSmoke({
       ],
       env: {
         ...process.env,
-        ...(expectedDeployment ? {
-          SCIFORGE_CLOUD_BASE_URL: expectedDeployment.cloudOrigin,
-          SCIFORGE_OIDC_ISSUER: expectedDeployment.oidcIssuer
-        } : {}),
         SCIFORGE_DEV_BROWSER_BRIDGE: '0',
         SCIFORGE_ELECTRON_SMOKE: '1',
         SCIFORGE_STARTUP_TRACE: '1'
@@ -325,10 +253,6 @@ export async function runElectronDomainSmoke({
       const window = await electronApp.firstWindow({ timeout: timeoutMs })
       phase = 'main-process diagnostics'
       await installMainProcessDiagnostics(electronApp)
-      const deploymentEnvironment = await electronApp.evaluate(() => ({
-        cloudOrigin: process.env.SCIFORGE_CLOUD_BASE_URL ?? null,
-        oidcIssuer: process.env.SCIFORGE_OIDC_ISSUER ?? null
-      }))
       attachPage(window)
       phase = 'renderer load'
       await window.waitForLoadState('domcontentloaded', { timeout: timeoutMs })
@@ -364,14 +288,13 @@ export async function runElectronDomainSmoke({
       phase = 'capability workflow'
       const result = await window.evaluate(smokeRendererWorkflow, {
         expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
-        expectCloudConfigured: Boolean(expectedDeployment),
         identityInvocationId: createIdentitySmokeInvocationId(),
         requiredCapabilityIds: REQUIRED_CAPABILITY_IDS,
         workspaceDirectory
       })
       validateSmokeResult(
-        { ...result, deploymentEnvironment, nativeVisual, codexPreToolUseHook },
-        { expectedDeployment, expectedRendererUrl }
+        { ...result, nativeVisual, codexPreToolUseHook },
+        { expectedRendererUrl }
       )
 
       phase = 'lifecycle diagnostics'
@@ -396,7 +319,6 @@ export async function runElectronDomainSmoke({
       return {
         mode: label,
         executablePath: resolve(executablePath),
-        deploymentEnvironment,
         ...result,
         nativeVisual,
         codexPreToolUseHook,
@@ -484,9 +406,7 @@ export function parseSmokeCliOptions(argv) {
       '--repository-root',
       '--dist-dir',
       '--executable',
-      '--timeout-ms',
-      '--expected-cloud-origin',
-      '--expected-oidc-issuer'
+      '--timeout-ms'
     ].includes(flag)) {
       throw new Error(`Unknown Electron smoke option: ${flag}`)
     }
@@ -503,31 +423,15 @@ export function parseSmokeCliOptions(argv) {
       options.repositoryRoot = resolve(value)
     } else if (flag === '--dist-dir') {
       options.distDirectory = resolve(value)
-    } else if (flag === '--expected-cloud-origin') {
-      options.expectedCloudOrigin = requireAbsoluteHttpsOrigin(value, flag)
-    } else if (flag === '--expected-oidc-issuer') {
-      options.expectedOidcIssuer = requireAbsoluteHttpsUrl(value, flag)
     } else {
       options.executablePath = resolve(value)
     }
-  }
-  if (Boolean(options.expectedCloudOrigin) !== Boolean(options.expectedOidcIssuer)) {
-    throw new Error(
-      '--expected-cloud-origin and --expected-oidc-issuer must be supplied together.'
-    )
-  }
-  if (options.expectedCloudOrigin) {
-    options.expectedDeployment = Object.freeze({
-      cloudOrigin: options.expectedCloudOrigin,
-      oidcIssuer: options.expectedOidcIssuer
-    })
   }
   return options
 }
 
 async function smokeRendererWorkflow({
   expectedContractVersion,
-  expectCloudConfigured,
   identityInvocationId,
   requiredCapabilityIds,
   workspaceDirectory
@@ -555,68 +459,6 @@ async function smokeRendererWorkflow({
     identityAccount.output?.status !== 'available' ||
     identityAccount.output.currentAccount?.username !== 'electron_smoke') {
     throw new Error('Identity did not create and select the isolated smoke account.')
-  }
-
-  const cloudIdentity = await api.capabilities.invoke({
-    request: { actionId: 'identity.cloud.inspect', input: {} }
-  })
-  const cloudSnapshot = cloudIdentity.output?.snapshot
-  if (cloudIdentity.actionId !== 'identity.cloud.inspect' ||
-    cloudSnapshot?.identity?.state !== 'signed-out' ||
-    cloudSnapshot?.device?.state !== 'signed-out') {
-    throw new Error('Cloud Identity did not expose the isolated pre-login state.')
-  }
-  if (expectCloudConfigured && cloudSnapshot.error) {
-    throw new Error(
-      `Cloud Identity pre-login readiness failed: ${cloudSnapshot.error.code ?? cloudSnapshot.error.source}.`
-    )
-  }
-
-  const contentSpaceProviders = await api.capabilities.invoke({
-    request: { actionId: 'content-space.list-provider-instances', input: {} }
-  })
-  const providerInstances = contentSpaceProviders.output?.ok
-    ? contentSpaceProviders.output.value?.items
-    : undefined
-  const providerInstanceRefs = Array.isArray(providerInstances)
-    ? providerInstances.map(({ providerInstanceRef }) => providerInstanceRef)
-    : []
-  if (contentSpaceProviders.actionId !== 'content-space.list-provider-instances' ||
-    providerInstanceRefs.length === 0 ||
-    providerInstanceRefs.some((providerInstanceRef) =>
-      typeof providerInstanceRef !== 'string' || providerInstanceRef.length === 0
-    ) ||
-    new Set(providerInstanceRefs).size !== providerInstanceRefs.length) {
-    throw new Error('Content Space did not expose a unique installed Provider Instance directory.')
-  }
-
-  const collaborationStatus = await api.capabilities.invoke({
-    request: { actionId: 'collaboration.status.read', input: {} }
-  })
-  if (collaborationStatus.actionId !== 'collaboration.status.read' ||
-    collaborationStatus.output?.connection?.configured !== false ||
-    collaborationStatus.output?.connection?.state !== 'unconfigured') {
-    throw new Error('Collaboration did not preserve the isolated profile as unconfigured.')
-  }
-
-  const projectCoordinatorWorkspace = await api.capabilities.invoke({
-    request: { actionId: 'project-coordinator.workspace.read', input: {} }
-  })
-  const expectedProjectCoordinatorState = expectCloudConfigured
-    ? 'identity_required'
-    : 'cloud_unavailable'
-  if (projectCoordinatorWorkspace.actionId !== 'project-coordinator.workspace.read' ||
-    projectCoordinatorWorkspace.output?.connection?.state !== expectedProjectCoordinatorState ||
-    !Array.isArray(projectCoordinatorWorkspace.output?.projects) ||
-    projectCoordinatorWorkspace.output.projects.length !== 0) {
-    const actualState = projectCoordinatorWorkspace.output?.connection?.state ?? 'missing'
-    const projectCount = Array.isArray(projectCoordinatorWorkspace.output?.projects)
-      ? projectCoordinatorWorkspace.output.projects.length
-      : 'invalid'
-    throw new Error(
-      'Project Coordinator did not stop at the expected pre-login Cloud identity boundary: ' +
-      `expected=${expectedProjectCoordinatorState}, actual=${actualState}, projects=${projectCount}.`
-    )
   }
 
   const paperRadarStatus = await api.capabilities.invoke({
@@ -811,19 +653,6 @@ async function smokeRendererWorkflow({
     capabilityCount: readiness.availableCapabilityIds.length,
     identityActionId: identityAccount.actionId,
     identityAccountUsername: identityAccount.output.currentAccount.username,
-    cloudIdentityActionId: cloudIdentity.actionId,
-    cloudIdentityState: cloudSnapshot.identity.state,
-    cloudDeviceState: cloudSnapshot.device.state,
-    cloudIdentityErrorCode: cloudSnapshot.error?.code ?? null,
-    contentSpaceProviderActionId: contentSpaceProviders.actionId,
-    contentSpaceProviderInstanceRef: providerInstanceRefs[0],
-    contentSpaceProviderInstanceCount: providerInstanceRefs.length,
-    collaborationActionId: collaborationStatus.actionId,
-    collaborationConfigured: collaborationStatus.output.connection.configured,
-    collaborationConnectionState: collaborationStatus.output.connection.state,
-    projectCoordinatorActionId: projectCoordinatorWorkspace.actionId,
-    projectCoordinatorConnectionState: projectCoordinatorWorkspace.output.connection.state,
-    projectCoordinatorProjectCount: projectCoordinatorWorkspace.output.projects.length,
     datasetLoopCreated: true,
     datasetLoopWorkflowCount: builtWorkflowIds.length,
     paperRadarActionId: paperRadarStatus.actionId,
@@ -868,45 +697,12 @@ async function readMainProcessDiagnostics(electronApp) {
   ])
 }
 
-export function validateSmokeResult(result, { expectedDeployment, expectedRendererUrl }) {
+export function validateSmokeResult(result, { expectedRendererUrl }) {
   if (!result || typeof result !== 'object') throw new Error('Electron smoke returned no renderer result.')
   if (result.readiness !== 'ready') throw new Error(`Capability readiness was ${String(result.readiness)}.`)
   if (result.identityActionId !== 'identity.local.create-account' ||
     result.identityAccountUsername !== 'electron_smoke') {
     throw new Error('Identity account creation did not establish the isolated smoke Principal.')
-  }
-  if (result.cloudIdentityActionId !== 'identity.cloud.inspect' ||
-    result.cloudIdentityState !== 'signed-out' || result.cloudDeviceState !== 'signed-out') {
-    throw new Error('Cloud Identity pre-login state was not available through the capability path.')
-  }
-  if (expectedDeployment) {
-    if (result.deploymentEnvironment?.cloudOrigin !== expectedDeployment.cloudOrigin ||
-      result.deploymentEnvironment?.oidcIssuer !== expectedDeployment.oidcIssuer) {
-      throw new Error('Packaged deployment environment does not match the frozen Cloud/OIDC endpoints.')
-    }
-    if (result.cloudIdentityErrorCode !== null) {
-      throw new Error('Cloud Identity was not ready at the frozen pre-login boundary.')
-    }
-  }
-  if (result.contentSpaceProviderActionId !== 'content-space.list-provider-instances' ||
-    typeof result.contentSpaceProviderInstanceRef !== 'string' ||
-    result.contentSpaceProviderInstanceRef.length === 0 ||
-    !Number.isSafeInteger(result.contentSpaceProviderInstanceCount) ||
-    result.contentSpaceProviderInstanceCount < 1) {
-    throw new Error('Content Space Provider Instance directory was not available.')
-  }
-  if (result.collaborationActionId !== 'collaboration.status.read' ||
-    result.collaborationConfigured !== false ||
-    result.collaborationConnectionState !== 'unconfigured') {
-    throw new Error('Collaboration isolated profile did not remain unconfigured.')
-  }
-  const expectedProjectCoordinatorState = expectedDeployment
-    ? 'identity_required'
-    : 'cloud_unavailable'
-  if (result.projectCoordinatorActionId !== 'project-coordinator.workspace.read' ||
-    result.projectCoordinatorConnectionState !== expectedProjectCoordinatorState ||
-    result.projectCoordinatorProjectCount !== 0) {
-    throw new Error('Project Coordinator did not preserve the expected pre-login identity boundary.')
   }
   if (result.paperRadarActionId !== 'paper-radar.status') throw new Error('Paper Radar status action mismatch.')
   if (result.workspacePreviewActionId !== 'workspace-preview.list') throw new Error('Workspace Preview list action mismatch.')
@@ -970,27 +766,6 @@ export function validateSmokeResult(result, { expectedDeployment, expectedRender
       throw new Error(`Packaged renderer loaded an unexpected URL: ${result.url}.`)
     }
   }
-}
-
-function requireAbsoluteHttpsOrigin(value, label) {
-  const url = requireAbsoluteHttpsUrl(value, label)
-  if (url !== new URL(url).origin) {
-    throw new Error(`${label} must be an absolute HTTPS origin with no path.`)
-  }
-  return url
-}
-
-function requireAbsoluteHttpsUrl(value, label) {
-  let url
-  try {
-    url = new URL(value)
-  } catch {
-    throw new Error(`${label} must be an absolute HTTPS URL.`)
-  }
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
-    throw new Error(`${label} must be an absolute HTTPS URL without credentials, query, or fragment.`)
-  }
-  return url.toString().replace(/\/$/u, '')
 }
 
 async function verifyPersistedNativeVisualArtifact(workspaceDirectory, nativeVisual) {

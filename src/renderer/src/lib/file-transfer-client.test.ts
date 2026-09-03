@@ -16,7 +16,7 @@ describe('rendererFileTransferHostFor', () => {
       }
     })
     try {
-      const host = rendererFileTransferHostFor('sciforge.content-space')
+      const host = rendererFileTransferHostFor('sciforge.workspace-files')
       expect(windowReads).toBe(0)
 
       await expect(host.pickUploadSource({ title: 'Upload', maxBytes: 1_024 }))
@@ -44,7 +44,7 @@ describe('rendererFileTransferHostFor', () => {
       settle: vi.fn(async () => true)
     }
     const host = rendererFileTransferHostFor(
-      'sciforge.content-space',
+      'sciforge.workspace-files',
       transport as never,
       () => requestId
     )
@@ -52,7 +52,7 @@ describe('rendererFileTransferHostFor', () => {
     await expect(host.pickUploadSource({ title: 'Upload', maxBytes: 1_024 }))
       .resolves.toMatchObject({ cancelled: false, name: 'paper.pdf' })
     expect(transport.pickUploadSource).toHaveBeenCalledWith({
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Upload', maxBytes: 1_024 },
       transportRequestId: requestId
     })
@@ -71,7 +71,7 @@ describe('rendererFileTransferHostFor', () => {
     }
     const controller = new AbortController()
     const host = rendererFileTransferHostFor(
-      'sciforge.content-space',
+      'sciforge.workspace-files',
       transport as never,
       () => requestId
     )
@@ -108,7 +108,7 @@ describe('rendererFileTransferHostFor', () => {
     }
     const controller = new AbortController()
     const host = rendererFileTransferHostFor(
-      'sciforge.content-space',
+      'sciforge.workspace-files',
       transport as never,
       () => requestId
     )
@@ -140,7 +140,7 @@ describe('rendererFileTransferHostFor', () => {
     const controller = new AbortController()
     controller.abort(new Error('already cancelled'))
     const host = rendererFileTransferHostFor(
-      'sciforge.content-space',
+      'sciforge.workspace-files',
       transport as never,
       () => requestId
     )
@@ -161,7 +161,7 @@ describe('rendererFileTransferHostFor', () => {
     }
     const controller = new AbortController()
     const host = rendererFileTransferHostFor(
-      'sciforge.content-space',
+      'sciforge.workspace-files',
       transport as never,
       () => {
         controller.abort(new DOMException('raced cancellation', 'AbortError'))

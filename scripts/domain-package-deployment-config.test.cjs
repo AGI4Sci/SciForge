@@ -214,26 +214,6 @@ test('inactive declaration requires its packaged target to remain absent', () =>
   }
 })
 
-test('the OpenContent package declares one public package-owned deployment configuration', () => {
-  const packageJson = require('../packages/domains/opencontent-connector/package.json')
-  assert.deepEqual(packageJson.sciforgeDeploymentConfiguration, {
-    contractVersion: 1,
-    sourceRelativePath: 'packages/domains/opencontent-connector/config/opencontent-connector.json',
-    packagedResourcesRelativePath: 'domain-deployments/opencontent-connector.json',
-    maxBytes: 4096,
-    publicRelease: 'allowed'
-  })
-  assert.ok(packageJson.files.includes('config'))
-  const configuration = require(
-    '../packages/domains/opencontent-connector/config/opencontent-connector.json'
-  )
-  assert.deepEqual(configuration, {
-    contractVersion: 1,
-    providerInstanceRef: 'opencontent-edoc2-demo',
-    origin: 'https://test1.edoc2.com'
-  })
-})
-
 function deploymentMetadata() {
   return {
     contractVersion: 1,

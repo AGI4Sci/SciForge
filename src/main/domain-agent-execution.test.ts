@@ -40,7 +40,7 @@ describe('domain Agent execution Host', () => {
     await expect(execution.run({
       ...session,
       workspaceRoot: '/workspace/project',
-      clientDirectiveId: 'collab-worker-stable-directive',
+      clientDirectiveId: 'remote-worker-stable-directive',
       outputSchema: {
         type: 'object',
         properties: { result: { type: 'string' } },
@@ -63,7 +63,7 @@ describe('domain Agent execution Host', () => {
     })
     expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       runtimeId: 'codex', threadId: 'thread-fixed',
-      clientDirectiveId: 'collab-worker-stable-directive',
+      clientDirectiveId: 'remote-worker-stable-directive',
       outputSchema: {
         type: 'object',
         properties: { result: { type: 'string' } },

@@ -26,21 +26,6 @@ export const identityI18nResourceContribution = Object.freeze({
       backupCreated: 'Backup created at: {{path}}',
       retry: 'Retry',
       loading: 'Loading…',
-      cloudTitle: 'SciForge Cloud',
-      cloudNotice: 'Secure browser sign-in links this Local Account and this Desktop to SciForge Cloud.',
-      cloudLoading: 'Loading cloud identity…',
-      cloudSignedOut: 'Not signed in to SciForge Cloud',
-      cloudLocalAccountRequired: 'Select or create a Local Account before signing in to Cloud.',
-      cloudSignIn: 'Sign in with browser',
-      cloudSignOut: 'Sign out',
-      cloudReauthenticate: 'Reauthenticate',
-      cloudEnrollDevice: 'Register this Desktop',
-      cloudRevokeDevice: 'Revoke this Desktop',
-      cloudDeviceActive: 'This Desktop is connected',
-      cloudDeviceRevoked: 'This Desktop is revoked',
-      cloudDeviceEnrolling: 'Registering this Desktop',
-      cloudDeviceNotEnrolled: 'This Desktop is not connected',
-      cloudDeviceError: 'Desktop registration needs attention'
     }),
     zh: Object.freeze({
       accountTitle: '本地账户',
@@ -67,21 +52,6 @@ export const identityI18nResourceContribution = Object.freeze({
       backupCreated: '已创建备份：{{path}}',
       retry: '重试',
       loading: '加载中…',
-      cloudTitle: 'SciForge 云端',
-      cloudNotice: '通过系统浏览器安全登录，将当前本地账户和这台 Desktop 连接到 SciForge 云端。',
-      cloudLoading: '正在加载云端身份…',
-      cloudSignedOut: '尚未登录 SciForge 云端',
-      cloudLocalAccountRequired: '请先创建或选择一个本地账户，再登录云端。',
-      cloudSignIn: '使用浏览器登录',
-      cloudSignOut: '退出云端登录',
-      cloudReauthenticate: '重新认证',
-      cloudEnrollDevice: '注册这台 Desktop',
-      cloudRevokeDevice: '撤销这台 Desktop',
-      cloudDeviceActive: '此 Desktop 已连接',
-      cloudDeviceRevoked: '此 Desktop 已撤销',
-      cloudDeviceEnrolling: '正在注册此 Desktop',
-      cloudDeviceNotEnrolled: '此 Desktop 尚未连接',
-      cloudDeviceError: 'Desktop 注册需要处理'
     })
   })
 })

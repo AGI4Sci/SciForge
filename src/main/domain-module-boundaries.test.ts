@@ -465,9 +465,7 @@ describe('domain module boundaries', () => {
       'coordinatorAuthorityEpoch',
       'workerUserId',
       'membership',
-      'executionFence',
-      'project-coordinator',
-      'domain-project'
+      'executionFence'
     ]
     for (const path of provenancePaths) {
       const source = readFileSync(resolve(projectRoot, path), 'utf8')
@@ -483,13 +481,6 @@ describe('domain module boundaries', () => {
     )
     expect(sdkSource).toContain('DomainMainCapabilityInvocationContext')
     expect(sdkSource).toContain('ordinarySession?: DomainMainOrdinarySessionIdentity')
-    const projectMain = readFileSync(
-      resolve(projectRoot, 'packages/domains/project-coordinator/src/main.ts'),
-      'utf8'
-    )
-    expect(projectMain).toMatch(
-      /context:\s*DomainMainCapabilityInvocationContext/u
-    )
   })
 
   it('keeps the runtime installer on public SDK contracts and out of extension execution', () => {

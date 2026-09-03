@@ -16,13 +16,9 @@ import {
 export const PROVIDER_FACTORY_CONTRACT_VERSION = '1.0.0' as const
 export const PROVIDER_FACTORY_SUPPORTED_CONTRACT_MAJOR = 1 as const
 
-/** Canonical `main.extension` location for Shared Documents Provider factories. */
+/** Canonical `main.extension` location for local document Provider factories. */
 export const MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION =
   'main.document-provider-factory' as const
-
-/** Canonical `main.extension` location for Content Space Provider factories. */
-export const MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION =
-  'main.content-space-provider-factory' as const
 
 /** Canonical `main.extension` location for trusted non-secret Provider Instances. */
 export const MAIN_PROVIDER_INSTANCE_DIRECTORY_ENTRY_LOCATION =
@@ -67,15 +63,8 @@ export const documentProviderFactoryContributionContractSchema = z.object({
   ...providerFactoryContractFields
 }).strict()
 
-export const contentSpaceProviderFactoryContributionContractSchema = z.object({
-  location: z.literal(MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION),
-  ...providerFactoryContractFields
-}).strict()
-
-export const providerFactoryContributionContractSchema = z.discriminatedUnion('location', [
-  documentProviderFactoryContributionContractSchema,
-  contentSpaceProviderFactoryContributionContractSchema
-])
+export const providerFactoryContributionContractSchema =
+  documentProviderFactoryContributionContractSchema
 
 export const providerInstanceDirectoryEntryContributionContractSchema = z.object({
   location: z.literal(MAIN_PROVIDER_INSTANCE_DIRECTORY_ENTRY_LOCATION),
@@ -117,8 +106,7 @@ export type ProviderFactoryHostView<HostPorts> = Readonly<{
 }>
 
 export type ProviderFactoryLocation =
-  | typeof MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION
-  | typeof MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION
+  typeof MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION
 
 export type ProviderFactoryRuntimeValue<
   Provider,
@@ -146,13 +134,6 @@ export type DocumentProviderFactoryRuntimeValue<Provider, HostPorts> =
     Provider,
     HostPorts,
     typeof MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION
-  >
-
-export type ContentSpaceProviderFactoryRuntimeValue<Provider, HostPorts> =
-  ProviderFactoryRuntimeValue<
-    Provider,
-    HostPorts,
-    typeof MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION
   >
 
 export type ProviderInstanceDirectoryEntryRuntimeValue = Readonly<{
@@ -269,12 +250,6 @@ export function defineDocumentProviderFactory<Provider, HostPorts>(
   return defineProviderFactoryRuntimeValue(MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION, input)
 }
 
-export function defineContentSpaceProviderFactory<Provider, HostPorts>(
-  input: ProviderFactoryRuntimeValueInput<Provider, HostPorts>
-): ContentSpaceProviderFactoryRuntimeValue<Provider, HostPorts> {
-  return defineProviderFactoryRuntimeValue(MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION, input)
-}
-
 export function defineProviderInstanceDirectoryEntry(
   input: ProviderInstanceDirectoryEntryRuntimeValueInput
 ): ProviderInstanceDirectoryEntryRuntimeValue {
@@ -316,12 +291,6 @@ export function createDocumentProviderFactoryCatalog<Provider, HostPorts>(
   host: DomainMainContributionHost
 ): ProviderFactoryCatalog<Provider, HostPorts> {
   return createProviderFactoryCatalog(host, MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION)
-}
-
-export function createContentSpaceProviderFactoryCatalog<Provider, HostPorts>(
-  host: DomainMainContributionHost
-): ProviderFactoryCatalog<Provider, HostPorts> {
-  return createProviderFactoryCatalog(host, MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION)
 }
 
 export function parseProviderKind(input: unknown): ProviderKind {
@@ -419,10 +388,7 @@ function validateOwnedProviderFactory<Provider, HostPorts>(
 ): OwnedProviderFactory<Provider, HostPorts> {
   try {
     const owner = validateContributionMetadata(contribution)
-    const contractSchema = expectedLocation === MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION
-      ? documentProviderFactoryContributionContractSchema
-      : contentSpaceProviderFactoryContributionContractSchema
-    const contract = contractSchema.parse(contribution.contract)
+    const contract = documentProviderFactoryContributionContractSchema.parse(contribution.contract)
     assertSupportedContractVersion(contract.contractVersion)
     if (contribution.version !== contract.contractVersion ||
       !isProviderFactoryRuntimeValue<Provider, HostPorts>(contribution.value) ||
@@ -508,8 +474,7 @@ function isProviderFactoryRuntimeValue<Provider, HostPorts>(
     value,
     ['contractVersion', 'createProvider', 'location', 'providerKind']
   )) return false
-  return (value.location === MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION ||
-      value.location === MAIN_CONTENT_SPACE_PROVIDER_FACTORY_LOCATION) &&
+  return value.location === MAIN_DOCUMENT_PROVIDER_FACTORY_LOCATION &&
     domainPackageStableVersionSchema.safeParse(value.contractVersion).success &&
     providerKindSchema.safeParse(value.providerKind).success &&
     typeof value.createProvider === 'function'

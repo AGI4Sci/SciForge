@@ -7,7 +7,6 @@ const afterPackPackaging = require('./scripts/after-pack.cjs')
 const publicReleaseArtifactReceipt = require(
   './scripts/public-release-artifact-receipt.cjs'
 )
-const stage4ArtifactReceipt = require('./scripts/stage4-artifact-receipt.cjs')
 const { internalRuntimeComposition } = require('./scripts/internal-runtime-packaging.cjs')
 const releaseWorkerManifest = require('./scripts/release-worker-manifest.cjs')
 
@@ -54,14 +53,6 @@ const publicReleaseArtifactHooks =
     internalRuntimeComposition,
     deploymentConfigurationComposition
   })
-const stage4BuildIdentity = stage4ArtifactReceipt.readConfiguredStage4BuildIdentity(__dirname)
-const stage4ArtifactHooks = stage4ArtifactReceipt.createStage4ArtifactHooks({
-  afterPack: publicReleaseArtifactHooks.afterPack,
-  projectRoot: __dirname,
-  internalRuntimeComposition,
-  deploymentConfigurationComposition
-})
-
 const hasExplicitMacSigningIdentity = Boolean(
   process.env.CSC_LINK ||
     process.env.CSC_NAME ||
@@ -175,11 +166,8 @@ module.exports = {
       url: genericUpdateUrl
     }
   ],
-  afterPack: stage4ArtifactHooks.afterPack,
-  afterAllArtifactBuild: async (buildResult) => [
-    ...await publicReleaseArtifactHooks.afterAllArtifactBuild(buildResult),
-    ...await stage4ArtifactHooks.afterAllArtifactBuild(buildResult)
-  ],
+  afterPack: publicReleaseArtifactHooks.afterPack,
+  afterAllArtifactBuild: publicReleaseArtifactHooks.afterAllArtifactBuild,
   afterSign: './scripts/mac-notarize.cjs',
   mac: {
     category: 'public.app-category.developer-tools',
@@ -230,7 +218,6 @@ module.exports = {
     buildHints: {
       macSigningEnabled: hasExplicitMacSigningIdentity,
       notarizationEnabled: hasNotaryToolCredentials
-    },
-    ...(stage4BuildIdentity ? { sciforgeStage4Build: stage4BuildIdentity } : {})
+    }
   }
 }

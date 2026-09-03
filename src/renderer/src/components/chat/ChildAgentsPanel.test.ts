@@ -525,7 +525,7 @@ describe('ChildAgentsPanelView', () => {
     const html = renderView({
       children: [
         child({
-          id: 'collaboration-call-1',
+          id: 'remote-call-1',
           name: 'clone-repo',
           openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-child' }
         }),

@@ -75,14 +75,14 @@ describe('package-owned storage contracts', () => {
 
   it('keeps the provider binding local and requires an exact Principal lease', () => {
     assert.deepEqual(domainMainProviderCredentialBindingSchema.parse({
-      providerInstanceRef: 'opencontent.demo',
+      providerInstanceRef: 'document.demo',
       connectionId: 'connection-a'
     }), {
-      providerInstanceRef: 'opencontent.demo',
+      providerInstanceRef: 'document.demo',
       connectionId: 'connection-a'
     })
     assert.throws(() => domainMainProviderCredentialBindingSchema.parse({
-      providerInstanceRef: 'opencontent.demo',
+      providerInstanceRef: 'document.demo',
       connectionId: 'connection-a',
       principalId: 'caller-must-not-supply-this'
     }), z.ZodError)
@@ -99,20 +99,20 @@ describe('package-owned storage contracts', () => {
     } as const
     assert.deepEqual(domainMainProviderCredentialAccessSchema.parse({
       binding: {
-        providerInstanceRef: 'opencontent.demo',
+        providerInstanceRef: 'document.demo',
         connectionId: 'connection-a'
       },
       expectedPrincipal
     }), {
       binding: {
-        providerInstanceRef: 'opencontent.demo',
+        providerInstanceRef: 'document.demo',
         connectionId: 'connection-a'
       },
       expectedPrincipal
     })
     assert.throws(() => domainMainProviderCredentialAccessSchema.parse({
       binding: {
-        providerInstanceRef: 'opencontent.demo',
+        providerInstanceRef: 'document.demo',
         connectionId: 'connection-a'
       },
       acceptedPrincipalAssurances: ['local-selection']

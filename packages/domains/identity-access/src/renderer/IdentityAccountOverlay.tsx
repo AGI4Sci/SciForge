@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { IDENTITY_RESET_CONFIRMATION } from '../contract.js'
-import { CloudIdentitySection } from './CloudIdentitySection.js'
 import type { IdentityRendererProjection } from './projection.js'
 
 export function IdentityAccountOverlay(props: Readonly<{
@@ -192,11 +191,6 @@ export function IdentityAccountOverlay(props: Readonly<{
             ) : null}
           </>
         )}
-
-        <CloudIdentitySection
-          projection={props.projection}
-          localAccountSelected={Boolean(availableState?.currentAccount)}
-        />
 
         {snapshot.loading ? <p className="mt-3 text-xs text-muted-foreground">{t('loading')}</p> : null}
         {snapshot.error ? <p role="alert" className="mt-3 text-sm text-destructive">{snapshot.error}</p> : null}

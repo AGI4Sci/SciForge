@@ -31,7 +31,7 @@ describe('managed secret redaction registry', () => {
     const registry = new ManagedSecretRedactionRegistry()
     const canary = 'opaque-provider-surface-canary-11d8'
     registry.activate({ recordId: 'record-surface', secret: canary })
-    const url = `https://opencontent.invalid/download?token=${canary}`
+    const url = `https://provider.invalid/download?token=${canary}`
     const diagnostic = `provider error echoed ${url}`
     const redactedDiagnostic = redactExactSensitiveValues(diagnostic, registry.values())
     const redactedTrace = sanitizeTraceValue({

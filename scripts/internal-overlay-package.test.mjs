@@ -108,8 +108,8 @@ test('requires every overlay payload root to remain beneath internal', async (co
 test('preserves a repo-relative payload prefix and excludes disposable source residue', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-private-assets-'))
   context.after(() => rm(root, { recursive: true, force: true }))
-  const sourceDir = path.join(root, 'internal', 'opencontent')
-  const assetDir = path.join(sourceDir, 'packages', 'opencontent-skill-assets')
+  const sourceDir = path.join(root, 'internal', 'document')
+  const assetDir = path.join(sourceDir, 'packages', 'document-skill-assets')
   await mkdir(assetDir, { recursive: true })
   await writeFile(path.join(sourceDir, 'README.md'), '# Private attachment assets\n')
   await writeFile(path.join(assetDir, 'package.json'), '{"private":true}\n')
@@ -122,19 +122,19 @@ test('preserves a repo-relative payload prefix and excludes disposable source re
 
   await packInternalOverlay({
     sourceDir,
-    payloadPrefix: 'internal/opencontent',
+    payloadPrefix: 'internal/document',
     outputFile: archivePath,
-    overlayId: 'opencontent-attachment-assets',
+    overlayId: 'document-attachment-assets',
     version: '1.0.1'
   })
 
   const verified = await verifyInternalOverlay({ archivePath })
   assert.deepEqual(verified.files, [
-    'internal/opencontent/README.md',
-    'internal/opencontent/packages/opencontent-skill-assets/package.json'
+    'internal/document/README.md',
+    'internal/document/packages/document-skill-assets/package.json'
   ])
   assert.equal(
-    verified.files.every((file) => file.startsWith('internal/opencontent/')),
+    verified.files.every((file) => file.startsWith('internal/document/')),
     true
   )
 
@@ -147,7 +147,7 @@ test('preserves a repo-relative payload prefix and excludes disposable source re
   })
   assert.equal(installed.status, 'installed')
   assert.equal(
-    await readFile(path.join(targetRoot, 'internal', 'opencontent', 'README.md'), 'utf8'),
+    await readFile(path.join(targetRoot, 'internal', 'document', 'README.md'), 'utf8'),
     '# Private attachment assets\n'
   )
   assert.equal(
@@ -155,9 +155,9 @@ test('preserves a repo-relative payload prefix and excludes disposable source re
       path.join(
         targetRoot,
         'internal',
-        'opencontent',
+        'document',
         'packages',
-        'opencontent-skill-assets',
+        'document-skill-assets',
         'package.json'
       ),
       'utf8'
@@ -330,7 +330,7 @@ test('exposes pack, verify, and install as a group-distribution CLI', async (con
   const packed = await runCli([
     'pack',
     '--source', fixture.sourceDir,
-    '--prefix', 'internal/opencontent',
+    '--prefix', 'internal/document',
     '--output', archivePath,
     '--id', 'provider-fixture',
     '--version', '1.2.3'
@@ -340,8 +340,8 @@ test('exposes pack, verify, and install as a group-distribution CLI', async (con
 
   const verified = await runCli(['verify', '--archive', archivePath])
   assert.deepEqual(verified.files, [
-    'internal/opencontent/docs/README.md',
-    'internal/opencontent/internal/provider-fixture/package.json'
+    'internal/document/docs/README.md',
+    'internal/document/internal/provider-fixture/package.json'
   ])
 
   const installed = await runCli([
@@ -353,7 +353,7 @@ test('exposes pack, verify, and install as a group-distribution CLI', async (con
   assert.equal(installed.status, 'installed')
   assert.equal(
     await readFile(
-      path.join(targetRoot, 'internal', 'opencontent', 'docs', 'README.md'),
+      path.join(targetRoot, 'internal', 'document', 'docs', 'README.md'),
       'utf8'
     ),
     '# Internal overlay\n'
@@ -362,7 +362,7 @@ test('exposes pack, verify, and install as a group-distribution CLI', async (con
   const installation = await runCli([
     'verify-installation',
     '--id', 'provider-fixture',
-    '--root', 'internal/opencontent',
+    '--root', 'internal/document',
     '--target', targetRoot
   ])
   assert.equal(installation.fileCount, 2)

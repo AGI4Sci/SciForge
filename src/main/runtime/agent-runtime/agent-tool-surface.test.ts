@@ -382,7 +382,7 @@ describe('modelVisibleAgentRuntimeToolFailure', () => {
   it('publishes bounded capability input validation issues so the model can repair writes', () => {
     const text = modelVisibleAgentRuntimeToolFailure('sciforge_invoke', {
       code: 'invalid_input',
-      message: 'Input for project-coordinator.plan-draft.edit failed validation.',
+      message: 'Input for project-plan.edit failed validation.',
       details: {
         issues: [
           { path: ['expectedDraftRevision'], message: 'Required' },

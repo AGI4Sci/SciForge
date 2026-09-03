@@ -22,7 +22,6 @@ try {
   const result = await runElectronDomainSmoke({
     executablePath: require('electron'),
     ...configuration,
-    expectedDeployment: options.expectedDeployment,
     timeoutMs: options.timeoutMs
   })
   console.log(JSON.stringify(result, null, 2))

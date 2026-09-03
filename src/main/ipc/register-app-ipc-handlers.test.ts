@@ -255,7 +255,7 @@ describe('registerAppIpcHandlers', () => {
     }))
     const sender = createSender(41)
     const request = (transportRequestId: string) => ({
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Upload', maxBytes: 1_024 },
       transportRequestId
     })
@@ -337,7 +337,7 @@ describe('registerAppIpcHandlers', () => {
     await expect(handlers.get('fileTransfer:pick-upload-source')?.(
       { sender: alreadyDestroyed },
       {
-        ownerId: 'sciforge.content-space',
+        ownerId: 'sciforge.workspace-files',
         request: { title: 'Upload', maxBytes: 1_024 },
         transportRequestId: '123e4567-e89b-42d3-a456-426614174043'
       }
@@ -353,7 +353,7 @@ describe('registerAppIpcHandlers', () => {
     await expect(handlers.get('fileTransfer:pick-download-destination')?.(
       { sender: raced },
       {
-        ownerId: 'sciforge.content-space',
+        ownerId: 'sciforge.workspace-files',
         request: { title: 'Download', suggestedName: 'paper.pdf' },
         transportRequestId: '123e4567-e89b-42d3-a456-426614174044'
       }
@@ -401,7 +401,7 @@ describe('registerAppIpcHandlers', () => {
       } as never
     }))
     const request = (transportRequestId: string) => ({
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Upload', maxBytes: 1_024 },
       transportRequestId
     })

@@ -127,8 +127,8 @@ describe('createCodexAgentRuntimeAdapter', () => {
         additionalProperties: false
       },
       metadata: {
-        source: 'collaboration.remote-session-projection',
-        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22',
+        source: 'remote-session-projection',
+        sourceLabel: '手机远程会话',
         privateField: 'must-not-cross-runtime-boundary'
       },
       fileReferences: [{
@@ -150,8 +150,8 @@ describe('createCodexAgentRuntimeAdapter', () => {
       text: 'capture the exact figure',
       displayText: undefined,
       metadata: {
-        source: 'collaboration.remote-session-projection',
-        sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+        source: 'remote-session-projection',
+        sourceLabel: '手机远程会话'
       },
       workspace: undefined,
       model: undefined,
@@ -840,8 +840,8 @@ describe('createCodexAgentRuntimeAdapter', () => {
             text: 'expanded runtime prompt',
             displayText: 'short user prompt',
             metadata: {
-              source: 'collaboration.remote-session-projection',
-              sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+              source: 'remote-session-projection',
+              sourceLabel: '手机远程会话'
             },
             createdAt: '2026-06-11T00:00:00.000Z'
           }
@@ -865,8 +865,8 @@ describe('createCodexAgentRuntimeAdapter', () => {
         text: 'expanded runtime prompt',
         displayText: 'short user prompt',
         meta: {
-          source: 'collaboration.remote-session-projection',
-          sourceLabel: '手机 Zulip · 私人 Channel / Topic 22'
+          source: 'remote-session-projection',
+          sourceLabel: '手机远程会话'
         }
       })
     ])

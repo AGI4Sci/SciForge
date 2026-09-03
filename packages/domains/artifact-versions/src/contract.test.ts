@@ -184,7 +184,7 @@ test('deterministic commit identities are additive V2 fields and rejected by V1'
   assert.equal(ARTIFACT_VERSION_COMMIT_V2_CONTRACT.actionId, ARTIFACT_VERSIONS_CAPABILITY_IDS.commitV2)
 })
 
-test('origin/gui V1 list and bundle wires stay strict and fail closed', () => {
+test('public V1 list and bundle wires stay strict and fail closed', () => {
   assert.equal(artifactVersionListInputV1Schema.safeParse({ kind: 'dataset' }).success, false)
   assert.equal(artifactVersionListV1Schema.safeParse({
     items: [{ artifactOrdinal: 1, isCurrent: true }]

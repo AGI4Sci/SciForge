@@ -3,7 +3,7 @@ name: Publish research needs map
 on:
   push:
     branches:
-      - gui
+      - main
     paths:
       - "docs/research-agent-needs-site/**"
       - ".github/workflows/research-needs-pages.yml"

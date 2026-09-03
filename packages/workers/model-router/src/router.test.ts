@@ -947,7 +947,7 @@ test('Codex-shaped structured output survives Responses fallback through every u
         text: {
           format: {
             type: 'json_schema',
-            name: 'collaboration_worker_result',
+            name: 'worker_result',
             strict: true,
             schema: outputSchema,
           },
@@ -965,7 +965,7 @@ test('Codex-shaped structured output survives Responses fallback through every u
     assert.deepEqual(calls[0]?.body.text, {
       format: {
         type: 'json_schema',
-        name: 'collaboration_worker_result',
+        name: 'worker_result',
         strict: true,
         schema: outputSchema,
       },
@@ -973,7 +973,7 @@ test('Codex-shaped structured output survives Responses fallback through every u
     assert.deepEqual(calls[1]?.body.response_format, {
       type: 'json_schema',
       json_schema: {
-        name: 'collaboration_worker_result',
+        name: 'worker_result',
         strict: true,
         schema: outputSchema,
       },

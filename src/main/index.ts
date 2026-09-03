@@ -1659,10 +1659,6 @@ app
         defaultRuntimeId: async () => getActiveAgentRuntime(await store.load()),
         runtimeReadiness: async () => resolveDomainAgentRuntimeReadiness(await store.load())
       }),
-      remoteCapabilityApprovals: {
-        subscribe: (listener) => agentRuntimeHost.subscribeRemoteCapabilityApprovals(listener),
-        decide: (input) => agentRuntimeHost.decideRemoteCapabilityApproval(input)
-      },
       power: {
         acquire: async () => {
           const blockerId = powerSaveBlocker.start('prevent-app-suspension')

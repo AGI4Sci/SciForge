@@ -33,7 +33,6 @@ const requiredDevDependencies = [
 
 export const DEV_FORWARD_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP'])
 export const DEV_PREPARATION_SCRIPTS = Object.freeze([
-  'build:domain-native-addons',
   'build:agent-support'
 ])
 

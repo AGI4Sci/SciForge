@@ -26,7 +26,7 @@ describe('Host external navigation targets', () => {
     const service = createService(openExternal, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
     let invocation: HostResourceGrantInvocation | undefined = invocationFor(caller)
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -72,7 +72,7 @@ describe('Host external navigation targets', () => {
     const service = createService(openExternal, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
     let invocation: HostResourceGrantInvocation | undefined = invocationFor(caller)
-    const port = service.forOwner('domain.content-space', () => invocation)
+    const port = service.forOwner('domain.workspace-files', () => invocation)
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -102,7 +102,7 @@ describe('Host external navigation targets', () => {
       maxTargets: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     for (const url of [
       'http://content.example/portal',
       'https:////content.example/portal',
@@ -156,7 +156,7 @@ describe('Host external navigation targets', () => {
     const openExternal = vi.fn(async () => undefined)
     const service = createService(openExternal, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     const url = 'https://content.example:443/portal/%2fraw?signature=a%2Bb%2Fc&expires=60'
     const target = port.issueTarget({
       url,
@@ -172,7 +172,7 @@ describe('Host external navigation targets', () => {
     const openExternal = vi.fn(async () => undefined)
     const service = createService(openExternal, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -196,7 +196,7 @@ describe('Host external navigation targets', () => {
     })
     const service = createService(openExternal, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1?signature=opaque',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -222,7 +222,7 @@ describe('Host external navigation targets', () => {
     })
     const service = createService(openExternal, () => currentPrincipal)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -249,7 +249,7 @@ describe('Host external navigation targets', () => {
       maxTargets: 1
     })
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1',
       expiresAt: new Date(Date.now() + 60_000).toISOString()
@@ -279,7 +279,7 @@ describe('Host external navigation targets', () => {
       throw new Error('browser unavailable')
     }, () => principalV1)
     const caller = grantCaller('window:7', principalV1)
-    const port = service.forOwner('domain.content-space', () => invocationFor(caller))
+    const port = service.forOwner('domain.workspace-files', () => invocationFor(caller))
     const target = port.issueTarget({
       url: 'https://content.example/portal/file-1',
       expiresAt: new Date(Date.now() + 60_000).toISOString()

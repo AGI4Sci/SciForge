@@ -598,7 +598,7 @@ describe('dev sciforge browser bridge', () => {
     await window.sciforge.capabilities.invoke(capabilityRequest)
     await window.sciforge.capabilities.cancel('123e4567-e89b-42d3-a456-426614174000')
     await window.sciforge.fileTransfers.pickUploadSource({
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Upload', maxBytes: 1_024 },
       transportRequestId: '223e4567-e89b-42d3-a456-426614174000'
     })
@@ -665,7 +665,7 @@ describe('dev sciforge browser bridge', () => {
     expect(bridgeRequests).toContainEqual({
       channel: 'fileTransfer:pick-upload-source',
       payload: {
-        ownerId: 'sciforge.content-space',
+        ownerId: 'sciforge.workspace-files',
         request: { title: 'Upload', maxBytes: 1_024 },
         transportRequestId: '223e4567-e89b-42d3-a456-426614174000'
       }
@@ -767,7 +767,7 @@ describe('dev sciforge browser bridge', () => {
       return new Response(JSON.stringify({
         ok: true,
         payload: body.channel === 'capability:discover'
-          ? [{ id: 'content-space.upload-new', tags: [] }]
+          ? [{ id: 'workspace-files.upload-new', tags: [] }]
           : {
               contractVersion: 1,
               ok: false,
@@ -788,7 +788,7 @@ describe('dev sciforge browser bridge', () => {
 
     await expect(window.sciforge.capabilities.invoke({
       request: {
-        actionId: 'content-space.upload-new',
+        actionId: 'workspace-files.upload-new',
         invocationId: 'upload-1',
         input: {}
       }

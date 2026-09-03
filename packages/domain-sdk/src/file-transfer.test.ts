@@ -144,16 +144,16 @@ describe('Host-owned resource grant contracts', () => {
 
   it('limits system Workspace transfer authority to one Provider-neutral manifest grant', () => {
     assert.deepEqual(domainSystemWorkspaceTransferAuthorizationSchema.parse({
-      requiredSystemCapabilityGrant: 'content-space.system-transfer'
+      requiredSystemCapabilityGrant: 'workspace-files.system-transfer'
     }), {
-      requiredSystemCapabilityGrant: 'content-space.system-transfer'
+      requiredSystemCapabilityGrant: 'workspace-files.system-transfer'
     })
 
     for (const requiredSystemCapabilityGrant of [
       '',
       'transfer',
-      'Content-Space.system-transfer',
-      'content space.system-transfer'
+      'Workspace-Files.system-transfer',
+      'workspace files.system-transfer'
     ]) {
       assert.throws(() => domainSystemWorkspaceTransferAuthorizationSchema.parse({
         requiredSystemCapabilityGrant
@@ -162,13 +162,13 @@ describe('Host-owned resource grant contracts', () => {
 
     for (const forbidden of [
       { workspaceRoot: '/private/tmp/workspace' },
-      { domainId: 'content-space' },
-      { actionId: 'content-space.system-download' },
+      { domainId: 'workspace-files' },
+      { actionId: 'workspace-files.system-download' },
       { invocationId: 'caller-selected' },
       { principal: { subject: 'caller-selected' } }
     ]) {
       assert.throws(() => domainSystemWorkspaceTransferAuthorizationSchema.parse({
-        requiredSystemCapabilityGrant: 'content-space.system-transfer',
+        requiredSystemCapabilityGrant: 'workspace-files.system-transfer',
         ...forbidden
       }))
     }

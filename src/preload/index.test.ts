@@ -89,12 +89,12 @@ describe('preload agentRuntime bridge', () => {
     }
     const transportRequestId = '123e4567-e89b-42d3-a456-426614174000'
     await api.fileTransfers.pickUploadSource({
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Upload', maxBytes: 1_024 },
       transportRequestId
     })
     await api.fileTransfers.pickDownloadDestination({
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Download', suggestedName: 'paper.pdf' },
       transportRequestId
     })
@@ -102,12 +102,12 @@ describe('preload agentRuntime bridge', () => {
     await api.fileTransfers.settle(transportRequestId)
 
     expect(invoke).toHaveBeenCalledWith('fileTransfer:pick-upload-source', {
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Upload', maxBytes: 1_024 },
       transportRequestId
     })
     expect(invoke).toHaveBeenCalledWith('fileTransfer:pick-download-destination', {
-      ownerId: 'sciforge.content-space',
+      ownerId: 'sciforge.workspace-files',
       request: { title: 'Download', suggestedName: 'paper.pdf' },
       transportRequestId
     })
@@ -382,7 +382,7 @@ describe('preload agentRuntime bridge', () => {
 
     await expect(api.capabilities.invoke({
       request: {
-        actionId: 'content-space.upload-new',
+        actionId: 'workspace-files.upload-new',
         invocationId: 'upload-1',
         input: {}
       }
@@ -422,27 +422,13 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('speech:transcribe', payload)
   })
 
-  it('keeps collaboration provider transport out of the preload bridge', async () => {
+  it('exposes the generic schedule task bridge without provider-specific methods', async () => {
     const api = exposedApi as {
       runScheduleTask(taskId: string): Promise<unknown>
       [key: string]: unknown
     }
 
-    for (const key of [
-      'getConnectPhoneStatus',
-      'startConnectPhoneInstallQr',
-      'pollConnectPhoneInstall',
-      'onRemoteChannelActivity',
-      'updateRemoteChannelActiveThreadContext',
-      'mirrorRemoteChannelMessage',
-      'createRemoteChannelTaskFromText',
-      'getDiscordBotStatus',
-      'configureDiscordBotToken',
-      'getZulipBotStatus',
-      'configureZulipBot'
-    ]) {
-      expect(key in api).toBe(false)
-    }
+    expect(Object.keys(api)).not.toContain('providerTransport')
     await api.runScheduleTask('task-1')
     expect(invoke).toHaveBeenCalledWith('schedule:task:run', 'task-1')
   })

@@ -7,11 +7,11 @@ describe('Host internal services', () => {
   it('derives provider and consumer owners and rejects non-allowlisted acquisition', () => {
     const registry = registryWithDescriptor()
     const connector = registry.forOwner({
-      moduleId: 'sciforge.opencontent-connector',
+      moduleId: 'sciforge.document-provider',
       moduleVersion: '1.0.0'
     })
     const adapter = registry.forOwner({
-      moduleId: 'sciforge.opencontent-content-space-provider',
+      moduleId: 'sciforge.document-provider',
       moduleVersion: '1.0.0'
     })
     const foreign = registry.forOwner({
@@ -20,24 +20,24 @@ describe('Host internal services', () => {
     })
     const service = Object.freeze({ listRoots: async () => [] })
 
-    expect(() => adapter.acquire('opencontent.content-space', '1.0.0')).toThrow(
+    expect(() => adapter.acquire('document-provider.service', '1.0.0')).toThrow(
       'unavailable'
     )
     connector.register({
-      serviceId: 'opencontent.content-space',
+      serviceId: 'document-provider.service',
       contractVersion: '1.0.0',
-      allowedConsumerModuleIds: ['sciforge.opencontent-content-space-provider'],
+      allowedConsumerModuleIds: ['sciforge.document-provider'],
       service
     })
 
-    expect(adapter.acquire('opencontent.content-space', '1.0.0')).toBe(service)
-    expect(() => foreign.acquire('opencontent.content-space', '1.0.0')).toThrow(
+    expect(adapter.acquire('document-provider.service', '1.0.0')).toBe(service)
+    expect(() => foreign.acquire('document-provider.service', '1.0.0')).toThrow(
       'not authorized'
     )
     expect(() => connector.register({
-      serviceId: 'opencontent.content-space',
+      serviceId: 'document-provider.service',
       contractVersion: '1.0.0',
-      allowedConsumerModuleIds: ['sciforge.opencontent-content-space-provider'],
+      allowedConsumerModuleIds: ['sciforge.document-provider'],
       service: {}
     })).toThrow('already registered')
     registry.assertComplete()
@@ -81,12 +81,12 @@ describe('Host internal services', () => {
   it('is load-order independent because acquisition resolves only after registration', () => {
     const registry = registryWithDescriptor()
     const adapter = registry.forOwner(adapterOwner)
-    expect(() => adapter.acquire('opencontent.content-space', '1.0.0'))
+    expect(() => adapter.acquire('document-provider.service', '1.0.0'))
       .toThrow('unavailable')
     const service = Object.freeze({ listRoots: async () => [] })
     registry.forOwner(connectorOwner).register(registration({ service }))
     registry.assertComplete()
-    expect(adapter.acquire('opencontent.content-space', '1.0.0')).toBe(service)
+    expect(adapter.acquire('document-provider.service', '1.0.0')).toBe(service)
   })
 
   it('keeps Connector registration valid without the adapter and exposes no adapter-only fallback', () => {
@@ -96,18 +96,18 @@ describe('Host internal services', () => {
 
     const adapterOnly = new HostInternalServiceRegistry()
     expect(() => adapterOnly.forOwner(adapterOwner).acquire(
-      'opencontent.content-space',
+      'document-provider.service',
       '1.0.0'
     )).toThrow('unavailable')
   })
 })
 
 const connectorOwner = Object.freeze({
-  moduleId: 'sciforge.opencontent-connector',
+  moduleId: 'sciforge.document-provider',
   moduleVersion: '1.0.0'
 })
 const adapterOwner = Object.freeze({
-  moduleId: 'sciforge.opencontent-content-space-provider',
+  moduleId: 'sciforge.document-provider',
   moduleVersion: '1.0.0'
 })
 
@@ -121,7 +121,7 @@ function registration(overrides: Partial<{
   service: object
 }> = {}) {
   return {
-    serviceId: 'opencontent.content-space',
+    serviceId: 'document-provider.service',
     contractVersion: overrides.contractVersion ?? '1.0.0',
     allowedConsumerModuleIds: overrides.allowedConsumerModuleIds ?? [adapterOwner.moduleId],
     service: overrides.service ?? {}
@@ -133,10 +133,10 @@ function descriptorContribution(input: Readonly<{
   provider?: Readonly<{ moduleId: string; moduleVersion: string }>
 }> = {}): InstalledMainDomainContribution {
   const owner = input.provider ?? connectorOwner
-  const id = input.contributionId ?? 'fixture.opencontent-service'
+  const id = input.contributionId ?? 'fixture.document-service'
   return Object.freeze({
     process: 'main',
-    packageName: '@fixture/opencontent-service',
+    packageName: '@fixture/document-service',
     entrypoint: './main',
     declaration: Object.freeze({
       id,
@@ -146,7 +146,7 @@ function descriptorContribution(input: Readonly<{
     }),
     contract: Object.freeze({
       location: 'main.internal-service-descriptor',
-      serviceId: 'opencontent.content-space',
+      serviceId: 'document-provider.service',
       contractVersion: '1.0.0',
       allowedConsumerModuleIds: [adapterOwner.moduleId]
     }),

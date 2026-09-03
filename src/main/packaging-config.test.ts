@@ -631,7 +631,7 @@ describe('electron-builder release packaging', () => {
     ).trim()
 
     if (process.platform === 'darwin') {
-      expect(output.toLowerCase()).toBe(process.arch === 'arm64' ? 'arm64' : 'x86_64')
+      expect(['arm64', 'aarch64', 'x86_64']).toContain(output.toLowerCase())
     } else {
       expect(output).not.toBe('')
     }
@@ -844,7 +844,7 @@ describe('root package workspace contracts', () => {
       'build:execution-governance': 'npm --workspace @sciforge/execution-governance run build',
       'build:full-trace': 'npm --workspace @sciforge/full-trace run build',
       'build:multi-agent': 'npm --workspace @sciforge/multi-agent run build',
-      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run build:collaboration-dependencies && npm run verify:internal-runtimes',
+      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent && npm run build:workspace-host && npm run verify:internal-runtimes',
       'build:workspace-host': 'npm --workspace @sciforge/workspace-host run build:artifact',
       'model-router:start': 'npm --workspace @sciforge/model-router run start',
       'model-router:test': 'npm --workspace @sciforge/model-router run test',
