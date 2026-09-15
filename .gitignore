@@ -13,6 +13,7 @@ packages/workers/workspace-host/artifacts/
 .sciforge/
 .npm-cache/
 outputs/
+eval-results/
 *.log
 .DS_Store
 __pycache__/
