@@ -2755,6 +2755,10 @@ describe('CodexRuntimeService compatibility operations', () => {
         .map(([event]) => event)
         .find((event) => event.tool?.meta?.phase === 'succeeded')
       expect(terminal?.tool?.detail).toBe('Dynamic tool completed successfully.')
+      expect(terminal?.tool?.meta?.capabilityIdentity).toEqual({
+        operationRef: `op_${'a'.repeat(24)}`,
+        capabilityId: 'workspace-files.create-folder'
+      })
       expect(terminal?.tool?.meta).not.toHaveProperty('arguments')
       expect(terminal?.tool?.meta).not.toHaveProperty('structuredContent')
     } finally {
@@ -2762,6 +2766,72 @@ describe('CodexRuntimeService compatibility operations', () => {
     }
 
     expect(call).toHaveBeenCalledTimes(2)
+  })
+
+  it('records Host-resolved capability identity on failed dynamic tool facts', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const broadcast = captureBroadcastEvents()
+    const capabilityIdentity = {
+      operationRef: `op_${'f'.repeat(24)}`,
+      capabilityId: 'paper-radar.search'
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      storageRoot,
+      capabilityAgentTools: {
+        tools: () => [{
+          type: 'function',
+          name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+          description: 'Invoke.',
+          inputSchema: { type: 'object', properties: {} }
+        }],
+        call: async () => {
+          throw Object.assign(new Error('Capability output must be JSON serializable.'), {
+            code: 'non_serializable_output',
+            ...capabilityIdentity
+          })
+        }
+      },
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await expect(service.startThread({
+      threadId: 'failed-identity-thread',
+      title: 'Failed identity',
+      workspace: '/tmp/capability-workspace'
+    })).resolves.toMatchObject({ ok: true })
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'failed-identity-request',
+      callId: 'failed-identity-call',
+      threadId: 'failed-identity-thread',
+      turnId: 'turn-1',
+      tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: capabilityIdentity.operationRef, input: {} }
+    })).resolves.toMatchObject({
+      success: false,
+      errorCode: 'non_serializable_output',
+      capabilityIdentity
+    })
+
+    expect(broadcast.mock.calls.map(([event]) => event)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tool: expect.objectContaining({
+          status: 'error',
+          meta: expect.objectContaining({
+            phase: 'failed',
+            capabilityIdentity,
+            errorCode: 'non_serializable_output'
+          })
+        })
+      })
+    ]))
+    broadcast.mockRestore()
   })
 
   it('uses a stable Host JSON-RPC identity when legacy tool calls omit provider callId', async () => {

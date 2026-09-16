@@ -60,6 +60,11 @@ export type RuntimeToolOutputContentItem =
 export type RuntimeToolCallResponse = {
   contentItems: RuntimeToolOutputContentItem[]
   success: boolean
+  /** Host-private operation identity for durable capability trace facts. */
+  capabilityIdentity?: Readonly<{
+    operationRef: string
+    capabilityId?: string
+  }>
   structuredContent?: unknown
   effects?: AgentRuntimeExecutionEffectClass[]
   completionReceipts?: AgentRuntimeCompletionReceipt[]

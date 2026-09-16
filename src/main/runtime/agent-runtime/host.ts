@@ -1665,14 +1665,48 @@ export class AgentRuntimeHost {
       input.threadId,
       input.workspaceLocator
     )
-    await adapter.deleteThread(context, input)
-    this.threadWorkspaceHosts.delete(threadTurnKey(adapter.id, input.threadId))
-    this.threadSummaries.delete(threadTurnKey(adapter.id, input.threadId))
+    const key = threadTurnKey(adapter.id, input.threadId)
+    try {
+      await adapter.deleteThread(context, input)
+    } finally {
+      this.cleanupDeletedThreadState(adapter.id, input.threadId)
+      this.threadWorkspaceHosts.delete(key)
+      this.threadSummaries.delete(key)
+    }
     await Promise.resolve(this.options.services?.visibleContext?.releaseSurface?.(capabilityAgentCallerId({
       runtimeId: adapter.id,
       threadId: input.threadId,
       requestId: input.threadId
     }))).catch(() => undefined)
+  }
+
+  /**
+   * A deleted eval/workspace thread must not leave approval records or event
+   * subscribers behind. Resolved records are also removed so a later thread
+   * cannot observe stale authorization history from the deleted scope.
+   */
+  private cleanupDeletedThreadState(runtimeId: AgentRuntimeId, threadIdInput: string): void {
+    const key = threadTurnKey(runtimeId, threadIdInput)
+    this.cancelCapabilityApprovalsForTurn(
+      runtimeId,
+      threadIdInput,
+      undefined,
+      'Thread deleted; pending capability confirmations were cancelled.'
+    )
+    for (let index = this.capabilityApprovalOrder.length - 1; index >= 0; index -= 1) {
+      const approvalId = this.capabilityApprovalOrder[index]
+      const record = approvalId ? this.capabilityApprovals.get(approvalId) : undefined
+      if (!record || capabilityApprovalRecordKey(record) !== key) continue
+      this.capabilityApprovals.delete(approvalId)
+      this.capabilityApprovalOrder.splice(index, 1)
+    }
+    const subscribers = this.capabilityApprovalSubscribers.get(key)
+    if (subscribers) {
+      for (const subscriber of subscribers) subscriber.close()
+      this.capabilityApprovalSubscribers.delete(key)
+    }
+    this.activeThreadTurns.delete(key)
+    this.turnQueues.delete(key)
   }
 
   async *subscribeEvents(input: AgentRuntimeEventSubscribeInput): AsyncIterable<AgentRuntimeEvent> {

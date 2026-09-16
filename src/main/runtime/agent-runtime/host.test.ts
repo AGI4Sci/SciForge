@@ -1278,6 +1278,51 @@ describe('AgentRuntimeHost', () => {
     host.dispose()
   })
 
+  it('cleans capability approvals and subscribers when a thread is deleted', async () => {
+    const thread = {
+      id: 'deleted-eval-thread',
+      runtimeId: 'codex' as const,
+      title: 'Deleted eval thread',
+      updatedAt: '2026-08-17T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter] })
+    const decision = host.requestCapabilityApproval({
+      context: {
+        requestId: 'deleted-call',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'deleted-turn',
+        callId: 'deleted-call'
+      },
+      actionId: 'generic.package.write',
+      invocationId: 'agent_inv_deleted_thread_0001',
+      mode: 'confirmation',
+      title: 'Approve generic action',
+      description: 'Exercises deletion cleanup.',
+      effect: 'external-write',
+      input: { thread: thread.id }
+    })
+    const eventAbort = new AbortController()
+    const events = host.subscribeEvents({ runtimeId: 'codex', threadId: thread.id, signal: eventAbort.signal })[Symbol.asyncIterator]()
+    await expect(events.next()).resolves.toMatchObject({
+      value: { kind: 'approval_requested', threadId: thread.id }
+    })
+
+    await host.deleteThread({ runtimeId: 'codex', threadId: thread.id })
+
+    await expect(decision).resolves.toBe('cancelled')
+    eventAbort.abort()
+    await events.return?.()
+    const internals = host as unknown as {
+      capabilityApprovals: Map<string, unknown>
+      capabilityApprovalSubscribers: Map<string, unknown>
+    }
+    expect(internals.capabilityApprovals.size).toBe(0)
+    expect(internals.capabilityApprovalSubscribers.size).toBe(0)
+    host.dispose()
+  })
+
   it('includes a pending capability approval in the latest thread page for late UI attachment', async () => {
     const thread = {
       id: 'persistent-child-thread',

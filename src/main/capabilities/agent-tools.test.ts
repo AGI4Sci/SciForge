@@ -775,6 +775,58 @@ describe('CapabilityAgentToolSurface', () => {
     })).rejects.toMatchObject({ code: 'capability_identity_mismatch' })
   })
 
+  it('preserves the Host-resolved operation identity on invocation failures', async () => {
+    const operation = descriptor('document.failed-invocation', 'Failed invocation', 'global', 'read')
+    const invoke = vi.fn(async () => {
+      throw Object.assign(new Error('Capability output must be JSON serializable.'), {
+        code: 'non_serializable_output',
+        failureClass: 'failed'
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation]),
+        invoke
+      },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery result.')
+    const operationRef = discovered.value[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {} },
+      context
+    })).rejects.toMatchObject({
+      code: 'non_serializable_output',
+      operationRef,
+      capabilityId: operation.id,
+      cause: expect.objectContaining({ code: 'non_serializable_output' })
+    })
+    expect(invoke).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ actionId: operation.id }),
+      expect.anything()
+    )
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {}, unexpected: true },
+      context
+    })).rejects.toMatchObject({
+      code: 'invalid_arguments',
+      operationRef,
+      capabilityId: operation.id
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
   it('passes a Host workspace locator only through the private caller context', async () => {
     const locator = {
       contractVersion: 1 as const,

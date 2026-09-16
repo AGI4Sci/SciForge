@@ -1899,10 +1899,12 @@ export class CodexRuntimeService {
       { tool: request.tool, value: result.value },
       callId
     )
+    const capabilityIdentity = capabilityIdentityFrom(result.value)
     const response: DynamicToolResponseWithDelivery = {
       success: true,
       contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }],
       structuredContent: result.value,
+      ...(capabilityIdentity ? { capabilityIdentity } : {}),
       ...(execution.effects.length ? { effects: execution.effects } : {}),
       ...(execution.completionReceipts.length ? { completionReceipts: execution.completionReceipts } : {}),
       evidenceDelta: true,
@@ -1980,6 +1982,9 @@ export class CodexRuntimeService {
             : {}),
           ...(response?.evidenceDelta !== undefined ? { evidenceDelta: response.evidenceDelta } : {}),
           ...(response?.stateChanged !== undefined ? { stateChanged: response.stateChanged } : {}),
+          ...(response?.capabilityIdentity
+            ? { capabilityIdentity: response.capabilityIdentity }
+            : {}),
           ...(request.namespace ? { namespace: request.namespace } : {})
         }
       }
@@ -4022,6 +4027,7 @@ function failedDynamicToolCall(
       | 'resourceIdentity'
       | 'evidenceDelta'
       | 'stateChanged'
+      | 'capabilityIdentity'
     >
   > = {}
 ): RuntimeToolCallResponse {
@@ -4069,7 +4075,10 @@ function principalDeliveryFailure(
       errorCode: code,
       failureClass: outcomeUnknown ? 'outcome_unknown' : 'authorization_changed',
       retryable: false,
-      evidenceDelta: false
+      evidenceDelta: false,
+      ...(response?.capabilityIdentity
+        ? { capabilityIdentity: response.capabilityIdentity }
+        : {})
     }
   )
 }
@@ -4630,6 +4639,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function capabilityIdentityFrom(
+  value: unknown
+): RuntimeToolCallResponse['capabilityIdentity'] | undefined {
+  const record = asRecord(value)
+  const identity = asRecord(record?.capabilityIdentity) ?? record
+  const operationRef = stringValue(identity?.operationRef).trim()
+  if (!operationRef.startsWith('op_')) return undefined
+  const capabilityId = stringValue(identity?.capabilityId).trim()
+  return {
+    operationRef,
+    ...(capabilityId ? { capabilityId } : {})
+  }
+}
+
 function dynamicToolArgumentsRecord(value: unknown): Record<string, unknown> | null {
   const record = asRecord(value)
   if (record) return record
@@ -4663,6 +4686,7 @@ function dynamicToolErrorMetadata(
   | 'resourceIdentity'
   | 'evidenceDelta'
   | 'stateChanged'
+  | 'capabilityIdentity'
 > {
   const record = asRecord(error)
   const code = stringValue(record?.code).trim()
@@ -4674,6 +4698,7 @@ function dynamicToolErrorMetadata(
   const resourceIdentity = stringValue(record?.resourceIdentity).trim()
   const evidenceDelta = booleanValue(record?.evidenceDelta)
   const stateChanged = booleanValue(record?.stateChanged)
+  const capabilityIdentity = capabilityIdentityFrom(error)
   return {
     ...(code ? { errorCode: code } : {}),
     ...(failureClass ? { failureClass } : {}),
@@ -4682,7 +4707,8 @@ function dynamicToolErrorMetadata(
     ...(providerStage ? { providerStage } : {}),
     ...(resourceIdentity ? { resourceIdentity } : {}),
     ...(evidenceDelta !== undefined ? { evidenceDelta } : {}),
-    ...(stateChanged !== undefined ? { stateChanged } : {})
+    ...(stateChanged !== undefined ? { stateChanged } : {}),
+    ...(capabilityIdentity ? { capabilityIdentity } : {})
   }
 }
 
