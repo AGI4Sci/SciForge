@@ -14,15 +14,34 @@ import {
 
 export function evaluateRouting(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
   const expected = evalCase.expected.domain
-  if (!expected) return part(1)
+  const requiredDomains = evalCase.expected.requiredDomains
+  const actualDomains = new Set(trace.domains ?? domainsFromInvocations(trace.invocations))
+  if (!expected && requiredDomains.length === 0) return part(1)
   const actual = trace.domain ?? domainFromActions(trace.selectedActions)
-  if (actual === expected) return part(1)
-  return part(0, failure(
-    'wrong_domain',
-    `Expected domain ${expected}, received ${actual ?? 'none'}.`,
-    expected,
-    actual ?? null
-  ))
+  const failures: EvalFailure[] = []
+  let checks = 0
+  let passed = 0
+  if (expected) {
+    checks += 1
+    if (actual === expected) passed += 1
+    else failures.push(failure(
+      'wrong_domain',
+      `Expected domain ${expected}, received ${actual ?? 'none'}.`,
+      expected,
+      actual ?? null
+    ))
+  }
+  for (const domain of requiredDomains) {
+    checks += 1
+    if (actualDomains.has(domain)) passed += 1
+    else failures.push(failure(
+      'wrong_domain',
+      `Expected workflow to route through domain ${domain}.`,
+      domain,
+      [...actualDomains]
+    ))
+  }
+  return part(checks === 0 ? 1 : passed / checks, failures)
 }
 
 export function evaluateDiscovery(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
@@ -58,6 +77,15 @@ export function evaluateActionSelection(evalCase: EvalCase, trace: EvalTrace): E
       ))
     }
   }
+  for (const group of evalCase.expected.alternativeActionGroups) {
+    if (group.some((actionId) => actual.has(actionId))) continue
+    failures.push(failure(
+      'missing_alternative_action',
+      `At least one action from the alternative group was required: ${group.join(', ')}.`,
+      group,
+      [...actual]
+    ))
+  }
   for (const actionId of actual) {
     if (evalCase.expected.forbiddenActions.includes(actionId)) {
       failures.push(failure(
@@ -77,10 +105,133 @@ export function evaluateActionSelection(evalCase: EvalCase, trace: EvalTrace): E
       ))
     }
   }
+  if (evalCase.expected.noCapabilityCalls && trace.invocations.length > 0) {
+    failures.push(failure(
+      'unexpected_action',
+      'This task explicitly requires no Capability action calls.',
+      [],
+      trace.invocations.map((invocation) => invocation.actionId)
+    ))
+  }
   const requiredRecall = required.length === 0
     ? 1
     : required.filter((actionId) => actual.has(actionId)).length / required.length
   return part(failures.length > 0 ? 0 : requiredRecall, failures)
+}
+
+export function evaluateOrdering(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
+  const constraints = evalCase.expected.ordering
+  if (constraints.length === 0) return part(1)
+  const failures: EvalFailure[] = []
+  let passed = 0
+  for (const constraint of constraints) {
+    const before = firstInvocation(trace.invocations, constraint.before)
+    const after = firstInvocation(trace.invocations, constraint.after)
+    if (!before || !after || sequenceOf(before, trace.invocations) < sequenceOf(after, trace.invocations)) {
+      passed += 1
+      continue
+    }
+    failures.push(failure(
+      'ordering_mismatch',
+      `Expected ${constraint.before} to run before ${constraint.after}.`,
+      `${constraint.before} → ${constraint.after}`,
+      `${constraint.after} → ${constraint.before}`
+    ))
+  }
+  return part(passed / constraints.length, failures)
+}
+
+export function evaluateUnnecessaryActions(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
+  const unnecessary = new Set(evalCase.expected.unnecessaryActions)
+  if (unnecessary.size === 0) return part(1)
+  const actual = trace.invocations.filter((invocation) => unnecessary.has(invocation.actionId))
+  if (actual.length === 0) return part(1)
+  return part(0, actual.map((invocation) => failure(
+    'unnecessary_action',
+    `Action ${invocation.actionId} was explicitly marked unnecessary for this task.`,
+    [...unnecessary],
+    invocation.actionId
+  )))
+}
+
+const PROTOCOL_TOOL_NAMES = new Set([
+  'sciforge_discover',
+  'sciforge_observe',
+  'sciforge_invoke',
+  'sciforge_events'
+])
+
+/**
+ * Evaluates runtime tools that are visible in the trace but are not
+ * capability actions. Protocol tools are always allowed; a case may allow
+ * additional tools explicitly when its workflow contract requires them.
+ */
+export function evaluateToolUsage(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
+  const details = trace.toolCallDetails ?? []
+  const expected = evalCase.expected.tools
+  const required = new Set(expected.required)
+  const allowed = new Set(expected.allowed)
+  const forbidden = new Set(expected.forbidden)
+  const unnecessary = new Set(expected.unnecessary)
+  const actualNames = new Set(details.map((detail) => detail.toolName))
+  const failures: EvalFailure[] = []
+
+  for (const toolName of required) {
+    if (!actualNames.has(toolName)) {
+      failures.push(failure(
+        'missing_tool',
+        `Required runtime tool ${toolName} was not called.`,
+        toolName,
+        [...actualNames]
+      ))
+    }
+  }
+  for (const detail of details) {
+    if (forbidden.has(detail.toolName)) {
+      failures.push(failure(
+        'forbidden_tool',
+        `Runtime tool ${detail.toolName} is forbidden for this task.`,
+        [...forbidden],
+        detail.toolName
+      ))
+    } else if (unnecessary.has(detail.toolName)) {
+      failures.push(failure(
+        'unnecessary_tool',
+        `Runtime tool ${detail.toolName} was explicitly marked unnecessary for this task.`,
+        [...unnecessary],
+        detail.toolName
+      ))
+    }
+    if (PROTOCOL_TOOL_NAMES.has(detail.toolName)) {
+      if (detail.status === 'error') {
+        failures.push(failure(
+          'tool_failure',
+          `Runtime protocol tool ${detail.toolName} failed${detail.errorCode ? ` (${detail.errorCode})` : ''}.`,
+          'success',
+          detail.errorCode ?? detail.status
+        ))
+      }
+      continue
+    }
+    if (!forbidden.has(detail.toolName) && !unnecessary.has(detail.toolName) &&
+        allowed.size > 0 && !allowed.has(detail.toolName)) {
+      failures.push(failure(
+        'unexpected_tool',
+        `Runtime tool ${detail.toolName} is outside the allowed tool set.`,
+        [...allowed],
+        detail.toolName
+      ))
+    }
+    if (detail.status === 'error') {
+      failures.push(failure(
+        'tool_failure',
+        `Runtime tool ${detail.toolName} failed${detail.errorCode ? ` (${detail.errorCode})` : ''}.`,
+        'success',
+        detail.errorCode ?? detail.status
+      ))
+    }
+  }
+  return part(failures.length === 0 ? 1 : 0, failures)
 }
 
 export function evaluateArguments(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
@@ -90,49 +241,53 @@ export function evaluateArguments(evalCase: EvalCase, trace: EvalTrace): Evaluat
   let checks = 0
   let passed = 0
   for (const [actionId, expectation] of expectations) {
-    const invocation = lastInvocation(trace.invocations, actionId)
-    for (const path of expectation.required) {
-      checks += 1
-      if (invocation && hasPath(invocation.args, path)) passed += 1
-      else failures.push(failure(
-        'argument_mismatch',
-        `Action ${actionId} is missing required argument ${path}.`,
-        path,
-        invocation ? invocation.args : null
-      ))
-    }
-    for (const [path, expectedType] of Object.entries(expectation.types)) {
-      checks += 1
-      const value = invocation ? getPath(invocation.args, path) : undefined
-      if (value !== undefined && argumentType(value) === expectedType) passed += 1
-      else failures.push(failure(
-        'argument_mismatch',
-        `Argument ${actionId}.${path} must have type ${expectedType}.`,
-        expectedType,
-        value === undefined ? null : value
-      ))
-    }
-    for (const [path, expectedValue] of Object.entries(expectation.values)) {
-      checks += 1
-      const value = invocation ? getPath(invocation.args, path) : undefined
-      if (value !== undefined && deepEqual(value, expectedValue)) passed += 1
-      else failures.push(failure(
-        'argument_mismatch',
-        `Argument ${actionId}.${path} did not match the expected value.`,
-        expectedValue,
-        value === undefined ? null : value
-      ))
-    }
-    if (!invocation && expectation.required.length === 0 &&
-        Object.keys(expectation.types).length === 0 &&
-        Object.keys(expectation.values).length === 0) {
-      checks += 1
-      failures.push(failure(
-        'argument_mismatch',
-        `Action ${actionId} was not invoked, so its arguments cannot be evaluated.`,
-        actionId,
-        null
-      ))
+    const invocations = trace.invocations.filter((invocation) => invocation.actionId === actionId)
+    const targets: readonly (EvalInvocation | undefined)[] = invocations.length > 0 ? invocations : [undefined]
+    for (const invocation of targets) {
+      const label = invocation?.logicalInvocationId ? ` (${invocation.logicalInvocationId})` : ''
+      for (const path of expectation.required) {
+        checks += 1
+        if (invocation && hasPath(invocation.args, path)) passed += 1
+        else failures.push(failure(
+          'argument_mismatch',
+          `Action ${actionId}${label} is missing required argument ${path}.`,
+          path,
+          invocation ? invocation.args : null
+        ))
+      }
+      for (const [path, expectedType] of Object.entries(expectation.types)) {
+        checks += 1
+        const value = invocation ? getPath(invocation.args, path) : undefined
+        if (value !== undefined && argumentType(value) === expectedType) passed += 1
+        else failures.push(failure(
+          'argument_mismatch',
+          `Argument ${actionId}.${path}${label} must have type ${expectedType}.`,
+          expectedType,
+          value === undefined ? null : value
+        ))
+      }
+      for (const [path, expectedValue] of Object.entries(expectation.values)) {
+        checks += 1
+        const value = invocation ? getPath(invocation.args, path) : undefined
+        if (value !== undefined && deepEqual(value, expectedValue)) passed += 1
+        else failures.push(failure(
+          'argument_mismatch',
+          `Argument ${actionId}.${path}${label} did not match the expected value.`,
+          expectedValue,
+          value === undefined ? null : value
+        ))
+      }
+      if (!invocation && expectation.required.length === 0 &&
+          Object.keys(expectation.types).length === 0 &&
+          Object.keys(expectation.values).length === 0) {
+        checks += 1
+        failures.push(failure(
+          'argument_mismatch',
+          `Action ${actionId} was not invoked, so its arguments cannot be evaluated.`,
+          actionId,
+          null
+        ))
+      }
     }
   }
   return part(checks === 0 ? 1 : passed / checks, failures)
@@ -142,54 +297,91 @@ export function evaluateAuthorization(evalCase: EvalCase, trace: EvalTrace): Eva
   const expectations = Object.entries(evalCase.expected.authorization)
   if (expectations.length === 0) return part(1)
   const failures: EvalFailure[] = []
+  let checks = 0
   let passed = 0
   for (const [actionId, expected] of expectations) {
     const events = trace.authorizationEvents.filter((event) => event.actionId === actionId)
-    const actual = authorizationStatus(events, trace.invocations, actionId)
-    if (actual === expected) {
-      passed += 1
-    } else {
-      failures.push(failure(
+    const invocations = trace.invocations.filter((invocation) => invocation.actionId === actionId)
+    if (invocations.length === 0) {
+      checks += 1
+      const actual = authorizationStatus(events, [], actionId)
+      if (actual === expected) passed += 1
+      else failures.push(failure(
         'authorization_mismatch',
         `Expected authorization ${expected} for ${actionId}, received ${actual}.`,
         expected,
         actual
       ))
+      if (expected === 'confirmation') appendConfirmationFailures(
+        failures, actionId, events, undefined, trace.invocations, events
+      )
+      continue
     }
-    if (expected === 'confirmation') {
-      const requested = events.find((event) => event.status === 'requested')
-      const allowed = events.find((event) => event.status === 'allowed')
-      const invocation = lastInvocation(trace.invocations, actionId)
-      if (requested && allowed && invocation &&
-          sequenceOf(invocation, trace.invocations) <= sequenceOf(allowed, events)) {
-        failures.push(failure(
-          'authorization_order',
-          `Action ${actionId} was invoked before its confirmation was resolved.`,
-          'approval before invoke',
-          'invoke before approval'
-        ))
-      }
-      if (!requested || !allowed) {
+    for (const invocation of invocations) {
+      checks += 1
+      const relevantEvents = authorizationEventsBeforeInvocation(events, invocation)
+      const actual = authorizationStatus(relevantEvents, [invocation], actionId)
+      if (actual === expected) passed += 1
+      else failures.push(failure(
+        'authorization_mismatch',
+        `Expected authorization ${expected} for ${actionId}, received ${actual}.`,
+        expected,
+        actual
+      ))
+      if (expected === 'confirmation') appendConfirmationFailures(
+        failures, actionId, relevantEvents, invocation, trace.invocations, events
+      )
+      if (expected === 'deny' && invocation.success) {
         failures.push(failure(
           'authorization_mismatch',
-          `Action ${actionId} did not produce a complete confirmation request/resolution pair.`,
-          'requested → allowed',
-          events.map((event) => event.status)
+          `Denied action ${actionId} was invoked successfully.`,
+          'no successful invocation',
+          invocation.success
         ))
       }
     }
-    if (expected === 'deny' && trace.invocations.some((invocation) => (
-      invocation.actionId === actionId && invocation.success
-    ))) {
-      failures.push(failure(
-        'authorization_mismatch',
-        `Denied action ${actionId} was invoked successfully.`,
-        'no successful invocation',
-        trace.invocations.filter((invocation) => invocation.actionId === actionId).map((invocation) => invocation.success)
-      ))
-    }
   }
-  return part(failures.length > 0 ? 0 : passed / expectations.length, failures)
+  return part(failures.length > 0 ? 0 : checks === 0 ? 1 : passed / checks, failures)
+}
+
+function appendConfirmationFailures(
+  failures: EvalFailure[],
+  actionId: string,
+  events: readonly EvalAuthorizationEvent[],
+  invocation: EvalInvocation | undefined,
+  allInvocations: readonly EvalInvocation[],
+  allEvents: readonly EvalAuthorizationEvent[]
+): void {
+  const requested = events.find((event) => event.status === 'requested')
+  const allowed = events.find((event) => event.status === 'allowed')
+  const firstAllowed = allEvents.find((event) => event.status === 'allowed')
+  const hasConfirmation = allEvents.some((event) => event.status === 'requested') && Boolean(firstAllowed)
+  if (hasConfirmation && invocation &&
+      sequenceOf(invocation, allInvocations) <= sequenceOf(firstAllowed!, allEvents)) {
+    failures.push(failure(
+      'authorization_order',
+      `Action ${actionId} was invoked before its confirmation was resolved.`,
+      'approval before invoke',
+      'invoke before approval'
+    ))
+  }
+  if (!requested || !allowed) {
+    failures.push(failure(
+      'authorization_mismatch',
+      `Action ${actionId} did not produce a complete confirmation request/resolution pair.`,
+      'requested → allowed',
+      events.map((event) => event.status)
+    ))
+  }
+}
+
+function authorizationEventsBeforeInvocation(
+  events: readonly EvalAuthorizationEvent[],
+  invocation: EvalInvocation
+): readonly EvalAuthorizationEvent[] {
+  const invocationSequence = invocation.sequence
+  if (invocationSequence === undefined) return events
+  return events.filter((event) => event.sequence === undefined || event.sequence <= invocationSequence)
 }
 
 export function evaluateInvocation(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
@@ -232,7 +424,8 @@ export function evaluateInvocation(evalCase: EvalCase, trace: EvalTrace): Evalua
       continue
     }
     if (expected.errorCode !== undefined &&
-        !invocations.some((invocation) => invocation.errorCode === expected.errorCode)) {
+        !invocations.some((invocation) => invocation.errorCode === expected.errorCode ||
+          invocation.providerAttempts?.some((attempt) => attempt.errorCode === expected.errorCode) === true)) {
       failures.push(failure(
         'invocation_failure',
         `Expected ${actionId} to report error ${expected.errorCode}.`,
@@ -261,7 +454,7 @@ export function evaluateFinalState(evalCase: EvalCase, trace: EvalTrace): Evalua
   if (assertions.length === 0) return part(1)
   if (trace.finalState === undefined) {
     return part(0, failure(
-      'final_state_mismatch',
+      'trace_unsupported',
       'Expected final state assertions, but the execution did not provide final state.',
       assertions,
       null
@@ -290,6 +483,12 @@ export function evaluateRubric(evalCase: EvalCase, trace: EvalTrace): RubricEval
   let weightedMax = 0
   for (const item of evalCase.rubric) {
     if (item.type === 'llm_judge') {
+      failures.push(failure(
+        'trace_unsupported',
+        `Rubric ${item.id} requires LLM Judge infrastructure, which is not configured in the MVP.`,
+        'llm_judge',
+        'unsupported'
+      ))
       results.push({
         id: item.id,
         status: 'unsupported',
@@ -301,6 +500,12 @@ export function evaluateRubric(evalCase: EvalCase, trace: EvalTrace): RubricEval
       continue
     }
     if (!item.assertion || trace.finalState === undefined) {
+      failures.push(failure(
+        'trace_unsupported',
+        `Rubric ${item.id} cannot be evaluated without a deterministic assertion and final state.`,
+        'deterministic assertion and final state',
+        null
+      ))
       results.push({
         id: item.id,
         status: 'unsupported',
@@ -349,9 +554,13 @@ export function evaluateCase(evalCase: EvalCase, execution: EvalExecutionView): 
   const routing = evaluateRouting(evalCase, trace)
   const discovery = evaluateDiscovery(evalCase, trace)
   const selection = evaluateActionSelection(evalCase, trace)
+  const ordering = evaluateOrdering(evalCase, trace)
+  const unnecessary = evaluateUnnecessaryActions(evalCase, trace)
+  const tools = evaluateToolUsage(evalCase, trace)
   const argumentsPart = evaluateArguments(evalCase, trace)
   const authorization = evaluateAuthorization(evalCase, trace)
   const invocation = evaluateInvocation(evalCase, trace)
+  const expectedFailure = evaluateExpectedFailure(evalCase, trace)
   const finalState = evaluateFinalState(evalCase, trace)
   const rubric = evaluateRubric(evalCase, trace)
   const taskSuccess = evaluateTaskSuccess(evalCase, trace)
@@ -359,13 +568,18 @@ export function evaluateCase(evalCase: EvalCase, execution: EvalExecutionView): 
     ...routing.failures,
     ...discovery.failures,
     ...selection.failures,
+    ...ordering.failures,
+    ...unnecessary.failures,
+    ...tools.failures,
     ...argumentsPart.failures,
     ...authorization.failures,
     ...invocation.failures,
+    ...expectedFailure.failures,
     ...taskSuccess.failures,
     ...finalState.failures,
     ...rubric.failures,
-    ...(trace.unsupported ?? []).map((message) => failure('trace_unsupported', message))
+    ...(trace.unsupported ?? []).map((message) => failure('trace_unsupported', message)),
+    ...(trace.executionError ? [failure('execution_error', trace.executionError)] : [])
   ]
   const scores: EvalScores = {
     routing: routing.score,
@@ -395,10 +609,76 @@ export function evaluateCase(evalCase: EvalCase, execution: EvalExecutionView): 
     invocations: [...trace.invocations],
     authorizationEvents: [...trace.authorizationEvents],
     expected: evalCase.expected,
+    ...(evalCase.expectedFailure ? { expectedFailure: evalCase.expectedFailure } : {}),
+    ...(evalCase.expectedFinalState ? { expectedFinalState: evalCase.expectedFinalState } : {}),
+    ...(evalCase.selfTest ? { selfTest: evalCase.selfTest } : {}),
+    ...(evalCase.workflowType ? { workflowType: evalCase.workflowType } : {}),
+    ...(trace.domains ? { domains: [...trace.domains] } : {}),
+    expectedFailureHandling: evalCase.expectedFailure
+      ? expectedFailure.failures.length === 0 ? 'passed' : 'failed'
+      : 'not-applicable',
     actual: trace,
     rubric: rubric.results,
-    failures
+    failures,
+    outcome: outcomeFromFailures(failures)
   }
+}
+
+export function evaluateExpectedFailure(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
+  const expectation = evalCase.expectedFailure
+  if (!expectation) return part(1)
+  const invocations = trace.invocations.filter((invocation) => invocation.actionId === expectation.actionId)
+  const matchingFailure = findExpectedFailure(invocations, expectation.errorCode)
+  if (!matchingFailure) {
+    return part(0, failure(
+      'expected_failure_mismatch',
+      `Expected ${expectation.actionId} to report ${expectation.errorCode ?? 'a provider failure'}.`,
+      expectation,
+      invocations.map((invocation) => ({ success: invocation.success, errorCode: invocation.errorCode ?? null }))
+    ))
+  }
+  const recovered = matchingFailure.sameInvocationRecovery ||
+    invocations.slice(matchingFailure.invocationIndex + 1).some((invocation) => invocation.success)
+  if (expectation.handling === 'recovered' && !recovered) {
+    return part(0, failure(
+      'expected_failure_mismatch',
+      `Expected ${expectation.actionId} to recover after the expected failure.`,
+      'failure followed by success',
+      invocations.map((invocation) => invocation.success)
+    ))
+  }
+  if (expectation.handling === 'reported' && recovered) {
+    return part(0, failure(
+      'expected_failure_mismatch',
+      `Expected ${expectation.actionId} failure to remain reported, but a later retry succeeded.`,
+      'terminal failure',
+      invocations.map((invocation) => invocation.success)
+    ))
+  }
+  return part(1)
+}
+
+function findExpectedFailure(
+  invocations: readonly EvalInvocation[],
+  expectedErrorCode: string | undefined
+): Readonly<{ invocationIndex: number; sameInvocationRecovery: boolean }> | undefined {
+  for (const [invocationIndex, invocation] of invocations.entries()) {
+    const attempts = invocation.providerAttempts ?? []
+    const failedAttemptIndex = attempts.findIndex((attempt) => (
+      !attempt.success && (expectedErrorCode === undefined || attempt.errorCode === expectedErrorCode)
+    ))
+    if (failedAttemptIndex >= 0) {
+      return {
+        invocationIndex,
+        sameInvocationRecovery: attempts.slice(failedAttemptIndex + 1).some((attempt) => attempt.success)
+      }
+    }
+    if (!invocation.success &&
+        (expectedErrorCode === undefined || invocation.errorCode === expectedErrorCode)) {
+      return { invocationIndex, sameInvocationRecovery: false }
+    }
+  }
+  return undefined
 }
 
 export type EvalExecutionView = Readonly<{
@@ -418,7 +698,15 @@ export type RubricEvaluation = Readonly<{
 
 function evaluateTaskSuccess(evalCase: EvalCase, trace: EvalTrace): EvaluationPart {
   const expected = evalCase.expected.taskSuccess ?? true
-  const actual = trace.taskSuccess === true
+  if (trace.taskSuccess === undefined) {
+    return part(0, failure(
+      'trace_unsupported',
+      'Task success was not reported by the execution or final-state inspector.',
+      expected,
+      null
+    ))
+  }
+  const actual = trace.taskSuccess
   if (actual === expected) return part(1)
   return part(0, failure(
     'task_failure',
@@ -426,6 +714,17 @@ function evaluateTaskSuccess(evalCase: EvalCase, trace: EvalTrace): EvaluationPa
     expected,
     actual
   ))
+}
+
+const INCONCLUSIVE_FAILURE_TYPES = new Set<EvalFailure['type']>([
+  'trace_unsupported',
+  'execution_error',
+  'cleanup_failure'
+])
+
+function outcomeFromFailures(failures: readonly EvalFailure[]): 'PASS' | 'FAIL' | 'INCONCLUSIVE' {
+  if (failures.some((failure) => !INCONCLUSIVE_FAILURE_TYPES.has(failure.type))) return 'FAIL'
+  return failures.length > 0 ? 'INCONCLUSIVE' : 'PASS'
 }
 
 function authorizationStatus(
@@ -460,6 +759,14 @@ function finalStateAssertionPasses(assertion: EvalFinalStateAssertion, actual: u
 
 function domainFromActions(actions: readonly EvalInvocation[]): string | undefined {
   return actions[0]?.actionId.split('.')[0]
+}
+
+function domainsFromInvocations(invocations: readonly EvalInvocation[]): string[] {
+  return [...new Set(invocations.map((invocation) => invocation.actionId.split('.')[0]))]
+}
+
+function firstInvocation(invocations: readonly EvalInvocation[], actionId: string): EvalInvocation | undefined {
+  return invocations.find((invocation) => invocation.actionId === actionId)
 }
 
 function lastInvocation(invocations: readonly EvalInvocation[], actionId: string): EvalInvocation | undefined {

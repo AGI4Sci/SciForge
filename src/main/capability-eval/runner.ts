@@ -1,6 +1,6 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { CapabilityJsonValue } from '../../shared/capability-broker'
 import { evaluateCase, type EvalExecutionView } from './evaluators'
 import type { CapabilityReference } from './reference'
@@ -66,6 +66,16 @@ export async function createIsolatedEvalContext(evalCase: EvalCase): Promise<{
       'utf8'
     )
   }
+  for (const fixture of evalCase.fixtures?.files ?? []) {
+    const root = resolve(directory)
+    const target = resolve(directory, fixture.path)
+    const targetRelative = relative(root, target)
+    if (isAbsolute(targetRelative) || targetRelative === '..' || targetRelative.startsWith(`..${sep}`)) {
+      throw new Error(`Workspace fixture path escapes the isolated workspace: ${fixture.path}`)
+    }
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, fixture.content, 'utf8')
+  }
   let cleaned = false
   return {
     context: {
@@ -105,17 +115,37 @@ export function createDeterministicSimulationExecutor(
 function simulationToTrace(simulation: EvalSimulation): EvalTrace {
   const discoveries = simulation.discoveries.flatMap((discovery) => discovery.actions)
   const discoveredActions = [...new Set(discoveries)]
-  const invocations = simulation.calls.map((call) => ({
+  const invocations = simulation.calls.map((call, index) => {
+    const attempts = call.attempts ?? Array.from({ length: call.retryCount + 1 }, (_, attempt) => ({
+      success: attempt === call.retryCount ? call.outcome === 'success' : false,
+      ...(attempt < call.retryCount && call.errorCode ? { errorCode: call.errorCode } : {}),
+      latencyMs: call.latencyMs,
+      ...(call.sequence !== undefined ? { sequence: call.sequence } : {})
+    }))
+    const providerAttempts = attempts.map((attempt, attemptIndex) => ({
+      attempt: attemptIndex + 1,
+      success: attempt.success,
+      ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
+      latencyMs: attempt.latencyMs,
+      ...(attempt.sequence !== undefined ? { sequence: attempt.sequence } : {})
+    }))
+    return {
     actionId: call.actionId,
     args: call.args,
     success: call.outcome === 'success',
+    logicalInvocationId: `simulation-invocation-${index + 1}`,
+    providerAttempts,
+    firstAttemptSuccess: providerAttempts[0]?.success ?? call.outcome === 'success',
+    eventualSuccess: call.outcome === 'success',
     ...(call.errorCode ? { errorCode: call.errorCode } : {}),
     retryCount: call.retryCount,
     latencyMs: call.latencyMs,
     ...(call.sequence !== undefined ? { sequence: call.sequence } : {})
-  }))
+    }
+  })
   return {
     ...(simulation.domain ? { domain: simulation.domain } : {}),
+    ...(simulation.domain ? { domains: [simulation.domain] } : {}),
     discoveredActions,
     selectedActions: invocations,
     invocations,
@@ -123,6 +153,11 @@ function simulationToTrace(simulation: EvalSimulation): EvalTrace {
     toolCalls: invocations.length,
     retryCount: invocations.reduce((total, invocation) => total + invocation.retryCount, 0),
     latencyMs: simulation.latencyMs ?? invocations.reduce((total, invocation) => total + invocation.latencyMs, 0),
+    taskLatencyMs: simulation.latencyMs ?? invocations.reduce((total, invocation) => total + invocation.latencyMs, 0),
+    approvalCount: simulation.authorizationEvents.filter((event) => event.status === 'requested').length,
+    attemptEvidence: 'complete',
+    ...(simulation.finalState !== undefined ? { finalStateSource: 'simulation' as const } : {}),
+    executionStatus: simulation.taskSuccess === false ? 'failed' : 'completed',
     ...(simulation.taskSuccess !== undefined ? { taskSuccess: simulation.taskSuccess } : {}),
     ...(simulation.finalState !== undefined ? { finalState: simulation.finalState } : {})
   }
@@ -156,16 +191,17 @@ async function runOneCase(
     const execution = await executor.run(evalCase, isolated.context)
     result = evaluateCase(evalCase, execution)
   } catch (error) {
+    const executionError = {
+      type: 'execution_error' as const,
+      message: error instanceof Error ? error.message : String(error)
+    }
     result = {
-      ...result,
+      ...evaluateCase(evalCase, { trace: emptyTrace() }),
       passed: false,
-      failures: [
-        ...result.failures,
-        {
-          type: 'execution_error',
-          message: error instanceof Error ? error.message : String(error)
-        }
-      ]
+      outcome: 'INCONCLUSIVE',
+      // With no execution result, an empty trace is not evidence that the
+      // Agent missed an action. Keep only the infrastructure failure.
+      failures: [executionError]
     }
   } finally {
     try {
@@ -174,6 +210,7 @@ async function runOneCase(
       result = {
         ...result,
         passed: false,
+        outcome: outcomeAfterInfrastructureFailure(result.failures),
         failures: [
           ...result.failures,
           {
@@ -187,6 +224,13 @@ async function runOneCase(
   return result
 }
 
+function outcomeAfterInfrastructureFailure(
+  failures: EvalCaseResult['failures']
+): 'FAIL' | 'INCONCLUSIVE' {
+  const decisive = failures.some((failure) => !['trace_unsupported', 'execution_error', 'cleanup_failure'].includes(failure.type))
+  return decisive ? 'FAIL' : 'INCONCLUSIVE'
+}
+
 function emptyTrace(): EvalTrace {
   return {
     discoveredActions: [],
@@ -195,7 +239,6 @@ function emptyTrace(): EvalTrace {
     authorizationEvents: [],
     toolCalls: 0,
     retryCount: 0,
-    latencyMs: 0,
-    taskSuccess: false
+    latencyMs: 0
   }
 }
