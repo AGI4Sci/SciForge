@@ -21,7 +21,7 @@ const developmentEnvironmentPath = join(
   'development',
   'sciforge.env'
 )
-const instanceId = randomUUID()
+const instanceId = process.env.SCIFORGE_DEV_INSTANCE_ID?.trim() || randomUUID()
 let lockOwned = false
 let child = null
 const require = createRequire(import.meta.url)
@@ -42,6 +42,15 @@ export function mergeDevelopmentEnvironment(source, currentEnvironment) {
     if (value !== undefined) merged[key] = value
   }
   return merged
+}
+
+/**
+ * Arguments after `npm run dev --` belong to Electron, not electron-vite.
+ * Keeping this forwarding explicit lets the workflow evaluator start a
+ * throw-away Electron profile without changing the normal development path.
+ */
+export function devElectronCliArguments(argv = process.argv.slice(2)) {
+  return argv.length === 0 ? [] : ['--', ...argv]
 }
 
 export function devChildSpawnOptions(platform = process.platform) {
@@ -227,7 +236,11 @@ async function main() {
       else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', script], env)
       throwIfInterrupted()
     }
-    await run(process.execPath, [join(projectRoot, 'node_modules/electron-vite/bin/electron-vite.js'), 'dev'], env)
+    await run(process.execPath, [
+      join(projectRoot, 'node_modules/electron-vite/bin/electron-vite.js'),
+      'dev',
+      ...devElectronCliArguments()
+    ], env)
   } catch (error) {
     console.error(`[sciforge dev] ${error instanceof Error ? error.message : String(error)}`)
     process.exitCode = 1

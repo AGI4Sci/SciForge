@@ -177,6 +177,12 @@ export type AgentCapabilityInvocation = Readonly<{
   completedAt: string
 }>
 
+/** Host-private identity carried alongside a capability tool result/error. */
+export type CapabilityAgentToolIdentity = Readonly<{
+  operationRef: string
+  capabilityId?: string
+}>
+
 type AgentCapabilityEventBase = Readonly<{
   eventId: string
   type: 'resource.changed'
@@ -447,28 +453,43 @@ export class CapabilityAgentToolSurface {
         return result
       }
       case CAPABILITY_AGENT_TOOL_NAMES.invoke: {
-        const parsed = parseAgentToolRequest(
-          agentInvokeRequestSchema,
-          rawArguments,
-          CAPABILITY_AGENT_TOOL_NAMES.invoke
-        )
-        const descriptor = this.#operation(cache, parsed.operationRef)
-        const result = await this.#invokeOperation(
-          caller,
-          cache,
-          parsed,
-          request.context,
-          options.signal
-        )
+        const rawOperationRef = isRecord(rawArguments) && typeof rawArguments.operationRef === 'string'
+          ? rawArguments.operationRef.trim()
+          : ''
+        let descriptor: CapabilityDescriptor | undefined
         try {
-          this.#assertPrincipalLease(request.context)
-        } catch (error) {
-          if (isMutationEffect(descriptor.effect) && isPrincipalChangedError(error)) {
-            throw outcomeUnknownAgentToolError()
+          const parsed = parseAgentToolRequest(
+            agentInvokeRequestSchema,
+            rawArguments,
+            CAPABILITY_AGENT_TOOL_NAMES.invoke
+          )
+          descriptor = this.#operation(cache, parsed.operationRef)
+          const result = await this.#invokeOperation(
+            caller,
+            cache,
+            parsed,
+            request.context,
+            options.signal
+          )
+          try {
+            this.#assertPrincipalLease(request.context)
+          } catch (error) {
+            if (isMutationEffect(descriptor.effect) && isPrincipalChangedError(error)) {
+              throw outcomeUnknownAgentToolError()
+            }
+            throw error
           }
-          throw error
+          return result
+        } catch (error) {
+          const cachedDescriptor = descriptor ?? (rawOperationRef
+            ? cache.operationsByRef.get(rawOperationRef)
+            : undefined)
+          if (!rawOperationRef) throw error
+          throw annotateCapabilityInvocationError(error, {
+            operationRef: rawOperationRef,
+            ...(cachedDescriptor ? { capabilityId: cachedDescriptor.id } : {})
+          })
         }
-        return result
       }
       case CAPABILITY_AGENT_TOOL_NAMES.events: {
         const parsed = parseAgentToolRequest(
@@ -642,15 +663,17 @@ export class CapabilityAgentToolSurface {
   ): Promise<CapabilityAgentToolResult> {
     const active = this.#beginActiveCall(context, signal)
     let dispatchedEffect: CapabilityDescriptor['effect'] | undefined
+    let descriptor: CapabilityDescriptor | undefined
     try {
-      const descriptor = this.#operation(cache, parsed.operationRef)
-      const invocationId = descriptor.effect === 'read'
+      const resolvedDescriptor = this.#operation(cache, parsed.operationRef)
+      descriptor = resolvedDescriptor
+      const invocationId = resolvedDescriptor.effect === 'read'
         ? undefined
-        : stableAgentInvocationId(descriptor, context)
+        : stableAgentInvocationId(resolvedDescriptor, context)
       let handle = parsed.resourceRef ? this.#resource(cache, parsed.resourceRef) : undefined
       const invokeCaller = await this.#callerForInvocation(
         caller,
-        descriptor,
+        resolvedDescriptor,
         invocationId,
         context,
         { signal: active.signal },
@@ -660,9 +683,9 @@ export class CapabilityAgentToolSurface {
       )
       this.#assertPrincipalLease(context)
       const invoke = (resource: CapabilityResourceHandle | undefined) => this.#broker.invoke(invokeCaller, {
-        actionId: descriptor.id,
+        actionId: resolvedDescriptor.id,
         ...(resource ? { resource } : {}),
-        ...(descriptor.concurrency.revision === 'optimistic' && resource
+        ...(resolvedDescriptor.concurrency.revision === 'optimistic' && resource
           ? { expectedRevision: resource.semanticRevision }
           : {}),
         ...(invocationId ? { invocationId } : {}),
@@ -670,7 +693,7 @@ export class CapabilityAgentToolSurface {
       }, { signal: active.signal, context })
       let result: CapabilityInvocationResult
       try {
-        dispatchedEffect = descriptor.effect
+        dispatchedEffect = resolvedDescriptor.effect
         result = await invoke(handle)
       } catch (error) {
         if (!parsed.resourceRef || !handle || !isExpiredResourceHandleError(error)) throw error
@@ -684,10 +707,10 @@ export class CapabilityAgentToolSurface {
         }
         handle = renewed
         cache.resources.set(parsed.resourceRef, renewed)
-        dispatchedEffect = descriptor.effect
+        dispatchedEffect = resolvedDescriptor.effect
         result = await invoke(renewed)
       }
-      if (result.actionId !== descriptor.id) {
+      if (result.actionId !== resolvedDescriptor.id) {
         throw new CapabilityAgentToolError(
           'capability_identity_mismatch',
           'The capability broker returned an action identity that did not match the Host-resolved operation.'
@@ -709,14 +732,14 @@ export class CapabilityAgentToolSurface {
         }
         this.#assertPrincipalLease(context)
       } catch (error) {
-        if (isMutationEffect(descriptor.effect)) throw outcomeUnknownAgentToolError()
+        if (isMutationEffect(resolvedDescriptor.effect)) throw outcomeUnknownAgentToolError()
         throw error
       }
       return {
         tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
-        deliveryEffect: descriptor.effect,
+        deliveryEffect: resolvedDescriptor.effect,
         value: {
-          capabilityId: descriptor.id,
+          capabilityId: resolvedDescriptor.id,
           operationRef: parsed.operationRef,
           output: sanitizedOutput,
           ...(resourceRef ? { resourceRef } : {}),
@@ -726,14 +749,18 @@ export class CapabilityAgentToolSurface {
         }
       }
     } catch (error) {
+      let finalError = error
       if (
         dispatchedEffect !== undefined &&
         isMutationEffect(dispatchedEffect) &&
         (isPrincipalChangedError(error) || isOutcomeUnknownError(error))
       ) {
-        throw outcomeUnknownAgentToolError()
+        finalError = outcomeUnknownAgentToolError()
       }
-      throw error
+      throw annotateCapabilityInvocationError(finalError, {
+        operationRef: parsed.operationRef,
+        ...(descriptor ? { capabilityId: descriptor.id } : {})
+      })
     } finally {
       active.close()
     }
@@ -999,45 +1026,35 @@ export class CapabilityAgentToolSurface {
 }
 
 export class CapabilityAgentToolError extends Error {
-  readonly code:
-    | 'invalid_caller_audience'
-    | 'unknown_agent_tool'
-    | 'unknown_operation_ref'
-    | 'unknown_resource_ref'
-    | 'resource_ref_retired'
-    | 'capability_discovery_empty'
-    | 'invalid_arguments'
-    | 'broker_scope_denied'
-    | 'capability_identity_mismatch'
-    | 'stale_resource_ref'
-    | 'missing_invocation_context'
-    | 'approval_denied'
-    | 'approval_cancelled'
-    | 'principal_changed'
-    | 'outcome_unknown'
-    | 'visual_runtime_unavailable'
-    | 'invalid_visual_result'
+  readonly code: string
   readonly details?: CapabilityJsonValue
   readonly failureClass?: string
   readonly retryable?: boolean
   readonly recovery?: CapabilityAgentToolRecovery
+  readonly recoveryGuidance?: string
   readonly providerStage?: string
   readonly resourceIdentity?: string
   readonly evidenceDelta?: boolean
   readonly stateChanged?: boolean
+  /** Host-private exact mapping captured before Broker invocation. */
+  readonly operationRef?: string
+  readonly capabilityId?: string
 
   constructor(
-    code: CapabilityAgentToolError['code'],
+    code: string,
     message: string,
     options: {
       details?: CapabilityJsonValue
       failureClass?: string
       retryable?: boolean
       recovery?: CapabilityAgentToolRecovery
+      recoveryGuidance?: string
       providerStage?: string
       resourceIdentity?: string
       evidenceDelta?: boolean
       stateChanged?: boolean
+      operationRef?: string
+      capabilityId?: string
     } = {}
   ) {
     super(message)
@@ -1047,11 +1064,64 @@ export class CapabilityAgentToolError extends Error {
     this.failureClass = options.failureClass
     this.retryable = options.retryable
     this.recovery = options.recovery
+    this.recoveryGuidance = options.recoveryGuidance
     this.providerStage = options.providerStage
     this.resourceIdentity = options.resourceIdentity
     this.evidenceDelta = options.evidenceDelta
     this.stateChanged = options.stateChanged
+    this.operationRef = options.operationRef
+    this.capabilityId = options.capabilityId
   }
+}
+
+function annotateCapabilityInvocationError(
+  error: unknown,
+  identity: CapabilityAgentToolIdentity
+): CapabilityAgentToolError {
+  if (
+    error instanceof CapabilityAgentToolError &&
+    error.operationRef === identity.operationRef &&
+    error.capabilityId === identity.capabilityId
+  ) {
+    return error
+  }
+  const record = isRecord(error) ? error : {}
+  const recoveryRecord = isRecord(record.recovery) ? record.recovery : {}
+  const recovery = typeof recoveryRecord.action === 'string' && typeof recoveryRecord.instruction === 'string'
+    ? {
+        action: recoveryRecord.action,
+        instruction: recoveryRecord.instruction
+      }
+    : undefined
+  const code = typeof record.code === 'string' && record.code.trim()
+    ? record.code.trim()
+    : 'capability_invocation_failed'
+  const message = error instanceof Error && error.message.trim()
+    ? error.message
+    : typeof record.message === 'string' && record.message.trim()
+      ? record.message
+      : 'Capability invocation failed.'
+  const details = isCapabilityJsonValue(record.details) ? record.details : undefined
+  const annotated = new CapabilityAgentToolError(code, message, {
+    ...(details !== undefined ? { details } : {}),
+    ...(typeof record.failureClass === 'string' ? { failureClass: record.failureClass } : {}),
+    ...(typeof record.retryable === 'boolean' ? { retryable: record.retryable } : {}),
+    ...(recovery ? { recovery } : {}),
+    ...(typeof record.recoveryGuidance === 'string' ? { recoveryGuidance: record.recoveryGuidance } : {}),
+    ...(typeof record.providerStage === 'string' ? { providerStage: record.providerStage } : {}),
+    ...(typeof record.resourceIdentity === 'string' ? { resourceIdentity: record.resourceIdentity } : {}),
+    ...(typeof record.evidenceDelta === 'boolean' ? { evidenceDelta: record.evidenceDelta } : {}),
+    ...(typeof record.stateChanged === 'boolean' ? { stateChanged: record.stateChanged } : {}),
+    operationRef: identity.operationRef,
+    ...(identity.capabilityId ? { capabilityId: identity.capabilityId } : {})
+  })
+  if (error instanceof Error) {
+    Object.defineProperty(annotated, 'cause', {
+      configurable: true,
+      value: error
+    })
+  }
+  return annotated
 }
 
 function parseAgentToolRequest<T>(

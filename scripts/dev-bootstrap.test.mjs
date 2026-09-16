@@ -9,6 +9,7 @@ import {
   DEV_PREPARATION_SCRIPTS,
   DEV_FORWARD_SIGNALS,
   devChildSpawnOptions,
+  devElectronCliArguments,
   forwardSignalToDevChild,
   mergeDevelopmentEnvironment
 } from './dev-bootstrap.mjs'
@@ -26,6 +27,14 @@ test('fresh clones include a local development environment file', async () => {
   )
   const environment = mergeDevelopmentEnvironment(source, {})
   assert.deepEqual(environment, {})
+})
+
+test('forwards explicit Electron arguments after the electron-vite separator', () => {
+  assert.deepEqual(devElectronCliArguments([]), [])
+  assert.deepEqual(devElectronCliArguments(['--user-data-dir=/tmp/sciforge-eval']), [
+    '--',
+    '--user-data-dir=/tmp/sciforge-eval'
+  ])
 })
 
 test('development children use an independent process group only on POSIX', () => {
