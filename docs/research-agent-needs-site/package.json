@@ -10,7 +10,7 @@
     "build": "vinext build",
     "build:pages": "node scripts/patch-vinext-static-export.mjs && GITHUB_PAGES=true npm run build",
     "start": "vinext start",
-    "test": "npm run build:pages && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build:pages && node --test tests/rendered-html.test.mjs tests/market-rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {

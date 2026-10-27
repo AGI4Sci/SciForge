@@ -12,6 +12,7 @@ export function SiteFooter() {
           <Link href="/needs">44 个需求</Link>
           <Link href="/capabilities">6 个工程模块</Link>
           <Link href="/loops">3 个 AI 研究闭环</Link>
+          <Link href="/market">插件市场</Link>
           <Link href="/submit">提交新需求</Link>
         </div>
         <p className="footer-note">Research map · 2026</p>

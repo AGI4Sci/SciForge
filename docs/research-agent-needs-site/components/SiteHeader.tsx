@@ -4,6 +4,7 @@ const nav = [
   { href: "/needs", label: "需求地图" },
   { href: "/capabilities", label: "工程模块" },
   { href: "/loops", label: "真实闭环" },
+  { href: "/market", label: "插件市场" },
   { href: "/submit", label: "提交需求" },
 ];
 
