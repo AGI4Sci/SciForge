@@ -1,0 +1,30 @@
+{
+  "name": "@sciforge/plugin-biology-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Biology Room domain module as a runtime plugin (phase 1: named-runner contract entry; workspace-write capabilities carry the host-injected caller workspace).",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "^0.2.18",
+    "zod": "^4.4.3"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/main.js"
+    }
+  },
+  "engines": {
+    "dsh": "0.2.0-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

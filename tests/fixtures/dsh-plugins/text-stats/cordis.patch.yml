@@ -1,0 +1,3 @@
+- insert:
+    - id: text-stats
+      name: "@sciforge/plugin-text-stats"

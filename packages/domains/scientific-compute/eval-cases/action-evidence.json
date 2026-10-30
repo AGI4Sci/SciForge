@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "scientific-compute",
+  "actionEvidence": {
+    "scientific-compute.run-baseline": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-compute/src/scientific-job.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-compute/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-trace-closure-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-compute-baseline-success-local-fixture"
+      }
+    },
+    "scientific-compute.status": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-compute/src/main.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-compute/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-status-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-compute-status-local-fixture"
+      }
+    }
+  }
+}

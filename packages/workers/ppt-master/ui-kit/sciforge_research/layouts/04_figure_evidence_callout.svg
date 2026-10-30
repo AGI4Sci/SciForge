@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- New project-authored plain-text layout; Apache-2.0. No inherited artwork. -->
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+  <text x="80" y="96" font-family="sans-serif" font-size="32" fill="#17212B" data-max-width="1100">{{PAGE_TITLE}}</text>
+  <text x="80" y="140" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{FIGURE_CAPTION}}</text>
+  <text x="104" y="560" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="680">{{FIGURE_SOURCE}}</text>
+  <text x="880" y="220" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_1_TITLE}}</text>
+  <text x="880" y="254" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_1_LINE_1}}</text>
+  <text x="880" y="350" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_2_TITLE}}</text>
+  <text x="880" y="384" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_2_LINE_1}}</text>
+  <text x="880" y="418" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_2_LINE_2}}</text>
+  <text x="880" y="480" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_3_TITLE}}</text>
+  <text x="880" y="514" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_3_LINE_1}}</text>
+  <text x="880" y="548" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="280">{{CALLOUT_3_LINE_2}}</text>
+  <rect x="88" y="190" width="704" height="340" fill="none" stroke="#17212B"/>
+  <text x="104" y="360" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="672">{{FIGURE_ASSET}}</text>
+  <line x1="760" y1="230" x2="856" y2="230" stroke="#17212B"/>
+  <line x1="760" y1="360" x2="856" y2="360" stroke="#17212B"/>
+  <line x1="760" y1="490" x2="856" y2="490" stroke="#17212B"/>
+  <text x="80" y="650" font-family="sans-serif" font-size="14" fill="#17212B" data-max-width="1100" data-role="footer">{{EVIDENCE_TRACE}}</text>
+</svg>

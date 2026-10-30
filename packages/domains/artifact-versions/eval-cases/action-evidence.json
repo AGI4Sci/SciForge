@@ -1,0 +1,397 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "artifact-versions",
+  "actionEvidence": {
+    "artifact-versions.bundle.export": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-bundle-verification",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-bundle-export-local-fixture"
+      }
+    },
+    "artifact-versions.bundle.export-v2": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-bundle-v2-verification",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-bundle-export-v2-local-fixture"
+      }
+    },
+    "artifact-versions.bundle.import": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-imported-history-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-bundle-import-local-fixture"
+      }
+    },
+    "artifact-versions.bundle.verify": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-bundle-verification",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-bundle-verify-local-fixture"
+      }
+    },
+    "artifact-versions.bundle.verify-v2": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-bundle-v2-verification",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-bundle-verify-v2-local-fixture"
+      }
+    },
+    "artifact-versions.commit": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-commit-history-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-commit-local-fixture"
+      }
+    },
+    "artifact-versions.compare": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-content-comparison",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-compare-local-fixture"
+      }
+    },
+    "artifact-versions.content.read-range-v2": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-range-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-read-range-local-fixture"
+      }
+    },
+    "artifact-versions.describe-v2": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-version-description-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-describe-local-fixture"
+      }
+    },
+    "artifact-versions.events.list": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-event-stream-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-events-list-local-fixture"
+      }
+    },
+    "artifact-versions.lifecycle.refresh": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-refresh-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-refresh-local-fixture"
+      }
+    },
+    "artifact-versions.list": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-version-list-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-list-local-fixture"
+      }
+    },
+    "artifact-versions.list-v2": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-version-list-v2-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-list-v2-local-fixture"
+      }
+    },
+    "artifact-versions.materialize": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-materialized-content-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-materialize-local-fixture"
+      }
+    },
+    "artifact-versions.observe": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-observation-history-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-observe-local-fixture"
+      }
+    },
+    "artifact-versions.read": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-content-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-read-local-fixture"
+      }
+    },
+    "artifact-versions.restore-as-new": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/artifact-versions/src/main/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/artifact-versions/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-restore-history-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "artifact-versions-restore-local-fixture"
+      }
+    }
+  }
+}

@@ -1,0 +1,190 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "biology-room",
+  "actionEvidence": {
+    "biology-room.apply": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-apply-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-apply-local-fixture"
+      }
+    },
+    "biology-room.create": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-manifest-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-create-local-fixture"
+      }
+    },
+    "biology-room.history": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-history-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-history-local-fixture"
+      }
+    },
+    "biology-room.list": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-list-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-list-local-fixture"
+      }
+    },
+    "biology-room.load": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-manifest-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-load-local-fixture"
+      }
+    },
+    "biology-room.open": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-observation-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-open-local-fixture"
+      }
+    },
+    "biology-room.open-or-create": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-open-or-create-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-open-or-create-local-fixture"
+      }
+    },
+    "biology-room.refresh": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/biology-room/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/biology-room/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-room-refresh-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "biology-room-refresh-local-fixture"
+      }
+    }
+  }
+}

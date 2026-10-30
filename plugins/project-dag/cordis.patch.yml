@@ -1,0 +1,3 @@
+- insert:
+    - id: project-dag
+      name: "@sciforge/plugin-project-dag"

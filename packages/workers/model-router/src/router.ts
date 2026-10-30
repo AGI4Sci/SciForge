@@ -1,0 +1,5283 @@
+import { createHash } from 'node:crypto';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import jpeg from 'jpeg-js';
+import { PNG } from 'pngjs';
+
+import {
+  anthropicMessagesToResponses,
+  chatFinishReasonFromResponse,
+  chatToolNameAliasesFromResponsesTools,
+  estimateAnthropicMessagesInputTokens,
+  hasStructuredOutputContract,
+  makeId,
+  messageOutputItem,
+  responseReasoningText,
+  responseToAnthropicMessage,
+  type AnthropicMessagesRequest,
+  type JsonObject,
+  type JsonValue,
+  type ResponsesRequest,
+} from './response-compat';
+import {
+  createModelRouterWorkerDiagnostics,
+  modelRouterManifest,
+  type ModelRouterUpstreamDiagnostic,
+} from './manifest';
+import { CODEX_DEFAULT_BASE_INSTRUCTIONS } from './codex-default-base-instructions';
+import { readIncomingMessageBody, readIncomingMessageBodyBytes } from './http-body';
+import {
+  type ModelRouterFullTraceRecorder,
+  type ModelRouterTraceCaptureStatus,
+  type ModelRouterTraceSession,
+} from './full-trace-recorder';
+import { redactTraceText, redactUserVisibleText } from './trace-redaction';
+import { normalizeLoopbackHost } from './network-policy';
+import {
+  preferredProviderProtocol,
+  providerCompatibilityConfigurationIssue,
+  type ProviderCompatibilityConfig,
+} from './provider-compat';
+import {
+  UpstreamProtocolNegotiator,
+  UpstreamRequestError,
+  captureUpstreamResponse,
+  type UpstreamAttempt,
+  type UpstreamWireProtocol,
+} from './upstream-drivers';
+
+export interface ModelRouterProviderConfig {
+  baseUrl: string;
+  apiKeyEnv: string;
+  model: string;
+  compatibility?: ProviderCompatibilityConfig;
+  maxSupplementRounds?: number;
+}
+
+export interface ModelRouterScientificTranslatorConfig {
+  baseUrl: string;
+  tokenEnv: string;
+  model: string;
+  timeoutMs?: number;
+}
+
+export const MODEL_ROUTER_VISION_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+] as const;
+export const MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES = 20 * 1024 * 1024;
+export const MODEL_ROUTER_MAX_REQUEST_BYTES = 40 * 1024 * 1024;
+const MODEL_ROUTER_EVIDENCE_POLICY_HEADER = 'x-sciforge-model-router-evidence-policy';
+
+export interface ModelRouterProfileCapabilityRegistration {
+  vision?: {
+    mimeTypes?: string[];
+    maxInputBytes?: number;
+  };
+  images?: {
+    generation?: boolean;
+    editing?: boolean;
+    referenceImages?: boolean;
+    masks?: boolean;
+    sizeSelection?: boolean;
+    sizes?: string[];
+  };
+}
+
+export type ModelRouterVisionCachePolicy = 'use' | 'bypass' | 'refresh';
+
+export interface ModelRouterProfile {
+  visionCachePolicy?: 'use' | 'bypass';
+  textReasoner: ModelRouterProviderConfig;
+  imageGenerator?: ModelRouterProviderConfig;
+  translators: {
+    vision?: ModelRouterProviderConfig;
+    scientific?: ModelRouterScientificTranslatorConfig;
+  };
+  capabilities?: ModelRouterProfileCapabilityRegistration;
+  /** Upstream context window in tokens for the text reasoner model. Defaults to 16384. */
+  contextWindow?: number;
+}
+
+export interface ModelRouterConfig {
+  defaultProfile: string;
+  publicModelAlias?: string;
+  runtimeApiKeyEnv?: string;
+  profiles: Record<string, ModelRouterProfile>;
+}
+
+export interface ModelRouterServerOptions {
+  config: ModelRouterConfig;
+  env?: Record<string, string | undefined>;
+  workspaceRoot?: string;
+  fetchImpl?: typeof fetch;
+  log?: (message: string) => void;
+  fullTraceRecorder?: ModelRouterFullTraceRecorder;
+  fullTraceRequired?: boolean;
+}
+
+export interface StartedModelRouterServer {
+  server: Server;
+  url: string;
+  port: number;
+  close(): Promise<void>;
+}
+
+export type ModelRouterRoleReadinessState =
+  | 'ready'
+  | 'not_configured'
+  | 'invalid_configuration'
+  | 'missing_credentials';
+
+export type ModelRouterRoleReadiness = {
+  configured: boolean;
+  ready: boolean;
+  state: ModelRouterRoleReadinessState;
+};
+
+export type ModelRouterPublicCapabilityContract = {
+  schemaVersion: 'sciforge.model-router.capabilities.v1';
+  publicModelAlias: string;
+  profile: string;
+  roles: {
+    textReasoner: ModelRouterRoleReadiness;
+    imageGenerator: ModelRouterRoleReadiness;
+    visionTranslator: ModelRouterRoleReadiness;
+    scientificTranslator: ModelRouterRoleReadiness;
+  };
+  vision: {
+    available: boolean;
+    input: {
+      mimeTypes: string[];
+      maxInputBytes: number;
+      maxRequestBytes: number;
+      sources: Array<'inline' | 'url' | 'workspace_ref'>;
+    };
+  };
+  images: {
+    available: boolean;
+    maxRequestBytes: number;
+    features: {
+      generation: boolean;
+      editing: boolean;
+      referenceImages: boolean;
+      masks: boolean;
+      sizeSelection: boolean;
+    };
+    sizes: {
+      mode: 'enumerated' | 'provider-defined' | 'unsupported';
+      values: string[];
+    };
+  };
+};
+
+/**
+ * v2 capability contract — opt-in via `GET /v1/capabilities?version=2`.
+ *
+ * The v1 shape stays byte-compatible for today's consumers (the workspace-egress
+ * bridge proxies it, the computer-use drivers read it); v2 adds the model
+ * identity, the context-window *sources* and the three-state reasoning
+ * declaration. This is a deliberate compatibility adjustment relative to the
+ * redesign's original “bump to v2, keep no v1” plan — dropping v1 would break
+ * the existing consumers above, and cannot be done without their migration.
+ */
+export type ModelRouterPublicCapabilityContractV2 = Omit<
+  ModelRouterPublicCapabilityContract,
+  'schemaVersion'
+> & {
+  schemaVersion: 'sciforge.model-router.capabilities.v2';
+  identity: {
+    publicModelAlias: string;
+    upstreamModel: string;
+    protocol: string;
+  };
+  context: {
+    modelDeclared: number | null;
+    hostBudget: number;
+    source: 'profile-declaration' | 'host-budget';
+  };
+  reasoning: {
+    state: 'known' | 'unknown';
+    levels: Array<{ id: string }>;
+    source: 'model-access-declaration' | 'none';
+    note: string;
+  };
+};
+
+type ModalityKind = 'vision.image' | 'audio' | 'video' | 'table' | 'document';
+
+type ModalityRef = {
+  id: string;
+  kind: ModalityKind;
+  source: 'inline' | 'url' | 'ref';
+  mime?: string;
+  title?: string;
+  semanticSignal: SemanticModalitySignal;
+  sha256: string;
+  contentSha256?: string;
+  byteLength?: number;
+  safeRef?: string;
+  urlSha256?: string;
+  materializationPath?: string;
+  transientProviderPart?: JsonObject;
+};
+
+type ToolResultImage = {
+  dataBase64: string;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  title?: string;
+};
+
+/** Cap tool-result images so large figures do not blow the upstream context. */
+const MAX_TOOL_IMAGE_SIDE = 1024;
+
+/** Conservative default when a profile omits `contextWindow`. */
+const DEFAULT_PROFILE_CONTEXT_WINDOW = 16384
+/**
+ * Host-level operating budget published on the Codex model entry when the
+ * profile does not declare a context window. Codex’s models manager requires a
+ * numeric value, so one must be published — but this number is the HOST’s
+ * operating window, NOT a claim about the upstream model’s real capability.
+ * When `profile.contextWindow` is declared, that value is published instead and
+ * the capability contract (v2) reports both values with their source, so the
+ * difference is visible rather than hidden behind a magic constant.
+ */
+const MODEL_ROUTER_HOST_CONTEXT_BUDGET = 128_000
+/** Keeps Codex’s previous compaction behaviour (100k of 128k) for any budget. */
+const MODEL_ROUTER_HOST_AUTO_COMPACT_RATIO = 0.78125;
+/** Token room reserved for the upstream model's output. */
+const CONTEXT_OVERFLOW_OUTPUT_RESERVE_TOKENS = 2048;
+/** Conservative image-token estimate: ~1 token per 500 bytes of encoded image. */
+const IMAGE_TOKEN_ESTIMATE_BYTES_PER_TOKEN = 500;
+
+type DroppedVisionModality = {
+  name: string;
+  bytes: number;
+};
+
+type VisionContextNotice = {
+  reason: 'context_overflow';
+  dropped: DroppedVisionModality[];
+};
+
+function estimateTextTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function estimateImageTokens(modality: ModalityRef): number {
+  return Math.ceil((modality.byteLength ?? 0) / IMAGE_TOKEN_ESTIMATE_BYTES_PER_TOKEN);
+}
+
+function modalityDisplayName(modality: ModalityRef): string {
+  return modality.title?.trim() || modality.safeRef || modality.id;
+}
+
+/** Drop the largest vision images until the estimated context budget fits. */
+function pruneOversizeVisionModalities(
+  modalities: ModalityRef[],
+  contextWindow: number,
+  textTokens: number,
+): { kept: ModalityRef[]; notice?: VisionContextNotice } {
+  const budget = contextWindow - textTokens - CONTEXT_OVERFLOW_OUTPUT_RESERVE_TOKENS;
+  if (budget <= 0) {
+    return {
+      kept: [],
+      notice: {
+        reason: 'context_overflow',
+        dropped: modalities.map((m) => ({ name: modalityDisplayName(m), bytes: m.byteLength ?? 0 })),
+      },
+    };
+  }
+  const bySizeDesc = [...modalities].sort((a, b) => (b.byteLength ?? 0) - (a.byteLength ?? 0));
+  const keptSet = new Set<ModalityRef>();
+  const dropped: DroppedVisionModality[] = [];
+  let usedTokens = 0;
+  for (const modality of bySizeDesc) {
+    const imageTokens = estimateImageTokens(modality);
+    if (usedTokens + imageTokens > budget) {
+      dropped.push({ name: modalityDisplayName(modality), bytes: modality.byteLength ?? 0 });
+      continue;
+    }
+    keptSet.add(modality);
+    usedTokens += imageTokens;
+  }
+  const kept = modalities.filter((m) => keptSet.has(m));
+  return kept.length === modalities.length
+    ? { kept }
+    : { kept, notice: { reason: 'context_overflow', dropped } };
+}
+
+function downsampleToolResultImage(image: ToolResultImage): ToolResultImage {
+  try {
+    const input = Buffer.from(image.dataBase64, 'base64');
+    const normalizedMime = image.mimeType.toLowerCase();
+    if (normalizedMime === 'image/png') {
+      const png = PNG.sync.read(input);
+      if (png.width <= MAX_TOOL_IMAGE_SIDE && png.height <= MAX_TOOL_IMAGE_SIDE) return image;
+      const { width, height } = fitWithin(png.width, png.height, MAX_TOOL_IMAGE_SIDE);
+      const out = PNG.sync.write(scaleRgbaPng(png, width, height));
+      return { ...image, dataBase64: out.toString('base64'), mimeType: 'image/png', width, height };
+    }
+    if (normalizedMime === 'image/jpeg' || normalizedMime === 'image/jpg') {
+      const raw = jpeg.decode(new Uint8Array(input), { useTArray: true });
+      if (raw.width <= MAX_TOOL_IMAGE_SIDE && raw.height <= MAX_TOOL_IMAGE_SIDE) return image;
+      const { width, height } = fitWithin(raw.width, raw.height, MAX_TOOL_IMAGE_SIDE);
+      const scaled = scaleRgba(Buffer.from(raw.data), raw.width, raw.height, width, height);
+      const encoded = jpeg.encode(scaled as never, 80);
+      return {
+        ...image,
+        dataBase64: Buffer.from(encoded.data).toString('base64'),
+        mimeType: 'image/jpeg',
+        width,
+        height,
+      };
+    }
+  } catch {
+    // Keep the original image when decoding or rescaling fails.
+  }
+  return image;
+}
+
+function fitWithin(width: number, height: number, maxSide: number): { width: number; height: number } {
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+export function downsampleDataUrl(dataUrl: string): string {
+  if (!dataUrl.startsWith('data:image/')) return dataUrl;
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) return dataUrl;
+  const mimeType = mimeFromDataUrl(dataUrl);
+  const downsampled = downsampleToolResultImage({
+    dataBase64: dataUrl.slice(comma + 1),
+    mimeType: mimeType || 'image/png'
+  });
+  if (downsampled.dataBase64 === dataUrl.slice(comma + 1)) return dataUrl;
+  return `data:${downsampled.mimeType};base64,${downsampled.dataBase64}`;
+}
+
+function scaleRgba(data: Buffer, srcWidth: number, srcHeight: number, dstWidth: number, dstHeight: number): Buffer {
+  const out = Buffer.alloc(dstWidth * dstHeight * 4);
+  for (let y = 0; y < dstHeight; y += 1) {
+    const sy = Math.min(srcHeight - 1, Math.floor((y * srcHeight) / dstHeight));
+    for (let x = 0; x < dstWidth; x += 1) {
+      const sx = Math.min(srcWidth - 1, Math.floor((x * srcWidth) / dstWidth));
+      const si = (sy * srcWidth + sx) * 4;
+      const di = (y * dstWidth + x) * 4;
+      out[di] = data[si];
+      out[di + 1] = data[si + 1];
+      out[di + 2] = data[si + 2];
+      out[di + 3] = data[si + 3];
+    }
+  }
+  return out;
+}
+
+function scaleRgbaPng(png: PNG, dstWidth: number, dstHeight: number): PNG {
+  const out = new PNG({ width: dstWidth, height: dstHeight });
+  const scaled = scaleRgba(png.data, png.width, png.height, dstWidth, dstHeight);
+  scaled.copy(out.data);
+  return out;
+}
+
+type SemanticModalitySignal = {
+  kind: ModalityKind;
+  evidence: Array<'structured-type' | 'structured-media-type' | 'structured-mime' | 'ref-extension' | 'ref-lexical-feature' | 'image-url'>;
+  refsFirst: boolean;
+};
+
+type ProviderCallRecord = {
+  role: 'textReasoner' | 'visionTranslator';
+  phase: string;
+  status: 'ok' | 'failed';
+  roleAlias: string;
+  providerBindingSha256: string;
+  modelAliasSha256: string;
+  wireApi: UpstreamWireProtocol;
+  wireRequest: {
+    urlSha256: string;
+    endpointRoute: UpstreamWireProtocol;
+    bodyShape: {
+      modelAliasSha256: string;
+      messageCount: number;
+      toolCount: number;
+      hasImageParts: boolean;
+      textCharCount: number;
+      maxTokensSet: boolean;
+      temperatureSet: boolean;
+    };
+  };
+  latencyMs: number;
+  stopReason?: 'stop' | 'tool_calls' | 'length' | 'error' | 'unknown';
+  errorSummary?: string;
+};
+
+const MIN_MULTIMODAL_TEXT_REASONER_MAX_TOKENS = 1024;
+
+type RecentProviderError = {
+  code: string;
+  status?: number;
+  at: number;
+  role?: ModelRouterUpstreamDiagnostic['role'];
+};
+
+type ResponseUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  input_tokens_details: {
+    cached_tokens: number;
+  };
+  output_tokens_details: {
+    reasoning_tokens: number;
+  };
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_input_tokens: number;
+  reasoning_output_tokens: number;
+};
+
+type VisionTranslationCacheEntry = {
+  schemaVersion: 'sciforge.model-router.vision-translation-cache-entry.v1';
+  profileId: string;
+  modalityCacheKey: string;
+  observation: string;
+  status: 'ok';
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type RoutedResponse = {
+  responseId: string;
+  model: string;
+  outputText: string;
+  outputItems: JsonObject[];
+  usage: ResponseUsage;
+  status?: string;
+  incompleteDetails?: JsonObject;
+  terminalDetails?: JsonObject;
+};
+
+type ResponseContinuationBlock = readonly JsonObject[];
+type ResponseContinuationCache = Map<string, ResponseContinuationBlock>;
+
+type TextControl =
+  | { type: 'final_answer'; content: string }
+  | { type: 'need_more_modality_info'; target: string; question: string; reason?: string };
+
+const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES;
+const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = MODEL_ROUTER_MAX_REQUEST_BYTES;
+const MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES = 512;
+const MAX_TEXT_MODALITY_BYTES = 256 * 1024;
+const RECENT_PROVIDER_AUTH_ERROR_TTL_MS = 30 * 60 * 1000;
+const modelRouterInFlightRequests = new WeakMap<Server, Set<Promise<void>>>();
+
+// Protected scientific files can carry sequence, chemistry, structure, variant, or assay data and
+// must never be inlined raw into the text reasoner. This set is intentionally broader than the file
+// formats accepted by the optional native-to-text experts below.
+const PROTECTED_SCIENTIFIC_FILE_EXTENSIONS =
+  /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|mmcif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)(?:$|[?#])/i;
+
+type ScientificTranslatorModality = 'protein' | 'protein_structure' | 'molecule';
+
+// Only formats with a deployed native-to-text expert may cross the sci-modality service boundary.
+// Ambiguous FASTA extensions require conservative local content confirmation below. Nucleotide,
+// variant, annotation, interval, tree, and spectrum formats remain protected but are rejected until
+// a matching expert is explicitly added.
+const TRANSLATABLE_SCIENTIFIC_FILE_MODALITIES: ReadonlyArray<{
+  extensions: RegExp;
+  modality: ScientificTranslatorModality;
+}> = [
+  { extensions: /\.(?:fasta|fa|faa)(?:$|[?#])/i, modality: 'protein' },
+  { extensions: /\.(?:pdb|cif|mmcif)(?:$|[?#])/i, modality: 'protein_structure' },
+  { extensions: /\.(?:smi|smiles)(?:$|[?#])/i, modality: 'molecule' },
+];
+
+function isProtectedScientificFilePath(path: string): boolean {
+  return PROTECTED_SCIENTIFIC_FILE_EXTENSIONS.test(path);
+}
+
+function scientificTranslatorModalityForPath(path: string): ScientificTranslatorModality | undefined {
+  return TRANSLATABLE_SCIENTIFIC_FILE_MODALITIES.find(({ extensions }) => extensions.test(path))?.modality;
+}
+
+function isAmbiguousFastaExtension(path: string): boolean {
+  return /\.(?:fasta|fa)(?:$|[?#])/i.test(path);
+}
+
+export function createModelRouterServer(options: ModelRouterServerOptions): Server {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const env = options.env ?? processEnvSnapshot();
+  const workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
+  const visionTranslationCache = new Map<string, VisionTranslationCacheEntry>();
+  // Caches scientific-file expert translations by resolved modality + file-content sha. An agentic
+  // turn is several router requests; the upload rides along on each, so the expert should run once.
+  const scientificTranslationCache = new Map<string, ScientificEvidence>();
+  const responseContinuationCache: ResponseContinuationCache = new Map();
+  const upstreamNegotiator = new UpstreamProtocolNegotiator();
+  let recentRouterError: RecentProviderError | null = null;
+  const backgroundControllers = new Set<AbortController>();
+  let activeInteractiveRequests = 0;
+  const routeWithPriority = <T>(
+    body: unknown,
+    clientSignal: AbortSignal,
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
+    const background = isDagBackgroundRequest(body);
+    if (background && activeInteractiveRequests > 0) {
+      return Promise.reject(routerError(
+        503,
+        'background_preempted',
+        'Background DAG work yielded to an interactive request.',
+      ));
+    }
+    if (!background) {
+      activeInteractiveRequests += 1;
+      for (const controller of backgroundControllers) controller.abort();
+      return task(clientSignal).finally(() => { activeInteractiveRequests = Math.max(0, activeInteractiveRequests - 1); });
+    }
+    const controller = new AbortController();
+    backgroundControllers.add(controller);
+    return task(AbortSignal.any([clientSignal, controller.signal]))
+      .finally(() => backgroundControllers.delete(controller));
+  };
+  const recordProviderError = (error: Omit<RecentProviderError, 'at'>) => {
+    recentRouterError = {
+      ...error,
+      at: Date.now(),
+    };
+  };
+
+  const inFlightRequests = new Set<Promise<void>>();
+  const server = createServer((request, response) => {
+    const operation = (async (): Promise<void> => {
+    const clientController = new AbortController();
+    const abortClientRequest = () => {
+      if (!clientController.signal.aborted) {
+        clientController.abort(new DOMException('Client connection closed before the model request completed.', 'AbortError'));
+      }
+    };
+    request.once('aborted', abortClientRequest);
+    response.once('close', () => {
+      if (!response.writableFinished) abortClientRequest();
+    });
+    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
+    const traceRoute = isModelTraceRoute(request.method, url.pathname);
+    let fullTraceSession: ModelRouterTraceSession | undefined;
+    try {
+      if (traceRoute) {
+        assertRuntimeAuthorized(request, options.config, env);
+        const traceCaptureStatus = options.fullTraceRecorder?.status();
+        if (!traceCaptureStatus && options.fullTraceRequired) {
+          return sendJson(response, 503, {
+            error: {
+              code: 'full_trace_disabled',
+              message: 'Full Trace capture is required but unavailable.',
+            },
+          });
+        }
+        if (traceCaptureStatus && !traceCaptureStatus.ready) {
+          return sendJson(response, 503, {
+            error: {
+              code: `full_trace_${traceCaptureStatus.state}`,
+              message: traceCaptureStatus.state === 'starting'
+                ? 'Full Trace capture is initializing. Retry shortly.'
+                : traceCaptureStatus.state === 'backlogged'
+                  ? 'Full Trace capture is backlogged. Retry after the writer catches up.'
+                  : 'Full Trace capture failed. Check Model Router logs.',
+            },
+            traceCapture: publicTraceCaptureDiagnostics(traceCaptureStatus),
+          });
+        }
+        fullTraceSession = options.fullTraceRecorder?.start({
+          method: request.method ?? 'POST',
+          path: `${url.pathname}${url.search}`,
+          headers: request.headers,
+        });
+        fullTraceSession?.attach(response);
+      }
+      if (request.method === 'OPTIONS') return sendCors(response);
+      if (request.method === 'GET' && url.pathname === '/health') {
+        return sendJson(response, 200, compactObject({
+          ok: true,
+          service: 'sciforge.model-router',
+          instanceId: stringField(env.SCIFORGE_MODEL_ROUTER_INSTANCE_ID),
+          checkedAt: new Date().toISOString(),
+          traceCapture: options.fullTraceRecorder?.status().state ?? 'disabled',
+        }));
+      }
+      if (request.method === 'GET' && url.pathname === '/healthz') {
+        const defaultTextReasoner = options.config.profiles[options.config.defaultProfile]?.textReasoner;
+        const protocol = defaultTextReasoner
+          ? upstreamNegotiator.cachedProtocol(
+            defaultTextReasoner.baseUrl,
+            defaultTextReasoner.model,
+            defaultTextReasoner.compatibility,
+          ) ?? null
+          : null;
+        const recentProviderDiagnostic = recentProviderErrorDiagnostic(recentRouterError);
+        const upstream = recentProviderDiagnostic
+          ? recentProviderDiagnostic
+          : modelRouterHealthzUpstreamDiagnostic(options.config, env);
+        const diagnostics = createModelRouterWorkerDiagnostics(
+          upstream,
+          recentProviderDiagnostic ? upstream.category : undefined,
+        );
+        const traceCapture = options.fullTraceRecorder?.status();
+        const traceReady = traceCapture?.ready ?? !options.fullTraceRequired;
+        const ready = upstream.ok && traceReady;
+        return sendJson(response, ready ? 200 : 503, compactObject({
+          ok: ready,
+          service: 'sciforge.model-router',
+          checkedAt: new Date().toISOString(),
+          version: diagnostics.version,
+          transport: diagnostics.transport,
+          health: diagnostics.health,
+          recentError: diagnostics.recentError,
+          capabilities: diagnostics.capabilities,
+          protocol,
+          traceCapture: traceCapture?.state ?? 'disabled',
+          traceCaptureDiagnostics: traceCapture
+            ? publicTraceCaptureDiagnostics(traceCapture)
+            : undefined,
+          upstream,
+        }));
+      }
+      if (request.method === 'GET' && url.pathname === '/manifest') {
+        return sendJson(response, 200, modelRouterManifest as unknown as JsonObject);
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/models') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
+        // Codex's models manager decodes each entry into its ModelInfo struct;
+        // a missing required field (verified against codex 0.163.0-alpha.10.2:
+        // `base_instructions`) makes the whole online refresh come back EMPTY,
+        // so the full structure is published with the router alias. This
+        // payload is proven end-to-end by
+        // scripts/codex-app-server-catalog-contract.mjs, which runs the real
+        // codex app-server against a real router instance for the
+        // declared-empty, unknown and declared-level cases.
+        // Reasoning levels are published only when the active connection
+        // declares them; with no declaration they stay null/[] and no default
+        // is ever invented (the 10-22 fabricated catalog is not coming back).
+        // The context fields below are Codex-required numbers: a declared
+        // profile window wins; otherwise the documented host budget is
+        // published (source of truth for both: capabilities v2).
+        const listProfileId = requestedProfileId({}, request, options.config);
+        const declaredReasoningEfforts =
+          options.config.profiles[listProfileId]?.textReasoner.compatibility?.reasoningEfforts ?? [];
+        const publishedContextWindow =
+          options.config.profiles[listProfileId]?.contextWindow ?? MODEL_ROUTER_HOST_CONTEXT_BUDGET;
+        const publishedAutoCompactLimit = Math.floor(
+          publishedContextWindow * MODEL_ROUTER_HOST_AUTO_COMPACT_RATIO
+        );
+        const publicModel = {
+          slug: publicModelAlias,
+          display_name: publicModelAlias,
+          description: 'SciForge Model Router public alias',
+          default_reasoning_level: null,
+          supported_reasoning_levels: declaredReasoningEfforts.map((effort) => ({
+            effort,
+            description: 'Declared reasoning effort for this connection'
+          })),
+          shell_type: 'shell_command',
+          visibility: 'list',
+          supported_in_api: true,
+          priority: 1,
+          additional_speed_tiers: [],
+          service_tiers: [],
+          default_service_tier: null,
+          base_instructions: CODEX_DEFAULT_BASE_INSTRUCTIONS,
+          supports_reasoning_summary_parameter: false,
+          support_verbosity: false,
+          apply_patch_tool_type: 'freeform',
+          supports_parallel_tool_calls: false,
+          truncation_policy: { mode: 'tokens', limit: publishedContextWindow },
+          supports_image_detail_original: false,
+          context_window: publishedContextWindow,
+          max_context_window: publishedContextWindow,
+          auto_compact_token_limit: publishedAutoCompactLimit,
+          effective_context_window_percent: 95,
+          experimental_supported_tools: [],
+          input_modalities: ['text', 'image'],
+          supports_search_tool: false,
+          use_responses_lite: false,
+          id: publicModelAlias,
+          object: 'model',
+          owned_by: 'sciforge',
+        };
+        return sendJson(response, 200, {
+          object: 'list',
+          data: [publicModel],
+          models: [publicModel],
+        });
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const profileId = requestedProfileId({}, request, options.config);
+        // v1 stays byte-compatible for existing consumers (workspace-egress
+        // bridge, computer-use drivers); v2 adds model identity, context
+        // sources and the three-state reasoning declaration on request:
+        //   GET /v1/capabilities?version=2
+        if (url.searchParams.get('version') === '2') {
+          return sendJson(
+            response,
+            200,
+            createModelRouterPublicCapabilitiesV2(options.config, env, profileId) as unknown as JsonObject,
+          );
+        }
+        return sendJson(
+          response,
+          200,
+          createModelRouterPublicCapabilities(options.config, env, profileId) as unknown as JsonObject,
+        );
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/responses') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const body = await readJson(request, fullTraceSession);
+        if (isRecord(body) && body.stream === true) {
+          const responseId = makeId('resp');
+          return sendDeferredResponseStream(
+            response,
+            responseId,
+            options.config.publicModelAlias ?? 'sciforge-model-router',
+            routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
+              config: options.config,
+              env,
+              fetchImpl,
+              workspaceRoot,
+              request,
+              visionTranslationCache,
+              scientificTranslationCache,
+              responseContinuationCache,
+              responseId,
+              providerSignal,
+              recordProviderError,
+              upstreamNegotiator,
+              preferredProtocol: preferredResponsesProtocol(options.config, body, request),
+              traceSession: fullTraceSession,
+            })),
+          );
+        }
+        const result = await routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
+          config: options.config,
+          env,
+          fetchImpl,
+          workspaceRoot,
+          request,
+          visionTranslationCache,
+          scientificTranslationCache,
+          responseContinuationCache,
+          providerSignal,
+          recordProviderError,
+          upstreamNegotiator,
+          preferredProtocol: preferredResponsesProtocol(options.config, body, request),
+          traceSession: fullTraceSession,
+        }));
+        return sendJson(response, 200, responseObject(result));
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const body = await readJson(request, fullTraceSession);
+        if (!isRecord(body)) {
+          throw routerError(400, 'invalid_request', 'Chat completions request body must be a JSON object.');
+        }
+        const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
+        const responseRequest = chatCompletionsToResponsesRequest(body, publicModelAlias);
+        const streamedReasoning = { text: '', responseId: makeId('resp') };
+        const resultPromise = routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
+          responseId: streamedReasoning.responseId,
+          onReasoningDelta: body.stream === true ? (text) => {
+            if (response.destroyed || response.writableEnded) return;
+            streamedReasoning.text += text;
+            writeChatCompletionChunk(response, {
+              id: streamedReasoning.responseId, object: 'chat.completion.chunk',
+              created: Math.floor(Date.now() / 1000), model: publicModelAlias,
+              choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: text }, finish_reason: null }],
+            });
+          } : undefined,
+          config: options.config,
+          env,
+          fetchImpl,
+          workspaceRoot,
+          request,
+          visionTranslationCache,
+          scientificTranslationCache,
+          responseContinuationCache,
+          providerSignal,
+          recordProviderError,
+          upstreamNegotiator,
+          preferredProtocol: 'chat-completions',
+          traceSession: fullTraceSession,
+        }));
+        if (body.stream === true) {
+          return sendDeferredChatCompletionStream(response, body, resultPromise, streamedReasoning);
+        }
+        const result = await resultPromise;
+        return sendJson(response, 200, responseToChatCompletion(responseObject(result), body));
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/images/generations') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const body = await readJson(request, fullTraceSession);
+        const result = await routeWithPriority(body, clientController.signal, (providerSignal) => routeImageGenerationRequest(body, {
+          config: options.config,
+          env,
+          fetchImpl,
+          workspaceRoot,
+          request,
+          providerSignal,
+          traceSession: fullTraceSession,
+        }));
+        return sendJson(response, 200, result);
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/images/edits') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const form = await readMultipartForm(request, fullTraceSession);
+        const result = await routeWithPriority({}, clientController.signal, (providerSignal) => routeImageEditRequest(form, {
+          config: options.config,
+          env,
+          fetchImpl,
+          workspaceRoot,
+          request,
+          providerSignal,
+          traceSession: fullTraceSession,
+        }));
+        return sendJson(response, 200, result);
+      }
+      if (
+        request.method === 'POST' &&
+        (url.pathname === '/v1/messages' || url.pathname === '/api/cc/v1/messages')
+      ) {
+        assertRuntimeAuthorized(request, options.config, env);
+        const body = await readJson(request, fullTraceSession) as AnthropicMessagesRequest;
+        const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
+        const bodyForRouting = normalizeAnthropicMessagesRouterModel(body, publicModelAlias);
+        const responseModel = stringField(body.model) || publicModelAlias;
+        const responseRequest = anthropicMessagesToResponses(body, {
+          defaultModel: publicModelAlias,
+        });
+        responseRequest.model = stringField(bodyForRouting.model) || publicModelAlias;
+        if (isRecord(body) && body.stream === true) {
+          const responseId = makeId('msg');
+          return sendDeferredAnthropicMessageStream(
+            response,
+            responseId,
+            responseModel,
+            body,
+            routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
+              config: options.config,
+              env,
+              fetchImpl,
+              workspaceRoot,
+              request,
+              visionTranslationCache,
+              scientificTranslationCache,
+              responseContinuationCache,
+              responseId,
+              providerSignal,
+              recordProviderError,
+              upstreamNegotiator,
+              preferredProtocol: 'anthropic-messages',
+              traceSession: fullTraceSession,
+            })),
+          );
+        }
+        const result = await routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
+          config: options.config,
+          env,
+          fetchImpl,
+          workspaceRoot,
+          request,
+          visionTranslationCache,
+          scientificTranslationCache,
+          responseContinuationCache,
+          providerSignal,
+          recordProviderError,
+          upstreamNegotiator,
+          preferredProtocol: 'anthropic-messages',
+          traceSession: fullTraceSession,
+        }));
+        return sendJson(response, 200, responseToAnthropicMessage(responseObject(result), body));
+      }
+      if (
+        request.method === 'POST' &&
+        (url.pathname === '/v1/messages/count_tokens' || url.pathname === '/api/cc/v1/messages/count_tokens')
+      ) {
+        assertRuntimeAuthorized(request, options.config, env);
+        const body = await readJson(request, fullTraceSession) as AnthropicMessagesRequest;
+        return sendJson(response, 200, {
+          input_tokens: estimateAnthropicMessagesInputTokens(body),
+        });
+      }
+      return sendJson(response, 404, { error: { code: 'not_found', message: 'Route not found' } });
+    } catch (error) {
+      const routerError = normalizeRouterError(error);
+      fullTraceSession?.recordError(routerError);
+      recordProviderError({
+        code: routerError.code,
+        status: routerError.status,
+        ...(routerError.role ? { role: routerError.role } : {}),
+      });
+      options.log?.(`model-router ${routerError.code}: ${routerError.message}`);
+      if (response.destroyed || response.writableEnded) return;
+      return sendJson(response, routerError.status, {
+        error: routerErrorResponseBody(routerError),
+      });
+    }
+    })();
+    inFlightRequests.add(operation);
+    void operation.finally(() => inFlightRequests.delete(operation));
+  });
+  modelRouterInFlightRequests.set(server, inFlightRequests);
+  return server;
+}
+
+function recentProviderErrorDiagnostic(error: RecentProviderError | null): ModelRouterUpstreamDiagnostic | null {
+  if (!error) return null;
+  if (Date.now() - error.at > RECENT_PROVIDER_AUTH_ERROR_TTL_MS) return null;
+  const category = providerDiagnosticCategory(error.code, error.status);
+  if (!category) return null;
+  return {
+    category,
+    ok: false,
+    retryable: category === 'provider-network' || category === 'provider-error',
+    ...(error.status ? { httpStatus: error.status } : {}),
+    ...(error.role ? { role: error.role } : {}),
+    releaseAcceptance: 'not-evaluated',
+  };
+}
+
+function isDagBackgroundRequest(body: unknown): boolean {
+  const request = isRecord(body) ? body : {};
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  const source = (stringField(metadata.source) ?? '').toLowerCase();
+  return source === 'evidence-dag' || source === 'project-dag' || source === 'dag-background';
+}
+
+function providerDiagnosticCategory(
+  code: string,
+  status?: number,
+): ModelRouterUpstreamDiagnostic['category'] | null {
+  if (/^(?:provider|upstream)_http_40[13]$/.test(code) || status === 401 || status === 403) return 'provider-auth';
+  if (/^(?:provider_exception_(?:timeout|network|fetch_failed)|upstream_(?:timeout|network_error))/.test(code)) return 'provider-network';
+  if (code === 'provider_invalid_json' || code === 'provider_error_payload' || code === 'upstream_invalid_response') return 'provider-bad-response';
+  if (code.startsWith('provider_http_') || code.startsWith('provider_exception_') || code.startsWith('upstream_')) return 'provider-error';
+  return null;
+}
+
+function recordProviderAuthFailure(
+  context: { recordProviderError?: (error: Omit<RecentProviderError, 'at'>) => void },
+  summary: string,
+  role: ProviderCallRecord['role'],
+): void {
+  const match = /^(?:provider|upstream)_http_(40[13])$/.exec(summary);
+  if (!match) return;
+  context.recordProviderError?.({
+    code: summary,
+    status: Number(match[1]),
+    role,
+  });
+}
+
+function assertRuntimeAuthorized(
+  request: IncomingMessage,
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+): void {
+  const runtimeApiKeyEnv = config.runtimeApiKeyEnv ?? 'SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY';
+  const runtimeApiKey = stringField(env[runtimeApiKeyEnv]);
+  if (!runtimeApiKey) throw routerError(503, 'missing_runtime_api_key', 'Model Router runtime API key is not configured.');
+  const authorization = Array.isArray(request.headers.authorization)
+    ? request.headers.authorization[0]
+    : request.headers.authorization;
+  const xApiKey = Array.isArray(request.headers['x-api-key'])
+    ? request.headers['x-api-key'][0]
+    : request.headers['x-api-key'];
+  if (authorization !== `Bearer ${runtimeApiKey}` && xApiKey !== runtimeApiKey) {
+    throw routerError(401, 'unauthorized', 'Missing or invalid Model Router runtime API key.');
+  }
+}
+
+export function createModelRouterPublicCapabilities(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+  profileId = config.defaultProfile,
+): ModelRouterPublicCapabilityContract {
+  const profile = config.profiles[profileId];
+  if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
+
+  const roles = {
+    textReasoner: providerRoleReadiness(profile.textReasoner, env),
+    imageGenerator: providerRoleReadiness(profile.imageGenerator, env),
+    visionTranslator: providerRoleReadiness(profile.translators.vision, env),
+    scientificTranslator: scientificTranslatorRoleReadiness(profile.translators.scientific, env),
+  };
+  const visionRegistration = profile.capabilities?.vision;
+  const registeredVisionMimeTypes = visionRegistration?.mimeTypes;
+  const mimeTypes = profile.translators.vision
+    ? sanitizeVisionMimeTypes(registeredVisionMimeTypes ?? [...MODEL_ROUTER_VISION_MIME_TYPES])
+    : [];
+  const maxInputBytes = profile.translators.vision
+    ? boundedPublicInputBytes(visionRegistration?.maxInputBytes, MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES)
+    : 0;
+
+  const imageRegistration = profile.capabilities?.images;
+  const imageRoleRegistered = Boolean(profile.imageGenerator);
+  const generation = imageRoleRegistered && registeredFeature(imageRegistration?.generation, true);
+  const editing = imageRoleRegistered && registeredFeature(imageRegistration?.editing, true);
+  const referenceImages = editing && registeredFeature(imageRegistration?.referenceImages, true);
+  const masks = editing && registeredFeature(imageRegistration?.masks, true);
+  const sizeSelection = (generation || editing) && registeredFeature(imageRegistration?.sizeSelection, true);
+  const sizes = sizeSelection ? sanitizeImageSizes(imageRegistration?.sizes ?? []) : [];
+
+  return {
+    schemaVersion: 'sciforge.model-router.capabilities.v1',
+    publicModelAlias: config.publicModelAlias ?? 'sciforge-model-router',
+    profile: profileId,
+    roles,
+    vision: {
+      available: roles.visionTranslator.ready,
+      input: {
+        mimeTypes,
+        maxInputBytes,
+        maxRequestBytes: MODEL_ROUTER_MAX_REQUEST_BYTES,
+        sources: ['inline', 'url', 'workspace_ref'],
+      },
+    },
+    images: {
+      available: roles.imageGenerator.ready && (generation || editing),
+      maxRequestBytes: MODEL_ROUTER_MAX_REQUEST_BYTES,
+      features: {
+        generation,
+        editing,
+        referenceImages,
+        masks,
+        sizeSelection,
+      },
+      sizes: {
+        mode: !sizeSelection ? 'unsupported' : sizes.length > 0 ? 'enumerated' : 'provider-defined',
+        values: sizes,
+      },
+    },
+  };
+}
+
+/**
+ * v2 of the public capability contract (opt-in via ?version=2). Everything from
+ * v1 is passed through unchanged; the added blocks describe the real model
+ * identity behind the public alias, where the published context window comes
+ * from, and the three-state reasoning declaration of the active connection.
+ * Router-side reasoning can be “known” (declared levels) or “unknown”; an
+ * explicit upstream “unsupported” verdict lives in the host discovery layer and
+ * is deliberately not mirrored here (see the `note` field).
+ */
+export function createModelRouterPublicCapabilitiesV2(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+  profileId = config.defaultProfile,
+): ModelRouterPublicCapabilityContractV2 {
+  const base = createModelRouterPublicCapabilities(config, env, profileId);
+  const profile = config.profiles[profileId];
+  if (!profile) {
+    throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
+  }
+  const declared = profile.textReasoner.compatibility?.reasoningEfforts;
+  const levels = Array.isArray(declared)
+    ? [...new Set(declared.map((token) => token.trim()).filter(Boolean))].map((id) => ({ id }))
+    : [];
+  const declaredWindow = profile.contextWindow;
+  return {
+    ...base,
+    schemaVersion: 'sciforge.model-router.capabilities.v2',
+    identity: {
+      publicModelAlias: base.publicModelAlias,
+      upstreamModel: profile.textReasoner.model,
+      protocol: profile.textReasoner.compatibility?.preferredProtocol ?? 'auto',
+    },
+    context: {
+      modelDeclared: declaredWindow !== undefined ? declaredWindow : null,
+      hostBudget: MODEL_ROUTER_HOST_CONTEXT_BUDGET,
+      source: declaredWindow !== undefined ? 'profile-declaration' : 'host-budget',
+    },
+    reasoning: {
+      state: levels.length > 0 ? 'known' : 'unknown',
+      levels,
+      source: levels.length > 0 ? 'model-access-declaration' : 'none',
+      note:
+        'Router-side state only: “known” lists the levels this connection declares. ' +
+        'An explicit upstream “unsupported” verdict and catalog observations live in the ' +
+        'host discovery layer (modelReasoning:discover) and are not mirrored here.',
+    },
+  };
+}
+
+function providerRoleReadiness(
+  provider: ModelRouterProviderConfig | undefined,
+  env: Record<string, string | undefined>,
+): ModelRouterRoleReadiness {
+  if (!provider) return { configured: false, ready: false, state: 'not_configured' };
+  if (providerConfigurationIssue(provider)) {
+    return { configured: true, ready: false, state: 'invalid_configuration' };
+  }
+  if (!stringField(env[provider.apiKeyEnv])) {
+    return { configured: true, ready: false, state: 'missing_credentials' };
+  }
+  return { configured: true, ready: true, state: 'ready' };
+}
+
+function scientificTranslatorRoleReadiness(
+  translator: ModelRouterScientificTranslatorConfig | undefined,
+  env: Record<string, string | undefined>,
+): ModelRouterRoleReadiness {
+  if (!translator) return { configured: false, ready: false, state: 'not_configured' };
+  if (scientificTranslatorConfigurationIssue(translator)) {
+    return { configured: true, ready: false, state: 'invalid_configuration' };
+  }
+  if (!stringField(env[translator.tokenEnv])) {
+    return { configured: true, ready: false, state: 'missing_credentials' };
+  }
+  return { configured: true, ready: true, state: 'ready' };
+}
+
+function registeredFeature(value: boolean | undefined, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeVisionMimeTypes(values: unknown): string[] {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^image\/[a-z0-9][a-z0-9.+-]{0,63}$/.test(value)))]
+    .slice(0, 32);
+}
+
+function sanitizeImageSizes(values: unknown): string[] {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value === 'auto' || /^[1-9]\d{1,4}x[1-9]\d{1,4}$/.test(value)))]
+    .slice(0, 32);
+}
+
+function boundedPublicInputBytes(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || !value || value < 1) return fallback;
+  return Math.min(Math.floor(value), MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES);
+}
+
+function modelRouterHealthzUpstreamDiagnostic(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+): ModelRouterUpstreamDiagnostic {
+  const profile = config.profiles[config.defaultProfile];
+  const provider = profile?.textReasoner;
+  if (!profile || !provider?.baseUrl || !provider.model) {
+    return {
+      category: 'repo-bug',
+      ok: false,
+      retryable: false,
+      releaseAcceptance: 'not-evaluated',
+    };
+  }
+  if (!stringField(env[provider.apiKeyEnv])) {
+    return {
+      category: 'provider-auth',
+      ok: false,
+      retryable: false,
+      httpStatus: 401,
+      releaseAcceptance: 'not-evaluated',
+    };
+  }
+  const imageGenerator = profile.imageGenerator;
+  if (imageGenerator) {
+    if (!imageGenerator.baseUrl || !imageGenerator.model) {
+      return {
+        category: 'repo-bug',
+        ok: false,
+        retryable: false,
+        releaseAcceptance: 'not-evaluated',
+      };
+    }
+    if (!stringField(env[imageGenerator.apiKeyEnv])) {
+      return {
+        category: 'provider-auth',
+        ok: false,
+        retryable: false,
+        httpStatus: 401,
+        role: 'imageGenerator',
+        releaseAcceptance: 'not-evaluated',
+      };
+    }
+  }
+  const visionProvider = profile.translators.vision;
+  if (visionProvider) {
+    if (!visionProvider.baseUrl || !visionProvider.model) {
+      return {
+        category: 'repo-bug',
+        ok: false,
+        retryable: false,
+        releaseAcceptance: 'not-evaluated',
+      };
+    }
+    if (!stringField(env[visionProvider.apiKeyEnv])) {
+      return {
+        category: 'provider-auth',
+        ok: false,
+        retryable: false,
+        httpStatus: 401,
+        role: 'visionTranslator',
+        releaseAcceptance: 'not-evaluated',
+      };
+    }
+  }
+  const scientificTranslator = profile.translators.scientific;
+  if (scientificTranslator) {
+    if (!scientificTranslator.baseUrl || !scientificTranslator.tokenEnv || !scientificTranslator.model) {
+      return {
+        category: 'repo-bug',
+        ok: false,
+        retryable: false,
+        releaseAcceptance: 'not-evaluated',
+      };
+    }
+    if (!stringField(env[scientificTranslator.tokenEnv])) {
+      return {
+        category: 'provider-auth',
+        ok: false,
+        retryable: false,
+        httpStatus: 401,
+        role: 'scientificTranslator',
+        releaseAcceptance: 'not-evaluated',
+      };
+    }
+  }
+  return {
+    category: 'ready',
+    ok: true,
+    retryable: false,
+    releaseAcceptance: 'not-evaluated',
+  };
+}
+
+export async function startModelRouterServer(
+  options: ModelRouterServerOptions & { host?: string; port?: number },
+): Promise<StartedModelRouterServer> {
+  const host = normalizeLoopbackHost(options.host ?? '127.0.0.1');
+  const server = createModelRouterServer(options);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(options.port ?? 3892, host, () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  const displayHost = host.includes(':') ? `[${host.replace(/^\[|\]$/g, '')}]` : host;
+  const url = `http://${displayHost}:${address.port}`;
+  return {
+    server,
+    url,
+    port: address.port,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+      await Promise.allSettled([...modelRouterInFlightRequests.get(server) ?? []]);
+      await options.fullTraceRecorder?.flush();
+    },
+  };
+}
+
+type ImageRouteContext = {
+  config: ModelRouterConfig;
+  env: Record<string, string | undefined>;
+  fetchImpl: typeof fetch;
+  workspaceRoot: string;
+  request: IncomingMessage;
+  providerSignal: AbortSignal;
+  traceSession?: ModelRouterTraceSession;
+};
+
+type ResolvedImageRoute = {
+  profileId: string;
+  profile: ModelRouterProfile;
+  provider: ModelRouterProviderConfig;
+  secret: string;
+};
+
+async function routeImageGenerationRequest(body: unknown, context: ImageRouteContext): Promise<JsonObject> {
+  if (!isRecord(body)) {
+    throw routerError(400, 'invalid_request', 'Image generation request body must be a JSON object.');
+  }
+  const route = resolveImageRoute(body, context);
+  assertImageRequestCapabilities(
+    createModelRouterPublicCapabilities(context.config, context.env, route.profileId),
+    'generation',
+    { size: stringField(body.size) },
+  );
+  return routeImageProviderRequest({
+    context,
+    route,
+    providerRequest: {
+      protocol: 'images-generations',
+      url: providerImageGenerationsUrl(route.provider.baseUrl),
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${route.secret}`,
+      },
+      body: JSON.stringify({
+        ...body,
+        model: route.provider.model,
+      }),
+    },
+  });
+}
+
+async function routeImageEditRequest(form: FormData, context: ImageRouteContext): Promise<JsonObject> {
+  const model = requiredMultipartText(form, 'model');
+  const prompt = requiredMultipartText(form, 'prompt');
+  const images = requiredMultipartFiles(form, 'image');
+  const mask = optionalMultipartFile(form, 'mask');
+  const size = optionalMultipartText(form, 'size');
+  const route = resolveImageRoute({ model }, context);
+  assertImageRequestCapabilities(
+    createModelRouterPublicCapabilities(context.config, context.env, route.profileId),
+    'editing',
+    {
+      imageCount: images.length,
+      hasMask: Boolean(mask),
+      size,
+    },
+  );
+  const providerForm = new FormData();
+  providerForm.set('model', route.provider.model);
+  providerForm.set('prompt', prompt);
+  if (size) providerForm.set('size', size);
+  copyOptionalMultipartText(form, providerForm, 'n');
+  copyOptionalMultipartText(form, providerForm, 'quality');
+  copyOptionalMultipartText(form, providerForm, 'input_fidelity');
+  for (const image of images) appendMultipartFile(providerForm, 'image', image);
+  if (mask) appendMultipartFile(providerForm, 'mask', mask);
+  return routeImageProviderRequest({
+    context,
+    route,
+    providerRequest: {
+      protocol: 'images-edits',
+      url: providerImageEditsUrl(route.provider.baseUrl),
+      headers: { authorization: `Bearer ${route.secret}` },
+      body: providerForm,
+    },
+  });
+}
+
+function assertImageRequestCapabilities(
+  capabilities: ModelRouterPublicCapabilityContract,
+  operation: 'generation' | 'editing',
+  request: { imageCount?: number; hasMask?: boolean; size?: string },
+): void {
+  if (!capabilities.images.features[operation]) {
+    throw routerError(422, 'image_capability_not_supported', `The active Model Router profile does not support image ${operation}.`, 'imageGenerator');
+  }
+  if ((request.imageCount ?? 0) > 1 && !capabilities.images.features.referenceImages) {
+    throw routerError(422, 'image_references_not_supported', 'The active Model Router profile does not support multiple reference images.', 'imageGenerator');
+  }
+  if (request.hasMask && !capabilities.images.features.masks) {
+    throw routerError(422, 'image_masks_not_supported', 'The active Model Router profile does not support masked image editing.', 'imageGenerator');
+  }
+  if (request.size && !capabilities.images.features.sizeSelection) {
+    throw routerError(422, 'image_size_selection_not_supported', 'The active Model Router profile does not support explicit image sizes.', 'imageGenerator');
+  }
+  if (
+    request.size
+    && capabilities.images.sizes.mode === 'enumerated'
+    && !capabilities.images.sizes.values.includes(request.size.toLowerCase())
+  ) {
+    throw routerError(422, 'image_size_not_supported', 'The requested image size is not supported by the active Model Router profile.', 'imageGenerator');
+  }
+}
+
+function resolveImageRoute(request: Record<string, unknown>, context: ImageRouteContext): ResolvedImageRoute {
+  const profileId = requestedProfileId(request, context.request, context.config);
+  const profile = context.config.profiles[profileId];
+  if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
+  validateRequestedModel(request.model, context.config.publicModelAlias, context.config);
+  const provider = profile.imageGenerator;
+  if (!provider) {
+    throw routerError(503, 'image_generator_not_configured', 'Model Router image generation is not configured.', 'imageGenerator');
+  }
+  validateProviderConfig(provider, 'imageGenerator');
+  return {
+    profileId,
+    profile,
+    provider,
+    secret: secretForProvider(provider, context.env, 'imageGenerator'),
+  };
+}
+
+async function routeImageProviderRequest(options: {
+  context: ImageRouteContext;
+  route: ResolvedImageRoute;
+  providerRequest: {
+    protocol: 'images-generations' | 'images-edits';
+    url: string;
+    headers: Record<string, string>;
+    body: string | FormData;
+  };
+}): Promise<JsonObject> {
+  const { context, route, providerRequest } = options;
+  const startedAt = Date.now();
+  const traceAttempt = context.traceSession?.startUpstreamAttempt({
+    protocol: providerRequest.protocol,
+    phase: 'request',
+    method: 'POST',
+    url: providerRequest.url,
+    headers: providerRequest.headers,
+    body: await traceableImageProviderBody(providerRequest.body),
+    retry: 0,
+  });
+  let response: Response;
+  try {
+    response = await context.fetchImpl(providerRequest.url, {
+      method: 'POST',
+      headers: providerRequest.headers,
+      body: providerRequest.body,
+      signal: context.providerSignal,
+    });
+  } catch (error) {
+    const errorSummary = providerExceptionSummary(error, 'fetch_failed');
+    const failure = routerError(500, errorSummary, `Provider request failed (${errorSummary}).`, 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  traceAttempt?.responseHeaders?.(response.status, Object.fromEntries(response.headers.entries()));
+  try {
+    response = await captureUpstreamResponse(response, (index, chunk) => {
+      traceAttempt?.responseChunk?.(index, chunk);
+    });
+  } catch (error) {
+    const failure = routerError(502, 'provider_response_read_failed', 'Provider image response could not be read.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    const errorSummary = `provider_http_${response.status}`;
+    const failure = routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, route.provider, route.secret, errorText), 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    const failure = routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  if (isProviderErrorPayload(payload)) {
+    const failure = routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  if (!isRecord(payload)) {
+    const failure = routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  const jsonPayload = jsonValueField(payload);
+  if (!isRecord(jsonPayload)) {
+    const failure = routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+  return normalizeImageGenerationPayload(jsonPayload as JsonObject, context.fetchImpl, context.providerSignal);
+}
+
+async function traceableImageProviderBody(body: string | FormData): Promise<unknown> {
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      return body;
+    }
+  }
+  const entries: Array<Record<string, unknown>> = [];
+  for (const [name, value] of body.entries()) {
+    if (typeof value === 'string') {
+      entries.push({ name, value });
+      continue;
+    }
+    entries.push({
+      name,
+      file: {
+        name: value.name,
+        type: value.type,
+        size: value.size,
+        body: new Uint8Array(await value.arrayBuffer()),
+      },
+    });
+  }
+  return { encoding: 'form-data', entries };
+}
+
+function requiredMultipartText(form: FormData, name: string): string {
+  const value = form.get(name);
+  if (typeof value !== 'string' || !value.trim()) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must be a non-empty string.`);
+  }
+  return value;
+}
+
+function copyOptionalMultipartText(source: FormData, target: FormData, name: string): void {
+  const value = optionalMultipartText(source, name);
+  if (!value) return;
+  target.set(name, value);
+}
+
+function optionalMultipartText(form: FormData, name: string): string | undefined {
+  const value = form.get(name);
+  if (value === null) return undefined;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must be a non-empty string when provided.`);
+  }
+  return value.trim();
+}
+
+function requiredMultipartFiles(form: FormData, name: string): Blob[] {
+  const values = form.getAll(name);
+  if (!values.length || values.some((value) => typeof value === 'string' || value.size <= 0)) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must contain a non-empty file.`);
+  }
+  return values as Blob[];
+}
+
+function optionalMultipartFile(form: FormData, name: string): Blob | undefined {
+  const value = form.get(name);
+  if (value === null) return undefined;
+  if (typeof value === 'string' || value.size <= 0) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must contain a non-empty file when provided.`);
+  }
+  return value;
+}
+
+function appendMultipartFile(form: FormData, name: string, file: Blob): void {
+  const fileName = stringField((file as Blob & { name?: unknown }).name) ?? `${name}.png`;
+  form.append(name, file, fileName);
+}
+
+async function normalizeImageGenerationPayload(
+  payload: JsonObject,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<JsonObject> {
+  const data = Array.isArray(payload.data) ? payload.data : undefined;
+  if (!data) return payload;
+  const normalizedData = await Promise.all(data.map((item) => normalizeImageGenerationItem(item, fetchImpl, signal)));
+  return {
+    ...payload,
+    data: normalizedData,
+  };
+}
+
+async function normalizeImageGenerationItem(
+  item: unknown,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<JsonObject> {
+  const record = isRecord(item) ? item : {};
+  const b64Json = stringField(record.b64_json);
+  if (b64Json) {
+    const { url: _url, image_url: _imageUrl, image: _image, ...rest } = record;
+    return { ...jsonObjectFromRecord(rest), b64_json: b64Json };
+  }
+  const dataUri = imageDataUriFromProviderItem(record) ?? imageDataUriFromProviderItem(item);
+  if (dataUri) {
+    const { url: _url, image_url: _imageUrl, image: _image, ...rest } = record;
+    return {
+      ...jsonObjectFromRecord(rest),
+      b64_json: dataUri.base64,
+      mime_type: stringField(rest.mime_type) ?? dataUri.mime,
+    };
+  }
+  const imageUrl = providerImageUrlFromItem(record);
+  if (!imageUrl) return jsonObjectFromRecord(record);
+  const downloaded = await fetchProviderImageUrl(imageUrl, fetchImpl, signal);
+  const { url: _url, image_url: _imageUrl, image: _image, ...rest } = record;
+  return {
+    ...jsonObjectFromRecord(rest),
+    b64_json: downloaded.base64,
+    mime_type: stringField(rest.mime_type) ?? downloaded.mime,
+  };
+}
+
+function jsonObjectFromRecord(record: Record<string, unknown>): JsonObject {
+  const json = jsonValueField(record);
+  return isRecord(json) ? json as JsonObject : {};
+}
+
+function providerImageUrlFromItem(record: Record<string, unknown>): string | undefined {
+  const imageUrl = isRecord(record.image_url) ? record.image_url : {};
+  const image = isRecord(record.image) ? record.image : {};
+  const url = stringField(record.url)
+    ?? stringField(imageUrl.url)
+    ?? stringField(image.url);
+  if (!url) return undefined;
+  const parsed = safeParsedUrl(url);
+  if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) return undefined;
+  return parsed.toString();
+}
+
+function safeParsedUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function imageDataUriFromProviderItem(value: unknown): { mime: string; base64: string } | undefined {
+  if (typeof value === 'string') return parseImageDataUri(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = imageDataUriFromProviderItem(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  for (const item of Object.values(value)) {
+    const found = imageDataUriFromProviderItem(item);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function parseImageDataUri(value: string): { mime: string; base64: string } | undefined {
+  const match = value.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i);
+  return match ? { mime: match[1].toLowerCase(), base64: match[2] } : undefined;
+}
+
+async function fetchProviderImageUrl(
+  url: string,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<{ mime: string; base64: string }> {
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { signal });
+  } catch (error) {
+    const errorSummary = providerExceptionSummary(error, 'image_url_fetch_failed');
+    throw routerError(502, errorSummary, `Provider image URL fetch failed (${errorSummary}).`, 'imageGenerator');
+  }
+  if (!response.ok) {
+    throw routerError(502, `provider_image_url_http_${response.status}`, 'Provider image URL fetch failed.', 'imageGenerator');
+  }
+  const mime = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!mime.startsWith('image/')) {
+    throw routerError(502, 'provider_image_url_not_image', 'Provider image URL did not return an image.', 'imageGenerator');
+  }
+  const contentLength = Number(response.headers.get('content-length') ?? '0');
+  if (Number.isFinite(contentLength) && contentLength > MAX_TRANSIENT_PROVIDER_IMAGE_BYTES) {
+    throw routerError(502, 'provider_image_url_too_large', 'Provider image URL exceeded the image size limit.', 'imageGenerator');
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.byteLength <= 0) {
+    throw routerError(502, 'provider_image_url_empty', 'Provider image URL returned an empty image.', 'imageGenerator');
+  }
+  if (bytes.byteLength > MAX_TRANSIENT_PROVIDER_IMAGE_BYTES) {
+    throw routerError(502, 'provider_image_url_too_large', 'Provider image URL exceeded the image size limit.', 'imageGenerator');
+  }
+  return { mime, base64: bytes.toString('base64') };
+}
+
+async function routeResponsesRequest(
+  body: unknown,
+  context: {
+    config: ModelRouterConfig;
+    env: Record<string, string | undefined>;
+    fetchImpl: typeof fetch;
+    workspaceRoot: string;
+    request: IncomingMessage;
+    visionTranslationCache: Map<string, VisionTranslationCacheEntry>;
+    scientificTranslationCache: Map<string, ScientificEvidence>;
+    responseContinuationCache: ResponseContinuationCache;
+    upstreamNegotiator: UpstreamProtocolNegotiator;
+    preferredProtocol: UpstreamWireProtocol;
+    onReasoningDelta?: (text: string) => void;
+    traceSession?: ModelRouterTraceSession;
+    responseId?: string;
+    providerSignal?: AbortSignal;
+    recordProviderError?: (error: Omit<RecentProviderError, 'at'>) => void;
+  },
+): Promise<RoutedResponse> {
+  const request = isRecord(body) ? body : {};
+  let structuredOutputRequested: boolean;
+  try {
+    structuredOutputRequested = hasStructuredOutputContract(request);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw routerError(
+      422,
+      'upstream_protocol_capability_unsupported',
+      error.message,
+      'textReasoner',
+    );
+  }
+  const profileId = requestedProfileId(request, context.request, context.config);
+  const profile = context.config.profiles[profileId];
+  if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
+  validateRequestedModel(request.model, context.config.publicModelAlias, context.config);
+  validateProfile(profile);
+  const textSecret = secretForProvider(profile.textReasoner, context.env, 'textReasoner');
+  const visionTranslator = profile.translators.vision;
+  const visionSecret = visionTranslator ? optionalSecretForProvider(visionTranslator, context.env) : undefined;
+  const evidencePolicy = requestedEvidencePolicy(context.request);
+  const visionCachePolicy = requestedVisionCachePolicy(context.request, profile);
+
+  const responseId = context.responseId ?? makeId('resp');
+  const requestInputs = extractRequestInputs(request.input, request.instructions);
+  const extracted = {
+    ...requestInputs,
+    modalities: await materializeWorkspaceImageRefs(requestInputs.modalities, context.workspaceRoot),
+  };
+  const calls: ProviderCallRecord[] = [];
+  const observations: string[] = [];
+  const scientificEvidence: ScientificEvidence[] = [];
+  let degraded = false;
+  let imageNotSent = false;
+  const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
+  const traceRedactionSecrets = [textSecret, visionSecret]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const usage = emptyResponseUsage();
+  const hasToolTranscriptInput = responseInputHasToolTranscript(request.input);
+  const previousResponseId = stringField(request.previous_response_id);
+  const requestWithoutContinuationHandle = { ...request };
+  delete requestWithoutContinuationHandle.previous_response_id;
+  const requestWithSafeTextInput = typeof request.input === 'string'
+    ? { ...requestWithoutContinuationHandle, input: textOnlyResponseInput(request.input) }
+    : requestWithoutContinuationHandle;
+  const requestForTextReasoner = hasToolTranscriptInput
+    ? {
+      ...requestWithSafeTextInput,
+      input: repairResponseToolTranscriptInput(
+        restoreResponseContinuation(
+          request.input,
+          previousResponseId
+            ? context.responseContinuationCache.get(previousResponseId)
+            : undefined,
+        ),
+      ),
+    }
+    : requestWithSafeTextInput;
+  const toolNameAliases = chatToolNameAliasesFromResponsesTools(requestForTextReasoner.tools);
+
+  // Lexical detectors must not become routing truth; final routing must use structured semantic signals and refs-first evidence.
+  const visionModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind === 'vision.image');
+  const visionBudgetPrune = visionModalities.length > 0
+    ? pruneOversizeVisionModalities(
+        visionModalities,
+        profile.contextWindow ?? DEFAULT_PROFILE_CONTEXT_WINDOW,
+        estimateTextTokens(extracted.userText),
+      )
+    : { kept: visionModalities };
+  const keptVisionModalities = visionBudgetPrune.kept;
+  const visionContextNotice = visionBudgetPrune.notice;
+  if (visionContextNotice) {
+    for (const dropped of visionContextNotice.dropped) {
+      observations.push([
+        `modality_input=${dropped.name}`,
+        'status=dropped',
+        `reason=context budget exceeded (${dropped.bytes} bytes)`,
+        'instruction=Answer from text-only context; the image was not sent to the vision translator.',
+      ].join('\n'));
+    }
+  }
+  const unsupportedModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind !== 'vision.image');
+  const strictVisualEvidenceRequired = evidencePolicy === 'required';
+  if (strictVisualEvidenceRequired && visionModalities.length === 0) {
+    throw strictVisionEvidenceError({
+      causeCode: 'vision_evidence_input_required',
+      status: 400,
+      failureClass: 'invalid_arguments',
+      retryable: false,
+      message: 'Strict evidence policy requires at least one visual input.',
+      recovery: {
+        action: 'stop',
+        instruction: 'Attach an authorized visual input and repeat the native visual inspection.',
+      },
+    });
+  }
+  if (strictVisualEvidenceRequired && keptVisionModalities.length === 0) {
+    throw strictVisionEvidenceErrorFromCause(routerError(
+      413,
+      'vision_input_too_large',
+      'No visual input fits the active Model Router context budget.',
+      'visionTranslator',
+    ));
+  }
+
+  // Protected scientific files retain their expert-only admission barrier before any
+  // reasoner call. Ordinary modalities remain metadata-first and are inspected on demand.
+  const scientificRisks = new Map<ModalityRef, ScientificModalityRisk>();
+  for (const modality of unsupportedModalities) {
+    scientificRisks.set(modality, await classifyScientificModalityRisk(modality, context.workspaceRoot));
+  }
+  const eagerModalities = [
+    ...unsupportedModalities.filter((modality) => structuredOutputRequested
+      || strictVisualEvidenceRequired || scientificRisks.get(modality)?.level === 'high'),
+    ...(strictVisualEvidenceRequired || structuredOutputRequested || !visionTranslator || !visionSecret ? keptVisionModalities : []),
+  ];
+  const lazyModalities = [...unsupportedModalities, ...keptVisionModalities]
+    .filter((modality) => !eagerModalities.includes(modality));
+  const lazyModalityInspection = lazyModalities.length > 0;
+  observations.push(...lazyModalities.map(formatModalityReferenceObservation));
+  const visualIntent = latestVisualUserIntent(request.input);
+  const inspect = (target: ModalityRef, control?: Extract<TextControl, { type: 'need_more_modality_info' }>) => inspectModality({
+    target,
+    control,
+    userInstruction: visualIntent || extracted.userText || 'Inspect the referenced modality.',
+    profile,
+    profileId,
+    visionSecret,
+    visionCachePolicy,
+    evidencePolicy,
+    scientificRisk: scientificRisks.get(target),
+    context,
+    calls,
+    usage,
+  });
+  const rememberInspection = (target: ModalityRef, result: ModalityInspectionResult, control?: Extract<TextControl, { type: 'need_more_modality_info' }>) => {
+    const observation = result.imageNotSent
+      ? formatVisionNotSentObservation(target, result.observation)
+      : result.visionStatus
+        ? control
+          ? formatVisionSupplementObservation(target, control, result.observation, result.visionStatus)
+          : formatVisionObservation(target, result.observation, result.visionStatus)
+        : result.observation;
+    observations.push([
+      observation,
+      result.cached ? 'cache_status=hit\ninstruction=This visual evidence was cached and may be inaccurate. If unreliable, request a fresh visual inspection with cachePolicy=refresh or bypass; do not treat cached claims as ground truth.' : '',
+    ].filter(Boolean).join('\n'));
+    degraded ||= result.degraded;
+    imageNotSent ||= Boolean(result.imageNotSent);
+    if (result.scientificEvidence) scientificEvidence.push(result.scientificEvidence);
+  };
+  // Inspect protected inputs first so a rejection cannot expose them to another provider.
+  for (const modality of eagerModalities.filter((item) => item.kind !== 'vision.image')) {
+    rememberInspection(modality, await inspect(modality));
+  }
+  const eagerVisionModalities = eagerModalities.filter((item) => item.kind === 'vision.image');
+  const pending = new Map<string, Promise<ModalityInspectionResult>>();
+  const translated = new Array<ModalityInspectionResult>(eagerVisionModalities.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(4, eagerVisionModalities.length) }, async () => {
+    while (cursor < eagerVisionModalities.length) {
+      const index = cursor++;
+      const modality = eagerVisionModalities[index]!;
+      const key = modality.contentSha256 ?? modality.sha256;
+      let task = pending.get(key);
+      if (!task) {
+        task = inspect(modality);
+        pending.set(key, task);
+      }
+      translated[index] = await task;
+    }
+  });
+  const settled = await Promise.allSettled(workers);
+  const failure = settled.find((result) => result.status === 'rejected');
+  if (failure?.status === 'rejected') throw failure.reason;
+  translated.forEach((result, index) => rememberInspection(eagerVisionModalities[index]!, result));
+
+  let outputText = '';
+  let outputItems: JsonObject[] = [];
+  let responseStatus: string | undefined;
+  let incompleteDetails: JsonObject | undefined;
+  let terminalDetails: JsonObject | undefined;
+  let supplementRounds = 0;
+    const configuredSupplementRounds = profile.translators.vision?.maxSupplementRounds;
+    const maxSupplementRounds = Number.isFinite(configuredSupplementRounds ?? Number.NaN)
+      ? Math.max(0, Math.floor(configuredSupplementRounds ?? 0))
+      : (lazyModalityInspection ? 2 : 0);
+
+  while (true) {
+      const textResult = await callTextReasoner({
+        // Supplement/control rounds are internal evidence, not public progress.
+        onReasoningDelta: extracted.modalities.length === 0 ? context.onReasoningDelta : undefined,
+        profile,
+        secret: textSecret,
+        fetchImpl: context.fetchImpl,
+        observations,
+        visualFailure: degraded,
+        strictVisualEvidence: strictVisualEvidenceRequired,
+        structuredOutput: structuredOutputRequested,
+        allowModalitySupplement: !structuredOutputRequested
+          && supplementRounds < maxSupplementRounds
+          && Boolean(extracted.modalities.length),
+        calls,
+        request: requestForTextReasoner,
+        toolNameAliases,
+        signal: context.providerSignal,
+        upstreamNegotiator: context.upstreamNegotiator,
+        preferredProtocol: context.preferredProtocol,
+        traceSession: context.traceSession,
+      }).catch((error: unknown) => {
+        if (context.providerSignal?.aborted) throw error;
+        if (strictVisualEvidenceRequired) {
+          recordProviderAuthFailure(context, traceErrorSummary(error), 'textReasoner');
+          throw strictVisualEvidenceSynthesisErrorFromCause(error);
+        }
+        throw error;
+      });
+      addUsage(usage, textResult.usage);
+      responseStatus = textResult.status;
+      incompleteDetails = textResult.incompleteDetails;
+      terminalDetails = textResult.terminalDetails;
+      const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
+      const reasoningItems = textResult.outputItems.filter((item) => item.type === 'reasoning');
+      if (hasToolCall) {
+        outputText = textResult.outputText;
+        outputItems = textResult.outputItems;
+        break;
+      }
+
+      if (structuredOutputRequested) {
+        if (!textResult.outputText.trim()) {
+          throw routerError(
+            502,
+            'structured_output_empty',
+            'The text reasoner returned an empty structured output.',
+            'textReasoner',
+          );
+        }
+        if (
+          publicProviderOutputText(
+            textResult.outputText,
+            profile,
+            publicModelAlias,
+            traceRedactionSecrets,
+          ) !== textResult.outputText
+        ) {
+          throw routerError(
+            502,
+            'structured_output_private_data',
+            'The text reasoner returned provider-private data inside structured output.',
+            'textReasoner',
+          );
+        }
+        outputText = textResult.outputText;
+        outputItems = [messageOutputItem(textResult.outputText)];
+        break;
+      }
+
+      const control = parseTextControl(textResult.outputText);
+      if (!strictVisualEvidenceRequired && control?.type === 'final_answer') {
+        outputText = publicProviderOutputText(control.content, profile, publicModelAlias, traceRedactionSecrets);
+        outputItems = reasoningItems;
+        break;
+      }
+
+      if (control?.type === 'need_more_modality_info') {
+        const target = [...keptVisionModalities, ...unsupportedModalities].find((modality) => modality.id === control.target);
+        if (!target || supplementRounds >= maxSupplementRounds) {
+          throw routerError(422, 'modality_inspection_unavailable',
+            'The requested modality cannot be inspected within the current input and inspection budget.', 'textReasoner');
+        }
+        supplementRounds += 1;
+        const safeControl = sanitizeTextControl(control, profile, publicModelAlias, traceRedactionSecrets);
+        rememberInspection(target, await inspect(target, safeControl), safeControl);
+        continue;
+      }
+
+      outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
+      outputItems = textResult.outputItems.map((item) => item.type === 'message'
+        ? compactObject({
+            ...messageOutputItem(outputText, stringField(item.id), stringField(item.phase)),
+            status: stringField(item.status) ?? 'completed',
+            role: stringField(item.role) ?? 'assistant',
+          })
+        : item);
+      break;
+  }
+
+  if (!structuredOutputRequested) {
+    if (!outputText) {
+      if (!outputItems.length) {
+        outputText = imageNotSent
+          ? `${imageNotSentPrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
+          : degraded
+            ? `${degradedUnavailablePrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
+          : '';
+      }
+    }
+    if (imageNotSent && !mentionsImageNotSent(outputText)) {
+      outputText = `${imageNotSentPrefix(extracted.modalities)} ${outputText}`;
+    }
+    if (degraded && !mentionsModalityUnavailable(outputText)) {
+      outputText = `${degradedUnavailablePrefix(extracted.modalities)} ${outputText}`;
+    }
+    // Transparency: surface each scientific expert's raw output verbatim at the top of the answer.
+    if (scientificEvidence.length > 0) {
+      const block = formatScientificEvidenceBlock(scientificEvidence);
+      outputText = outputText ? `${block}${outputText}` : block.trimEnd();
+      outputItems = prependScientificEvidenceToOutputItems(outputItems, block.trimEnd(), outputText);
+    }
+  }
+  if (outputText && !outputItems.some((item) => item.type !== 'reasoning')) {
+    outputItems = [...outputItems, messageOutputItem(outputText)];
+  }
+  rememberResponseContinuation(context.responseContinuationCache, responseId, outputItems);
+  return {
+    responseId,
+    model: context.config.publicModelAlias ?? 'sciforge-model-router',
+    outputText,
+    outputItems,
+    usage,
+    status: responseStatus,
+    incompleteDetails,
+    terminalDetails,
+  };
+}
+
+function requestedProfileId(request: Record<string, unknown>, incoming: IncomingMessage, config: ModelRouterConfig) {
+  const header = incoming.headers['x-sciforge-model-router-profile'];
+  if (typeof header === 'string' && header.trim()) return header.trim();
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  if (typeof metadata.profile === 'string' && metadata.profile.trim()) return metadata.profile.trim();
+  if (typeof metadata.modelRouterProfile === 'string' && metadata.modelRouterProfile.trim()) return metadata.modelRouterProfile.trim();
+  return config.defaultProfile;
+}
+
+function requestedVisionCachePolicy(incoming: IncomingMessage, profile: ModelRouterProfile): ModelRouterVisionCachePolicy {
+  const value = incoming.headers['x-sciforge-model-router-vision-cache-policy'];
+  if (value === undefined) return profile.visionCachePolicy ?? 'use';
+  if (value === 'use' || value === 'bypass' || value === 'refresh') return value;
+  throw routerError(400, 'invalid_vision_cache_policy', 'x-sciforge-model-router-vision-cache-policy must be "use", "bypass", or "refresh".');
+}
+
+function requestedEvidencePolicy(incoming: IncomingMessage): 'allow-degraded' | 'required' {
+  const value = incoming.headers[MODEL_ROUTER_EVIDENCE_POLICY_HEADER];
+  if (value === undefined) return 'allow-degraded';
+  const normalized = (Array.isArray(value) ? value[0] : value)?.trim().toLowerCase();
+  if (normalized === 'required') return 'required';
+  throw routerError(
+    400,
+    'invalid_evidence_policy',
+    `${MODEL_ROUTER_EVIDENCE_POLICY_HEADER} must be "required" when supplied.`,
+  );
+}
+
+function preferredResponsesProtocol(
+  config: ModelRouterConfig,
+  request: unknown,
+  incoming: IncomingMessage,
+): UpstreamWireProtocol {
+  const profileId = requestedProfileId(isRecord(request) ? request : {}, incoming, config);
+  const provider = config.profiles[profileId]?.textReasoner;
+  if (!provider) return 'responses';
+  validateProviderConfig(provider, 'textReasoner');
+  return preferredProviderProtocol(provider.compatibility, 'responses');
+}
+
+function validateRequestedModel(model: unknown, publicModelAlias: string | undefined, config: ModelRouterConfig) {
+  if (model === undefined || model === null) return;
+  if (typeof model !== 'string' || !model.trim()) throw routerError(400, 'invalid_model', 'Model Router requests must use the public router model alias.');
+  const expectedAlias = publicModelAlias ?? 'sciforge-model-router';
+  if (model === expectedAlias) return;
+  // The #99 request chain sends the declared upstream model name ("目录按声明"):
+  // a name declared by a registered profile member is unambiguous, so accept it
+  // and keep routing by profile configuration. Anything else stays rejected —
+  // the alias boundary must not become an open relay.
+  if (isDeclaredProfileModelName(model, config)) return;
+  throw routerError(400, 'unregistered_model', 'Model Router requests must use the public router model alias.');
+}
+
+function isDeclaredProfileModelName(model: string, config: ModelRouterConfig): boolean {
+  const name = model.trim();
+  for (const profile of Object.values(config.profiles)) {
+    const members: Array<{ model?: string } | undefined> = [
+      profile.textReasoner,
+      profile.imageGenerator,
+      profile.translators.vision,
+      profile.translators.scientific,
+    ];
+    if (members.some((member) => member?.model?.trim() === name)) return true;
+  }
+  return false;
+}
+
+function normalizeAnthropicMessagesRouterModel(
+  request: AnthropicMessagesRequest,
+  publicModelAlias: string,
+): AnthropicMessagesRequest {
+  const model = stringField(request.model);
+  if (!model || model === publicModelAlias || isClaudeCodeModelName(model)) {
+    return { ...request, model: publicModelAlias };
+  }
+  return request;
+}
+
+function isClaudeCodeModelName(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return normalized === 'sonnet' ||
+    normalized === 'opus' ||
+    normalized === 'fable' ||
+    normalized === 'haiku' ||
+    normalized.startsWith('claude-');
+}
+
+function validateProfile(profile: ModelRouterProfile) {
+  if (profile.visionCachePolicy !== undefined && profile.visionCachePolicy !== 'use' && profile.visionCachePolicy !== 'bypass') {
+    throw routerError(400, 'invalid_vision_cache_policy', 'Profile visionCachePolicy must be "use" or "bypass".');
+  }
+  validateProviderConfig(profile.textReasoner, 'textReasoner');
+  if (profile.imageGenerator) validateProviderConfig(profile.imageGenerator, 'imageGenerator');
+  if (profile.translators.vision) validateProviderConfig(profile.translators.vision, 'translators.vision');
+  if (profile.translators.scientific) validateScientificTranslatorConfig(profile.translators.scientific);
+  if (profile.contextWindow !== undefined && (!Number.isFinite(profile.contextWindow) || profile.contextWindow <= 0)) {
+    throw routerError(400, 'invalid_provider_config', 'Model Router profile "contextWindow" must be a positive finite token count.');
+  }
+}
+
+function validateProviderConfig(config: ModelRouterProviderConfig, role: string) {
+  const issue = providerConfigurationIssue(config);
+  if (issue === 'missing') {
+    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" is missing required provider configuration.`);
+  }
+  if (issue === 'invalid_url') {
+    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
+  }
+  const compatibilityIssue = providerCompatibilityConfigurationIssue(config.compatibility);
+  if (compatibilityIssue) {
+    throw routerError(
+      400,
+      'invalid_provider_config',
+      `Model Router profile role "${role}" has invalid compatibility settings: ${compatibilityIssue}.`,
+    );
+  }
+}
+
+function providerConfigurationIssue(config: ModelRouterProviderConfig): 'missing' | 'invalid_url' | undefined {
+  if (!config.baseUrl || !config.apiKeyEnv || !config.model) return 'missing';
+  try {
+    new URL(config.baseUrl);
+    return undefined;
+  } catch {
+    return 'invalid_url';
+  }
+}
+
+function secretForProvider(config: ModelRouterProviderConfig, env: Record<string, string | undefined>, roleAlias: string) {
+  const secret = env[config.apiKeyEnv];
+  if (!secret) throw routerError(400, 'missing_secret', `Model Router role "${roleAlias}" is missing its configured secret.`);
+  return secret;
+}
+
+function optionalSecretForProvider(config: ModelRouterProviderConfig, env: Record<string, string | undefined>) {
+  const secret = env[config.apiKeyEnv];
+  return typeof secret === 'string' && secret.length > 0 ? secret : undefined;
+}
+
+function validateScientificTranslatorConfig(config: ModelRouterScientificTranslatorConfig) {
+  const issue = scientificTranslatorConfigurationIssue(config);
+  if (issue === 'missing') {
+    throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" is missing required service configuration.');
+  }
+  if (issue === 'invalid_url') {
+    throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" has an invalid service base URL.');
+  }
+}
+
+function scientificTranslatorConfigurationIssue(
+  config: ModelRouterScientificTranslatorConfig,
+): 'missing' | 'invalid_url' | undefined {
+  if (!config.baseUrl || !config.tokenEnv || !config.model) return 'missing';
+  try {
+    new URL(config.baseUrl);
+    return undefined;
+  } catch {
+    return 'invalid_url';
+  }
+}
+
+function extractRequestInputs(input: unknown, instructions: unknown): { userText: string; modalities: ModalityRef[] } {
+  const texts: string[] = [];
+  if (typeof instructions === 'string' && instructions.trim()) texts.push(instructions.trim());
+  const modalities: ModalityRef[] = [];
+  visitInput(input, texts, modalities);
+  const userText = sanitizeRoutingUserText(texts.filter(Boolean).join('\n').trim());
+  const textual = extractTextualModalityRefs(userText, modalities.length + 1);
+  return {
+    userText: textual.userText,
+    modalities: [...modalities, ...textual.modalities],
+  };
+}
+
+function sanitizeRoutingUserText(value: string): string {
+  if (!value) return value;
+  return value
+    .replace(
+      /\[Attached image as base64 text\]([\s\S]*?)Base64:\s*```base64\s*[\s\S]*?```\s*\[\/Attached image\]/g,
+      (_matched, metadata: string) => {
+        const safeMetadata = metadata
+          .split(/\r?\n/u)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .filter((line) => !/^Base64:/iu.test(line))
+          .join('\n');
+        return [
+          '[Attached image metadata; base64 omitted because the image is routed as structured visual input]',
+          safeMetadata,
+          '[/Attached image]',
+        ].filter(Boolean).join('\n');
+      },
+    )
+    .replace(/\bdata:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+/gi, '[image data omitted; routed as structured visual input]')
+    .replace(/```base64\s*[\s\S]{512,}?```/g, '```base64\n[base64 data omitted]\n```')
+    .replace(/\b[A-Za-z0-9+/]{4096,}={0,2}\b/g, '[large base64 data omitted]');
+}
+
+function visitInput(value: unknown, texts: string[], modalities: ModalityRef[]) {
+  if (value === undefined || value === null) return;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    texts.push(String(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) visitInput(item, texts, modalities);
+    return;
+  }
+  if (!isRecord(value)) return;
+  const type = stringField(value.type);
+  if (type === 'input_text' || type === 'text') {
+    const text = stringField(value.text) ?? stringField(value.content);
+    if (text) texts.push(text);
+    return;
+  }
+  if (type === 'function_call_output') {
+    const images = modalityRefsFromToolResultOutput(value.output, modalities.length + 1, stringField(value.call_id) ?? stringField(value.id));
+    modalities.push(...images);
+    const output = safeTextualFallback(value.output);
+    if (output) texts.push(output);
+    return;
+  }
+  const signal = semanticSignalFromRecord(value);
+  if (signal || value.image_url !== undefined) {
+    const ref = normalizeModalityPart(value, modalities.length + 1, signal);
+    if (ref) modalities.push(ref);
+    return;
+  }
+  if (value.content !== undefined) visitInput(value.content, texts, modalities);
+  if (value.text !== undefined) visitInput(value.text, texts, modalities);
+  if (value.input !== undefined) visitInput(value.input, texts, modalities);
+}
+
+const MODEL_VISIBLE_IMAGE_KINDS = new Set(['image', 'computer_screenshot', 'visualSnapshot']);
+const TOOL_RESULT_IMAGE_PLACEHOLDER = '[image data omitted; image was routed as visual modality input]';
+
+function safeTextualFallback(value: unknown): string {
+  let raw = '';
+  if (typeof value === 'string') {
+    const parsed = parseJsonValue(value);
+    raw = parsed === undefined ? value : stringifySafeToolResult(parsed);
+  } else {
+    raw = stringifySafeToolResult(value);
+  }
+  const text = raw
+    .replace(/\bdata:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+/gi, '[image data omitted; image was not sent]')
+    .replace(/\b[A-Za-z0-9+/]{512,}={0,2}\b/g, '[large base64 data omitted]');
+  return boundedText(text.trim(), 4_000);
+}
+
+function stringifySafeToolResult(value: unknown): string {
+  const stripped = stripToolResultImages(value);
+  const normalized = jsonValueField(stripped);
+  return normalized === undefined ? '' : JSON.stringify(normalized);
+}
+
+function stripToolResultImages(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((entry) => stripToolResultImages(entry));
+  if (!isRecord(value)) return value;
+
+  const clone: Record<string, unknown> = {};
+  const isMcpImageContent = value.type === 'image';
+  let strippedImage = false;
+
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'images') {
+      clone.images_omitted = Array.isArray(entry) ? entry.length : 1;
+      strippedImage = true;
+      continue;
+    }
+    if (key === 'data_base64' || key === 'dataBase64' || (isMcpImageContent && key === 'data')) {
+      clone[key] = TOOL_RESULT_IMAGE_PLACEHOLDER;
+      strippedImage = true;
+      continue;
+    }
+    clone[key] = stripToolResultImages(entry);
+  }
+  if (strippedImage && typeof clone.note !== 'string') clone.note = TOOL_RESULT_IMAGE_PLACEHOLDER;
+  return clone;
+}
+
+function modalityRefsFromToolResultOutput(output: unknown, startOrdinal: number, callId?: string): ModalityRef[] {
+  const images = extractToolResultImages(parseToolResultOutput(output));
+  return images.map((image, index) => modalityRefFromToolResultImage(image, startOrdinal + index, callId));
+}
+
+function parseToolResultOutput(output: unknown): unknown {
+  if (typeof output !== 'string') return output;
+  return parseJsonValue(output) ?? output;
+}
+
+function modalityRefFromToolResultImage(image: ToolResultImage, ordinal: number, callId?: string): ModalityRef {
+  const bytes = Buffer.from(image.dataBase64, 'base64');
+  const id = `${modalityIdPrefix('vision.image')}_${ordinal}`;
+  const title = image.title ?? (callId ? `tool result image ${callId}` : 'tool result image');
+  return {
+    id,
+    kind: 'vision.image',
+    source: 'inline',
+    mime: image.mimeType,
+    title,
+    semanticSignal: makeSemanticSignal('vision.image', ['structured-type', 'structured-mime'], true),
+    sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+    byteLength: bytes.byteLength,
+    transientProviderPart: {
+      type: 'image_url',
+      image_url: { url: `data:${image.mimeType};base64,${image.dataBase64}` },
+    },
+  };
+}
+
+export function extractToolResultImages(output: unknown): ToolResultImage[] {
+  const images: ToolResultImage[] = [];
+  // Responses tool transcripts commonly encode output as an array of content
+  // parts (`input_image`/`image_url`). Walk those arrays before the legacy
+  // record-shaped envelopes so visual evidence is not forwarded to a
+  // text-only reasoner as raw input.
+  if (Array.isArray(output)) {
+    for (const entry of output) {
+      if (isRecord(entry)) {
+        const type = stringField(entry.type) ?? '';
+        if (type === 'input_image' || type === 'image_url' || type === 'inputImage') {
+          const raw = entry.image_url ?? entry.imageUrl ?? entry.url;
+          const imageUrl = typeof raw === 'string' ? raw : isRecord(raw) ? stringField(raw.url) : undefined;
+          if (imageUrl?.startsWith('data:image/')) {
+            const comma = imageUrl.indexOf(',');
+            const dataBase64 = comma >= 0 ? imageUrl.slice(comma + 1) : '';
+            const mimeType = mimeFromDataUrl(imageUrl);
+            if (dataBase64 && mimeType) addUniqueToolResultImage(images, compactToolResultImage({ dataBase64, mimeType, title: stringField(entry.title) }));
+          }
+        }
+      }
+      for (const image of extractToolResultImages(entry)) addUniqueToolResultImage(images, image);
+    }
+    return images;
+  }
+  if (!isRecord(output)) return [];
+  for (const image of directToolResultImages(output)) addUniqueToolResultImage(images, image);
+  for (const image of mcpToolResultImages(output)) addUniqueToolResultImage(images, image);
+  for (const image of codexContentItemImages(output)) addUniqueToolResultImage(images, image);
+  for (const key of ['result', 'structuredContent', 'output'] as const) {
+    const nested = output[key];
+    if (isRecord(nested) || Array.isArray(nested)) {
+      for (const image of extractToolResultImages(nested)) addUniqueToolResultImage(images, image);
+    } else if (typeof nested === 'string') {
+      const parsed = parseJsonValue(nested);
+      if (parsed !== undefined) {
+        for (const image of extractToolResultImages(parsed)) addUniqueToolResultImage(images, image);
+      }
+    }
+  }
+  return images;
+}
+
+function codexContentItemImages(output: Record<string, unknown>): ToolResultImage[] {
+  const contentItems = Array.isArray(output.contentItems) ? output.contentItems : [];
+  const images: ToolResultImage[] = [];
+  for (const entry of contentItems) {
+    if (!isRecord(entry)) continue;
+    addUniqueToolResultImage(images, toolResultImageFromCodexContentItem(entry));
+  }
+  return images;
+}
+
+function directToolResultImages(output: Record<string, unknown>): ToolResultImage[] {
+  const kind = stringField(output.kind) ?? '';
+  if (!MODEL_VISIBLE_IMAGE_KINDS.has(kind)) return [];
+  const images: ToolResultImage[] = [];
+  if (Array.isArray(output.images)) {
+    for (const entry of output.images) addUniqueToolResultImage(images, toolResultImageFromRecord(entry, output));
+  }
+  addUniqueToolResultImage(images, toolResultImageFromRecord(output, output));
+  return images;
+}
+
+function mcpToolResultImages(output: Record<string, unknown>): ToolResultImage[] {
+  const structured = isRecord(output.structuredContent) ? output.structuredContent : {};
+  const content = Array.isArray(output.content) ? output.content : [];
+  const metadata = Array.isArray(structured.images) ? structured.images : [];
+  const images: ToolResultImage[] = [];
+  let imageIndex = 0;
+  for (const entry of content) {
+    if (!isRecord(entry) || entry.type !== 'image') continue;
+    addUniqueToolResultImage(images, toolResultImageFromMcpContent(entry, metadata[imageIndex], structured));
+    imageIndex += 1;
+  }
+  return images;
+}
+
+function toolResultImageFromRecord(value: unknown, metadata: unknown): ToolResultImage | null {
+  if (!isRecord(value)) return null;
+  const dataBase64 = stringField(value.data_base64) ?? stringField(value.dataBase64) ?? '';
+  const mimeType = stringField(value.mime_type) ?? stringField(value.mimeType) ?? '';
+  if (!dataBase64 || !mimeType) return null;
+  const meta = isRecord(metadata) ? metadata : {};
+  return compactToolResultImage({
+    dataBase64,
+    mimeType,
+    width: numberField(value.width) ?? numberField(meta.width),
+    height: numberField(value.height) ?? numberField(meta.height),
+    title: stringField(value.title) ?? stringField(value.name) ?? stringField(meta.title) ?? stringField(meta.note),
+  });
+}
+
+function toolResultImageFromMcpContent(value: Record<string, unknown>, metadata: unknown, structured: unknown): ToolResultImage | null {
+  const dataBase64 = stringField(value.data) ?? '';
+  const mimeType = stringField(value.mimeType) ?? stringField(value.mime_type) ?? '';
+  if (!dataBase64 || !mimeType) return null;
+  const meta = isRecord(metadata) ? metadata : {};
+  const parent = isRecord(structured) ? structured : {};
+  return compactToolResultImage({
+    dataBase64,
+    mimeType,
+    width: numberField(meta.width),
+    height: numberField(meta.height),
+    title: stringField(meta.title) ?? stringField(parent.title) ?? stringField(parent.note),
+  });
+}
+
+function toolResultImageFromCodexContentItem(value: Record<string, unknown>): ToolResultImage | null {
+  const type = stringField(value.type) ?? '';
+  if (type !== 'inputImage') return null;
+  const imageUrl = stringField(value.imageUrl) ?? '';
+  if (!imageUrl.startsWith('data:image/')) return null;
+  const commaIndex = imageUrl.indexOf(',');
+  if (commaIndex < 0) return null;
+  const header = imageUrl.slice(0, commaIndex);
+  const dataBase64 = imageUrl.slice(commaIndex + 1);
+  const mimeType = mimeFromDataUrl(imageUrl) ?? header.slice('data:'.length).split(';', 1)[0];
+  if (!dataBase64 || !mimeType) return null;
+  return compactToolResultImage({
+    dataBase64,
+    mimeType,
+    width: numberField(value.width),
+    height: numberField(value.height),
+    title: stringField(value.title) ?? stringField(value.name),
+  });
+}
+
+function compactToolResultImage(image: ToolResultImage): ToolResultImage {
+  return {
+    dataBase64: image.dataBase64,
+    mimeType: image.mimeType,
+    ...(image.width !== undefined ? { width: image.width } : {}),
+    ...(image.height !== undefined ? { height: image.height } : {}),
+    ...(image.title ? { title: image.title } : {}),
+  };
+}
+
+function addUniqueToolResultImage(images: ToolResultImage[], image: ToolResultImage | null): void {
+  if (!image) return;
+  const downsampled = downsampleToolResultImage(image);
+  if (!images.some((candidate) => candidate.dataBase64 === downsampled.dataBase64 && candidate.mimeType === downsampled.mimeType)) images.push(downsampled);
+}
+
+function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, signal?: SemanticModalitySignal): ModalityRef | undefined {
+  const rawImageUrl = value.image_url ?? value.imageUrl;
+  const imageUrl = typeof rawImageUrl === 'string'
+    ? rawImageUrl
+    : isRecord(rawImageUrl)
+      ? stringField(rawImageUrl.url)
+      : undefined;
+  const kind = signal?.kind ?? (imageUrl ? 'vision.image' : undefined);
+  if (!kind) return undefined;
+  const id = `${modalityIdPrefix(kind)}_${ordinal}`;
+  const mime = stringField(value.mime_type) ?? stringField(value.mimeType);
+  const title = stringField(value.title) ?? stringField(value.name) ?? stringField(value.filename) ?? stringField(value.fileName);
+  const localPath = stringField(value.path);
+  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? localPath;
+  if (imageUrl?.startsWith('data:image/')) {
+    const semanticSignal = signal ?? makeSemanticSignal(kind, ['image-url'], false);
+    const payload = imageUrl.split(',', 2)[1] ?? '';
+    const bytes = Buffer.from(payload, 'base64');
+    return {
+      id,
+      kind,
+      source: 'inline',
+      mime: mime ?? mimeFromDataUrl(imageUrl),
+      title,
+      semanticSignal,
+      sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      byteLength: bytes.byteLength,
+      transientProviderPart: { type: 'image_url', image_url: { url: imageUrl } },
+    };
+  }
+  if (imageUrl) {
+    const semanticSignal = signal ?? makeSemanticSignal(kind, ['image-url'], false);
+    return {
+      id,
+      kind,
+      source: 'url',
+      mime,
+      title,
+      semanticSignal,
+      sha256: hashForTrace(imageUrl),
+      urlSha256: hashForTrace(imageUrl),
+      transientProviderPart: { type: 'image_url', image_url: { url: imageUrl } },
+    };
+  }
+  if (ref) {
+    if (!signal) return undefined;
+    const providerRef = safeTraceRef(ref);
+    return {
+      id,
+      kind,
+      source: 'ref',
+      mime,
+      title,
+      semanticSignal: signal,
+      sha256: hashForTrace(ref),
+      safeRef: providerRef,
+      materializationPath: localPath,
+      transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
+    };
+  }
+  return undefined;
+}
+
+// Inline a readable low-risk workspace text file (e.g. uploaded .txt / .csv without high-risk
+// scientific extensions) as the observation so the text reasoner can answer directly instead of
+// blindly searching the filesystem.
+async function readWorkspaceTextModalityObservation(item: ModalityRef, workspaceRoot: string): Promise<string | undefined> {
+  const target = await workspaceImageTarget(item, workspaceRoot);
+  if (!target) return undefined;
+  try {
+    const stats = await stat(target.absolutePath);
+    if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TEXT_MODALITY_BYTES) return undefined;
+    const bytes = await readFile(target.absolutePath);
+    if (bytes.subarray(0, 8192).includes(0)) return undefined; // looks binary
+    const text = bytes.toString('utf8');
+    if (!text.trim()) return undefined;
+    return [
+      `modality_input=${item.id}`,
+      `kind=${item.kind}`,
+      'status=ok',
+      'risk_marker=scientific_modality_risk:low',
+      'risk_level=low',
+      'risk_reason=no_high_risk_scientific_extension_detected',
+      'fallback_marker=workspace_text_fallback',
+      'fallback_reason=low_risk_textual_object_without_expert_translation',
+      `source=workspace-file:${target.relativeRef}`,
+      'instruction=The referenced file was read directly. Treat the following contents as the inspected modality and answer the user question from it; do not search the filesystem for it.',
+      'content:',
+      text,
+    ].join('\n');
+  } catch {
+    return undefined;
+  }
+}
+
+type ScientificModalityRisk = {
+  level: 'high' | 'low';
+  translatorModality?: ScientificTranslatorModality;
+};
+
+async function classifyScientificModalityRisk(item: ModalityRef, workspaceRoot: string): Promise<ScientificModalityRisk> {
+  const candidates = [
+    item.safeRef,
+    item.title,
+    item.materializationPath,
+  ];
+  const target = await workspaceImageTarget(item, workspaceRoot);
+  if (target) candidates.push(target.relativeRef);
+  const level = candidates.some((candidate) => Boolean(candidate && isProtectedScientificFilePath(candidate)))
+    ? 'high'
+    : 'low';
+  // When the workspace target exists, its extension is authoritative. Never let a display title
+  // relabel an unsupported protected file as a translatable modality.
+  let translatorModality = target
+    ? scientificTranslatorModalityForPath(target.relativeRef)
+    : candidates.map((candidate) => candidate ? scientificTranslatorModalityForPath(candidate) : undefined).find(Boolean);
+  // `.fasta` and `.fa` are shared by protein and nucleotide FASTA. Resolve them locally and
+  // conservatively: only a canonical amino-acid sequence containing at least one residue that
+  // cannot be an IUPAC nucleotide symbol may enter the protein expert. `.faa` is unambiguous by
+  // format convention and does not need content classification.
+  if (target && translatorModality === 'protein' && isAmbiguousFastaExtension(target.relativeRef)) {
+    const proteinConfirmed = await isUnambiguousProteinFasta(target.absolutePath);
+    if (!proteinConfirmed) translatorModality = undefined;
+  }
+  return translatorModality ? { level, translatorModality } : { level };
+}
+
+async function isUnambiguousProteinFasta(absolutePath: string): Promise<boolean> {
+  try {
+    const stats = await stat(absolutePath);
+    if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TEXT_MODALITY_BYTES) return false;
+    const bytes = await readFile(absolutePath);
+    if (bytes.subarray(0, 8192).includes(0)) return false;
+    const lines = bytes.toString('utf8').split(/\r?\n/);
+    const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
+    if (firstContentLine < 0 || !lines[firstContentLine]?.trimStart().startsWith('>')) return false;
+    const records: string[] = [];
+    let sequenceLines: string[] = [];
+    for (const line of lines.slice(firstContentLine + 1)) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('>')) {
+        records.push(sequenceLines.join(''));
+        sequenceLines = [];
+        continue;
+      }
+      if (trimmed) sequenceLines.push(trimmed);
+    }
+    records.push(sequenceLines.join(''));
+    // EFILPQ are canonical amino-acid symbols outside the IUPAC nucleotide alphabet. Requiring at
+    // least one in every record prevents DNA/RNA, ambiguity-only, and mixed multi-record FASTA
+    // files from being labeled as protein based only on their first record.
+    return records.length > 0 && records.every((record) => {
+      const sequence = record.replace(/\s+/g, '').toUpperCase();
+      return sequence.length >= 10
+        && /^[ACDEFGHIKLMNPQRSTVWY]+$/.test(sequence)
+        && /[EFILPQ]/.test(sequence);
+    });
+  } catch {
+    return false;
+  }
+}
+
+function isScientificTranslatorUsable(
+  service: ModelRouterScientificTranslatorConfig | undefined,
+  env: Record<string, string | undefined>,
+): boolean {
+  if (!service?.baseUrl.trim() || !service.tokenEnv.trim() || !service.model.trim()) return false;
+  return Boolean((env[service.tokenEnv] ?? '').trim());
+}
+
+// Translate an uploaded scientific file to natural-language evidence via the Model-Router-managed
+// sci-modality worker. Gated by `profile.translators.scientific`; the worker owns modality
+// retry/robustness. Model Router resolves the modality from an allowlisted file extension and sends
+// it explicitly, so unsupported protected formats never reach auto-detection. Translation-only: it
+// returns evidence, never answers. Returns undefined when the service is unconfigured, the ref is
+// not a scientific file, the file is unreadable/binary, or the call fails; callers decide whether
+// to fail closed by risk level.
+type ScientificEvidence = { modalityInputId: string; modality: string; model: string; summary: string };
+
+function buildScientificObservation(item: ModalityRef, evidence: ScientificEvidence): string {
+  return [
+    `modality_input=${item.id}`,
+    `kind=${item.kind}`,
+    'status=ok',
+    `source=sci-modality:${evidence.modality}/${evidence.model}`,
+    'instruction=The referenced scientific file was analyzed by a domain expert model. Treat the following evidence as the inspected modality and answer the user question from it; do not search the filesystem for it.',
+    'evidence:',
+    evidence.summary,
+  ].join('\n');
+}
+
+async function translateScientificModalityObservation(
+  item: ModalityRef,
+  workspaceRoot: string,
+  service: ModelRouterScientificTranslatorConfig | undefined,
+  env: Record<string, string | undefined>,
+  fetchImpl: typeof fetch,
+  cache?: Map<string, ScientificEvidence>,
+  translatorModality?: ScientificTranslatorModality,
+  signal?: AbortSignal,
+  traceSession?: ModelRouterTraceSession,
+): Promise<{ observation: string; evidence: ScientificEvidence } | undefined> {
+  if (!translatorModality) return undefined;
+  if (!service) return undefined;
+  const serviceUrl = service.baseUrl.trim();
+  if (!serviceUrl) return undefined;
+  const serviceToken = (env[service.tokenEnv] ?? '').trim();
+  if (!serviceToken) return undefined;
+  const target = await workspaceImageTarget(item, workspaceRoot);
+  if (!target || scientificTranslatorModalityForPath(target.relativeRef) !== translatorModality) return undefined;
+  try {
+    const stats = await stat(target.absolutePath);
+    if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TEXT_MODALITY_BYTES) return undefined;
+    const bytes = await readFile(target.absolutePath);
+    if (bytes.subarray(0, 8192).includes(0)) return undefined; // looks binary
+    const payload = bytes.toString('utf8');
+    if (!payload.trim()) return undefined;
+
+    // Cache by resolved modality + file-content sha: the same uploaded file rides every tool round
+    // of one agentic turn, so translate once and re-surface the block without re-calling the GPU.
+    const cacheKey = createHash('sha256').update(`${translatorModality}\0${payload}`).digest('hex');
+    const cached = cache?.get(cacheKey);
+    if (cached) return { observation: buildScientificObservation(item, cached), evidence: cached };
+
+    const timeoutMs = service?.timeoutMs ?? 1_800_000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let json: JsonObject | undefined;
+    let ok = false;
+    const requestUrl = `${serviceUrl.replace(/\/+$/, '')}/modality/translate`;
+    const requestHeaders = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${serviceToken}`,
+    };
+    const requestBody = {
+      payload,
+      modality: translatorModality,
+      objectId: item.id,
+      model: service.model,
+    };
+    const startedAt = Date.now();
+    const traceAttempt = traceSession?.startUpstreamAttempt({
+      protocol: 'scientific-translation',
+      phase: 'request',
+      method: 'POST',
+      url: requestUrl,
+      headers: requestHeaders,
+      body: requestBody,
+      retry: 0,
+    });
+    try {
+      let resp = await fetchImpl(requestUrl, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody),
+        signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+      });
+      traceAttempt?.responseHeaders?.(resp.status, Object.fromEntries(resp.headers.entries()));
+      resp = await captureUpstreamResponse(resp, (index, chunk) => {
+        traceAttempt?.responseChunk?.(index, chunk);
+      });
+      ok = resp.ok;
+      json = (await resp.json().catch(() => undefined)) as JsonObject | undefined;
+      if (!ok || !json || json.ok !== true) {
+        const failure = routerError(
+          resp.status || 502,
+          !ok ? `scientific_translation_http_${resp.status}` : 'scientific_translation_invalid_response',
+          'Scientific translator returned an unsuccessful response.',
+          'scientificTranslator',
+        );
+        traceAttempt?.error?.(failure);
+      }
+      traceAttempt?.end?.({ status: resp.status, durationMs: Date.now() - startedAt });
+    } catch (error) {
+      traceAttempt?.error?.(error);
+      traceAttempt?.end?.({ durationMs: Date.now() - startedAt });
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!ok || !json || json.ok !== true) return undefined;
+    const data = (isRecord(json.data) ? json.data : {}) as JsonObject;
+    // Prefer the full multi-line evidence (data.summary) over the bounded preview (json.summary) so both
+    // the reasoner and the user-facing transparency block see the expert's raw output.
+    const summary = (typeof data.summary === 'string' && data.summary.trim())
+      ? data.summary
+      : (typeof json.summary === 'string' ? json.summary : '');
+    if (!summary.trim()) return undefined;
+    const model = typeof data.model === 'string' ? data.model : 'sci-modality';
+    const modality = typeof data.modality === 'string' ? data.modality : 'scientific';
+    const evidence: ScientificEvidence = { modalityInputId: item.id, modality, model, summary };
+    cache?.set(cacheKey, evidence);
+    return { observation: buildScientificObservation(item, evidence), evidence };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return undefined;
+  }
+}
+
+// Transparency: a user-facing block that shows each scientific expert's RAW output verbatim, plus which
+// expert the router selected. Prepended to the final answer so SciForge surfaces what the (translate-only)
+// domain model actually emitted instead of hiding it behind the reasoner.
+function formatScientificEvidenceBlock(evidence: ScientificEvidence[]): string {
+  const sections = evidence
+    .map((e) => `#### 🔬 ${e.modality} expert — raw output\nRouted to expert model \`${e.model}\` (translate-only).\n\n\`\`\`\n${e.summary.trim()}\n\`\`\``)
+    .join('\n\n');
+  return [
+    '> **SciForge Model Router — expert translation (transparent)**',
+    '> Your scientific input was routed to a domain expert model whose only job is to translate it to text. Its raw output is shown verbatim below.',
+    '',
+    sections,
+    '',
+    '---',
+    '',
+  ].join('\n');
+}
+
+function prependScientificEvidenceToOutputItems(items: JsonObject[], block: string, outputText: string): JsonObject[] {
+  if (!items.length) return items;
+  const messageIndex = items.findIndex((item) => item.type === 'message');
+  if (messageIndex < 0) {
+    return items.some((item) => item.type !== 'reasoning') ? [messageOutputItem(block), ...items] : items;
+  }
+  return items.map((item, index) => (
+    index === messageIndex ? replaceMessageOutputText(item, outputText) : item
+  ));
+}
+
+function replaceMessageOutputText(item: JsonObject, text: string): JsonObject {
+  const content = Array.isArray(item.content) ? item.content : [];
+  let replaced = false;
+  const nextContent = content.map((part) => {
+    if (!replaced && isRecord(part) && part.type === 'output_text' && typeof part.text === 'string') {
+      replaced = true;
+      return { ...part, text };
+    }
+    return part;
+  });
+  if (!replaced) {
+    nextContent.unshift({ type: 'output_text', text, annotations: [] });
+  }
+  return { ...item, content: nextContent };
+}
+
+async function materializeWorkspaceImageRefs(modalities: ModalityRef[], workspaceRoot: string): Promise<ModalityRef[]> {
+  return await Promise.all(modalities.map(async (item) => {
+    if (item.kind !== 'vision.image' || item.source !== 'ref' || (!item.safeRef && !item.materializationPath)) return item;
+    const materialized = await transientWorkspaceImagePart(item, workspaceRoot);
+    return materialized
+      ? {
+          ...item,
+          mime: materialized.mime,
+          sha256: materialized.sha256,
+          contentSha256: materialized.sha256,
+          byteLength: materialized.byteLength,
+          safeRef: materialized.safeRef,
+          transientProviderPart: materialized.part,
+        }
+      : item;
+  }));
+}
+
+async function transientWorkspaceImagePart(item: ModalityRef, workspaceRoot: string) {
+  const target = await workspaceImageTarget(item, workspaceRoot);
+  if (!target) return undefined;
+  const mime = imageMimeForRef(target.absolutePath, item.mime) ?? imageMimeForRef(target.relativeRef, item.mime);
+  if (!mime) return undefined;
+  try {
+    const stats = await stat(target.absolutePath);
+    if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TRANSIENT_PROVIDER_IMAGE_BYTES) return undefined;
+    const bytes = await readFile(target.absolutePath);
+    return {
+      mime,
+      byteLength: bytes.byteLength,
+      sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      safeRef: isConservativeTraceRefPath(target.relativeRef) ? target.relativeRef : safeTraceRef(target.relativeRef),
+      part: {
+        type: 'image_url',
+        image_url: { url: `data:${mime};base64,${bytes.toString('base64')}` },
+      } satisfies JsonObject,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function workspaceImageTarget(item: ModalityRef, workspaceRoot: string): Promise<{ absolutePath: string; relativeRef: string } | undefined> {
+  const workspaceCandidate = resolve(workspaceRoot);
+  const candidate = item.materializationPath
+    ? filesystemPathFromLocalCandidate(item.materializationPath)
+    : item.safeRef
+      ? traceRefPath(item.safeRef)
+      : undefined;
+  if (!candidate) return undefined;
+  if (!item.materializationPath && !isConservativeTraceRefPath(candidate)) return undefined;
+  const lexicalPath = isAbsolute(candidate) ? resolve(candidate) : resolve(workspaceCandidate, candidate);
+  if (!isPathInsideWorkspace(lexicalPath, workspaceCandidate)) return undefined;
+  try {
+    const workspace = await realpath(workspaceCandidate);
+    const absolutePath = await realpath(lexicalPath);
+    if (!isPathInsideWorkspace(absolutePath, workspace)) return undefined;
+    const relativeRef = relative(workspace, absolutePath).replace(/\\/g, '/');
+    return { absolutePath, relativeRef };
+  } catch {
+    return undefined;
+  }
+}
+
+function filesystemPathFromLocalCandidate(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^file:/i.test(trimmed)) {
+    try {
+      return fileURLToPath(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  return trimmed;
+}
+
+function isPathInsideWorkspace(absolutePath: string, workspace: string) {
+  return absolutePath === workspace || absolutePath.startsWith(`${workspace}${sep}`);
+}
+
+function imageMimeForRef(refPath: string, explicitMime: string | undefined) {
+  if (explicitMime?.startsWith('image/')) return explicitMime;
+  switch (extname(refPath).toLowerCase()) {
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    case '.tif':
+    case '.tiff':
+      return 'image/tiff';
+    case '.bmp':
+      return 'image/bmp';
+    case '.heic':
+      return 'image/heic';
+    default:
+      return undefined;
+  }
+}
+
+// Tool results and assistant progress are execution history, not a new visual
+// question. Hashing that history invalidates the cache after every command.
+function latestVisualUserIntent(input: unknown): string {
+  const entries = Array.isArray(input) ? input : [input];
+  const user = [...entries].reverse().find((entry) => isRecord(entry) && entry.role === 'user');
+  const standalone = entries.filter((entry) => typeof entry === 'string' || (isRecord(entry) && !entry.role && ['input_text', 'text'].includes(String(entry.type))));
+  const text = extractRequestInputs(user ?? standalone, undefined).userText;
+  return text || 'Describe the provided visual input.';
+}
+
+function visionTranslatorInstruction(userInstruction: string, modality: ModalityRef) {
+  return [
+    `User request: ${userInstruction}`,
+    `Target modality_input: ${modality.id}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    'Translate this visual input into concise textual evidence for the Agent Host.',
+    'Include visible text, salient fields, spatial relationships, and uncertainty when relevant.',
+    'Do not claim task completion and do not mention router internals.',
+  ].filter(Boolean).join('\n');
+}
+
+function formatVisionObservation(modality: ModalityRef, observation: string, status: 'ok' | 'failed') {
+  return [
+    `Target modality_input: ${modality.id}`,
+    'kind=vision.image',
+    `status=${status}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    observation,
+  ].filter(Boolean).join('\n');
+}
+
+function formatVisionNotSentObservation(modality: ModalityRef, reason: string) {
+  return [
+    `Target modality_input: ${modality.id}`,
+    'kind=vision.image',
+    'status=not_sent',
+    'image_payload_sent=false',
+    `reason=${reason}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    modality.mime ? `mime=${modality.mime}` : '',
+    modality.byteLength !== undefined ? `byte_length=${modality.byteLength}` : '',
+    `source=${modality.source}`,
+    'text_fallback_summary=Only safe text metadata and surrounding text were forwarded; pixel data was not inspected.',
+    'instruction=Answer from text-only context and explicitly state that the image was not sent to the active text-only model and could not be inspected.',
+  ].filter(Boolean).join('\n');
+}
+
+
+function formatModalityReferenceObservation(modality: ModalityRef) {
+  return [
+    `Target modality_input: ${modality.id}`,
+    `kind=${modality.kind}`,
+    'status=available',
+    'payload_sent=false',
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    modality.mime ? `mime=${modality.mime}` : '',
+    modality.byteLength !== undefined ? `byte_length=${modality.byteLength}` : '',
+    `source=${modality.source}`,
+    'instruction=Only modality metadata was provided. If the user request requires evidence from this object, request it with need_more_modality_info; otherwise answer from the surrounding text.',
+  ].filter(Boolean).join('\n');
+}
+
+function visionSupplementInstruction(userInstruction: string, modality: ModalityRef, control: Extract<TextControl, { type: 'need_more_modality_info' }>) {
+  return [
+    `User request: ${userInstruction}`,
+    `Target modality_input: ${modality.id}`,
+    modality.title ? `Object title: ${modality.title}` : '',
+    modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
+    `Targeted follow-up question: ${control.question}`,
+    control.reason ? `Reason detail is needed: ${control.reason}` : '',
+    'Translate only the requested visual detail into concise textual evidence for the Agent Host.',
+    'Do not claim task completion and do not mention router internals.',
+  ].filter(Boolean).join('\n');
+}
+
+function formatVisionSupplementObservation(
+  modality: ModalityRef,
+  control: Extract<TextControl, { type: 'need_more_modality_info' }>,
+  observation: string,
+  status: 'ok' | 'failed',
+) {
+  return [
+    `Target modality_input: ${modality.id}`,
+    'kind=vision.image',
+    'phase=supplement',
+    `status=${status}`,
+    `question=${control.question}`,
+    control.reason ? `reason=${control.reason}` : '',
+    observation,
+  ].filter(Boolean).join('\n');
+}
+
+type ModalityInspectionResult = {
+  observation: string;
+  degraded: boolean;
+  imageNotSent?: boolean;
+  scientificEvidence?: ScientificEvidence;
+  visionStatus?: 'ok' | 'failed';
+  cached?: boolean;
+};
+
+async function inspectModality(options: {
+  target: ModalityRef;
+  control?: Extract<TextControl, { type: 'need_more_modality_info' }>;
+  userInstruction: string;
+  profile: ModelRouterProfile;
+  profileId: string;
+  visionSecret?: string;
+  visionCachePolicy: ModelRouterVisionCachePolicy;
+  evidencePolicy: 'allow-degraded' | 'required';
+  scientificRisk?: ScientificModalityRisk;
+  context: {
+    workspaceRoot: string;
+    env: Record<string, string | undefined>;
+    fetchImpl: typeof fetch;
+    visionTranslationCache: Map<string, VisionTranslationCacheEntry>;
+    scientificTranslationCache: Map<string, ScientificEvidence>;
+    providerSignal?: AbortSignal;
+    upstreamNegotiator: UpstreamProtocolNegotiator;
+    preferredProtocol: UpstreamWireProtocol;
+    traceSession?: ModelRouterTraceSession;
+    recordProviderError?: (error: Omit<RecentProviderError, 'at'>) => void;
+  };
+  calls: ProviderCallRecord[];
+  usage: ResponseUsage;
+}): Promise<ModalityInspectionResult> {
+  const { target, control, userInstruction, profile, profileId, visionSecret, visionCachePolicy, context, calls, usage } = options;
+  const strictVisualEvidenceRequired = options.evidencePolicy === 'required';
+  if (target.kind === 'vision.image') {
+    const translator = profile.translators.vision;
+    if (!translator || !visionSecret) {
+      if (strictVisualEvidenceRequired) {
+        throw strictVisionEvidenceError({
+          causeCode: translator ? 'vision_translator_credentials_unavailable' : 'vision_translator_not_configured',
+          status: 503,
+          failureClass: 'capability_unavailable',
+          retryable: false,
+          message: 'Strict visual evidence is unavailable because the vision translator is not ready.',
+          recovery: {
+            action: 'stop',
+            instruction: 'Configure the vision translator and its credentials before repeating native visual inspection.',
+          },
+        });
+      }
+      return {
+        observation: 'No usable vision translator is configured; the image payload was not sent to the text-only model.',
+        degraded: true,
+        imageNotSent: true,
+      };
+    }
+    const intentSha256 = visionInstructionIntentSha256(JSON.stringify({
+      visualIntent: userInstruction,
+      translator,
+      question: control?.question,
+      reason: control?.reason,
+    }), options.evidencePolicy);
+    const cacheKey = visionObservationCacheKey(profileId, target, intentSha256);
+    if (visionCachePolicy === 'refresh') context.visionTranslationCache.delete(cacheKey);
+    const cached = visionCachePolicy === 'use' ? context.visionTranslationCache.get(cacheKey) : undefined;
+    if (cached) {
+      return {
+        observation: cached.observation,
+        visionStatus: cached.status,
+        cached: true,
+        degraded: false,
+      };
+    }
+    try {
+      const result = await callVisionTranslator({
+        profile,
+        secret: visionSecret,
+        fetchImpl: context.fetchImpl,
+        instruction: control
+          ? visionSupplementInstruction(userInstruction, target, control)
+          : visionTranslatorInstruction(userInstruction, target),
+        modality: target,
+        phase: control ? 'vision-supplement' : 'vision-initial',
+        calls,
+        signal: context.providerSignal,
+        upstreamNegotiator: context.upstreamNegotiator,
+        preferredProtocol: context.preferredProtocol,
+        traceSession: context.traceSession,
+      });
+      addUsage(usage, result.usage);
+      if (strictVisualEvidenceRequired && !result.outputText.trim()) {
+        throw routerError(502, 'vision_translation_empty', 'Vision translator returned no usable observation.', 'visionTranslator');
+      }
+      if (visionCachePolicy !== 'bypass' && result.outputText.trim()) {
+        storeVisionTranslationCacheEntry(context.visionTranslationCache, profileId, target, intentSha256, result.outputText);
+      }
+      return { observation: result.outputText, visionStatus: 'ok', degraded: false };
+    } catch (error) {
+      if (context.providerSignal?.aborted) throw error;
+      const summary = traceErrorSummary(error);
+      recordProviderAuthFailure(context, summary, 'visionTranslator');
+      if (strictVisualEvidenceRequired) throw strictVisionEvidenceErrorFromCause(error);
+      return {
+        observation: `status=unavailable\nreason=${summary}\ninstruction=Answer from available text and explicitly state that the image could not be inspected.`,
+        visionStatus: 'failed',
+        degraded: true,
+      };
+    }
+  }
+
+  const scientificRisk = options.scientificRisk ?? await classifyScientificModalityRisk(target, context.workspaceRoot);
+  if (scientificRisk.level === 'high' && !scientificRisk.translatorModality) {
+    throw routerError(415, 'scientific_modality_unsupported',
+      'This protected scientific file format has no registered native-to-text expert. The raw object text was not sent to any translator or reasoner.', 'scientificTranslator');
+  }
+  if (scientificRisk.level === 'high' && !isScientificTranslatorUsable(profile.translators.scientific, context.env)) {
+    throw routerError(503, 'scientific_translator_required',
+      'High-risk scientific objects require a configured Model Router scientific expert translator. Configure translators.scientific for expert translation; the raw object text was not sent to the reasoner.', 'scientificTranslator');
+  }
+  const expert = await translateScientificModalityObservation(
+    target, context.workspaceRoot, profile.translators.scientific, context.env,
+    context.fetchImpl, context.scientificTranslationCache, scientificRisk.translatorModality,
+    context.providerSignal, context.traceSession,
+  );
+  if (expert) return { observation: expert.observation, degraded: false, scientificEvidence: expert.evidence };
+  if (scientificRisk.level === 'high') {
+    throw routerError(502, 'scientific_translation_failed',
+      'High-risk scientific object translation failed. Configure or repair the Model Router scientific expert translator; the raw object text was not sent to the reasoner.', 'scientificTranslator');
+  }
+  const inlined = await readWorkspaceTextModalityObservation(target, context.workspaceRoot);
+  if (inlined) return { observation: inlined, degraded: false };
+  return {
+    observation: [
+      `modality_input=${target.id}`,
+      `kind=${target.kind}`,
+      'status=unsupported',
+      'reason=No registered translator could inspect this modality.',
+      'instruction=Answer from surrounding text and state that the referenced modality could not be inspected.',
+    ].join('\n'),
+    degraded: true,
+  };
+}
+
+function storeVisionTranslationCacheEntry(
+  cache: Map<string, VisionTranslationCacheEntry>,
+  profileId: string,
+  modality: ModalityRef,
+  instructionIntentSha256: string,
+  observation: string,
+) {
+  const modalityCacheKey = visionObservationCacheKey(profileId, modality, instructionIntentSha256);
+  if (!cache.has(modalityCacheKey) && cache.size >= 256) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  const existing = cache.get(modalityCacheKey);
+  const now = new Date().toISOString();
+  cache.set(modalityCacheKey, {
+    schemaVersion: 'sciforge.model-router.vision-translation-cache-entry.v1',
+    profileId,
+    modalityCacheKey,
+    observation,
+    status: 'ok',
+    version: (existing?.version ?? 0) + 1,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+}
+
+function visionObservationCacheKey(
+  profileId: string,
+  modality: ModalityRef,
+  instructionIntentSha256: string,
+) {
+  return [
+    profileId,
+    modality.contentSha256 ?? modality.sha256,
+    instructionIntentSha256,
+  ].join(':');
+}
+
+function visionInstructionIntentSha256(
+  instruction: string,
+  evidencePolicy: 'allow-degraded' | 'required',
+): string {
+  const normalizedInstruction = instruction
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/gu, ' ');
+  return createHash('sha256')
+    .update(JSON.stringify({
+      evidencePolicy,
+      instruction: normalizedInstruction,
+    }))
+    .digest('hex');
+}
+
+function extractTextualModalityRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
+  const askParsed = extractAskCommandRefs(userText, startOrdinal);
+  const explicitParsed = extractExplicitSciForgeRefs(askParsed.userText, startOrdinal + askParsed.modalities.length);
+  return {
+    userText: explicitParsed.userText,
+    modalities: [...askParsed.modalities, ...explicitParsed.modalities],
+  };
+}
+
+function extractAskCommandRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
+  const lines = userText.split(/\r?\n/);
+  const retainedLines: string[] = [];
+  const retained: string[] = [];
+  const modalities: ModalityRef[] = [];
+  let ordinal = startOrdinal;
+  let foundAskRefLine = false;
+
+  for (const line of lines) {
+    const tokens = tokenizeCommandLikeText(line);
+    if (tokens[0] !== 'ask' || !tokens.includes('--ref')) {
+      retainedLines.push(line);
+      continue;
+    }
+    foundAskRefLine = true;
+    retained.length = 0;
+    for (let index = 1; index < tokens.length; index += 1) {
+      if (tokens[index] === '--ref') {
+        const candidate = tokens[index + 1];
+        const kind = candidate ? modalityKindFromTextualRef(candidate) : undefined;
+        if (candidate && kind && isAllowedTextualModalityRef(candidate, kind)) {
+          modalities.push(modalityRefFromTextualRef(candidate, ordinal, kind));
+          ordinal += 1;
+        }
+        if (candidate) index += 1;
+        continue;
+      }
+      retained.push(tokens[index]!);
+    }
+    if (retained.length) retainedLines.push(retained.join(' '));
+  }
+  if (!foundAskRefLine) return { userText, modalities: [] };
+  return {
+    userText: retainedLines.join('\n').trim(),
+    modalities,
+  };
+}
+
+function extractExplicitSciForgeRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
+  const modalities: ModalityRef[] = [];
+  let ordinal = startOrdinal;
+  const sanitized = userText.replace(
+    /\bSciForge\s+(image|object|visual|audio|video|table|document|file|modality)\s+refs?\s*(?::|=|\bis\b)?\s*([A-Za-z0-9._:@/-]+)/gi,
+    (matched: string, label: string, candidate: string) => {
+      const labelKind = modalityKindFromLabel(label);
+      const kind = labelKind ?? modalityKindFromTextualRef(candidate);
+      if (!kind || !isAllowedTextualModalityRef(candidate, kind)) return 'SciForge ref redacted';
+      modalities.push(modalityRefFromTextualRef(candidate, ordinal, kind, labelKind ? ['structured-type', ...lexicalRefFeatures(candidate)] : undefined));
+      ordinal += 1;
+      return 'SciForge ref attached';
+    },
+  );
+  return { userText: sanitized.trim(), modalities };
+}
+
+function modalityRefFromTextualRef(
+  ref: string,
+  ordinal: number,
+  kind: ModalityKind,
+  evidence: SemanticModalitySignal['evidence'] = ['ref-extension', ...lexicalRefFeatures(ref)],
+): ModalityRef {
+  const id = `${modalityIdPrefix(kind)}_${ordinal}`;
+  const providerRef = safeTraceRef(ref);
+  return {
+    id,
+    kind,
+    source: 'ref',
+    semanticSignal: makeSemanticSignal(kind, evidence, true),
+    sha256: hashForTrace(ref),
+    safeRef: providerRef,
+    transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
+  };
+}
+
+function tokenizeCommandLikeText(value: string) {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+async function callVisionTranslator(options: {
+  profile: ModelRouterProfile;
+  secret: string;
+  fetchImpl: typeof fetch;
+  instruction: string;
+  modality: ModalityRef;
+  phase: string;
+  calls: ProviderCallRecord[];
+  signal?: AbortSignal;
+  upstreamNegotiator: UpstreamProtocolNegotiator;
+  preferredProtocol: UpstreamWireProtocol;
+  traceSession?: ModelRouterTraceSession;
+}) {
+  const translator = options.profile.translators.vision;
+  if (!translator) throw new Error('Vision translator is not configured.');
+  assertVisionInputCapability(options.profile, options.modality);
+  const providerParts = [options.modality.transientProviderPart]
+    .filter((part): part is JsonObject => Boolean(part));
+  const content: JsonObject[] = [
+    { type: 'text', text: options.instruction },
+    ...providerParts,
+  ];
+  const chatBody = {
+    model: translator.model,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are a SciForge vision translator.',
+          'Convert the instruction and visual input into concise textual evidence for the Agent Host.',
+          'Include visible text, important fields, layout cues, and uncertainty when relevant.',
+          'Do not claim task completion.',
+        ].join(' '),
+      },
+      { role: 'user', content },
+    ],
+  };
+  const result = await callCanonicalProvider({
+    provider: translator,
+    secret: options.secret,
+    fetchImpl: options.fetchImpl,
+    request: chatCompletionsToResponsesRequest(chatBody, translator.model),
+    role: 'visionTranslator',
+    phase: options.phase,
+    calls: options.calls,
+    signal: options.signal,
+    upstreamNegotiator: options.upstreamNegotiator,
+    preferredProtocol: options.preferredProtocol,
+    traceSession: options.traceSession,
+  });
+  return result;
+}
+
+function assertVisionInputCapability(profile: ModelRouterProfile, modality: ModalityRef): void {
+  const registration = profile.capabilities?.vision;
+  const mimeTypes = sanitizeVisionMimeTypes(registration?.mimeTypes ?? [...MODEL_ROUTER_VISION_MIME_TYPES]);
+  const mime = modality.mime?.trim().toLowerCase();
+  if (mime && !mimeTypes.includes(mime)) {
+    throw routerError(415, 'vision_mime_not_supported', 'The visual input MIME type is not supported by the active Model Router profile.', 'visionTranslator');
+  }
+  const maxInputBytes = boundedPublicInputBytes(registration?.maxInputBytes, MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES);
+  if (modality.byteLength !== undefined && modality.byteLength > maxInputBytes) {
+    throw routerError(413, 'vision_input_too_large', 'The visual input exceeds the active Model Router profile input limit.', 'visionTranslator');
+  }
+}
+
+async function callTextReasoner(options: {
+  profile: ModelRouterProfile;
+  secret: string;
+  fetchImpl: typeof fetch;
+  observations: string[];
+  visualFailure: boolean;
+  strictVisualEvidence: boolean;
+  structuredOutput: boolean;
+  allowModalitySupplement: boolean;
+  calls: ProviderCallRecord[];
+  request: Record<string, unknown>;
+  toolNameAliases: Record<string, string>;
+  signal?: AbortSignal;
+  upstreamNegotiator: UpstreamProtocolNegotiator;
+  preferredProtocol: UpstreamWireProtocol;
+  onReasoningDelta?: (text: string) => void;
+  traceSession?: ModelRouterTraceSession;
+}) {
+  const outputContractInstruction = options.structuredOutput
+    ? 'Return only the caller-requested structured output and follow its native schema exactly. Do not add a Router control envelope or nest the result under another field.'
+    : options.strictVisualEvidence
+      ? 'Return only the caller-requested strict visual evidence JSON object. Do not add a control envelope or nest it under another field.'
+      : Array.isArray(options.request.tools) && options.request.tools.length > 0
+        ? 'Continue the caller\'s agent workflow using its native message and tool-call protocol. A progress update or a promise to act is not task completion. Carry out authorized actions and verify their results before giving a final answer; report a concrete blocker if work cannot continue.'
+        : 'When answering with text instead of a tool call, return strict JSON only: {"type":"final_answer","content":"..."}.';
+  const supplementInstruction = !options.structuredOutput && options.allowModalitySupplement
+    ? 'If evidence from a referenced modality is essential but absent, you may instead return strict JSON only: {"type":"need_more_modality_info","target":"<modality_input id>","question":"...","reason":"..."}.'
+    : '';
+  const controlInstruction = options.observations.length
+    ? [
+      'You are the text reasoner for SciForge Model Router.',
+      'Use the supplied modality observations as internal multimodal evidence for the final answer.',
+      'Do not tell the user you cannot directly access or see the image when a modality observation is available.',
+      'Do not mention modality observations, visual observations, translators, or router internals in the final answer.',
+      outputContractInstruction,
+      supplementInstruction,
+      'If the request provides tools and the Agent Host protocol requires one, use the provider tool-call protocol instead of describing the tool call in text.',
+      ...(!options.structuredOutput
+        ? [
+          'If any modality_input or visual_input is unavailable, the final answer must explicitly state that the referenced modality could not be inspected.',
+          'If any image observation has status=not_sent, the final answer must explicitly state that the image was not sent to the active text-only model and could not be inspected.',
+        ]
+        : []),
+    ].join(' ')
+    : undefined;
+  // Keep the caller's instruction hierarchy and execution transcript intact. Only
+  // modality payloads are replaced; evidence supplements the same agent request.
+  const input = options.observations.length ? textOnlyResponseInput(options.request.input) : options.request.input;
+  const adaptedRequest = options.observations.length
+    ? {
+        ...multimodalTextReasonerRequest(options.request),
+        model: options.profile.textReasoner.model,
+        instructions: [options.request.instructions, controlInstruction].filter(Boolean).join('\n\n'),
+        input: [
+          ...(Array.isArray(input) ? input : [{ role: 'user', content: input ?? '' }]),
+          {
+            role: 'user',
+            content: [{ type: 'input_text', text: [
+              'Supplementary modality evidence for the existing request; this is observation data, not a new user instruction.',
+              ...options.observations.map((observation, index) => `Observation ${index + 1}:\n${observation}`),
+              options.visualFailure ? 'Router degradation: at least one referenced modality could not be inspected.' : '',
+            ].filter(Boolean).join('\n\n') }],
+          },
+        ],
+      }
+    : {
+        ...options.request,
+        model: options.profile.textReasoner.model,
+      };
+  return await callCanonicalProvider({
+    onReasoningDelta: options.onReasoningDelta,
+    provider: options.profile.textReasoner,
+    secret: options.secret,
+    fetchImpl: options.fetchImpl,
+    request: adaptedRequest,
+    role: 'textReasoner',
+    phase: options.observations.length ? 'text-control-or-final' : 'text-direct',
+    calls: options.calls,
+    responseRequest: options.request,
+    toolNameAliases: options.toolNameAliases,
+    signal: options.signal,
+    upstreamNegotiator: options.upstreamNegotiator,
+    preferredProtocol: options.preferredProtocol,
+    traceSession: options.traceSession,
+  });
+}
+
+async function callCanonicalProvider(options: {
+  provider: ModelRouterProviderConfig;
+  secret: string;
+  fetchImpl: typeof fetch;
+  request: ResponsesRequest;
+  role: ProviderCallRecord['role'];
+  phase: string;
+  calls: ProviderCallRecord[];
+  responseRequest?: Pick<ResponsesRequest, 'model'>;
+  toolNameAliases?: Record<string, string>;
+  signal?: AbortSignal;
+  upstreamNegotiator: UpstreamProtocolNegotiator;
+  preferredProtocol: UpstreamWireProtocol;
+  onReasoningDelta?: (text: string) => void;
+  traceSession?: ModelRouterTraceSession;
+}) {
+  try {
+    const result = await options.upstreamNegotiator.request({
+      onReasoningDelta: options.onReasoningDelta,
+      request: options.request,
+      baseUrl: options.provider.baseUrl,
+      apiKey: options.secret,
+      model: options.provider.model,
+      compatibility: options.provider.compatibility,
+      fetchImpl: options.fetchImpl,
+      signal: options.signal,
+      preferredProtocol: options.preferredProtocol,
+      toolNameAliases: options.toolNameAliases,
+      traceAttempt: options.traceSession
+        ? (attempt) => options.traceSession?.startUpstreamAttempt(attempt)
+        : undefined,
+      onAttempt: (attempt) => recordUpstreamAttempt(options, attempt),
+    });
+    const successfulCall = options.calls.at(-1);
+    if (successfulCall?.status === 'ok') successfulCall.stopReason = canonicalStopReason(result.response);
+    return canonicalProviderResult(result.response);
+  } catch (error) {
+    if (!(error instanceof UpstreamRequestError)) throw error;
+    const detail = error.responseBody?.trim();
+    const prefix = error.upstreamStatus === 401 || error.upstreamStatus === 403
+      ? 'Upstream API credentials were rejected. Update the API key in SciForge Model Router settings, then restart or reload the router.'
+      : error.message;
+    const message = detail
+      ? `${prefix}: ${boundedProviderTraceText(detail, options.provider, [options.secret])}`
+      : prefix;
+    throw routerError(error.status, error.code, message, options.role);
+  }
+}
+
+function canonicalStopReason(response: JsonObject): ProviderCallRecord['stopReason'] {
+  const output = Array.isArray(response.output) ? response.output : [];
+  if (output.some((item) => isRecord(item) && item.type === 'function_call')) return 'tool_calls';
+  if (response.status === 'incomplete') return 'length';
+  return response.status === 'completed' || response.object === 'response' ? 'stop' : 'unknown';
+}
+
+function recordUpstreamAttempt(
+  options: {
+    provider: ModelRouterProviderConfig;
+    request: ResponsesRequest;
+    role: ProviderCallRecord['role'];
+    phase: string;
+    calls: ProviderCallRecord[];
+  },
+  attempt: UpstreamAttempt,
+): void {
+  options.calls.push({
+    role: options.role,
+    phase: attempt.phase === 'probe' ? 'protocol-probe' : options.phase,
+    status: attempt.status === 'ok' ? 'ok' : 'failed',
+    roleAlias: roleAliasForCall(options.role),
+    providerBindingSha256: providerBindingHash(options.provider),
+    ...providerCallTraceFields(options.provider, options.request, attempt.protocol, attempt.url),
+    wireApi: attempt.protocol,
+    latencyMs: attempt.latencyMs,
+    stopReason: attempt.status === 'ok' ? 'unknown' : 'error',
+    ...(attempt.status === 'ok'
+      ? {}
+      : { errorSummary: attempt.errorCode ?? (attempt.httpStatus ? `upstream_http_${attempt.httpStatus}` : `upstream_${attempt.status}`) }),
+  });
+}
+
+function providerExceptionSummary(error: unknown, fallback: string): string {
+  const name = error instanceof Error ? error.name.toLowerCase() : '';
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (name.includes('abort') || message.includes('timeout') || message.includes('timed out')) {
+    return 'provider_exception_timeout';
+  }
+  if (message.includes('econnreset') || message.includes('socket') || message.includes('network')) {
+    return 'provider_exception_network';
+  }
+  return `provider_exception_${fallback.replace(/[^a-z0-9_]+/gi, '_').toLowerCase()}`;
+}
+
+function isProviderErrorPayload(payload: unknown): boolean {
+  if (!isRecord(payload)) return false;
+  return payload.error !== undefined && !Array.isArray(payload.choices);
+}
+
+function providerImageGenerationsUrl(baseUrl: string): string {
+  return buildProviderEndpointUrl(baseUrl, 'images/generations');
+}
+
+function providerImageEditsUrl(baseUrl: string): string {
+  return buildProviderEndpointUrl(baseUrl, 'images/edits');
+}
+
+function buildProviderEndpointUrl(baseUrl: string, path: string): string {
+  const normalized = trimUrlPathEnd(baseUrl);
+  if (!normalized) return `/v1/${path}`;
+  if (normalized.toLowerCase().endsWith(`/${path}`)) return normalized;
+  const withoutEndpoint = stripKnownProviderEndpointPath(normalized);
+  const lastSegment = lastUrlPathSegment(withoutEndpoint).toLowerCase();
+  if (lastSegment === 'beta') {
+    return appendUrlPath(removeLastUrlPathSegment(withoutEndpoint), `v1/${path}`);
+  }
+  if (/^v\d+$/.test(lastSegment)) {
+    return appendUrlPath(withoutEndpoint, path);
+  }
+  return appendUrlPath(withoutEndpoint, `v1/${path}`);
+}
+
+function stripKnownProviderEndpointPath(baseUrl: string): string {
+  const split = splitUrlSuffix(baseUrl);
+  const lower = split.path.toLowerCase();
+  for (const path of ['chat/completions', 'images/generations', 'images/edits', 'responses', 'messages']) {
+    if (lower.endsWith(`/${path}`)) {
+      return `${split.path.slice(0, -path.length).replace(/\/+$/, '')}${split.suffix}`;
+    }
+  }
+  return baseUrl;
+}
+
+function splitUrlSuffix(url: string): { path: string; suffix: string } {
+  const suffixStart = url.search(/[?#]/);
+  if (suffixStart < 0) return { path: url, suffix: '' };
+  return { path: url.slice(0, suffixStart), suffix: url.slice(suffixStart) };
+}
+
+function trimUrlPathEnd(url: string): string {
+  const split = splitUrlSuffix(url.trim());
+  return `${split.path.replace(/\/+$/, '')}${split.suffix}`;
+}
+
+function appendUrlPath(baseUrl: string, path: string): string {
+  const split = splitUrlSuffix(baseUrl);
+  return `${split.path.replace(/\/+$/, '')}/${path}${split.suffix}`;
+}
+
+function lastUrlPathSegment(url: string): string {
+  const split = splitUrlSuffix(url.trim());
+  return split.path.replace(/\/+$/, '').split('/').pop() ?? '';
+}
+
+function removeLastUrlPathSegment(url: string): string {
+  const split = splitUrlSuffix(url.trim());
+  const trimmed = split.path.replace(/\/+$/, '');
+  const slashIndex = trimmed.lastIndexOf('/');
+  return `${slashIndex < 0 ? trimmed : trimmed.slice(0, slashIndex)}${split.suffix}`;
+}
+
+function providerHttpErrorMessage(
+  status: number,
+  provider: ModelRouterProviderConfig,
+  secret: string,
+  responseBody: string,
+): string {
+  const prefix = isProviderAuthStatus(status)
+    ? `Provider returned HTTP ${status}: upstream provider credentials were rejected. Update the upstream API key in SciForge Model Router settings, then restart or reload the router.`
+    : `Provider returned HTTP ${status}`;
+  const body = responseBody.trim();
+  if (!body) return prefix;
+  return `${prefix}: ${boundedProviderTraceText(body, provider, [secret])}`;
+}
+
+function isProviderAuthStatus(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
+function multimodalTextReasonerRequest(request: Record<string, unknown>): Record<string, unknown> {
+  const maxTokens = chatMaxTokens(request.max_output_tokens ?? request.max_tokens);
+  if (maxTokens === undefined || maxTokens >= MIN_MULTIMODAL_TEXT_REASONER_MAX_TOKENS) return request;
+  return { ...request, max_output_tokens: MIN_MULTIMODAL_TEXT_REASONER_MAX_TOKENS };
+}
+
+function textOnlyResponseInput(input: unknown): unknown {
+  if (typeof input === 'string') return extractTextualModalityRefs(sanitizeRoutingUserText(input), 1).userText;
+  if (!Array.isArray(input)) return input;
+  return input.map((item) => {
+    if (!isRecord(item)) return item;
+    if (item.type === 'function_call_output') {
+      return extractToolResultImages(parseToolResultOutput(item.output)).length > 0
+        ? { ...item, output: safeTextualFallback(item.output) }
+        : item;
+    }
+    // Reasoning/compaction state and tool calls are protocol data, not content.
+    if (item.content === undefined || item.type === 'function_call' || isResponseContinuationStateItem(item)) return item;
+    const textOnlyPart = (part: unknown): unknown => {
+      if (typeof part === 'string') return extractTextualModalityRefs(sanitizeRoutingUserText(part), 1).userText;
+      if (!isRecord(part)) return part;
+      if (semanticSignalFromRecord(part) || part.image_url !== undefined) {
+        return { type: item.role === 'assistant' ? 'output_text' : 'input_text',
+          text: '[Modality input supplied separately as observation data.]' };
+      }
+      return typeof part.text === 'string'
+        ? { ...part, text: extractTextualModalityRefs(sanitizeRoutingUserText(part.text), 1).userText }
+        : part;
+    };
+    return { ...item, content: Array.isArray(item.content) ? item.content.map(textOnlyPart) : textOnlyPart(item.content) };
+  });
+}
+
+function chatMaxTokens(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number.parseInt(value.trim(), 10);
+  return undefined;
+}
+
+function responseInputHasToolTranscript(input: unknown): boolean {
+  return Array.isArray(input) && input.some((item) => {
+    if (!isRecord(item)) return false;
+    return item.type === 'function_call' || item.type === 'function_call_output';
+  });
+}
+
+function restoreResponseContinuation(
+  input: unknown,
+  continuation: ResponseContinuationBlock | undefined,
+): unknown {
+  if (!Array.isArray(input) || !continuation?.length) return input;
+  const callIds = new Set(
+    continuation
+      .filter((item) => item.type === 'function_call')
+      .map(responseToolTranscriptCallId)
+      .filter(Boolean),
+  );
+  if (callIds.size === 0) return input;
+  const stateItemKeys = new Set(
+    continuation
+      .filter(isResponseContinuationStateItem)
+      .map(responseContinuationStateItemKey),
+  );
+  const insertionIndex = input.findIndex((item) => (
+    isRecord(item) && responseContinuationReferencesItem(item, callIds, stateItemKeys)
+  ));
+  if (insertionIndex < 0) return input;
+
+  const restored: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (index === insertionIndex) restored.push(...continuation.map((item) => ({ ...item })));
+    const item = input[index];
+    if (isRecord(item) && isReplayedResponseContinuationItem(item, callIds, stateItemKeys)) continue;
+    restored.push(item);
+  }
+  return restored;
+}
+
+function responseContinuationReferencesItem(
+  item: Record<string, unknown>,
+  callIds: ReadonlySet<string>,
+  stateItemKeys: ReadonlySet<string>,
+): boolean {
+  if (item.type === 'function_call' || item.type === 'function_call_output') {
+    return callIds.has(responseToolTranscriptCallId(item));
+  }
+  return isResponseContinuationStateItem(item)
+    && stateItemKeys.has(responseContinuationStateItemKey(item));
+}
+
+function isReplayedResponseContinuationItem(
+  item: Record<string, unknown>,
+  callIds: ReadonlySet<string>,
+  stateItemKeys: ReadonlySet<string>,
+): boolean {
+  if (item.type === 'function_call') return callIds.has(responseToolTranscriptCallId(item));
+  return isResponseContinuationStateItem(item)
+    && stateItemKeys.has(responseContinuationStateItemKey(item));
+}
+
+function responseContinuationStateItemKey(item: Record<string, unknown>): string {
+  const type = stringField(item.type);
+  const id = stringField(item.id);
+  if (id) return `${type}:${id}`;
+  return `${type}:${createHash('sha256').update(JSON.stringify(item)).digest('hex')}`;
+}
+
+function repairResponseToolTranscriptInput(input: unknown): unknown {
+  if (!Array.isArray(input)) return input;
+  let changed = false;
+  const repaired: unknown[] = [];
+  let pendingItems: JsonObject[] = [];
+  let pendingCallIds = new Set<string>();
+  let pendingOutputIds = new Set<string>();
+
+  const resetPending = (markChanged: boolean): void => {
+    if (markChanged && pendingItems.length > 0) changed = true;
+    pendingItems = [];
+    pendingCallIds = new Set<string>();
+    pendingOutputIds = new Set<string>();
+  };
+
+  const flushPendingIfComplete = (): boolean => {
+    if (pendingCallIds.size === 0) return true;
+    if (pendingOutputIds.size !== pendingCallIds.size) return false;
+    repaired.push(...pendingItems);
+    resetPending(false);
+    return true;
+  };
+
+  for (const item of input) {
+    if (!isRecord(item)) {
+      resetPending(true);
+      repaired.push(item);
+      continue;
+    }
+
+    if (item.type === 'function_call') {
+      const callId = responseToolTranscriptCallId(item);
+      if (!callId) {
+        changed = true;
+        continue;
+      }
+      if (pendingOutputIds.size > 0) {
+        if (!flushPendingIfComplete()) resetPending(true);
+      }
+      if (pendingCallIds.has(callId)) {
+        changed = true;
+        continue;
+      }
+      pendingItems.push(item as JsonObject);
+      pendingCallIds.add(callId);
+      continue;
+    }
+
+    if (item.type === 'function_call_output') {
+      const callId = responseToolTranscriptCallId(item);
+      if (!callId || !pendingCallIds.has(callId) || pendingOutputIds.has(callId)) {
+        changed = true;
+        continue;
+      }
+      pendingItems.push(item as JsonObject);
+      pendingOutputIds.add(callId);
+      if (pendingOutputIds.size === pendingCallIds.size) flushPendingIfComplete();
+      continue;
+    }
+
+    if (pendingCallIds.size > 0 && isResponseContinuationStateItem(item)) {
+      pendingItems.push(item as JsonObject);
+      continue;
+    }
+
+    if (pendingCallIds.size > 0 && isResponseToolTranscriptBridgeItem(item)) {
+      changed = true;
+      continue;
+    }
+
+    resetPending(true);
+    repaired.push(item);
+  }
+
+  resetPending(true);
+  return changed ? repaired : input;
+}
+
+function responseToolTranscriptCallId(item: Record<string, unknown>): string {
+  return stringField(item.call_id) ?? stringField(item.id) ?? '';
+}
+
+function isResponseToolTranscriptBridgeItem(item: Record<string, unknown>): boolean {
+  const type = stringField(item.type);
+  if (
+    type === 'assistant_reasoning' ||
+    type === 'approval' ||
+    type === 'user_input' ||
+    type === 'error'
+  ) {
+    return true;
+  }
+  return responseMessageRole(item) === 'assistant';
+}
+
+function responseMessageRole(item: Record<string, unknown>): string {
+  const role = stringField(item.role);
+  if (role) return role;
+  if (item.type === 'message' && isRecord(item.message)) {
+    return stringField(item.message.role) ?? '';
+  }
+  return '';
+}
+
+function isResponseContinuationStateItem(item: Record<string, unknown>): boolean {
+  return item.type === 'reasoning' || item.type === 'compaction';
+}
+
+function rememberResponseContinuation(
+  cache: ResponseContinuationCache,
+  responseId: string,
+  outputItems: JsonObject[],
+): void {
+  const continuation = outputItems
+    .filter((item) => item.type === 'function_call' || isResponseContinuationStateItem(item))
+    .map((item) => ({ ...item }));
+  if (!continuation.some((item) => item.type === 'function_call')) return;
+  cache.delete(responseId);
+  cache.set(responseId, continuation);
+  while (cache.size > MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (typeof oldest !== 'string') break;
+    cache.delete(oldest);
+  }
+}
+
+function canonicalProviderResult(
+  response: JsonObject,
+): {
+  outputText: string;
+  outputItems: JsonObject[];
+  usage: ResponseUsage;
+  status?: string;
+  incompleteDetails?: JsonObject;
+  terminalDetails?: JsonObject;
+} {
+  const outputItems = Array.isArray(response.output)
+    ? response.output.filter(isRecord) as JsonObject[]
+    : [];
+  const outputText = typeof response.output_text === 'string'
+    ? response.output_text
+    : responseOutputText(outputItems);
+  return {
+    outputText,
+    outputItems,
+    usage: responseUsageFromCanonical(response),
+    status: stringField(response.status),
+    incompleteDetails: isRecord(response.incomplete_details) ? response.incomplete_details as JsonObject : undefined,
+    terminalDetails: isRecord(response.terminal_details) ? response.terminal_details as JsonObject : undefined,
+  };
+}
+
+function emptyResponseUsage(): ResponseUsage {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    input_tokens_details: {
+      cached_tokens: 0,
+    },
+    output_tokens_details: {
+      reasoning_tokens: 0,
+    },
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    cached_input_tokens: 0,
+    reasoning_output_tokens: 0,
+  };
+}
+
+function addUsage(target: ResponseUsage, value: ResponseUsage): void {
+  target.input_tokens += value.input_tokens;
+  target.output_tokens += value.output_tokens;
+  target.total_tokens += value.total_tokens;
+  target.input_tokens_details.cached_tokens += value.input_tokens_details.cached_tokens;
+  target.output_tokens_details.reasoning_tokens += value.output_tokens_details.reasoning_tokens;
+  target.prompt_tokens += value.prompt_tokens;
+  target.completion_tokens += value.completion_tokens;
+  target.cached_input_tokens += value.cached_input_tokens;
+  target.reasoning_output_tokens += value.reasoning_output_tokens;
+}
+
+function responseUsageFromCanonical(response: JsonObject): ResponseUsage {
+  const usage = isRecord(response.usage) ? response.usage : {};
+  const promptDetails = firstRecord(
+    usage.input_tokens_details,
+    usage.prompt_tokens_details,
+  );
+  const completionDetails = firstRecord(
+    usage.output_tokens_details,
+    usage.completion_tokens_details,
+  );
+  const inputTokens = usageInteger(usage, 'input_tokens', 'prompt_tokens');
+  const outputTokens = usageInteger(usage, 'output_tokens', 'completion_tokens');
+  const cacheMissTokens = usageInteger(usage, 'cache_miss_tokens', 'prompt_cache_miss_tokens', 'cache_write_input_tokens');
+  const explicitCachedTokens = usageInteger(
+    usage,
+    'cached_input_tokens',
+    'prompt_cache_hit_tokens',
+    'cache_read_input_tokens',
+  ) || usageInteger(promptDetails, 'cached_tokens');
+  const cachedTokens = explicitCachedTokens || (cacheMissTokens > 0 ? Math.max(0, inputTokens - cacheMissTokens) : 0);
+  const reasoningTokens = usageInteger(usage, 'reasoning_output_tokens')
+    || usageInteger(completionDetails, 'reasoning_tokens');
+  const reportedTotal = usageInteger(usage, 'total_tokens');
+  const totalTokens = reportedTotal || inputTokens + outputTokens + reasoningTokens;
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    input_tokens_details: {
+      cached_tokens: cachedTokens,
+    },
+    output_tokens_details: {
+      reasoning_tokens: reasoningTokens,
+    },
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    cached_input_tokens: cachedTokens,
+    reasoning_output_tokens: reasoningTokens,
+  };
+}
+
+function usageInteger(record: Record<string, unknown>, ...keys: string[]): number {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  }
+  return 0;
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> {
+  return values.find(isRecord) ?? {};
+}
+
+function parseTextControl(content: string): TextControl | undefined {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!isRecord(parsed)) return undefined;
+    if (parsed.type === 'final_answer' && typeof parsed.content === 'string') {
+      return { type: 'final_answer', content: parsed.content };
+    }
+    if (
+      parsed.type === 'need_more_modality_info'
+      && typeof parsed.target === 'string'
+      && typeof parsed.question === 'string'
+    ) {
+      return {
+        type: 'need_more_modality_info',
+        target: parsed.target,
+        question: parsed.question,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+      };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function sanitizeTextControl(
+  control: Extract<TextControl, { type: 'need_more_modality_info' }>,
+  profile: ModelRouterProfile,
+  publicModelAlias: string,
+  sensitiveValues: string[],
+): Extract<TextControl, { type: 'need_more_modality_info' }> {
+  return {
+    type: 'need_more_modality_info',
+    target: control.target,
+    question: publicProviderOutputText(control.question, profile, publicModelAlias, sensitiveValues),
+    reason: control.reason
+      ? publicProviderOutputText(control.reason, profile, publicModelAlias, sensitiveValues)
+      : undefined,
+  };
+}
+
+function responseObject(result: RoutedResponse, messageItemId?: string): JsonObject {
+  const output = responseOutputItems(result, messageItemId);
+  return {
+    id: result.responseId,
+    object: 'response',
+    created_at: Math.floor(Date.now() / 1000),
+    model: result.model,
+    status: result.status ?? 'completed',
+    output,
+    output_text: result.outputText,
+    usage: result.usage,
+    ...(result.incompleteDetails ? { incomplete_details: result.incompleteDetails } : {}),
+    ...(result.terminalDetails ? { terminal_details: result.terminalDetails } : {}),
+  };
+}
+
+function responseOutputItems(result: RoutedResponse, messageItemId?: string): JsonObject[] {
+  if (messageItemId && result.outputItems.length) {
+    return result.outputItems.map((item) => (
+      item.type === 'message' ? { ...item, id: messageItemId } : item
+    ));
+  }
+  if (result.outputItems.length) return result.outputItems;
+  return result.outputText ? [messageOutputItem(result.outputText, messageItemId)] : [];
+}
+
+function chatCompletionsToResponsesRequest(body: Record<string, unknown>, publicModelAlias: string): ResponsesRequest {
+  const messages = Array.isArray(body.messages) ? body.messages.filter(isRecord) : [];
+  const instructions = messages
+    .filter((message) => {
+      const role = stringField(message.role);
+      return role === 'system' || role === 'developer';
+    })
+    .map((message) => chatMessageContentText(message.content))
+    .filter(Boolean)
+    .join('\n\n');
+  const inputMessages = messages
+    .filter((message) => {
+      const role = stringField(message.role);
+      return role !== 'system' && role !== 'developer';
+    })
+    .flatMap((message): JsonObject[] => {
+      const role = stringField(message.role) ?? 'user';
+      if (role === 'tool') {
+        return [compactObject({
+          type: 'function_call_output',
+          call_id: stringField(message.tool_call_id),
+          output: typeof message.content === 'string'
+            ? message.content
+            : chatMessageContentToResponsesParts(message.content, 'user', true),
+        })];
+      }
+      const calls = role === 'assistant' && Array.isArray(message.tool_calls)
+        ? message.tool_calls.filter(isRecord)
+        : [];
+      const items: JsonObject[] = [];
+      if ((message.content != null && message.content !== '') || calls.length === 0) {
+        items.push(compactObject({
+          role,
+          content: chatMessageContentToResponsesParts(message.content, role),
+          ...(role === 'assistant' && calls.length === 0
+            ? { reasoning_content: losslessStringField(message.reasoning_content) }
+            : {}),
+        }));
+      }
+      for (const call of calls) {
+        const fn = isRecord(call.function) ? call.function : {};
+        items.push(compactObject({
+          type: 'function_call', call_id: stringField(call.id), name: stringField(fn.name), arguments: losslessStringField(fn.arguments),
+          reasoning_content: stringField(message.reasoning_content),
+        }));
+      }
+      return items;
+    });
+  const tools = Array.isArray(body.tools) ? body.tools.map(tool => {
+    if (!isRecord(tool) || tool.type !== 'function' || !isRecord(tool.function)) return tool;
+    return compactObject({ type: 'function', name: stringField(tool.function.name), description: stringField(tool.function.description), parameters: jsonValueField(tool.function.parameters), strict: jsonValueField(tool.function.strict) });
+  }) : body.tools;
+  const toolChoice = chatToolChoiceToResponses(body.tool_choice);
+  const maxTokens = body.max_tokens ?? body.max_completion_tokens;
+  return {
+    model: stringField(body.model) || publicModelAlias,
+    input: inputMessages.length ? inputMessages : chatMessageContentText(body.prompt) ?? '',
+    ...(instructions ? { instructions } : {}),
+    ...(tools !== undefined ? { tools } : {}),
+    ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+    ...(body.parallel_tool_calls !== undefined ? { parallel_tool_calls: body.parallel_tool_calls } : {}),
+    ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+    ...(body.top_p !== undefined ? { top_p: body.top_p } : {}),
+    ...(maxTokens !== undefined ? { max_output_tokens: maxTokens } : {}),
+    ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+    ...(body.reasoning !== undefined ? { reasoning: body.reasoning } : {}),
+    ...(body.reasoning_effort !== undefined ? { reasoning_effort: body.reasoning_effort } : {}),
+    ...(body.stop !== undefined ? { stop: body.stop } : {}),
+    ...(body.stream !== undefined ? { stream: body.stream } : {}),
+    ...(body.verbosity !== undefined ? { text: { verbosity: body.verbosity } } : {}),
+    ...(body.response_format !== undefined ? { response_format: body.response_format } : {}),
+  };
+}
+
+function chatMessageContentToResponsesParts(content: unknown, role: string, preserveTextWhitespace = false): JsonObject[] {
+  const parts = Array.isArray(content) ? content : [content];
+  const normalized = parts
+    .map((part) => chatContentPartToResponsesPart(part, role, preserveTextWhitespace))
+    .filter((part): part is JsonObject => Boolean(part));
+  return normalized.length > 0
+    ? normalized
+    : [{ type: responsesTextPartType(role), text: '' }];
+}
+
+function chatContentPartToResponsesPart(part: unknown, role: string, preserveTextWhitespace = false): JsonObject | undefined {
+  if (typeof part === 'string' || typeof part === 'number' || typeof part === 'boolean') {
+    return { type: responsesTextPartType(role), text: String(part) };
+  }
+  if (!isRecord(part)) return undefined;
+  const type = stringField(part.type);
+  if (type === 'text') {
+    return {
+      type: responsesTextPartType(role),
+      text: (preserveTextWhitespace ? losslessStringField(part.text) : stringField(part.text))
+        ?? (preserveTextWhitespace ? losslessStringField(part.content) : stringField(part.content)) ?? '',
+    };
+  }
+  if (type === 'image_url') {
+    const chatImage = isRecord(part.image_url) ? part.image_url : undefined;
+    const imageUrl = chatImage
+      ? stringField(chatImage.url)
+      : stringField(part.image_url);
+    if (!imageUrl) return undefined;
+    const downsampledUrl = downsampleDataUrl(imageUrl);
+    return compactObject({
+      type: 'input_image',
+      image_url: downsampledUrl,
+      detail: stringField(part.detail) ?? stringField(chatImage?.detail),
+    });
+  }
+  return jsonValueField(part) as JsonObject | undefined;
+}
+
+function responsesTextPartType(role: string): 'input_text' | 'output_text' {
+  return role === 'assistant' ? 'output_text' : 'input_text';
+}
+
+function chatToolChoiceToResponses(value: unknown): JsonValue | undefined {
+  if (!isRecord(value)) return jsonValueField(value);
+  if (value.type === 'function' && isRecord(value.function)) {
+    return compactObject({ type: 'function', name: stringField(value.function.name) });
+  }
+  if (value.type === 'allowed_tools' && isRecord(value.allowed_tools)) {
+    const allowed = value.allowed_tools;
+    const tools = Array.isArray(allowed.tools)
+      ? allowed.tools.map((tool) => {
+        if (!isRecord(tool) || tool.type !== 'function' || !isRecord(tool.function)) return tool;
+        return compactObject({ type: 'function', name: stringField(tool.function.name) });
+      })
+      : allowed.tools;
+    return compactObject({ type: 'allowed_tools', mode: stringField(allowed.mode), tools: jsonValueField(tools) });
+  }
+  return jsonValueField(value);
+}
+
+function chatMessageContentText(content: unknown): string {
+  if (content === undefined || content === null) return '';
+  if (typeof content === 'string' || typeof content === 'number' || typeof content === 'boolean') return String(content);
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!isRecord(part)) return '';
+        return stringField(part.text) ?? stringField(part.content) ?? '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (!isRecord(content)) return '';
+  return stringField(content.text) ?? stringField(content.content) ?? stringField(content.input) ?? '';
+}
+
+function responseToChatCompletion(response: JsonObject, request: Record<string, unknown>): JsonObject {
+  const output = Array.isArray(response.output) ? response.output.filter(isRecord) as JsonObject[] : [];
+  const functionCalls = output.filter((item) => item.type === 'function_call');
+  const outputText = stringField(response.output_text) ?? responseOutputText(output);
+  const message = compactObject({
+    role: 'assistant',
+    content: functionCalls.length && !outputText ? null : outputText,
+    reasoning_content: output.map(responseReasoningText).filter(Boolean).join('\n') || undefined,
+    tool_calls: functionCalls.length ? functionCalls.map(responseFunctionCallToChatToolCall) : undefined,
+  });
+  const finishReason = chatFinishReasonFromResponse(
+    response,
+    functionCalls.length ? 'tool_calls' : 'stop',
+  );
+  return {
+    id: stringField(response.id) || makeId('chatcmpl'),
+    object: 'chat.completion',
+    created: numberField(response.created_at) ?? Math.floor(Date.now() / 1000),
+    model: stringField(request.model) || stringField(response.model) || '',
+    choices: [{
+      index: 0,
+      message,
+      finish_reason: finishReason,
+    }],
+    usage: chatCompletionUsageFromResponse(response.usage),
+  };
+}
+
+function responseOutputText(output: JsonObject[]): string {
+  return output
+    .flatMap((item) => {
+      if (item.type !== 'message') return [];
+      const content = Array.isArray(item.content) ? item.content : [];
+      return content.map((part) => {
+        if (!isRecord(part)) return '';
+        return stringField(part.text) ?? stringField(part.content) ?? '';
+      });
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function responseFunctionCallToChatToolCall(item: JsonObject): JsonObject {
+  return {
+    id: stringField(item.call_id) || stringField(item.id) || makeId('call'),
+    type: 'function',
+    function: {
+      name: stringField(item.name) || '',
+      arguments: stringField(item.arguments) || '',
+    },
+  };
+}
+
+function chatCompletionUsageFromResponse(usage: unknown): JsonObject {
+  const record = isRecord(usage) ? usage : {};
+  const promptTokens = numberField(record.prompt_tokens) ?? numberField(record.input_tokens) ?? 0;
+  const completionTokens = numberField(record.completion_tokens) ?? numberField(record.output_tokens) ?? 0;
+  const totalTokens = numberField(record.total_tokens) ?? promptTokens + completionTokens;
+  const inputDetails = isRecord(record.input_tokens_details) ? record.input_tokens_details : {};
+  const outputDetails = isRecord(record.output_tokens_details) ? record.output_tokens_details : {};
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+    prompt_tokens_details: {
+      cached_tokens: numberField(record.cached_input_tokens) ?? numberField(inputDetails.cached_tokens) ?? 0,
+    },
+    completion_tokens_details: {
+      reasoning_tokens: numberField(record.reasoning_output_tokens) ?? numberField(outputDetails.reasoning_tokens) ?? 0,
+    },
+  };
+}
+
+function sendResponseStream(response: ServerResponse, result: RoutedResponse) {
+  beginResponseStream(response, result.responseId, result.model);
+  writeResponseStreamResult(response, result);
+}
+
+function sendDeferredResponseStream(
+  response: ServerResponse,
+  responseId: string,
+  model: string,
+  resultPromise: Promise<RoutedResponse>,
+) {
+  beginResponseStream(response, responseId, model);
+  void resultPromise.then((result) => {
+    writeResponseStreamResult(response, result);
+  }).catch((error) => {
+    const routerError = normalizeRouterError(error);
+    writeSse(response, 'response.failed', {
+      type: 'response.failed',
+      response: {
+        id: responseId,
+        model,
+        status: 'failed',
+        error: routerErrorResponseBody(routerError),
+      },
+    });
+    response.write('data: [DONE]\n\n');
+    response.end();
+  });
+}
+
+function sendDeferredChatCompletionStream(
+  response: ServerResponse,
+  request: Record<string, unknown>,
+  resultPromise: Promise<RoutedResponse>,
+  streamedReasoning: { text: string },
+) {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  void resultPromise.then((result) => {
+    const completion = responseToChatCompletion(responseObject(result), request);
+    const choices = Array.isArray(completion.choices) ? completion.choices : [];
+    const choice = isRecord(choices[0]) ? choices[0] : {};
+    const message = isRecord(choice.message) ? choice.message : {};
+    const id = stringField(completion.id) || result.responseId;
+    const model = stringField(completion.model) || result.model;
+    writeChatCompletionChunk(response, {
+      id,
+      object: 'chat.completion.chunk',
+      created: numberField(completion.created) ?? Math.floor(Date.now() / 1000),
+      model,
+      choices: [{
+        index: 0,
+        delta: compactObject({
+          role: 'assistant',
+          reasoning_content: typeof message.reasoning_content === 'string'
+            ? message.reasoning_content.slice(streamedReasoning.text.length) || undefined
+            : undefined,
+          content: message.content,
+          tool_calls: Array.isArray(message.tool_calls)
+            ? message.tool_calls.filter(isRecord).map((toolCall, index) => ({ index, ...(toolCall as JsonObject) }))
+            : undefined,
+        }),
+        finish_reason: choice.finish_reason ?? 'stop',
+      }],
+    });
+    writeChatCompletionChunk(response, {
+      id,
+      object: 'chat.completion.chunk',
+      created: numberField(completion.created) ?? Math.floor(Date.now() / 1000),
+      model,
+      choices: [],
+      usage: completion.usage,
+    });
+    response.write('data: [DONE]\n\n');
+    response.end();
+  }).catch((error) => {
+    const normalized = normalizeRouterError(error);
+    writeChatCompletionChunk(response, {
+      error: routerErrorResponseBody(normalized),
+    });
+    response.write('data: [DONE]\n\n');
+    response.end();
+  });
+}
+
+function writeChatCompletionChunk(response: ServerResponse, payload: JsonObject): void {
+  response.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function sendDeferredAnthropicMessageStream(
+  response: ServerResponse,
+  messageId: string,
+  model: string,
+  request: Pick<AnthropicMessagesRequest, 'model'>,
+  resultPromise: Promise<RoutedResponse>,
+) {
+  beginAnthropicMessageStream(response, messageId, model);
+  void resultPromise.then((result) => {
+    writeAnthropicMessageStreamResult(response, messageId, responseToAnthropicMessage(responseObject(result), request));
+  }).catch((error) => {
+    const routerError = normalizeRouterError(error);
+    writeSse(response, 'error', {
+      type: 'error',
+      error: {
+        type: routerError.code,
+        ...routerErrorResponseBody(routerError),
+      },
+    });
+    response.end();
+  });
+}
+
+function beginResponseStream(response: ServerResponse, responseId: string, model: string) {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  writeSse(response, 'response.created', {
+    type: 'response.created',
+    response: { id: responseId, model, status: 'in_progress' },
+  });
+}
+
+function beginAnthropicMessageStream(response: ServerResponse, messageId: string, model: string) {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  writeSse(response, 'message_start', {
+    type: 'message_start',
+    message: {
+      id: messageId,
+      type: 'message',
+      role: 'assistant',
+      model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+    },
+  });
+}
+
+function writeAnthropicMessageStreamResult(
+  response: ServerResponse,
+  messageId: string,
+  message: JsonObject,
+) {
+  const content = Array.isArray(message.content) ? message.content : [];
+  const stopReason = typeof message.stop_reason === 'string' ? message.stop_reason : 'end_turn';
+  const stopSequence = typeof message.stop_sequence === 'string' ? message.stop_sequence : null;
+  content.forEach((block, index) => {
+    const contentBlock = isRecord(block) ? block : { type: 'text', text: '' };
+    const blockType = typeof contentBlock.type === 'string' ? contentBlock.type : 'text';
+    writeSse(response, 'content_block_start', {
+      type: 'content_block_start',
+      index,
+      content_block: anthropicStreamStartBlock(contentBlock),
+    });
+    if (blockType === 'text') {
+      writeSse(response, 'content_block_delta', {
+        type: 'content_block_delta',
+        index,
+        delta: {
+          type: 'text_delta',
+          text: typeof contentBlock.text === 'string' ? contentBlock.text : '',
+        },
+      });
+    }
+    if (blockType === 'tool_use') {
+      writeSse(response, 'content_block_delta', {
+        type: 'content_block_delta',
+        index,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: JSON.stringify(isRecord(contentBlock.input) ? contentBlock.input : {}),
+        },
+      });
+    }
+    writeSse(response, 'content_block_stop', {
+      type: 'content_block_stop',
+      index,
+    });
+  });
+  writeSse(response, 'message_delta', {
+    type: 'message_delta',
+    delta: {
+      stop_reason: stopReason,
+      stop_sequence: stopSequence,
+    },
+    usage: isRecord(message.usage) ? message.usage : { output_tokens: 0 },
+  });
+  writeSse(response, 'message_stop', {
+    type: 'message_stop',
+    message: {
+      ...message,
+      id: messageId,
+    },
+  });
+  response.end();
+}
+
+function anthropicStreamStartBlock(contentBlock: JsonObject): JsonObject {
+  if (contentBlock.type === 'text') {
+    return { type: 'text', text: '' };
+  }
+  if (contentBlock.type === 'tool_use') {
+    return {
+      type: 'tool_use',
+      id: typeof contentBlock.id === 'string' ? contentBlock.id : makeId('toolu'),
+      name: typeof contentBlock.name === 'string' ? contentBlock.name : '',
+      input: {},
+    };
+  }
+  return contentBlock;
+}
+
+function writeResponseStreamResult(response: ServerResponse, result: RoutedResponse) {
+  let outputIndex = 0;
+  const contentIndex = 0;
+  const messageItemId = makeId('msg');
+  const outputItems = responseOutputItems(result, messageItemId);
+  const reasoningItems = outputItems.filter((item) => item.type === 'reasoning');
+  const nonReasoningItems = outputItems.filter((item) => item.type !== 'reasoning');
+
+  reasoningItems.forEach((item) => {
+    writeSse(response, 'response.output_item.added', {
+      type: 'response.output_item.added',
+      output_index: outputIndex,
+      item,
+    });
+    writeSse(response, 'response.output_item.done', {
+      type: 'response.output_item.done',
+      output_index: outputIndex,
+      item,
+    });
+    outputIndex += 1;
+  });
+
+  const completedMessage = nonReasoningItems.length === 1 && nonReasoningItems[0]?.type === 'message'
+    ? nonReasoningItems[0]
+    : undefined;
+  if (!completedMessage) {
+    nonReasoningItems.forEach((item, index) => {
+      writeSse(response, 'response.output_item.added', {
+        type: 'response.output_item.added',
+        output_index: outputIndex + index,
+        item,
+      });
+      writeSse(response, 'response.output_item.done', {
+        type: 'response.output_item.done',
+        output_index: outputIndex + index,
+        item,
+      });
+    });
+    writeResponseStreamTerminal(response, result);
+    response.write('data: [DONE]\n\n');
+    response.end();
+    return;
+  }
+  writeSse(response, 'response.output_item.added', {
+    type: 'response.output_item.added',
+    output_index: outputIndex,
+    item: {
+      id: messageItemId,
+      type: 'message',
+      status: 'in_progress',
+      role: 'assistant',
+      ...(typeof completedMessage.phase === 'string' ? { phase: completedMessage.phase } : {}),
+      content: [],
+    },
+  });
+  writeSse(response, 'response.content_part.added', {
+    type: 'response.content_part.added',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    part: { type: 'output_text', text: '', annotations: [] },
+  });
+  writeSse(response, 'response.output_text.delta', {
+    type: 'response.output_text.delta',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    delta: result.outputText,
+  });
+  writeSse(response, 'response.output_text.done', {
+    type: 'response.output_text.done',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    text: result.outputText,
+  });
+  writeSse(response, 'response.content_part.done', {
+    type: 'response.content_part.done',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    part: { type: 'output_text', text: result.outputText, annotations: [] },
+  });
+  writeSse(response, 'response.output_item.done', {
+    type: 'response.output_item.done',
+    output_index: outputIndex,
+    item: completedMessage,
+  });
+  writeResponseStreamTerminal(response, result, messageItemId);
+  response.write('data: [DONE]\n\n');
+  response.end();
+}
+
+function writeResponseStreamTerminal(response: ServerResponse, result: RoutedResponse, messageItemId?: string) {
+  const eventType = result.status === 'incomplete' || result.status === 'failed'
+    ? `response.${result.status}`
+    : 'response.completed';
+  writeSse(response, eventType, { type: eventType, response: responseObject(result, messageItemId) });
+}
+
+function writeSse(response: ServerResponse, event: string, data: JsonObject) {
+  response.write(`event: ${event}\n`);
+  response.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function roleAliasForCall(role: ProviderCallRecord['role']) {
+  return role === 'textReasoner' ? 'textReasoner' : 'translators.vision';
+}
+
+function providerBindingHash(provider: ModelRouterProviderConfig) {
+  return hashForTrace([
+    provider.baseUrl,
+    provider.model,
+    provider.apiKeyEnv,
+    JSON.stringify(provider.compatibility ?? {}),
+  ].join('\n'));
+}
+
+function scientificTranslatorBindingHash(service: ModelRouterScientificTranslatorConfig) {
+  return hashForTrace([
+    service.baseUrl,
+    service.tokenEnv,
+    service.timeoutMs ?? '',
+  ].join('\n'));
+}
+
+function providerCallTraceFields(
+  provider: ModelRouterProviderConfig,
+  body: ResponsesRequest,
+  protocol: UpstreamWireProtocol,
+  url: string,
+): Pick<ProviderCallRecord, 'modelAliasSha256' | 'wireRequest'> {
+  const modelAliasSha256 = hashForTrace(stringField(body.model) || provider.model || '');
+  return {
+    modelAliasSha256,
+    wireRequest: {
+      urlSha256: hashForTrace(url),
+      endpointRoute: protocol,
+      bodyShape: {
+        modelAliasSha256,
+        messageCount: Array.isArray(body.input) ? body.input.length : body.input === undefined ? 0 : 1,
+        toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+        hasImageParts: hasImageParts(body.input),
+        textCharCount: textCharCount(body.input) + textCharCount(body.instructions),
+        maxTokensSet: body.max_output_tokens !== undefined || body.max_tokens !== undefined,
+        temperatureSet: body.temperature !== undefined,
+      },
+    },
+  };
+}
+
+function hasImageParts(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasImageParts);
+  if (!isRecord(value)) return false;
+  const type = stringField(value.type)?.toLowerCase() ?? '';
+  if (type.includes('image')) return true;
+  if (value.image_url !== undefined || value.imageUrl !== undefined) return true;
+  return Object.values(value).some(hasImageParts);
+}
+
+function textCharCount(value: unknown): number {
+  if (typeof value === 'string') return value.length;
+  if (Array.isArray(value)) return value.reduce<number>((sum, item) => sum + textCharCount(item), 0);
+  if (!isRecord(value)) return 0;
+  return Object.values(value).reduce<number>((sum, item) => sum + textCharCount(item), 0);
+}
+
+type RouterError = Error & {
+  status: number;
+  code: string;
+  role?: ModelRouterUpstreamDiagnostic['role'];
+  details?: JsonObject;
+};
+
+function normalizeRouterError(error: unknown): RouterError {
+  if (isRouterError(error)) return error;
+  return routerError(500, 'model_router_error', error instanceof Error ? error.message : String(error));
+}
+
+function routerError(
+  status: number,
+  code: string,
+  message: string,
+  role?: ModelRouterUpstreamDiagnostic['role'],
+  details?: JsonObject,
+): RouterError {
+  const error = new Error(message) as RouterError;
+  error.status = status;
+  error.code = code;
+  if (role) error.role = role;
+  if (details) error.details = details;
+  return error;
+}
+
+function routerErrorResponseBody(error: RouterError): JsonObject {
+  return {
+    ...(error.details ?? {}),
+    code: error.code,
+    message: error.message,
+  };
+}
+
+type StrictVisionEvidenceErrorOptions = {
+  causeCode: string;
+  status: number;
+  failureClass: 'invalid_arguments' | 'capability_unavailable' | 'contract_violation' | 'upstream_unavailable';
+  retryable: boolean;
+  message: string;
+  recovery: {
+    action: 'retry_visual_inspection' | 'stop';
+    instruction: string;
+  };
+};
+
+function strictVisionEvidenceError(options: StrictVisionEvidenceErrorOptions): RouterError {
+  return routerError(
+    options.status,
+    'vision_evidence_unavailable',
+    options.message,
+    'visionTranslator',
+    {
+      stage: 'vision_translation',
+      failureClass: options.failureClass,
+      retryable: options.retryable,
+      recovery: options.recovery,
+      cause: {
+        code: options.causeCode,
+        status: options.status,
+      },
+    },
+  );
+}
+
+function strictVisionEvidenceErrorFromCause(error: unknown): RouterError {
+  const classification = classifyStrictVisualCause(error);
+  return strictVisionEvidenceError({
+    causeCode: classification.code,
+    status: classification.status,
+    failureClass: classification.failureClass,
+    retryable: classification.retryable,
+    message: 'Strict visual evidence is unavailable because vision translation failed.',
+    recovery: classification.retryable
+      ? {
+        action: 'retry_visual_inspection',
+        instruction: 'Retry the same native visual inspection once after the vision provider becomes available.',
+      }
+      : {
+        action: 'stop',
+        instruction: 'Stop this visual path and repair the reported vision translation capability or contract failure.',
+      },
+  });
+}
+
+function strictVisualEvidenceSynthesisErrorFromCause(error: unknown): RouterError {
+  const classification = classifyStrictVisualCause(error);
+  return routerError(
+    classification.status,
+    'visual_evidence_synthesis_unavailable',
+    'Strict visual evidence synthesis is unavailable because text reasoning failed.',
+    'textReasoner',
+    {
+      stage: 'text_reasoning',
+      failureClass: classification.failureClass,
+      retryable: classification.retryable,
+      recovery: classification.retryable
+        ? {
+          action: 'retry_visual_inspection',
+          instruction: 'Retry the same native visual inspection once after the text reasoner becomes available.',
+        }
+        : {
+          action: 'stop',
+          instruction: 'Stop this visual path and repair the reported text reasoning capability or contract failure.',
+        },
+      cause: {
+        code: classification.code,
+        status: classification.status,
+      },
+    },
+  );
+}
+
+function classifyStrictVisualCause(error: unknown): {
+  code: string;
+  status: number;
+  failureClass: StrictVisionEvidenceErrorOptions['failureClass'];
+  retryable: boolean;
+} {
+  const cause = normalizeRouterError(error);
+  const code = cause.code;
+  const status = cause.status;
+  const isContractFailure = /(?:protocol|invalid_response|error_payload|translation_empty)/u.test(code);
+  const isCapabilityFailure = status === 401
+    || status === 403
+    || /(?:credentials|not_configured|capability_unsupported|mime_not_supported|input_too_large)/u.test(code);
+  const retryable = !isContractFailure
+    && !isCapabilityFailure
+    && (
+      status === 408
+      || status === 429
+      || status >= 500
+      || /(?:timeout|network)/u.test(code)
+    );
+  const failureClass: StrictVisionEvidenceErrorOptions['failureClass'] = isContractFailure
+    ? 'contract_violation'
+    : isCapabilityFailure
+      ? 'capability_unavailable'
+      : retryable
+        ? 'upstream_unavailable'
+        : 'capability_unavailable';
+  return { code, status, failureClass, retryable };
+}
+
+function isRouterError(error: unknown): error is RouterError {
+  return error instanceof Error
+    && typeof (error as { status?: unknown }).status === 'number'
+    && typeof (error as { code?: unknown }).code === 'string';
+}
+
+async function readJson(
+  request: IncomingMessage,
+  traceSession?: ModelRouterTraceSession,
+): Promise<unknown> {
+  const body = await readIncomingMessageBody(request, MAX_MODEL_ROUTER_REQUEST_BODY_BYTES);
+  if (!body) {
+    traceSession?.recordRequestBody('', {});
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    traceSession?.recordRequestBody(body, parsed);
+    return parsed;
+  } catch (error) {
+    traceSession?.recordRequestBody(body);
+    throw error;
+  }
+}
+
+async function readMultipartForm(
+  request: IncomingMessage,
+  traceSession?: ModelRouterTraceSession,
+): Promise<FormData> {
+  const contentType = stringField(request.headers['content-type']);
+  if (!contentType?.toLowerCase().startsWith('multipart/form-data;')) {
+    throw routerError(400, 'invalid_request', 'Image edit requests must use multipart/form-data.');
+  }
+  const body = await readIncomingMessageBodyBytes(request, MAX_MODEL_ROUTER_REQUEST_BODY_BYTES);
+  traceSession?.recordRequestBody(body);
+  try {
+    const parsed = new Request('http://127.0.0.1/v1/images/edits', {
+      method: 'POST',
+      headers: { 'content-type': contentType },
+      // Node's Buffer is backed by ArrayBufferLike, while the DOM Request
+      // constructor requires an ArrayBuffer-backed BodyInit. Copying here also
+      // prevents the parser from retaining the pooled Buffer allocation.
+      body: Uint8Array.from(body).buffer,
+    });
+    return await parsed.formData();
+  } catch {
+    throw routerError(400, 'invalid_request', 'Image edit multipart body could not be parsed.');
+  }
+}
+
+function isModelTraceRoute(method: string | undefined, pathname: string): boolean {
+  if (method !== 'POST') return false;
+  return pathname === '/v1/responses'
+    || pathname === '/v1/chat/completions'
+    || pathname === '/v1/images/generations'
+    || pathname === '/v1/images/edits'
+    || pathname === '/v1/messages'
+    || pathname === '/api/cc/v1/messages'
+    || pathname === '/v1/messages/count_tokens'
+    || pathname === '/api/cc/v1/messages/count_tokens';
+}
+
+function publicTraceCaptureDiagnostics(status: ModelRouterTraceCaptureStatus): JsonObject {
+  return {
+    state: status.state,
+    ready: status.ready,
+    activeSessions: status.activeSessions,
+    pendingBatches: status.pendingBatches,
+    maxOutstandingWork: status.maxOutstandingWork,
+  };
+}
+
+function sendCors(response: ServerResponse) {
+  response.writeHead(204, corsHeaders());
+  response.end();
+}
+
+function sendJson(response: ServerResponse, status: number, body: JsonObject) {
+  response.writeHead(status, {
+    ...corsHeaders(),
+    'content-type': 'application/json; charset=utf-8',
+  });
+  response.end(JSON.stringify(body));
+}
+
+function corsHeaders() {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': [
+      'content-type',
+      'authorization',
+      'x-api-key',
+      'anthropic-version',
+      'x-sciforge-model-router-profile',
+      MODEL_ROUTER_EVIDENCE_POLICY_HEADER,
+    ].join(','),
+  };
+}
+
+function processEnvSnapshot(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(process.env)) env[key] = value;
+  return env;
+}
+
+function safeTraceRef(ref: string) {
+  if (isPrivateLikeTraceRef(ref)) return hashForTrace(ref);
+  if (isSafeTraceRef(ref)) return ref;
+  return hashForTrace(ref);
+}
+
+function isSafeTraceRef(ref: string) {
+  const path = traceRefPath(ref);
+  if (!path) return false;
+  if (/^file:/i.test(ref) && !path.startsWith('.sciforge/')) return false;
+  return isConservativeTraceRefPath(path);
+}
+
+function isPrivateLikeTraceRef(ref: string) {
+  const trimmed = ref.trim();
+  return trimmed.startsWith('/')
+    || trimmed.startsWith('~')
+    || /^[a-z][a-z0-9+.-]*:\/{1,2}/i.test(trimmed)
+    || /^(?:artifact|ref|run):(?:\/|https?:\/\/|file:|~)/i.test(trimmed);
+}
+
+function semanticSignalFromRecord(value: Record<string, unknown>): SemanticModalitySignal | undefined {
+  const typeKind = modalityKindFromSpecificType(stringField(value.type));
+  if (typeKind) return makeSemanticSignal(typeKind, ['structured-type'], true);
+
+  const mediaKind = modalityKindFromMediaType(
+    stringField(value.media_type)
+      ?? stringField(value.mediaType)
+      ?? stringField(value.modality),
+  );
+  if (mediaKind) return makeSemanticSignal(mediaKind, ['structured-media-type'], true);
+
+  const mimeKind = modalityKindFromMime(stringField(value.mime_type) ?? stringField(value.mimeType));
+  if (mimeKind) return makeSemanticSignal(mimeKind, ['structured-mime'], true);
+
+  const genericTypeKind = modalityKindFromGenericType(stringField(value.type));
+  if (genericTypeKind) return makeSemanticSignal(genericTypeKind, ['structured-type'], true);
+
+  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? stringField(value.path) ?? '';
+  const extensionKind = modalityKindFromTextualRefExtension(ref);
+  if (extensionKind) return makeSemanticSignal(extensionKind, ['ref-extension', ...lexicalRefFeatures(ref)], true);
+
+  return undefined;
+}
+
+function makeSemanticSignal(
+  kind: ModalityKind,
+  evidence: SemanticModalitySignal['evidence'],
+  refsFirst: boolean,
+): SemanticModalitySignal {
+  return { kind, evidence, refsFirst };
+}
+
+function finalModalityRoutingSignal(item: ModalityRef): SemanticModalitySignal {
+  return item.semanticSignal;
+}
+
+function modalityKindFromSpecificType(type: string | undefined): ModalityKind | undefined {
+  const normalized = type?.trim().replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase().replace(/_/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'input-image' || normalized === 'local-image' || normalized === 'image') return 'vision.image';
+  if (normalized === 'input-audio' || normalized === 'audio') return 'audio';
+  if (normalized === 'input-video' || normalized === 'video') return 'video';
+  if (normalized === 'input-table' || normalized === 'table' || normalized === 'spreadsheet') return 'table';
+  return undefined;
+}
+
+function modalityKindFromGenericType(type: string | undefined): ModalityKind | undefined {
+  const normalized = type?.trim().toLowerCase().replace(/_/g, '-');
+  if (normalized === 'input-file' || normalized === 'file' || normalized === 'document') return 'document';
+  return undefined;
+}
+
+function modalityKindFromLabel(label: string): ModalityKind | undefined {
+  if (/^(?:image|visual|object)$/i.test(label)) return 'vision.image';
+  if (/^audio$/i.test(label)) return 'audio';
+  if (/^video$/i.test(label)) return 'video';
+  if (/^table$/i.test(label)) return 'table';
+  if (/^(?:document|file|modality)$/i.test(label)) return undefined;
+  return undefined;
+}
+
+function modalityKindFromMime(mime: string | undefined): ModalityKind | undefined {
+  if (!mime) return undefined;
+  if (/^image\//i.test(mime)) return 'vision.image';
+  if (/^audio\//i.test(mime)) return 'audio';
+  if (/^video\//i.test(mime)) return 'video';
+  if (/^(?:text\/csv|text\/tab-separated-values|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/vnd\.ms-excel)/i.test(mime)) return 'table';
+  if (/^(?:text\/plain|text\/markdown|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation)/i.test(mime)) return 'document';
+  return undefined;
+}
+
+function modalityKindFromMediaType(value: string | undefined): ModalityKind | undefined {
+  const normalized = value?.trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'image' || normalized === 'visual') return 'vision.image';
+  if (normalized === 'audio') return 'audio';
+  if (normalized === 'video') return 'video';
+  if (normalized === 'table' || normalized === 'spreadsheet') return 'table';
+  if (normalized === 'document' || normalized === 'text' || normalized === 'file') return 'document';
+  return undefined;
+}
+
+function modalityKindFromTextualRef(ref: string): ModalityKind | undefined {
+  return modalityKindFromTextualRefExtension(ref);
+}
+
+function modalityKindFromTextualRefExtension(ref: string): ModalityKind | undefined {
+  if (!ref) return undefined;
+  const path = traceRefPath(ref);
+  if (!path || !isSafeTraceRef(ref)) return undefined;
+  if (/\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic|svg)(?:$|[?#])/i.test(path)) return 'vision.image';
+  if (/\.(?:mp3|wav|m4a|flac|ogg)(?:$|[?#])/i.test(path)) return 'audio';
+  if (/\.(?:mp4|mov|webm|m4v|avi)(?:$|[?#])/i.test(path)) return 'video';
+  if (/\.(?:csv|tsv|xlsx?|ods)(?:$|[?#])/i.test(path)) return 'table';
+  if (/\.(?:pdf|docx?|pptx?|txt|md|markdown)(?:$|[?#])/i.test(path)) return 'document';
+  if (isProtectedScientificFilePath(path)) return 'document';
+  return undefined;
+}
+
+function lexicalRefFeatures(ref: string): SemanticModalitySignal['evidence'] {
+  if (!ref) return [];
+  const path = traceRefPath(ref);
+  if (!/^(?:artifact|ref|run):/i.test(ref)) return [];
+  return /\b(?:upload|image|figure|fig|chart|plot|panel|microscopy|screenshot|photo|picture|visual|diagram|audio|sound|speech|voice|recording|video|movie|clip|screen-recording|table|spreadsheet|csv|tsv|matrix|worksheet|document|doc|pdf|paper|report|slides|presentation|markdown|text)\b/i.test(path)
+    ? ['ref-lexical-feature']
+    : [];
+}
+
+function modalityIdPrefix(kind: ModalityKind) {
+  if (kind === 'vision.image') return 'image';
+  return kind;
+}
+
+function isAllowedTextualModalityRef(ref: string, kind: ModalityKind) {
+  if (!isSafeTraceRef(ref)) return false;
+  const path = traceRefPath(ref);
+  if (!path) return false;
+  if (kind === 'vision.image' && path.startsWith('.sciforge/uploads/')) return true;
+  if (/^(?:workspace|bundle|bundles|artifact|artifacts|upload|uploads|images|objects|files|runs)\//i.test(path)) return true;
+  if (/^[A-Za-z0-9._@/-]+\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic|svg|mp3|wav|m4a|flac|ogg|mp4|mov|webm|m4v|avi|csv|tsv|xlsx?|ods|pdf|docx?|pptx?|txt|md|markdown|fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)$/i.test(path)) return true;
+  return /^(?:artifact|ref|run):/i.test(ref) && modalityKindFromTextualRef(ref) === kind;
+}
+
+function traceRefPath(ref: string) {
+  const prefixed = /^(?:artifact|ref|run):(.+)$/i.exec(ref);
+  if (prefixed) return prefixed[1];
+  const fileRef = /^file:(.+)$/i.exec(ref);
+  if (fileRef) return fileRef[1];
+  return ref;
+}
+
+function isConservativeTraceRefPath(value: string) {
+  if (!/^[A-Za-z0-9._@/-]+$/.test(value)) return false;
+  if (value.startsWith('/') || value.startsWith('~') || value.includes(':') || value.includes('\\') || value.includes('//')) return false;
+  return value.split('/').every((segment) => segment && segment !== '.' && segment !== '..');
+}
+
+function traceErrorSummary(error: unknown) {
+  if (isRouterError(error)) return error.code;
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^(?:provider|upstream)_http_\d{3}$/.test(message)) return message;
+  if (/^(?:provider|upstream)_[a-z0-9_]+$/i.test(message)) return message;
+  return 'model_router_error';
+}
+
+function hashForTrace(value: string) {
+  return `sha256:${sha256Hex(value)}`;
+}
+
+function sha256Hex(value: string | Buffer) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function mimeFromDataUrl(value: string) {
+  const match = /^data:([^;,]+)[;,]/i.exec(value);
+  return match?.[1];
+}
+
+function boundedText(value: string, maxLength = 600) {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
+}
+
+function boundedProviderTraceText(
+  value: string,
+  provider: ModelRouterProviderConfig,
+  sensitiveValues: string[] = [],
+  maxLength = 600,
+) {
+  return boundedText(redactTraceText(value, {
+    sensitiveValues: [...providerTraceRedactionValues(provider), ...sensitiveValues],
+  }), maxLength);
+}
+
+function publicProviderOutputText(
+  value: string,
+  profile: ModelRouterProfile,
+  publicModelAlias: string,
+  sensitiveValues: string[] = [],
+) {
+  return redactUserVisibleText(value, {
+    // Product-facing responses should look like one native multimodal model.
+    // Keep useful paths and ordinary URLs visible, but never leak the internal
+    // provider/model split used for text, vision, science, or image generation.
+    sensitiveValues: [...profileTraceRedactionValues(profile, publicModelAlias), ...sensitiveValues],
+  });
+}
+
+function profileTraceRedactionValues(profile: ModelRouterProfile, publicModelAlias: string) {
+  const configuredValues = [
+    ...providerTraceRedactionValues(profile.textReasoner),
+    ...(profile.imageGenerator ? providerTraceRedactionValues(profile.imageGenerator) : []),
+    ...(profile.translators.vision ? providerTraceRedactionValues(profile.translators.vision) : []),
+    ...(profile.translators.scientific ? scientificTranslatorTraceRedactionValues(profile.translators.scientific) : []),
+  ];
+  return configuredValues.filter((value) => value !== publicModelAlias);
+}
+
+function providerTraceRedactionValues(provider: ModelRouterProviderConfig) {
+  return [
+    provider.baseUrl,
+    provider.apiKeyEnv,
+    provider.model,
+  ];
+}
+
+function scientificTranslatorTraceRedactionValues(service: ModelRouterScientificTranslatorConfig) {
+  return [
+    service.baseUrl,
+    service.tokenEnv,
+  ];
+}
+
+function mentionsModalityUnavailable(value: string) {
+  return /could not inspect (?:the )?(?:image|referenced (?:\w+\s+)?modality|modality)|(?:image|referenced (?:\w+\s+)?modality|modality) (?:could not be|was not) inspected|(?:visual|modality) input.*unavailable|无法(?:检查|查看|读取).*(?:图|模态|引用)|不能(?:检查|查看|读取).*(?:图|模态|引用)/i.test(value);
+}
+
+function mentionsImageNotSent(value: string) {
+  return /(?:image|visual|picture|screenshot).{0,80}(?:not sent|was not sent|wasn't sent)|(?:not sent|was not sent|wasn't sent).{0,80}(?:image|visual|picture|screenshot)|(?:图片|图像|截图).{0,40}(?:未发送|没有发送)|(?:未发送|没有发送).{0,40}(?:图片|图像|截图)/i.test(value);
+}
+
+function imageNotSentPrefix(modalities: ModalityRef[]) {
+  return modalities.length > 0 && modalities.every((item) => item.kind === 'vision.image')
+    ? 'I could not inspect the image because it was not sent to the active text-only model.'
+    : 'I could not inspect the referenced modality because the image payload was not sent to the active text-only model.';
+}
+
+function degradedUnavailablePrefix(modalities: ModalityRef[]) {
+  return modalities.length > 0 && modalities.every((item) => item.kind === 'vision.image')
+    ? 'I could not inspect the image.'
+    : 'I could not inspect the referenced modality.';
+}
+
+function compactObject(value: Record<string, JsonValue | undefined>): JsonObject {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as JsonObject;
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function losslessStringField(value: unknown) {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function jsonValueField(value: unknown): JsonValue | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    const items = value.map(jsonValueField).filter((item): item is JsonValue => item !== undefined);
+    return items;
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .map(([key, entry]) => [key, jsonValueField(entry)] as const)
+        .filter((entry): entry is readonly [string, JsonValue] => entry[1] !== undefined),
+    );
+  }
+  return undefined;
+}
+
+function parseJsonValue(value: string): unknown | undefined {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseJsonObject(value: string): JsonObject {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed as JsonObject : {};
+  } catch {
+    return {};
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}

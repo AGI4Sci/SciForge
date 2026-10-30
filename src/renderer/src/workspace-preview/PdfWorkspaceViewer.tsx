@@ -1,0 +1,589 @@
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement
+} from 'react'
+import { useTranslation } from 'react-i18next'
+import {
+  workspacePreviewContentKey,
+  type WorkspaceObservation,
+  type WorkspacePreviewEditOperation,
+  type WorkspacePreviewAssetTransportDescriptor
+} from '@shared/workspace-preview'
+import {
+  WritePdfViewer
+} from '../components/write/WritePdfViewer'
+import { rightPanelContextStateKey } from '../components/right-panel-context-state'
+import {
+  useRightPanelSessionId,
+  useRightPanelSurfaceId
+} from '../components/right-panel-session-scope'
+import type { WorkspacePreviewAssetTransportClient } from './host'
+import {
+  createDocumentWorkspacePreviewAnnotationOperation
+} from './document-annotation-operations'
+import type {
+  WritePdfAnnotationAction,
+  WritePdfAnnotationOverlay,
+  WritePdfSelection
+} from '../components/write/WritePdfViewer'
+import type {
+  WritePdfSelectionPageRect
+} from '../components/write/WritePdfViewer'
+import type {
+  WorkspacePreviewPresentationStateChangeHandler
+} from './presentation-state'
+
+const StableWritePdfViewer = memo(WritePdfViewer)
+const EMPTY_PDF_ANNOTATION_OVERLAYS: WritePdfAnnotationOverlay[] = []
+
+export type PdfWorkspaceViewerStatus =
+  | {
+      kind: 'ready'
+      title: string
+      message: string
+    }
+  | {
+      kind: 'empty'
+      title: string
+      message: string
+    }
+  | {
+      kind: 'unsupported'
+      title: string
+      message: string
+    }
+
+export type PdfWorkspaceViewerModel = {
+  status: PdfWorkspaceViewerStatus
+  title: string
+  subtitle?: string
+  fileSummary: string
+  agentSummary: string
+  mimeType?: string
+}
+
+export type PdfWorkspaceViewerPreviewState =
+  | {
+      kind: 'idle' | 'loading'
+      title: string
+      message: string
+    }
+  | {
+      kind: 'ready'
+      title: string
+      message: string
+      data?: Uint8Array
+      sourceUrl?: string
+      mimeType: string
+      bytesRead?: number
+    }
+  | {
+      kind: 'fallback' | 'error'
+      title: string
+      message: string
+    }
+
+export type PdfWorkspaceViewerProps = {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+  transport?: WorkspacePreviewAssetTransportClient | null
+  model?: PdfWorkspaceViewerModel
+  previewState?: PdfWorkspaceViewerPreviewState
+  documentContentKey?: string
+  className?: string
+  visualContextComponentId?: string
+  onApplyEdit?: (operation: WorkspacePreviewEditOperation) => Promise<void> | void
+  annotationOverlays?: WritePdfAnnotationOverlay[]
+  activeAnnotationId?: string | null
+  annotationsOpen?: boolean
+  jumpToRect?: WritePdfSelectionPageRect | null
+  onSelectionChange?: (selection: WritePdfSelection) => void
+  onAnnotationSelect?: (threadId: string) => void
+  onOpenAnnotations?: (selection: WritePdfSelection | null) => void
+  onToggleAnnotations?: () => void
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
+}
+
+export type PdfWorkspaceViewerLoadResult =
+  | Extract<PdfWorkspaceViewerPreviewState, { kind: 'ready' }>
+  | Extract<PdfWorkspaceViewerPreviewState, { kind: 'fallback' | 'error' }>
+
+export function pdfWorkspaceDocumentRevisionKey(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+  transport?: WorkspacePreviewAssetTransportClient | null
+}): string {
+  return workspacePreviewContentKey({
+    observation: input.observation,
+    asset: input.asset
+  })
+}
+
+export function buildPdfWorkspaceViewerModel(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+}): PdfWorkspaceViewerModel {
+  const { observation, asset } = input
+  if (!observation) {
+    return {
+      status: {
+        kind: 'empty',
+        title: 'No PDF observation',
+        message: 'Open a PDF workspace preview to populate this viewer.'
+      },
+      title: 'PDF viewer',
+      fileSummary: 'No PDF selected',
+      agentSummary: 'No PDF observation'
+    }
+  }
+
+  const mimeType = resolvePdfMimeType({ observation, asset })
+  if (!isPdfObservation({ observation, asset })) {
+    const modality = formatLabel(observation.view.modality)
+    return {
+      status: {
+        kind: 'unsupported',
+        title: 'Unsupported observation',
+        message: `${modality} observations cannot be rendered by the PDF viewer.`
+      },
+      title: observation.view.title || basename(observation.file.path),
+      subtitle: compactStrings([
+        observation.view.pluginId,
+        formatLabel(observation.view.mode)
+      ]).join(' | '),
+      fileSummary: buildPdfFileSummary(observation, asset),
+      agentSummary: `${modality} observation`
+    }
+  }
+
+  const fileSummary = buildPdfFileSummary(observation, asset)
+  const mimeSummary = mimeType ?? 'application/pdf'
+
+  return {
+    status: {
+      kind: 'ready',
+      title: 'PDF preview ready',
+      message: `${mimeSummary}; ${fileSummary}.`
+    },
+    title: observation.view.title || basename(observation.file.path) || asset?.file.name || 'PDF preview',
+    subtitle: compactStrings([
+      observation.view.pluginId,
+      formatLabel(observation.view.mode)
+    ]).join(' | '),
+    fileSummary,
+    agentSummary: compactStrings([
+      mimeSummary,
+      fileSummary,
+      'read-only'
+    ]).join(', '),
+    mimeType: mimeSummary
+  }
+}
+
+export async function loadPdfWorkspacePreviewData(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+  transport?: WorkspacePreviewAssetTransportClient | null
+}): Promise<PdfWorkspaceViewerLoadResult> {
+  const descriptor = input.asset ?? input.transport?.descriptor ?? null
+  const model = buildPdfWorkspaceViewerModel({
+    observation: input.observation,
+    asset: descriptor
+  })
+
+  if (model.status.kind !== 'ready') {
+    return {
+      kind: 'fallback',
+      title: model.status.title,
+      message: model.status.message
+    }
+  }
+
+  if (!descriptor) {
+    return {
+      kind: 'fallback',
+      title: 'PDF bytes unavailable',
+      message: 'No workspace preview asset descriptor is available for this PDF.'
+    }
+  }
+
+  if (!input.transport) {
+    return {
+      kind: 'fallback',
+      title: 'PDF bytes unavailable',
+      message: 'No workspace preview asset transport client is available for this PDF.'
+    }
+  }
+
+  if (input.transport.sourceUrl) {
+    return {
+      kind: 'ready',
+      title: 'PDF stream ready',
+      message: `${formatBytes(descriptor.range.size)} available through workspace preview URL transport.`,
+      sourceUrl: input.transport.sourceUrl,
+      mimeType: model.mimeType ?? 'application/pdf'
+    }
+  }
+
+  return {
+    kind: 'fallback',
+    title: 'PDF stream unavailable',
+    message: 'The workspace preview URL transport is unavailable for this PDF.'
+  }
+}
+
+export function PdfWorkspaceViewer({
+  observation,
+  asset,
+  transport,
+  model,
+  previewState,
+  documentContentKey,
+  className,
+  visualContextComponentId,
+  onApplyEdit,
+  annotationOverlays = EMPTY_PDF_ANNOTATION_OVERLAYS,
+  activeAnnotationId = null,
+  annotationsOpen = false,
+  jumpToRect = null,
+  onSelectionChange,
+  onAnnotationSelect,
+  onOpenAnnotations,
+  onToggleAnnotations,
+  onPresentationStateChange
+}: PdfWorkspaceViewerProps): ReactElement {
+  const { t } = useTranslation()
+  const rightPanelSessionId = useRightPanelSessionId()
+  const rightPanelSurfaceId = useRightPanelSurfaceId()
+  const resolvedAsset = asset ?? transport?.descriptor ?? null
+  const resolvedModel = useMemo(() => model ?? buildPdfWorkspaceViewerModel({
+    observation,
+    asset: resolvedAsset
+  }), [model, observation, resolvedAsset])
+  const documentRevisionKey = documentContentKey?.trim() || pdfWorkspaceDocumentRevisionKey({
+    observation,
+    asset: resolvedAsset,
+    transport
+  })
+  const loadInputRef = useRef({
+    observation,
+    asset: resolvedAsset,
+    transport,
+    model: resolvedModel
+  })
+  loadInputRef.current = {
+    observation,
+    asset: resolvedAsset,
+    transport,
+    model: resolvedModel
+  }
+  const [loadedPreviewState, setLoadedPreviewState] = useState<PdfWorkspaceViewerPreviewState>(() =>
+    initialPdfPreviewState({
+      model: resolvedModel,
+      asset: resolvedAsset,
+      transport
+    })
+  )
+  const activeDocumentKeyRef = useRef(documentRevisionKey)
+
+  useEffect(() => {
+    if (previewState) return
+    let cancelled = false
+    const current = loadInputRef.current
+    const preserveReadyPreview = activeDocumentKeyRef.current === documentRevisionKey
+    activeDocumentKeyRef.current = documentRevisionKey
+
+    const initialState = initialPdfPreviewState({
+      model: current.model,
+      asset: current.asset,
+      transport: current.transport
+    })
+    setLoadedPreviewState((current) => preserveReadyPreview && current.kind === 'ready' ? current : initialState)
+
+    if (current.model.status.kind !== 'ready' || !current.asset || !current.transport) return
+
+    setLoadedPreviewState((current) => preserveReadyPreview && current.kind === 'ready'
+      ? current
+      : {
+          kind: 'loading',
+          title: 'Loading PDF',
+          message: 'Reading PDF bytes through workspace preview transport.'
+        })
+
+    void loadPdfWorkspacePreviewData({
+      observation: current.observation,
+      asset: current.asset,
+      transport: current.transport
+    })
+      .then((result) => {
+        if (!cancelled) setLoadedPreviewState(result)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setLoadedPreviewState({
+          kind: 'error',
+          title: 'PDF render failed',
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    documentRevisionKey,
+    previewState
+  ])
+
+  const activePreviewState = previewState ?? loadedPreviewState
+  const initialAnchorStateRef = useRef<{
+    documentKey: string
+    page: number
+  } | null>(null)
+  if (initialAnchorStateRef.current?.documentKey !== documentRevisionKey) {
+    const initialDocumentAnchor = observation?.selection?.kind === 'document'
+      ? observation.selection.anchors[0]
+      : undefined
+    const observedRect = initialDocumentAnchor?.rects?.[0]
+    initialAnchorStateRef.current = {
+      documentKey: documentRevisionKey,
+      page: initialDocumentAnchor?.page ?? observedRect?.page ?? 1
+    }
+  }
+  const initialPage = initialAnchorStateRef.current.page
+  const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
+  const observationPath = observation?.file.path
+  const handleAnnotationAction = useCallback((action: WritePdfAnnotationAction, selection: WritePdfSelection): void => {
+    if (!observationPath || !onApplyEdit) return
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'pdf',
+      path: observationPath,
+      action,
+      selection,
+      translationBody: t('writePdfAnnotationTranslatePrompt'),
+      visualSelectionQuote: t('writePdfAnnotationVisualSelectionQuote')
+    })
+    if (!operation) return
+    void onApplyEdit(operation)
+  }, [observationPath, onApplyEdit, t])
+
+  return (
+    <section
+      className={compactClassName('workspace-preview-pdf-viewer flex h-full min-h-0 flex-col', className)}
+      data-workspace-preview-pdf-viewer
+      data-status={resolvedModel.status.kind}
+      data-pdf-preview-state={activePreviewState.kind}
+    >
+      {resolvedModel.status.kind !== 'ready' ? (
+        <PdfFallbackSummary
+          title={resolvedModel.status.title}
+          message={resolvedModel.status.message}
+          role={statusRole}
+        />
+      ) : activePreviewState.kind !== 'ready' ? (
+        <PdfFallbackSummary
+          title={activePreviewState.title}
+          message={activePreviewState.message}
+          role={activePreviewState.kind === 'error' ? 'alert' : 'status'}
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col" data-pdf-ready-shell>
+          <div className="min-h-0 flex-1 pr-20" data-pdf-preview-viewport>
+            <StableWritePdfViewer
+              filePath={resolvePdfFilePath(observation, resolvedAsset)}
+              documentContentKey={documentRevisionKey}
+              workspaceRoot={observation?.file.workspaceRoot}
+              data={activePreviewState.data}
+              sourceUrl={activePreviewState.sourceUrl}
+              mimeType={activePreviewState.mimeType}
+              size={resolvePdfFileSize(observation, resolvedAsset)}
+              mtimeMs={observation?.file.mtimeMs}
+              visualContextComponentId={visualContextComponentId}
+              viewStateKey={rightPanelContextStateKey({
+                mode: 'file-pdf',
+                workspaceRoot: observation?.file.workspaceRoot,
+                threadId: rightPanelSessionId,
+                surfaceId: rightPanelSurfaceId,
+                resourceId: resolvePdfFilePath(observation, resolvedAsset)
+              })}
+              initialPage={initialPage}
+              onAnnotationAction={onApplyEdit ? handleAnnotationAction : undefined}
+              annotationOverlays={annotationOverlays}
+              activeAnnotationId={activeAnnotationId}
+              annotationsOpen={annotationsOpen}
+              jumpToRect={jumpToRect}
+              onSelectionChange={onSelectionChange}
+              onAnnotationSelect={onAnnotationSelect}
+              onOpenAnnotations={onOpenAnnotations}
+              onToggleAnnotations={onToggleAnnotations}
+              onPresentationStateChange={onPresentationStateChange}
+              className="h-full min-h-0"
+            />
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+export function resolvePdfMimeType(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+}): string | null {
+  const advertisedMimeType = [
+    input.asset?.file.mimeType,
+    input.observation?.file.mimeType
+  ]
+    .map((mimeType) => normalizePdfMimeType(mimeType))
+    .find((mimeType): mimeType is string => Boolean(mimeType)) ?? null
+
+  if (advertisedMimeType) return advertisedMimeType
+  if (hasPdfExtension(input.asset?.file.relativePath) ||
+    hasPdfExtension(input.asset?.file.name) ||
+    hasPdfExtension(input.observation?.file.path)) {
+    return 'application/pdf'
+  }
+  return null
+}
+
+function PdfFallbackSummary({
+  title,
+  message,
+  role
+}: {
+  title: string
+  message: string
+  role: 'status' | 'alert'
+}): ReactElement {
+  return (
+    <div
+      className="p-4 text-sm text-ds-text"
+      role={role}
+      data-pdf-fallback-summary
+    >
+      <strong>{title}</strong>
+      <p className="mt-1 text-ds-muted">{message}</p>
+    </div>
+  )
+}
+
+function initialPdfPreviewState(input: {
+  model: PdfWorkspaceViewerModel
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+  transport?: WorkspacePreviewAssetTransportClient | null
+}): PdfWorkspaceViewerPreviewState {
+  if (input.model.status.kind !== 'ready') {
+    return {
+      kind: 'fallback',
+      title: input.model.status.title,
+      message: input.model.status.message
+    }
+  }
+  if (!input.asset) {
+    return {
+      kind: 'fallback',
+      title: 'PDF bytes unavailable',
+      message: 'No workspace preview asset descriptor is available for this PDF.'
+    }
+  }
+  if (!input.transport) {
+    return {
+      kind: 'fallback',
+      title: 'PDF bytes unavailable',
+      message: 'No workspace preview asset transport client is available for this PDF.'
+    }
+  }
+  return {
+    kind: 'idle',
+    title: 'PDF bytes pending',
+    message: 'Waiting to read PDF bytes through workspace preview transport.'
+  }
+}
+
+function isPdfObservation(input: {
+  observation: WorkspaceObservation
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+}): boolean {
+  if (input.observation.view.modality !== 'document') return false
+  if (normalizePdfMimeType(input.observation.file.mimeType)) return true
+  if (hasPdfExtension(input.observation.file.path)) return true
+  if (input.observation.file.mimeType?.trim()) return false
+  return Boolean(
+    normalizePdfMimeType(input.asset?.file.mimeType) ||
+    hasPdfExtension(input.asset?.file.relativePath) ||
+    hasPdfExtension(input.asset?.file.name)
+  )
+}
+
+function buildPdfFileSummary(
+  observation: WorkspaceObservation,
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+): string {
+  const size = resolvePdfFileSize(observation, asset)
+  return compactStrings([
+    size === undefined ? undefined : formatBytes(size),
+    basename(asset?.file.relativePath || asset?.file.name || observation.file.path)
+  ]).join(', ') || 'PDF file'
+}
+
+function resolvePdfFilePath(
+  observation?: WorkspaceObservation | null,
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+): string {
+  return observation?.file.path || asset?.file.relativePath || asset?.file.name || 'preview.pdf'
+}
+
+function resolvePdfFileSize(
+  observation?: WorkspaceObservation | null,
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+): number | undefined {
+  return asset?.range.size ?? asset?.file.size ?? observation?.file.size
+}
+
+function normalizePdfMimeType(mimeType: string | null | undefined): string | null {
+  const normalized = mimeType?.trim().toLowerCase()
+  if (normalized === 'application/pdf' || normalized === 'application/x-pdf') return 'application/pdf'
+  return null
+}
+
+function hasPdfExtension(path: string | null | undefined): boolean {
+  return Boolean(path && /\.pdf$/iu.test(path.trim()))
+}
+
+function compactStrings(values: Array<string | null | undefined | false>): string[] {
+  return values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+}
+
+function compactClassName(...values: Array<string | null | undefined | false>): string {
+  return compactStrings(values).join(' ')
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  const units = ['KB', 'MB', 'GB']
+  let size = value / 1024
+  let unitIndex = 0
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+  return `${size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${units[unitIndex]}`
+}
+
+function formatLabel(value: string): string {
+  return value
+    .replace(/[-_]+/gu, ' ')
+    .split(/\s+/u)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function basename(path: string): string {
+  return path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? path
+}

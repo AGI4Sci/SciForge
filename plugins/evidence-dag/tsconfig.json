@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2023", "module": "ESNext", "moduleResolution": "bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true, "types": ["node"],
+    "paths": {
+      "@sciforge/domain-artifact-versions/contract": ["../../packages/domains/artifact-versions/src/contract.ts"],
+      "@sciforge/domain-sdk/contract": ["../../packages/domain-sdk/src/contract.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

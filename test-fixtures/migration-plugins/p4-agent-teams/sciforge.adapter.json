@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow",
+  "namespace": "agent-teams-fixture",
+  "hostApiRange": "^1.0.0",
+  "permissions": [],
+  "reloadPolicy": "restart",
+  "operations": {
+    "start": {
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["teamId"],
+        "properties": {
+          "teamId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "failTaskId": { "type": "string", "enum": ["fixture.prepare", "fixture.synthesize"] }
+        }
+      }
+    }
+  }
+}

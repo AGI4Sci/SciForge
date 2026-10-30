@@ -1,0 +1,142 @@
+{
+  "scenarios": {
+    "map-data": [
+      {
+        "step": "map-data",
+        "output": {
+          "ok": true,
+          "status": "mapped",
+          "selectedTemplate": "scatter",
+          "confidence": 0.96,
+          "renderRequest": {
+            "workspaceRoot": "/private<workspace>",
+            "operationId": "baseline-map-0000001",
+            "visualPlan": {
+              "planId": "plan-baseline-1",
+              "route": "code",
+              "routeLocked": true,
+              "rationale": "baseline",
+              "sourceArtifacts": [],
+              "reproducibleInputs": [
+                "inline-data"
+              ],
+              "lockedElements": [
+                "all"
+              ],
+              "modelOwnedElements": [],
+              "contextStatus": "ready",
+              "contextStopReason": "sufficient",
+              "contextEvidenceIds": [],
+              "unresolvedContext": [],
+              "releaseCeiling": "draft_ready",
+              "fallbackPolicy": "fail_closed"
+            },
+            "template": "scatter",
+            "data": {
+              "series": [
+                {
+                  "name": "S1",
+                  "x": [
+                    1,
+                    2,
+                    3
+                  ],
+                  "y": [
+                    2,
+                    4,
+                    9
+                  ]
+                }
+              ]
+            },
+            "reproducibilityMode": "standard",
+            "dataSources": [
+              {
+                "schemaVersion": 1,
+                "sourceId": "inline-8576f8b8c9f80e7e",
+                "kind": "inline",
+                "locator": "inline:scientific-plotting.map-data.data",
+                "sha256": "8576f8b8c9f80e7ef86104c6f92c9553e5817e26af39b9cb1431401fbacc9ed5",
+                "mediaType": "application/json"
+              }
+            ],
+            "derivedTableReceipts": [
+              {
+                "schemaVersion": 1,
+                "receiptId": "derived-e3984cba571404ae24b5",
+                "inputSourceIds": [
+                  "inline-8576f8b8c9f80e7e"
+                ],
+                "operation": "identity",
+                "inputHash": "8576f8b8c9f80e7ef86104c6f92c9553e5817e26af39b9cb1431401fbacc9ed5",
+                "outputHash": "8576f8b8c9f80e7ef86104c6f92c9553e5817e26af39b9cb1431401fbacc9ed5",
+                "transformationIds": [
+                  "transform-c6e7fe10ccdb0c11541e"
+                ],
+                "warnings": []
+              }
+            ],
+            "transformations": [
+              {
+                "schemaVersion": 1,
+                "transformationId": "transform-c6e7fe10ccdb0c11541e",
+                "kind": "identity",
+                "description": "Map input data to the controlled scatter schema.",
+                "parameters": {
+                  "template": "scatter",
+                  "selectedBy": "templateHint",
+                  "reasons": [
+                    "Input already matches the controlled scatter schema."
+                  ]
+                },
+                "inputHash": "8576f8b8c9f80e7ef86104c6f92c9553e5817e26af39b9cb1431401fbacc9ed5",
+                "outputHash": "8576f8b8c9f80e7ef86104c6f92c9553e5817e26af39b9cb1431401fbacc9ed5"
+              }
+            ],
+            "provenanceWarnings": [],
+            "reviewTask": "Baseline mapping"
+          },
+          "templateAdvice": {
+            "selectedTemplate": "scatter",
+            "compatible": true,
+            "severity": "info",
+            "messages": [],
+            "nextActions": [
+              "Proceed with controlled rendering and visual review."
+            ]
+          },
+          "dataSummary": {
+            "inputShape": "template-ready",
+            "seriesCount": 1
+          },
+          "mappingBasis": {
+            "taskSignals": [
+              "line"
+            ],
+            "dataSignals": [
+              "scatter"
+            ],
+            "selectedBy": "templateHint",
+            "reasons": [
+              "Input already matches the controlled scatter schema."
+            ]
+          },
+          "alternatives": [
+            {
+              "template": "line",
+              "confidence": 0.96,
+              "reason": "Input already matches the controlled line schema."
+            }
+          ],
+          "warnings": [],
+          "guardrails": [
+            "This tool maps data into a controlled render request; it does not render or write files.",
+            "Mapping may reshape records into template JSON, but it must not execute user code.",
+            "If duplicate summary rows are aggregated, review the mapping warning before rendering.",
+            "Use sciforge_invoke with capability scientific-plotting.render for artifact creation, then image_generation_review_candidate for manifest-bound candidate release QA."
+          ]
+        }
+      }
+    ]
+  }
+}

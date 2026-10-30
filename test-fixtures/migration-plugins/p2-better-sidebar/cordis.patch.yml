@@ -1,0 +1,10 @@
+[
+  {
+    "insert": [
+      {
+        "id": "sciforge.better-sidebar",
+        "name": "./dist/main.js"
+      }
+    ]
+  }
+]

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "palmer-penguins-curated-c19a904",
+  "title": "Palmer Archipelago Penguins",
+  "description": "Real-world body-size measurements for adult foraging Adelie, Chinstrap, and Gentoo penguins near Palmer Station, Antarctica.",
+  "dataFile": "penguins.csv",
+  "mediaType": "text/csv",
+  "source": {
+    "repository": "https://github.com/allisonhorst/palmerpenguins",
+    "commit": "c19a904462482430170bfe2c718775ddb7dbb885",
+    "path": "inst/extdata/penguins.csv",
+    "downloadUrl": "https://raw.githubusercontent.com/allisonhorst/palmerpenguins/c19a904462482430170bfe2c718775ddb7dbb885/inst/extdata/penguins.csv",
+    "retrievedAt": "2026-08-12",
+    "packageDoi": "10.5281/zenodo.3960218",
+    "researchArticleDoi": "10.1371/journal.pone.0090081"
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "digest": "f204db2c753b0937caac3cb35258562c14f073e4bbc76be24b4c51ce22767a93",
+    "bytes": 15241,
+    "records": 344,
+    "headerRows": 1,
+    "columns": 8
+  },
+  "license": {
+    "spdx": "CC0-1.0",
+    "name": "Creative Commons Zero v1.0 Universal",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "attribution": [
+    "Horst AM, Hill AP, Gorman KB (2020). palmerpenguins: Palmer Archipelago (Antarctica) penguin data.",
+    "Gorman KB, Williams TD, Fraser WR (2014). Ecological Sexual Dimorphism and Environmental Variability within a Community of Antarctic Penguins (Genus Pygoscelis). PLOS ONE 9(3): e90081."
+  ]
+}

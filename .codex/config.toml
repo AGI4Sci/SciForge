@@ -1,0 +1,3 @@
+[agents]
+max_threads = 10   # 同时运行的 sub agent 数量上限，默认是 6
+max_depth = 1      # sub agent 嵌套深度，默认 1

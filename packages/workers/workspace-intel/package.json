@@ -1,0 +1,44 @@
+{
+  "name": "@sciforge/workspace-intel",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Read-only SciForge workspace intelligence MCP worker for files, references, and skills.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "filesystem",
+    "publicContract": true,
+    "runtimeAdapter": false,
+    "mcpServer": true
+  },
+  "bin": {
+    "sciforge-workspace-intel": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./mcp-server": "./src/mcp-server.ts",
+    "./service": "./src/service.ts",
+    "./visual-inspection": "./src/visual-inspection.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

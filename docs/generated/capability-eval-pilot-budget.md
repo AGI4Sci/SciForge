@@ -1,0 +1,226 @@
+# Capability Evaluation Pilot Budget
+
+本报告由 `pilot-runs.json` 与已保存的 live raw trace/report 确定性生成。Token 用量取每条 trace 最后一个 usage 事件；不会把缺失 usage 当作 0。
+
+- 试跑候选: 8
+- 实际纳入预算的运行: 8
+- 预算停止: 否
+- 已观察总 token: N/A
+- 已观察总墙钟时间: N/A ms
+- 配置: maxRuns=8, maxTotalTokens=130000, maxWallClockMs=900000, maxRetries=0
+
+| 类型 | 计划 | 纳入 | 通过 | 失败 | 平均耗时(ms) | P50(ms) | 最大耗时(ms) | 平均 token | 最大 token |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| single-action-read | 3 | 0 | 0 | 0 | N/A | N/A | N/A | N/A | N/A |
+| multi-step-data-lineage | 2 | 0 | 0 | 0 | N/A | N/A | N/A | N/A | N/A |
+| approval-boundary | 1 | 0 | 0 | 0 | N/A | N/A | N/A | N/A | N/A |
+| external-compute | 1 | 0 | 0 | 0 | N/A | N/A | N/A | N/A | N/A |
+| multi-step-compute | 1 | 0 | 0 | 0 | N/A | N/A | N/A | N/A | N/A |
+
+## 未执行项
+
+- action-anchor: `anchored-comments.asset.read` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.capture` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.delete` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.feedback.status` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.feedback.submit` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.get` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.list` — no-live-evidence-in-current-index
+- action-anchor: `anchored-comments.upsert` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.bundle.export` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.bundle.export-v2` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.bundle.import` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.bundle.verify` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.bundle.verify-v2` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.commit` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.compare` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.content.read-range-v2` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.describe-v2` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.events.list` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.lifecycle.refresh` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.list` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.list-v2` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.materialize` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.observe` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.read` — no-live-evidence-in-current-index
+- action-anchor: `artifact-versions.restore-as-new` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.apply` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.create` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.history` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.list` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.load` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.open` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.open-or-create` — no-live-evidence-in-current-index
+- action-anchor: `biology-room.refresh` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.back` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.click` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.download` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.drag` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.fill` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.forward` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.hover` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.navigate` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.press` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.read` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.read-url` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.reload` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.scroll` — no-live-evidence-in-current-index
+- action-anchor: `browser-preview.select` — no-live-evidence-in-current-index
+- action-anchor: `change-inspector.list-changes` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.coordinator.transfer` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.human-needed.answer` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.human-needed.create` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.membership.accept` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.membership.add` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.membership.remove` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.project.create` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.project.delete` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.requirements.complete` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.session-projection.read` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.task-offer.extend` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.task-offer.reassign` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.task-offer.withdraw` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.task.checkpoint.append` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.task.interaction.read` — no-live-evidence-in-current-index
+- action-anchor: `collaboration.workspace.read` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-add-member` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-create-space` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-list-members` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-list-spaces` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-observe-space` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-open-root` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-pin-space` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-remove-member` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-unpin-space` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-admin-update-space` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-create-folder` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-download` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-extended-destructive` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-extended-read` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-extended-write` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-list-entries` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-native-document-destructive` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-native-document-read` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-native-document-workspace-write` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-native-document-write` — no-live-evidence-in-current-index
+- action-anchor: `content-space.agent-upload-new` — no-live-evidence-in-current-index
+- action-anchor: `content-space.authorize-agent-root` — no-live-evidence-in-current-index
+- action-anchor: `content-space.authorize-feature-selection` — no-live-evidence-in-current-index
+- action-anchor: `content-space.authorize-provider-administration` — no-live-evidence-in-current-index
+- action-anchor: `content-space.describe-capabilities` — no-live-evidence-in-current-index
+- action-anchor: `content-space.list-agent-root-candidates` — no-live-evidence-in-current-index
+- action-anchor: `content-space.list-provider-instances` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.build-dataset` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.check-code` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.export-dsl` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.export-rerun` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.import-dsl` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.read` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.resolve-approval` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.run` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.run-node` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.save` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.status` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.stop` — no-live-evidence-in-current-index
+- action-anchor: `create-loop.test-node` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.catalog` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.confirm-plan` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.deduplicate` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.execute-plan` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.filter` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.graph-organize` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.id-map` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.id-map-provider` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.join` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.list` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.list-object-stores` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.list-objects` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.materialize` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.metadata` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.object-metadata` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.object-raw-data` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.prepare-plan` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.profile` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.publish` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.raw-data` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.register-provider` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.resume-plan` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.select-columns` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.structure-profile` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.structure-validate` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.transform` — no-live-evidence-in-current-index
+- action-anchor: `dataset-api.validate` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.audit-query` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.export-snapshot-products` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.priority` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.resolve-evidence-preview` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.seal-closure` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.update` — no-live-evidence-in-current-index
+- action-anchor: `evidence-dag.view` — no-live-evidence-in-current-index
+- action-anchor: `extensions.candidate.apply` — no-live-evidence-in-current-index
+- action-anchor: `extensions.candidate.cancel` — no-live-evidence-in-current-index
+- action-anchor: `extensions.candidate.check` — no-live-evidence-in-current-index
+- action-anchor: `extensions.list` — no-live-evidence-in-current-index
+- action-anchor: `extensions.status` — no-live-evidence-in-current-index
+- action-anchor: `git-checkpoints.create` — no-live-evidence-in-current-index
+- action-anchor: `git-checkpoints.list` — no-live-evidence-in-current-index
+- action-anchor: `git-checkpoints.preview` — no-live-evidence-in-current-index
+- action-anchor: `git-checkpoints.restore` — no-live-evidence-in-current-index
+- action-anchor: `project-dag.evidence-preview.resolve` — no-live-evidence-in-current-index
+- action-anchor: `project-dag.goal.save` — no-live-evidence-in-current-index
+- action-anchor: `project-dag.read-records` — no-live-evidence-in-current-index
+- action-anchor: `project-dag.update` — no-live-evidence-in-current-index
+- action-anchor: `project-dag.view` — no-live-evidence-in-current-index
+- action-anchor: `remote-ssh.command.cancel` — no-live-evidence-in-current-index
+- action-anchor: `remote-ssh.command.execute` — no-live-evidence-in-current-index
+- action-anchor: `remote-ssh.file.download` — no-live-evidence-in-current-index
+- action-anchor: `remote-ssh.file.upload` — no-live-evidence-in-current-index
+- action-anchor: `remote-ssh.target.probe` — no-live-evidence-in-current-index
+- action-anchor: `remote-ssh.targets.list` — no-live-evidence-in-current-index
+- action-anchor: `research-checkpoints.list` — no-live-evidence-in-current-index
+- action-anchor: `research-checkpoints.read` — no-live-evidence-in-current-index
+- action-anchor: `research-checkpoints.status` — no-live-evidence-in-current-index
+- action-anchor: `research-checkpoints.turn-status` — no-live-evidence-in-current-index
+- action-anchor: `scientific-compute.run-baseline` — no-live-evidence-in-current-index
+- action-anchor: `scientific-compute.status` — no-live-evidence-in-current-index
+- action-anchor: `scientific-plotting.compare` — no-live-evidence-in-current-index
+- action-anchor: `scientific-plotting.map-data` — no-live-evidence-in-current-index
+- action-anchor: `scientific-plotting.render` — no-live-evidence-in-current-index
+- action-anchor: `scientific-plotting.rerun` — no-live-evidence-in-current-index
+- action-anchor: `scientific-plotting.status` — no-live-evidence-in-current-index
+- action-anchor: `siyuan.document.compose` — no-live-evidence-in-current-index
+- action-anchor: `surface.current` — no-live-evidence-in-current-index
+- action-anchor: `version-control.create-reference` — no-live-evidence-in-current-index
+- action-anchor: `version-control.create-snapshot` — no-live-evidence-in-current-index
+- action-anchor: `version-control.diff` — no-live-evidence-in-current-index
+- action-anchor: `version-control.list-snapshots` — no-live-evidence-in-current-index
+- action-anchor: `version-control.open-workspace` — no-live-evidence-in-current-index
+- action-anchor: `version-control.preview-restore` — no-live-evidence-in-current-index
+- action-anchor: `version-control.read-file` — no-live-evidence-in-current-index
+- action-anchor: `version-control.restore` — no-live-evidence-in-current-index
+- action-anchor: `version-control.status` — no-live-evidence-in-current-index
+- action-anchor: `visual-review.create-candidate` — no-live-evidence-in-current-index
+- action-anchor: `visual-review.export-review-packet` — no-live-evidence-in-current-index
+- action-anchor: `visual-review.open` — no-live-evidence-in-current-index
+- action-anchor: `visual-review.read-document` — no-live-evidence-in-current-index
+- action-anchor: `visual-review.update-context` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.annotations.delete` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.annotations.list` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.annotations.resolve` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.annotations.update` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.apply-edit` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.describe-asset` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.export` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.list` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.open` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.prepare-artifact` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.read-artifact-range` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.read-range` — no-live-evidence-in-current-index
+- action-anchor: `workspace-preview.release` — no-live-evidence-in-current-index
+
+## 解释
+
+- 试跑只用于校准耗时、模型用量和预算，不改变 198 action 分母。
+- live 失败仍保留为失败样本；预算未纳入的项不是通过，也不是失败，而是明确的未执行。
+- 全量 action 的 live/replay 结果以 `live-evidence-index.jsonl` 和 `full-execution-plan.json` 为准。
+

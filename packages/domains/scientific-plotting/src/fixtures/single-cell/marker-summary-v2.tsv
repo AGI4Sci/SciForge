@@ -1,0 +1,4 @@
+marker	T_cell	B_cell	Myeloid
+CD3D	5.0	0.5	0.9
+MS4A1	0.4	4.8	0.6
+LYZ	0.7	1.0	4.4

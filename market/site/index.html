@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SciForge 插件市场</title>
+    <meta
+      name="description"
+      content="SciForge 官方插件市场：浏览、搜索、查看权限与安装方式。索引与应用内市场共用同一份 catalog。"
+    />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0b1020;
+        --panel: #141a2e;
+        --line: #26304a;
+        --ink: #eef2ff;
+        --muted: #9aa6c4;
+        --faint: #6f7c9e;
+        --accent: #7c9cff;
+        --warn: #f0b46b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      a { color: var(--accent); }
+      /* Keyboard users need to see where they are: the link is the only control
+         besides the search box and the category picker. */
+      a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+      header { padding: 40px 24px 20px; max-width: 1080px; margin: 0 auto; }
+      h1 { font-size: 30px; margin: 0 0 8px; }
+      header p { color: var(--muted); margin: 0; max-width: 720px; }
+      main { max-width: 1080px; margin: 0 auto; padding: 0 24px 64px; }
+      .controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 8px; }
+      input[type="search"], select {
+        background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+        border-radius: 10px; padding: 9px 12px; font-size: 14px; min-width: 200px; flex: 1 1 220px;
+      }
+      .meta { color: var(--faint); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .cards { display: grid; gap: 14px; margin-top: 18px; }
+      article { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+      article h2 { font-size: 19px; margin: 0 0 4px; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+      .tag { background: #1d2540; color: var(--muted); border-radius: 6px; padding: 2px 8px; font-size: 12px; }
+      .tag.ok { color: #9be3b4; }
+      .tag.warn { color: var(--warn); }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 14px 0 0; font-size: 13px; }
+      dt { color: var(--faint); }
+      dd { margin: 0; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+      .blocked { margin-top: 36px; }
+      .blocked li { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; list-style: none; margin-bottom: 8px; }
+      .blocked ul { padding: 0; margin: 12px 0 0; }
+      footer { max-width: 1080px; margin: 0 auto; padding: 0 24px 48px; color: var(--faint); font-size: 12px; }
+      .empty { color: var(--muted); }
+      .banner { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); }
+      .error { border-color: #6b3b3b; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SciForge 插件市场</h1>
+      <p>
+        官方插件的浏览入口。这里列出的权限、版本与校验信息，与应用内市场读取的是<strong>同一份索引</strong>；
+        安装由 SciForge 客户端完成（校验摘要与发布者签名后原子安装）。
+      </p>
+      <p class="banner">
+        本地 MVP 预览：当前制品由<strong>仓库外的测试密钥</strong>签名，不是生产签名；本页未发布到公网，
+        也没有真实的下载量或安装统计。
+      </p>
+    </header>
+    <main>
+      <div class="controls">
+        <input id="query" type="search" placeholder="搜索插件名称或分类" aria-label="搜索插件" />
+        <select id="category" aria-label="分类"><option value="all">全部分类</option></select>
+      </div>
+      <p class="meta" id="index-meta"></p>
+      <div class="cards" id="cards"></div>
+      <section class="blocked" id="blocked-section" hidden>
+        <h2>暂不可安装</h2>
+        <p class="meta">以下官方插件未通过上架条件，因此不提供安装入口。</p>
+        <ul id="blocked"></ul>
+      </section>
+    </main>
+    <footer>
+      <p id="install-note"></p>
+    </footer>
+    <script src="./app.js"></script>
+  </body>
+</html>

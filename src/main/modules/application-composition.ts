@@ -1,0 +1,171 @@
+import { DOMAIN_PACKAGE_CONTRACT_VERSION } from '@sciforge/domain-sdk'
+import { installedMainDomainContributions } from '@sciforge/domain-sdk/main'
+import type { InstalledDomainPackageSet } from '@sciforge/domain-sdk'
+import { installedDomainPackages } from '../../shared/installed-domain-packages'
+import type { AppCapabilityDependencies } from '../capabilities/app-registry'
+import {
+  CONTROLLED_PROCESS_CAPABILITY_CONTRIBUTION_FACTORY,
+  EXTENSIONS_CAPABILITY_CONTRIBUTION_FACTORY,
+  SURFACE_CAPABILITY_CONTRIBUTION_FACTORY,
+  WORKSPACE_PREVIEW_CAPABILITY_CONTRIBUTION_FACTORY
+} from '../capabilities/app-registry'
+import {
+  VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY
+} from '../capabilities/version-control-provider'
+import type { CapabilityRegistry } from '../capabilities/registry'
+import { DomainModuleCatalog, type MainDomainModuleDefinition } from './catalog'
+import {
+  createInstalledMainDomainEntries,
+  type InstalledMainDomainHost
+} from './installed-domain-main'
+import {
+  MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
+  composeMainCapabilityRegistry
+} from './main-contributions'
+import { HostInternalServiceRegistry } from './internal-services'
+
+const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.freeze([
+  coreCapabilityEntry({
+    packageName: '@sciforge/core-controlled-process',
+    moduleId: 'sciforge.controlled-process',
+    displayName: 'Controlled Process',
+    contributionId: 'sciforge.controlled-process.capability-factory',
+    priority: 10_000,
+    value: CONTROLLED_PROCESS_CAPABILITY_CONTRIBUTION_FACTORY
+  }),
+  coreCapabilityEntry({
+    packageName: '@sciforge/core-surface',
+    moduleId: 'sciforge.surface',
+    displayName: 'Surface Context',
+    contributionId: 'sciforge.surface.capability-factory',
+    priority: 10_000,
+    value: SURFACE_CAPABILITY_CONTRIBUTION_FACTORY
+  }),
+  coreCapabilityEntry({
+    packageName: '@sciforge/core-extensions',
+    moduleId: 'sciforge.extensions',
+    displayName: 'Extensions',
+    contributionId: 'sciforge.extensions.capability-factory',
+    priority: 10_000,
+    value: EXTENSIONS_CAPABILITY_CONTRIBUTION_FACTORY
+  }),
+  coreCapabilityEntry({
+    packageName: '@sciforge/core-version-control',
+    moduleId: 'sciforge.version-control',
+    displayName: 'Version Control',
+    contributionId: 'sciforge.version-control.capability-factory',
+    priority: 10_000,
+    value: VERSION_CONTROL_CAPABILITY_CONTRIBUTION_FACTORY
+  }),
+  coreCapabilityEntry({
+    packageName: '@sciforge/core-workspace-preview',
+    moduleId: 'sciforge.workspace-preview',
+    displayName: 'Workspace Preview',
+    contributionId: 'sciforge.workspace-preview.capability-factory',
+    priority: 9_999,
+    value: WORKSPACE_PREVIEW_CAPABILITY_CONTRIBUTION_FACTORY
+  })
+])
+
+export function createApplicationDomainCatalog(
+  host: Omit<InstalledMainDomainHost, 'internalServicesFor'>,
+  options?: Readonly<{ excludedPackageNames?: readonly string[] }>
+): DomainModuleCatalog {
+  const excludedPackageNames = new Set(resolveExcludedPackageNames(options?.excludedPackageNames))
+  // A package excluded here keeps its generated entry in the compiled entry
+  // list, but the entry is dropped before registration: the catalog, the
+  // capability registry and the reserved extension identities all stop
+  // seeing it, which is how a migrated domain hands its surface to a runtime
+  // plugin instead of the static path (24-1 phase-1 completion).
+  const activePackages: InstalledDomainPackageSet = excludedPackageNames.size === 0
+    ? installedDomainPackages
+    : Object.freeze({
+        definitions: installedDomainPackages.definitions.filter(
+          (definition) => !excludedPackageNames.has(definition.packageName)
+        ),
+        contributionsFor(process) {
+          return installedDomainPackages.contributionsFor(process).filter(
+            (contribution) => !excludedPackageNames.has(contribution.packageName)
+          )
+        }
+      })
+  const catalog = new DomainModuleCatalog()
+  const internalServices = new HostInternalServiceRegistry(
+    installedMainDomainContributions(activePackages)
+  )
+  const installedEntries = createInstalledMainDomainEntries({
+    ...host,
+    internalServicesFor: (owner) => internalServices.forOwner(owner)
+  }).filter((entry) => !excludedPackageNames.has(entry.definition.packageName))
+  internalServices.assertComplete()
+  catalog.registerBatch([
+    ...CORE_MAIN_DOMAIN_ENTRIES,
+    ...installedEntries
+  ])
+  return catalog
+}
+
+/**
+ * Validates a requested exclusion list against the installed packages.
+ * Unknown names fail closed so a typo cannot silently leave the static path
+ * registered next to a runtime plugin.
+ */
+export function resolveExcludedPackageNames(
+  requested: readonly string[] | undefined
+): readonly string[] {
+  const names = [...new Set((requested ?? []).map((name) => name.trim()).filter(Boolean))]
+  if (names.length === 0) return []
+  const known = new Set(installedDomainPackages.definitions.map((definition) => definition.packageName))
+  const unknown = names.filter((name) => !known.has(name))
+  if (unknown.length > 0) {
+    throw new Error(
+      `SCIFORGE_EXCLUDED_DOMAIN_PACKAGES names packages that are not installed: ${unknown.join(', ')}`
+    )
+  }
+  return names
+}
+
+export function createApplicationCapabilityRegistry(
+  catalog: DomainModuleCatalog,
+  dependencies: AppCapabilityDependencies
+): CapabilityRegistry {
+  return composeMainCapabilityRegistry(catalog, dependencies)
+}
+
+function coreCapabilityEntry(input: Readonly<{
+  packageName: string
+  moduleId: string
+  displayName: string
+  contributionId: string
+  priority: number
+  value: unknown
+}>): MainDomainModuleDefinition {
+  return Object.freeze({
+    definition: {
+      contractVersion: DOMAIN_PACKAGE_CONTRACT_VERSION,
+      kind: 'trusted-compile-time',
+      packageName: input.packageName,
+      module: {
+        id: input.moduleId,
+        displayName: input.displayName,
+        version: '1.0.0',
+        hostApi: { minimum: '1.0.0', maximumExclusive: '2.0.0' },
+        priority: input.priority
+      },
+      entrypoints: [{
+        process: 'main',
+        export: './main',
+        contributions: [{
+          id: input.contributionId,
+          kind: MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
+          priority: input.priority
+        }]
+      }]
+    },
+    contributions: [{
+      id: input.contributionId,
+      kind: MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
+      value: input.value
+    }]
+  })
+}

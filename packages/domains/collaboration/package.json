@@ -1,0 +1,45 @@
+{
+  "name": "@sciforge/domain-collaboration",
+  "version": "13.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Collaboration Project, Coordinator and Worker domain.",
+  "exports": {
+    "./coordinator-cloud-command": "./src/coordinator-cloud-command.ts",
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main.ts",
+    "./task-interaction": "./src/task-interaction.ts",
+    "./worker-session-projection": "./src/worker-session-projection.ts",
+    "./renderer": "./src/renderer/index.tsx"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test --test-concurrency=1 \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/collaboration-contracts": "8.0.0",
+    "@sciforge/domain-identity-access": "5.0.2",
+    "@sciforge/domain-sdk": "^0.2.24",
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-i18next": "^15.7.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.2",
+    "happy-dom": "^20.11.2"
+  }
+}

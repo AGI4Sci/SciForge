@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- New project-authored plain-text layout; Apache-2.0. No inherited artwork. -->
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+  <text x="80" y="96" font-family="sans-serif" font-size="32" fill="#17212B" data-max-width="1100">{{PAGE_TITLE}}</text>
+  <text x="80" y="140" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{PAGE_SUBTITLE}}</text>
+  <text x="80" y="220" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_1_TITLE}}</text>
+  <text x="80" y="254" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_1_LINE_1}}</text>
+  <text x="80" y="288" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_1_LINE_2}}</text>
+  <text x="80" y="322" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_2_TITLE}}</text>
+  <text x="80" y="356" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_2_LINE_1}}</text>
+  <text x="80" y="390" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_2_LINE_2}}</text>
+  <text x="80" y="424" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_3_TITLE}}</text>
+  <text x="80" y="458" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_3_LINE_1}}</text>
+  <text x="80" y="492" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_3_LINE_2}}</text>
+  <text x="80" y="526" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_4_TITLE}}</text>
+  <text x="80" y="560" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_4_LINE_1}}</text>
+  <text x="80" y="594" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{STEP_4_LINE_2}}</text>
+  <text x="80" y="618" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{GUARDRAIL}}</text>
+  <text x="80" y="650" font-family="sans-serif" font-size="14" fill="#17212B" data-max-width="1100" data-role="footer">{{SOURCE_TRACE}}</text>
+</svg>

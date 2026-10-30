@@ -1,0 +1,49 @@
+{
+  "name": "@sciforge/plugin-evidence-dag",
+  "version": "1.0.0",
+  "description": "Evidence facts, durable deltas and immutable snapshots for DSH",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.mjs",
+  "exports": {
+    ".": "./dist/main.mjs",
+    "./core": "./dist/core.mjs",
+    "./runtime": "./dist/runtime.mjs",
+    "./ports": "./dist/ports.mjs",
+    "./static": "./dist/static.mjs",
+    "./python-worker": "./dist/python-worker.mjs",
+    "./host-provider": "./dist/host-provider.mjs",
+    "./production-service": "./dist/production-service.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "HOST-PORTS.md",
+    "DEPENDENCIES.json",
+    "VERIFICATION.md"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run --config vitest.config.mjs"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/cordis": "4.0.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "Apache-2.0"
+}

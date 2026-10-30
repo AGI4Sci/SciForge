@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sciforge-project-dag"
+version = "1.0.0"
+description = "Compiles per-thread evidence DAGs into one goal-oriented, bi-temporal project DAG"
+requires-python = ">=3.10"
+dependencies = [
+    "sciforge-evidence-dag>=1.0.0,<2.0.0",
+]
+
+[project.scripts]
+project-dag-server = "project_dag.server:main"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]

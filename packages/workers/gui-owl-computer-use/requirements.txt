@@ -1,0 +1,3 @@
+# Target-scoped CDP transport and observation decoding.
+requests>=2.31.0
+Pillow>=10.0.0

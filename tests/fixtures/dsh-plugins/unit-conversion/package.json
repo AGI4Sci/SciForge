@@ -1,0 +1,25 @@
+{
+  "name": "@sciforge/plugin-unit-conversion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unit conversion with explicit units, dimension checks and affine temperature handling.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/main.js"
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "scripts": {
+    "build": "node ./build.mjs",
+    "pretest": "npm run build",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\""
+  }
+}

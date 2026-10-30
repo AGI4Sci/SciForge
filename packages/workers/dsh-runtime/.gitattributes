@@ -1,0 +1,2 @@
+# Preserve unmodified test-runner assertion output, including blank indentation.
+evidence/*.log -whitespace

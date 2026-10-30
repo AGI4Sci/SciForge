@@ -1,0 +1,460 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { VisibleContextPublishInput } from '@shared/visible-context'
+import {
+  ensureVisibleContextRefreshListener,
+  measureVisibleContextBounds,
+  publishVisibleContextNow,
+  registerVisibleContextComponent,
+  registerVisibleContextSensitiveElements
+} from './visible-context'
+
+afterEach(() => vi.unstubAllGlobals())
+
+describe('visible context visual targets', () => {
+  it('measures an element without serializing a DOM selector', () => {
+    const element = {
+      getBoundingClientRect: () => ({
+        left: 100,
+        top: 40,
+        width: 800,
+        height: 600
+      })
+    } as unknown as Element
+
+    expect(measureVisibleContextBounds(element)).toEqual({
+      x: 100,
+      y: 40,
+      width: 800,
+      height: 600
+    })
+    expect(measureVisibleContextBounds(element, {
+      x: 0.25,
+      y: 0.1,
+      width: 0.5,
+      height: 0.2
+    })).toEqual({
+      x: 300,
+      y: 100,
+      width: 400,
+      height: 120
+    })
+  })
+
+  it('continues renderer revisions from session storage after a reload', async () => {
+    vi.resetModules()
+    const storage = new Map([['sciforge.visible-context.revision', '41']])
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value)
+      },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn()
+    })
+    const reloaded = await import('./visible-context')
+
+    reloaded.publishVisibleContextNow()
+
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ revision: 42 }))
+    expect(storage.get('sciforge.visible-context.revision')).toBe('42')
+  })
+
+  it('publishes immediately when main requests an on-demand refresh', () => {
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({ ...snapshot, windowId: 'electron:1' }))
+    let refresh: (() => void) | undefined
+    vi.stubGlobal('window', {
+      sciforge: {
+        visibleContext: {
+          publish,
+          onRefreshRequested: (handler: () => void) => {
+            refresh = handler
+            return () => undefined
+          }
+        }
+      },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn()
+    })
+
+    ensureVisibleContextRefreshListener()
+    refresh?.()
+
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      schemaVersion: 3,
+      revision: 1,
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 }
+    }))
+  })
+
+  it('auto-publishes password and explicitly sensitive controls as generic redactions', () => {
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({ ...snapshot, windowId: 'electron:1' }))
+    const password = {
+      getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 30 })
+    } as unknown as Element
+    const explicitlySensitive = {
+      getBoundingClientRect: () => ({ left: 40, top: 60, width: 80, height: 20 })
+    } as unknown as Element
+    const querySelectorAll = vi.fn((_selector: string) => [password, explicitlySensitive])
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    vi.stubGlobal('MutationObserver', class {
+      observe = observe
+      disconnect = disconnect
+    })
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })
+    const unregisterComponent = registerVisibleContextComponent({
+      id: 'app.window',
+      region: 'window',
+      component: 'sciforge-window',
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'SciForge window'
+    })
+    const unregisterSensitive = registerVisibleContextSensitiveElements({
+      componentId: 'app.window',
+      root: { querySelectorAll } as unknown as ParentNode & Node
+    })
+
+    publishVisibleContextNow()
+
+    const published = publish.mock.calls.at(-1)?.[0]
+    const targets = published?.components.find((component) => component.id === 'app.window')?.visualTargets
+    expect(querySelectorAll).toHaveBeenCalledWith(
+      'input[type="password"],[data-visual-context-sensitive]'
+    )
+    expect(querySelectorAll.mock.calls[0]?.[0]).not.toContain('textarea')
+    expect(targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'region', redact: true, bounds: { x: 10, y: 20, width: 100, height: 30 } }),
+      expect.objectContaining({ kind: 'region', redact: true, bounds: { x: 40, y: 60, width: 80, height: 20 } })
+    ]))
+    expect(observe).toHaveBeenCalled()
+
+    unregisterSensitive()
+    unregisterComponent()
+    expect(disconnect).toHaveBeenCalled()
+  })
+})
+
+describe('visible context publishing', () => {
+  it('publishes a newly registered capability resource immediately', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+
+    const unregister = visibleContext.registerVisibleContextComponent({
+      id: 'browser-preview:session-a:surface-a',
+      region: 'right-sidebar',
+      component: 'browser-preview',
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Browser page',
+      resources: [{
+        kind: 'browser-page',
+        role: 'active-page',
+        capability: {
+          resourceRef: `res_${'b'.repeat(26)}`
+        }
+      }]
+    })
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      components: [expect.objectContaining({
+        id: 'browser-preview:session-a:surface-a',
+        resources: [expect.objectContaining({
+          capability: { resourceRef: `res_${'b'.repeat(26)}` }
+        })]
+      })]
+    }))
+    unregister()
+  })
+
+  it('filters invalid components before they cross the IPC boundary', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+    const valid = visibleContext.registerVisibleContextComponent({
+      id: 'valid.component',
+      region: 'main',
+      component: 'test',
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Valid component',
+      state: {
+        longText: 'y'.repeat(10_000),
+        manyItems: Array.from({ length: 100 }, (_, index) => index)
+      }
+    })
+    const invalid = visibleContext.registerVisibleContextComponent({
+      id: 'invalid.component',
+      region: 'main',
+      component: 'test',
+      title: 'x'.repeat(257),
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Invalid component'
+    })
+
+    visibleContext.publishVisibleContextNow()
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0].components.map((component) => component.id)).toEqual([
+      'valid.component'
+    ])
+    const publishedState = publish.mock.calls[0]?.[0].components[0]?.state as {
+      longText: string
+      manyItems: number[]
+    }
+    expect(publishedState.longText).toHaveLength(4096)
+    expect(publishedState.manyItems).toHaveLength(64)
+    invalid()
+    valid()
+  })
+
+  it('mirrors the published owner session and publishes a real session change immediately', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    const setTimeout = vi.fn(() => 1)
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout
+    })
+    const visibleContext = await import('./visible-context')
+
+    expect(visibleContext.currentVisibleContextThreadId()).toBeNull()
+
+    visibleContext.setVisibleContextShell({ activeThreadId: ' thr_visible ' })
+
+    // A real session change publishes without waiting for the 80 ms debounce, so
+    // a turn submitted right after the switch declares the current session.
+    expect(setTimeout).not.toHaveBeenCalled()
+    expect(visibleContext.currentVisibleContextThreadId()).toBe('thr_visible')
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      activeThreadId: 'thr_visible'
+    }))
+
+    // A non-session update keeps the debounced publish path.
+    visibleContext.setVisibleContextShell({ activeThreadId: 'thr_visible', route: 'chat' })
+    expect(setTimeout).toHaveBeenCalled()
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(visibleContext.currentVisibleContextThreadId()).toBe('thr_visible')
+
+    // A blank session is unknown, never a blank owner.
+    visibleContext.setVisibleContextShell({ activeThreadId: '   ' })
+    expect(visibleContext.currentVisibleContextThreadId()).toBeNull()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2))
+    expect(publish.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      activeThreadId: null
+    }))
+  })
+
+  it('keeps one IPC publish in flight and coalesces queued snapshots to the latest revision', async () => {
+    vi.resetModules()
+    let resolveFirst: (() => void) | undefined
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve
+    })
+    const publish = vi.fn()
+      .mockImplementationOnce(() => first)
+      .mockResolvedValue({ windowId: 'electron:1' })
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+    const unregister = visibleContext.registerVisibleContextComponent({
+      id: 'stable.component',
+      region: 'main',
+      component: 'test',
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Stable component'
+    })
+
+    visibleContext.publishVisibleContextNow()
+    visibleContext.publishVisibleContextNow()
+    visibleContext.publishVisibleContextNow()
+
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ revision: 1 }))
+
+    resolveFirst?.()
+    await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2))
+    expect(publish.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ revision: 3 }))
+    unregister()
+  })
+
+  it('reports a dropped component once per session with its id and failing path', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    const logError = vi.fn(async () => undefined)
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish }, logError },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+    visibleContext.registerVisibleContextComponent({
+      id: 'invalid.component',
+      region: 'main',
+      component: 'test',
+      title: 'x'.repeat(257),
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Invalid component'
+    })
+
+    visibleContext.publishVisibleContextNow()
+    visibleContext.publishVisibleContextNow()
+
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'visible-context',
+      expect.stringContaining('Dropped a visible-context component'),
+      expect.objectContaining({
+        componentId: 'invalid.component',
+        componentRegion: 'main',
+        issues: [expect.stringContaining('title:too_big')]
+      })
+    )
+    // A dropped component is a diagnostic, not a stall: the rest still publishes.
+    expect(publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports an abandoned publication once with the failing message path', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    const logError = vi.fn(async () => undefined)
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish }, logError },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+
+    visibleContext.setVisibleContextShell({
+      activeThreadId: 'thr_visible',
+      route: 'r'.repeat(200)
+    })
+    visibleContext.publishVisibleContextNow()
+
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'visible-context',
+      expect.stringContaining('Abandoned a visible-context publication'),
+      expect.objectContaining({
+        activeThreadId: 'thr_visible',
+        issues: [expect.stringContaining('route:too_big')]
+      })
+    )
+    // Nothing crossed the IPC boundary for the abandoned revision.
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('never throws or blocks a publication when the error bridge itself fails', async () => {
+    vi.resetModules()
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({
+      ...snapshot,
+      windowId: 'electron:1'
+    }))
+    const logError = vi.fn(() => {
+      throw new Error('bridge unavailable')
+    })
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish }, logError },
+      sessionStorage: { getItem: vi.fn(), setItem: vi.fn() },
+      clearTimeout: vi.fn(),
+      setTimeout: vi.fn(() => 1)
+    })
+    const visibleContext = await import('./visible-context')
+    visibleContext.registerVisibleContextComponent({
+      id: 'invalid.component',
+      region: 'main',
+      component: 'test',
+      title: 'x'.repeat(257),
+      visible: true,
+      updatedAt: new Date().toISOString(),
+      summary: 'Invalid component'
+    })
+
+    expect(() => visibleContext.publishVisibleContextNow()).not.toThrow()
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+describe('retained surface visibility', () => {
+  it('excludes mounted hidden chats at refresh and includes them when shown', async () => {
+    vi.resetModules()
+    const context = await import('./visible-context')
+    const publish = vi.fn(async () => undefined)
+    vi.stubGlobal('window', {
+      sciforge: { visibleContext: { publish } }, setTimeout: vi.fn(), clearTimeout: vi.fn()
+    })
+    let hidden = true
+    const element = {
+      isConnected: true,
+      getClientRects: () => hidden ? [] : [{}],
+      closest: () => null
+    } as unknown as Element
+    const dispose = context.registerVisibleContextComponent({
+      id: 'retained-chat', component: 'chat', region: 'main', visible: true,
+      summary: 'A retained conversation', updatedAt: new Date().toISOString()
+    }, () => element)
+    context.publishVisibleContextNow()
+    await Promise.resolve()
+    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ components: [] }))
+    hidden = false
+    context.publishVisibleContextNow()
+    await vi.waitFor(() => expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
+      components: [expect.objectContaining({ id: 'retained-chat' })]
+    })))
+    dispose()
+  })
+})

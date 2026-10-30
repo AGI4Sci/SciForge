@@ -1,0 +1,121 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "scientific-plotting",
+  "actionEvidence": {
+    "scientific-plotting.compare": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-plotting/src/sciforge-fixtures.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-plotting/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-compare-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-plotting-workflow-local-fixture"
+      }
+    },
+    "scientific-plotting.map-data": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-plotting/src/sciforge-fixtures.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-plotting/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-map-data-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-plotting-workflow-local-fixture"
+      }
+    },
+    "scientific-plotting.render": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-plotting/src/sciforge-fixtures.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-plotting/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-render-artifact-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-plotting-workflow-local-fixture"
+      }
+    },
+    "scientific-plotting.rerun": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-plotting/src/sciforge-fixtures.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-plotting/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-rerun-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-plotting-workflow-local-fixture"
+      }
+    },
+    "scientific-plotting.status": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/scientific-plotting/src/main.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/scientific-plotting/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-status-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "scientific-plotting-status-local-fixture"
+      }
+    }
+  }
+}

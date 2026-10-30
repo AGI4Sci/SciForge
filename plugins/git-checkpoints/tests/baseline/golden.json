@@ -1,0 +1,241 @@
+{
+  "createdId": "manual_1785196801000_id-1",
+  "scenarios": {
+    "happy-path": [
+      {
+        "value": {
+          "ok": true,
+          "value": {
+            "checkpointId": "manual_1785196801000_id-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "phase": "manual",
+            "workspaceRoot": "/workspace/repository",
+            "provider": "git",
+            "revision": "revision-1",
+            "createdAt": "2026-07-28T00:00:02.000Z",
+            "changeSummary": "Clean workspace",
+            "status": "available"
+          }
+        }
+      },
+      {
+        "value": {
+          "ok": true,
+          "value": [
+            {
+              "checkpointId": "manual_1785196801000_id-1",
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "turn-1",
+              "phase": "manual",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-1",
+              "createdAt": "2026-07-28T00:00:02.000Z",
+              "changeSummary": "Clean workspace",
+              "status": "available"
+            }
+          ]
+        }
+      },
+      {
+        "value": {
+          "ok": true,
+          "value": [
+            {
+              "checkpointId": "manual_1785196801000_id-1",
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "turn-1",
+              "phase": "manual",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-1",
+              "createdAt": "2026-07-28T00:00:02.000Z",
+              "changeSummary": "Clean workspace",
+              "status": "available"
+            }
+          ]
+        }
+      },
+      {
+        "value": {
+          "ok": true,
+          "value": {
+            "checkpoint": {
+              "checkpointId": "manual_1785196801000_id-1",
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "turn-1",
+              "phase": "manual",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-1",
+              "createdAt": "2026-07-28T00:00:02.000Z",
+              "changeSummary": "Clean workspace",
+              "status": "available"
+            },
+            "patch": "patch for snapshot-1",
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "ok": true,
+          "value": {
+            "checkpointId": "manual_1785196801000_id-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "phase": "manual",
+            "workspaceRoot": "/workspace/repository",
+            "provider": "git",
+            "revision": "revision-1",
+            "createdAt": "2026-07-28T00:00:02.000Z",
+            "changeSummary": "Clean workspace",
+            "status": "restored",
+            "restoreStatus": "2026-07-28T00:00:05.000Z",
+            "rescueCheckpointId": "rescue_1785196803000_id-2"
+          }
+        }
+      },
+      {
+        "value": {
+          "ok": true,
+          "value": [
+            {
+              "checkpointId": "rescue_1785196803000_id-2",
+              "runtimeId": "codex",
+              "threadId": "thread-1:restore-rescue",
+              "turnId": "turn-1",
+              "phase": "rescue",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-2",
+              "createdAt": "2026-07-28T00:00:04.000Z",
+              "changeSummary": "1 change (modified: 1)",
+              "status": "available"
+            },
+            {
+              "checkpointId": "manual_1785196801000_id-1",
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "turn-1",
+              "phase": "manual",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-1",
+              "createdAt": "2026-07-28T00:00:02.000Z",
+              "changeSummary": "Clean workspace",
+              "status": "restored",
+              "restoreStatus": "2026-07-28T00:00:05.000Z",
+              "rescueCheckpointId": "rescue_1785196803000_id-2"
+            }
+          ]
+        }
+      }
+    ],
+    "rejections": [
+      {
+        "threw": "The public create capability only creates manual checkpoints."
+      },
+      {
+        "threw": "Git Checkpoints cannot access another workspace."
+      },
+      {
+        "threw": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+      },
+      {
+        "threw": "Git Checkpoints cannot access another workspace."
+      },
+      {
+        "threw": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"runtimeId\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      },
+      {
+        "value": {
+          "ok": false,
+          "reason": "not_found",
+          "message": "Git checkpoint not found: missing-checkpoint"
+        }
+      },
+      {
+        "value": {
+          "ok": false,
+          "reason": "not_found",
+          "message": "Git checkpoint not found: manual_1785196801000_id-1"
+        }
+      },
+      {
+        "value": {
+          "ok": false,
+          "reason": "not_found",
+          "message": "Git checkpoint not found: missing-checkpoint"
+        }
+      }
+    ],
+    "dirty-restore": [
+      {
+        "value": {
+          "ok": true,
+          "value": {
+            "checkpointId": "manual_1785196801000_id-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "phase": "manual",
+            "workspaceRoot": "/workspace/repository",
+            "provider": "git",
+            "revision": "revision-1",
+            "createdAt": "2026-07-28T00:00:02.000Z",
+            "changeSummary": "Clean workspace",
+            "status": "available"
+          }
+        }
+      },
+      {
+        "value": {
+          "ok": false,
+          "reason": "dirty_worktree",
+          "message": "Working tree has changes.",
+          "details": {
+            "rescueCheckpointId": "rescue_1785196803000_id-2"
+          }
+        }
+      },
+      {
+        "value": {
+          "ok": true,
+          "value": [
+            {
+              "checkpointId": "rescue_1785196803000_id-2",
+              "runtimeId": "codex",
+              "threadId": "thread-1:restore-rescue",
+              "phase": "rescue",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-2",
+              "createdAt": "2026-07-28T00:00:04.000Z",
+              "changeSummary": "1 change (modified: 1)",
+              "status": "available"
+            },
+            {
+              "checkpointId": "manual_1785196801000_id-1",
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "phase": "manual",
+              "workspaceRoot": "/workspace/repository",
+              "provider": "git",
+              "revision": "revision-1",
+              "createdAt": "2026-07-28T00:00:02.000Z",
+              "changeSummary": "Clean workspace",
+              "status": "blocked",
+              "rescueCheckpointId": "rescue_1785196803000_id-2"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+export { GeneralSettingsSection } from './settings-section-general'
+export { SpeechToTextSettingsSection } from './settings-section-speech-to-text'
+export { AgentsSettingsSection } from './settings-section-agents'
+export { KeyboardShortcutsSettingsSection } from './settings-section-shortcuts'
+export { RemoteResourcesSettingsSection } from './settings-section-remote-resources'

@@ -1,0 +1,1394 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentRuntimeId, AppSettingsV1 } from '@shared/app-settings'
+import type { NormalizedThread } from '../agent/types'
+import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
+import { rememberProviderThreadRuntime } from './chat-store-runtime-helpers'
+import { stopRuntimeBootRetry, stopRuntimeReconnectProbe, stopRuntimeThreadRefreshPoll } from './chat-store-schedulers'
+
+const inputRecoveryMock = vi.hoisted(() => ({ ensureSessionInputRecovery: vi.fn(async () => undefined) }))
+vi.mock('./chat-session-admission', () => inputRecoveryMock)
+
+const registryMock = vi.hoisted(() => ({
+  getProvider: vi.fn()
+}))
+const runtimeClientMock = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  setSettings: vi.fn()
+}))
+const lifecycleMock = vi.hoisted(() => ({
+  disposeSessionRightPanelWorkspace: vi.fn()
+}))
+
+vi.mock('../agent/registry', () => ({
+  getProvider: registryMock.getProvider
+}))
+vi.mock('../agent/runtime-client', () => ({
+  rendererRuntimeClient: {
+    getSettings: runtimeClientMock.getSettings,
+    setSettings: runtimeClientMock.setSettings
+  }
+}))
+vi.mock('../lib/session-right-panel-lifecycle', () => lifecycleMock)
+
+import { createNavigationActions } from './chat-store-navigation-actions'
+
+function thread(id: string, runtimeId?: AgentRuntimeId): NormalizedThread {
+  return {
+    id,
+    runtimeId,
+    title: id,
+    updatedAt: '2026-06-11T00:00:00.000Z',
+    model: 'deepseek-v4-pro',
+    mode: 'agent',
+    workspace: '/workspace/sciforge',
+    status: 'idle'
+  }
+}
+
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+function sideConversation(threadId: string, parentThreadId: string): ChatState['sideConversations'][string] {
+  return {
+    threadId,
+    runtimeId: 'codex',
+    parentThreadId,
+    source: 'child_agent',
+    title: 'research child',
+    createdAt: '2026-06-11T00:00:00.000Z',
+    inheritedAt: '2026-06-11T00:00:00.000Z',
+    blocks: [],
+    liveReasoning: '',
+    liveAssistant: '',
+    lastSeq: 0,
+    input: '',
+    model: 'deepseek-v4-pro',
+    reasoningEffort: 'medium',
+    busy: false,
+    turnId: null,
+    userItemId: null,
+    error: null
+  }
+}
+
+function buildHarness(options: {
+  activeRuntime: AgentRuntimeId
+  activeThread: NormalizedThread
+  listedThreads: NormalizedThread[]
+  blocks?: ChatState['blocks']
+  showArchivedThreads?: boolean
+  threadSearch?: string
+  sideConversations?: ChatState['sideConversations']
+}): {
+  refreshThreads: ReturnType<typeof createNavigationActions>['refreshThreads']
+  state: ChatState
+  provider: {
+    listThreads: ReturnType<typeof vi.fn>
+    getRecentThreadView: ReturnType<typeof vi.fn>
+  }
+} {
+  let state: ChatState
+  const provider = {
+    listThreads: vi.fn(async () => options.listedThreads),
+    getRecentThreadView: vi.fn(async () => ({ blocks: [] }))
+  }
+  registryMock.getProvider.mockReturnValue(provider)
+  runtimeClientMock.getSettings.mockResolvedValue({ activeAgentRuntime: options.activeRuntime })
+
+  state = {
+    activeThreadId: options.activeThread.id,
+    blocks: options.blocks ?? [],
+    busy: false,
+    codeWorkspaceRoots: [],
+    error: null,
+    route: 'chat',
+    runtimeConnection: 'ready',
+    showArchivedThreads: options.showArchivedThreads ?? false,
+    threadSearch: options.threadSearch ?? '',
+    threads: [options.activeThread],
+    sideConversations: options.sideConversations ?? {},
+    unreadThreadIds: {},
+    watchTurnCompletion: {}
+  } as unknown as ChatState
+
+  const set: ChatStoreSet = (partial) => {
+    const update = typeof partial === 'function' ? partial(state) : partial
+    Object.assign(state, update)
+  }
+  const get: ChatStoreGet = () => state
+  const actions = createNavigationActions({
+    set,
+    get,
+    sseAbortRef: { current: null }
+  })
+  state.refreshThreads = actions.refreshThreads
+  return { refreshThreads: actions.refreshThreads, state, provider }
+}
+
+describe('chat-store-navigation-actions refreshThreads', () => {
+  let currentSddRegistryJson: string | null = null
+
+  it('keeps ordinary conversations when recent archived history exceeds the live-session limit', async () => {
+    const active = thread('active', 'codex')
+    const older = thread('older-local', 'codex')
+    const catalog = [active, ...Array.from({ length: 80 }, (_, index) => ({ ...thread(`archived-${index}`, 'codex'), archived: true })), older]
+    const { refreshThreads, state, provider } = buildHarness({ activeRuntime: 'codex', activeThread: active, listedThreads: catalog })
+    provider.listThreads.mockImplementation(async (options = {}) => (
+      catalog.filter(item => options.archivedOnly ? item.archived : options.includeArchived || !item.archived).slice(0, options.limit ?? 100)
+    ))
+    await refreshThreads()
+    expect(state.threads.filter(item => !item.archived).map(item => item.id)).toEqual(['active', 'older-local'])
+    expect(state.threads.filter(item => item.archived)).toHaveLength(80)
+  })
+
+  it('refreshes ordinary conversations even when archive history fails', async () => {
+    const active = thread('active', 'codex')
+    const local = thread('new-local', 'codex')
+    const { refreshThreads, state, provider } = buildHarness({ activeRuntime: 'codex', activeThread: active, listedThreads: [] })
+    provider.listThreads.mockImplementation(async (options = {}) => {
+      if (options.archivedOnly) throw new Error('Archive unavailable')
+      return [active, local]
+    })
+    await refreshThreads()
+    expect(state.threads.map(item => item.id)).toEqual(['active', 'new-local'])
+  })
+
+  beforeEach(() => {
+    stopRuntimeThreadRefreshPoll()
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+    registryMock.getProvider.mockReset()
+    runtimeClientMock.getSettings.mockReset()
+    runtimeClientMock.setSettings.mockReset()
+    currentSddRegistryJson = null
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn((key: string) =>
+          key === 'sciforge.sdd.threadRegistry.v1'
+            ? currentSddRegistryJson
+            : null
+        ),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      }
+    })
+  })
+
+  afterEach(() => {
+    stopRuntimeThreadRefreshPoll()
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+  })
+
+  it('preserves the active thread when refreshing after a runtime switch', async () => {
+    const codexThread = thread('codex-thread', 'codex')
+    const dshThread = thread('dsh-thread', 'dsh')
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread: dshThread,
+      listedThreads: [codexThread]
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([dshThread, codexThread])
+    expect(state.activeThreadId).toBe('dsh-thread')
+  })
+
+  it('starts the runtime thread refresh poll after refreshing navigation threads', async () => {
+    vi.useFakeTimers()
+    const activeThread = thread('active-thread', 'codex')
+    const listedThread = thread('listed-thread', 'codex')
+    const { refreshThreads, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [listedThread]
+    })
+
+    await refreshThreads()
+
+    expect(provider.listThreads).toHaveBeenCalledTimes(2)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(provider.listThreads).toHaveBeenCalledTimes(4)
+  })
+
+  it('includes archived history in the shared navigation catalog during default refresh', async () => {
+    const activeThread = thread('active-thread', 'codex')
+    const listedThread = thread('listed-thread', 'codex')
+    const { refreshThreads, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [listedThread]
+    })
+
+    await refreshThreads()
+
+    expect(provider.listThreads).toHaveBeenCalledWith({ limit: 80 })
+  })
+
+  it('expands the shared history catalog when the archived sidebar view is enabled', async () => {
+    const activeThread = thread('active-thread', 'codex')
+    const listedThread = thread('listed-thread', 'codex')
+    const { refreshThreads, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [listedThread],
+      showArchivedThreads: true
+    })
+
+    await refreshThreads()
+
+    expect(provider.listThreads).toHaveBeenCalledWith({ limit: 200, archivedOnly: true })
+  })
+
+  it('keeps the domain history catalog independent of Local Workspaces search', async () => {
+    const activeThread = thread('active-thread', 'codex')
+    const listedThread = thread('listed-thread', 'codex')
+    const { refreshThreads, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [listedThread],
+      threadSearch: 'paper'
+    })
+
+    await refreshThreads()
+
+    expect(provider.listThreads).toHaveBeenCalledWith({ limit: 200 })
+  })
+
+  it('filters empty fallback threads from summary metadata without reading history', async () => {
+    const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
+    const fallbackThread = {
+      ...thread('thr_279f3fef', 'codex'),
+      title: 'thr_279f',
+      hasUserMessage: false
+    }
+    const { refreshThreads, state, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [fallbackThread]
+    })
+    await refreshThreads()
+
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
+    expect(state.threads.map((item) => item.id)).toEqual(['active-thread'])
+  })
+
+  it('uses the canonical title from the thread summary without reading history', async () => {
+    const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
+    const fallbackThread = {
+      ...thread('thr_279f3fef', 'codex'),
+      title: 'fix the sidebar placeholder titles',
+      hasUserMessage: true
+    }
+    const { refreshThreads, state, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [fallbackThread]
+    })
+    await refreshThreads()
+
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
+    expect(state.threads.map((item) => [item.id, item.title])).toEqual([
+      ['active-thread', 'Active thread'],
+      ['thr_279f3fef', 'fix the sidebar placeholder titles']
+    ])
+  })
+
+  it('keeps child and attached side conversation threads out of the sidebar list', async () => {
+    const activeThread = { ...thread('parent-thread', 'codex'), title: 'Parent research' }
+    const attachedChildThread = { ...thread('child-thread', 'codex'), title: 'research child' }
+    const sideThread = {
+      ...thread('side-thread', 'codex'),
+      title: 'side branch',
+      relation: 'side' as const,
+      parentThreadId: 'parent-thread'
+    }
+    const lineageChildThread = {
+      ...thread('lineage-child-thread', 'codex'),
+      title: 'lineage child',
+      parentThreadId: 'parent-thread'
+    }
+    const forkThread = {
+      ...thread('fork-thread', 'codex'),
+      title: 'Forked session',
+      relation: 'fork' as const,
+      parentThreadId: 'parent-thread'
+    }
+    const { refreshThreads, state, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [activeThread, attachedChildThread, sideThread, lineageChildThread, forkThread],
+      sideConversations: {
+        'child-thread': sideConversation('child-thread', 'parent-thread')
+      }
+    })
+
+    await refreshThreads()
+
+    expect(provider.getRecentThreadView).not.toHaveBeenCalled()
+    expect(state.threads.map((item) => item.id)).toEqual(['parent-thread', 'fork-thread'])
+    expect(state.activeThreadId).toBe('parent-thread')
+  })
+
+  it('clears an active PDF annotation side thread from the main conversation surface', async () => {
+    const pdfSideThread = {
+      ...thread('pdf-side-thread', 'codex'),
+      title: 'PDF: selected text',
+      relation: 'side' as const,
+      sidebarVisibility: 'hidden' as const
+    }
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread: pdfSideThread,
+      listedThreads: [pdfSideThread],
+      blocks: [{ kind: 'assistant', id: 'assistant-1', text: 'temporary answer' }],
+      sideConversations: {
+        'pdf-side-thread': {
+          ...sideConversation('pdf-side-thread', 'pdf-side-thread'),
+          source: 'pdf_annotation'
+        }
+      }
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([])
+    expect(state.activeThreadId).toBeNull()
+    expect(state.blocks).toEqual([])
+  })
+
+  it('ignores an older refresh result when a newer refresh has already applied', async () => {
+    const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
+    const oldThread = { ...thread('old-thread', 'codex'), title: 'Old thread' }
+    const newThread = { ...thread('new-thread', 'codex'), title: 'New thread' }
+    const { refreshThreads, state, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: []
+    })
+    let resolveOldRefresh: (threads: NormalizedThread[]) => void = () => {
+      throw new Error('old refresh was not started')
+    }
+    let resolveNewRefresh: (threads: NormalizedThread[]) => void = () => {
+      throw new Error('new refresh was not started')
+    }
+    provider.listThreads
+      .mockImplementationOnce(() => new Promise<NormalizedThread[]>((resolve) => {
+        resolveOldRefresh = resolve
+      }))
+      .mockResolvedValueOnce([]) // First refresh's archive query.
+      .mockImplementationOnce(() => new Promise<NormalizedThread[]>((resolve) => {
+        resolveNewRefresh = resolve
+      }))
+      .mockResolvedValueOnce([]) // Second refresh's archive query.
+
+    const oldRefresh = refreshThreads()
+    await Promise.resolve()
+    const newRefresh = refreshThreads()
+    await Promise.resolve()
+
+    resolveNewRefresh([newThread])
+    await newRefresh
+    expect(state.threads.map((item) => item.id)).toEqual(['active-thread', 'new-thread'])
+
+    resolveOldRefresh([oldThread])
+    await oldRefresh
+
+    expect(state.threads.map((item) => item.id)).toEqual(['active-thread', 'new-thread'])
+  })
+
+  it('ignores an older refresh failure after a newer refresh has already applied', async () => {
+    const activeThread = { ...thread('active-thread', 'codex'), title: 'Active thread' }
+    const newThread = { ...thread('new-thread', 'codex'), title: 'New thread' }
+    const { refreshThreads, state, provider } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: []
+    })
+    let rejectOldRefresh: (error: Error) => void = () => {
+      throw new Error('old refresh was not started')
+    }
+    let resolveNewRefresh: (threads: NormalizedThread[]) => void = () => {
+      throw new Error('new refresh was not started')
+    }
+    provider.listThreads
+      .mockImplementationOnce(() => new Promise<NormalizedThread[]>((_resolve, reject) => {
+        rejectOldRefresh = reject
+      }))
+      .mockResolvedValueOnce([]) // First refresh's archive query.
+      .mockImplementationOnce(() => new Promise<NormalizedThread[]>((resolve) => {
+        resolveNewRefresh = resolve
+      }))
+      .mockResolvedValueOnce([]) // Second refresh's archive query.
+
+    const oldRefresh = refreshThreads()
+    await Promise.resolve()
+    const newRefresh = refreshThreads()
+    await Promise.resolve()
+
+    resolveNewRefresh([newThread])
+    await newRefresh
+    rejectOldRefresh(new Error('stale list failure'))
+    await oldRefresh
+
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toBeNull()
+    expect(state.threads.map((item) => item.id)).toEqual(['active-thread', 'new-thread'])
+  })
+
+  it('preserves an unlisted active thread when it belongs to the active runtime', async () => {
+    const pendingCodexThread = thread('pending-codex-thread', 'codex')
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread: pendingCodexThread,
+      listedThreads: []
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([pendingCodexThread])
+    expect(state.activeThreadId).toBe('pending-codex-thread')
+  })
+
+  it('preserves a legacy pending active thread without a runtime id when the default runtime is active', async () => {
+    const legacyLocalRuntimeThread = thread('legacy-local-runtime-thread')
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread: legacyLocalRuntimeThread,
+      listedThreads: []
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([legacyLocalRuntimeThread])
+    expect(state.activeThreadId).toBe('legacy-local-runtime-thread')
+  })
+
+  it('preserves a hidden SDD active thread when refreshing after a runtime switch', async () => {
+    currentSddRegistryJson = JSON.stringify({
+      version: 1,
+      drafts: {
+        draft: {
+          draftId: 'draft',
+          threadId: 'sdd-codex-thread',
+          threadIds: ['sdd-codex-thread'],
+          publicThreadIds: [],
+          workspaceRoot: '/workspace/sciforge',
+          updatedAt: '2026-06-11T00:00:00.000Z'
+        }
+      }
+    })
+    const dshThread = thread('dsh-thread', 'dsh')
+    const sddThread = thread('sdd-codex-thread', 'codex')
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'dsh',
+      activeThread: sddThread,
+      listedThreads: [dshThread]
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([sddThread, dshThread])
+    expect(state.activeThreadId).toBe('sdd-codex-thread')
+  })
+
+  it('keeps the active thread selected from summary metadata during send', async () => {
+    const activeThread = {
+      ...thread('12345678abcdef', 'codex'),
+      title: '12345678',
+      hasUserMessage: true
+    }
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [activeThread],
+      blocks: [{ kind: 'user', id: 'optimistic-user', text: 'continue this thread' }]
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([activeThread])
+    expect(state.activeThreadId).toBe('12345678abcdef')
+    expect(state.blocks).toEqual([{ kind: 'user', id: 'optimistic-user', text: 'continue this thread' }])
+  })
+
+  it('clears an empty active fallback-title thread from summary metadata', async () => {
+    const activeThread = {
+      ...thread('87654321abcdef', 'codex'),
+      title: '87654321',
+      hasUserMessage: false
+    }
+    const { refreshThreads, state } = buildHarness({
+      activeRuntime: 'codex',
+      activeThread,
+      listedThreads: [activeThread],
+      blocks: []
+    })
+
+    await refreshThreads()
+
+    expect(state.threads).toEqual([])
+    expect(state.activeThreadId).toBeNull()
+    expect(state.blocks).toEqual([])
+  })
+})
+
+describe('chat-store-navigation-actions chooseWorkspace', () => {
+  beforeEach(() => {
+    registryMock.getProvider.mockReset()
+    runtimeClientMock.getSettings.mockReset()
+    lifecycleMock.disposeSessionRightPanelWorkspace.mockReset()
+    runtimeClientMock.setSettings.mockReset()
+  })
+
+  function buildChooseWorkspaceHarness(): {
+    chooseWorkspace: ReturnType<typeof createNavigationActions>['chooseWorkspace']
+    state: ChatState
+  } {
+    registryMock.getProvider.mockReturnValue({})
+    runtimeClientMock.setSettings.mockImplementation(async (patch: { workspaceRoot?: string }) => ({
+      activeAgentRuntime: 'codex',
+      workspaceRoot: patch.workspaceRoot ?? '/workspace/new',
+    }))
+    const state = {
+      activeThreadId: 'old-thread',
+      blocks: [],
+      busy: false,
+      codeWorkspaceRoots: ['/workspace/old'],
+      hiddenCodeWorkspaceRoots: [],
+      error: null,
+      route: 'chat',
+      runtimeConnection: 'ready',
+      threads: [thread('old-thread', 'codex')],
+      unreadThreadIds: {},
+      watchTurnCompletion: {},
+      workspaceRoot: '/workspace/old',
+      createThread: vi.fn(async () => undefined),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(async (threadId: string) => {
+        state.activeThreadId = threadId
+      })
+    } as unknown as ChatState
+    vi.stubGlobal('window', {
+      dispatchEvent: vi.fn(),
+      sciforge: {
+        pickWorkspaceDirectory: vi.fn(async () => ({ canceled: false, path: '/workspace/new' }))
+      },
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      }
+    })
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    return { chooseWorkspace: actions.chooseWorkspace, state }
+  }
+
+  it('does not create an empty thread when selecting an empty workspace', async () => {
+    const { chooseWorkspace, state } = buildChooseWorkspaceHarness()
+
+    await expect(chooseWorkspace()).resolves.toBe('/workspace/new')
+
+    expect(runtimeClientMock.setSettings).toHaveBeenCalledWith({ workspaceRoot: '/workspace/new' })
+    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
+    expect(state.createThread).not.toHaveBeenCalled()
+    expect(state.selectThread).not.toHaveBeenCalled()
+    expect(state.activeThreadId).toBeNull()
+    expect(state.workspaceRoot).toBe('/workspace/new')
+  })
+
+  it('creates a draft only when workspace selection explicitly asks for it', async () => {
+    const { chooseWorkspace, state } = buildChooseWorkspaceHarness()
+
+    await expect(chooseWorkspace({ createThreadAfter: true })).resolves.toBe('/workspace/new')
+
+    expect(state.createThread).toHaveBeenCalledWith({ workspaceRoot: '/workspace/new' })
+    expect(state.activeThreadId).toBe('old-thread')
+  })
+})
+
+describe('chat-store-runtime helper defaults', () => {
+  it('does not remember legacy threads without a runtime id as SciForge threads', () => {
+    const provider = {
+      rememberThreadRuntime: vi.fn<(threadId: string, runtimeId?: AgentRuntimeId) => void>()
+    }
+
+    rememberProviderThreadRuntime(provider, 'legacy-thread', [thread('legacy-thread')])
+
+    expect(provider.rememberThreadRuntime).not.toHaveBeenCalled()
+  })
+})
+
+describe('chat-store-navigation-actions boot', () => {
+  beforeEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    runtimeClientMock.getSettings.mockReset()
+    runtimeClientMock.setSettings.mockReset()
+    const documentElement = {
+      dataset: {} as Record<string, string>,
+      setAttribute: vi.fn(),
+      getAttribute: vi.fn(() => 'en'),
+      style: { setProperty: vi.fn() }
+    }
+    vi.stubGlobal('document', {
+      documentElement,
+      visibilityState: 'visible',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })
+    vi.stubGlobal('window', {
+      sciforge: {},
+      matchMedia: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn()
+      })),
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      },
+      dispatchEvent: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })
+  })
+
+  afterEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('blocks runtime bootstrap when legacy input recovery cannot certify its checkpoint', async () => {
+    inputRecoveryMock.ensureSessionInputRecovery.mockRejectedValueOnce(new Error('Saved Session input is unreadable'))
+    const state = { runtimeConnection: 'idle', probeRuntime: vi.fn() } as unknown as ChatState
+    const actions = createNavigationActions({
+      set: (partial) => Object.assign(state, typeof partial === 'function' ? partial(state) : partial),
+      get: () => state, sseAbortRef: { current: null }
+    })
+    await actions.boot()
+    expect(state.runtimeConnection).toBe('offline')
+    expect(state.error).toContain('unreadable')
+    expect(state.probeRuntime).not.toHaveBeenCalled()
+  })
+
+  it('probes the runtime immediately after loading settings', async () => {
+    const settings = {
+      version: 1,
+      locale: 'en',
+      theme: 'system',
+      uiFontScale: 'small',
+      activeAgentRuntime: 'codex',
+      workspaceRoot: '/workspace/sciforge',
+      modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' },
+      modelRouter: { runtimeApiKey: 'runtime-key' },
+      agents: {},
+    } as unknown as AppSettingsV1
+    runtimeClientMock.getSettings.mockResolvedValue(settings)
+    let state: ChatState
+    state = {
+      runtimeConnection: 'idle',
+      error: 'stale',
+      runtimeErrorDetail: 'stale detail',
+      composerPickList: [],
+      codeWorkspaceRoots: [],
+      hiddenCodeWorkspaceRoots: [],
+      applyI18nFromSettings: vi.fn(async () => undefined),
+      probeRuntime: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+
+    await actions.boot()
+
+    expect(runtimeClientMock.getSettings).toHaveBeenCalledWith({ forceRefresh: true })
+    expect(state.probeRuntime).toHaveBeenCalledWith('user')
+    expect(inputRecoveryMock.ensureSessionInputRecovery).toHaveBeenCalled()
+    expect(state.initialSetupOpen).toBe(false)
+    expect(state.modelAccessMode).toBe('coding-plan')
+  })
+
+  it('opens the current setup flow instead of probing a legacy configuration without model access', async () => {
+    const settings = {
+      version: 1,
+      locale: 'en',
+      theme: 'system',
+      uiFontScale: 'small',
+      activeAgentRuntime: 'codex',
+      workspaceRoot: '/workspace/sciforge',
+      modelRouter: { runtimeApiKey: 'legacy-runtime-key' },
+      agents: {},
+    } as unknown as AppSettingsV1
+    runtimeClientMock.getSettings.mockResolvedValue(settings)
+    let state: ChatState
+    state = {
+      runtimeConnection: 'idle',
+      error: 'stale',
+      runtimeErrorDetail: 'stale detail',
+      composerPickList: [],
+      codeWorkspaceRoots: [],
+      hiddenCodeWorkspaceRoots: [],
+      applyI18nFromSettings: vi.fn(async () => undefined),
+      probeRuntime: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+
+    await actions.boot()
+
+    expect(state.initialSetupOpen).toBe(true)
+    expect(state.initialSetupMode).toBe('required')
+    expect(state.modelAccessMode).toBeNull()
+    expect(state.runtimeConnection).toBe('idle')
+    expect(state.error).toBeNull()
+    expect(state.probeRuntime).not.toHaveBeenCalled()
+  })
+})
+
+describe('chat-store-navigation-actions probeRuntime', () => {
+  const availableCodexDiscovery = {
+    runtimeId: 'codex' as const,
+    available: true,
+    executablePath: '/usr/local/bin/codex',
+    source: 'process-path' as const,
+    version: '1.0.0',
+    protocol: { id: 'app-server', supported: true }
+  }
+
+  beforeEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    registryMock.getProvider.mockReset()
+    runtimeClientMock.getSettings.mockReset()
+    runtimeClientMock.setSettings.mockReset()
+    vi.stubGlobal('window', {
+      sciforge: {},
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      }
+    })
+  })
+
+  afterEach(() => {
+    stopRuntimeBootRetry()
+    stopRuntimeReconnectProbe()
+    vi.useRealTimers()
+  })
+
+  it('keeps the workbench available while an unavailable Codex runtime blocks only Codex connection', async () => {
+    const discovery = {
+      runtimeId: 'codex' as const,
+      available: false,
+      executablePath: null,
+      source: null,
+      version: null,
+      protocol: null,
+      failure: {
+        code: 'runtime_not_found' as const
+      }
+    }
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(async () => discovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'idle',
+      runtimeDiscovery: null,
+      activeAgentRuntime: 'codex',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('user')
+
+    expect(provider.probe).toHaveBeenCalledTimes(1)
+    expect(provider.connect).not.toHaveBeenCalled()
+    expect(state.runtimeDiscovery).toEqual(discovery)
+    expect(state.runtimeConnection).toBe('offline')
+    expect(state.error).toBe('SciForge could not find a compatible local assistant.')
+    expect(state.route).not.toBe('settings')
+  })
+
+  it('probes a non-Codex runtime through the provider contract and connects when discovery is unsupported', async () => {
+    const discovery = {
+      runtimeId: 'claude' as const,
+      available: false,
+      executablePath: null,
+      source: null,
+      version: null,
+      protocol: null,
+      failure: { code: 'runtime_probe_unsupported' as const }
+    }
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(async () => discovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'idle',
+      runtimeDiscovery: null,
+      activeAgentRuntime: 'claude',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      watchTurnCompletion: {},
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+
+    await actions.probeRuntime('user')
+
+    expect(provider.probe).toHaveBeenCalledTimes(1)
+    expect(provider.connect).toHaveBeenCalledTimes(1)
+    expect(state.runtimeDiscovery).toEqual(discovery)
+    expect(state.runtimeConnection).toBe('ready')
+  })
+
+  it('ignores a Codex probe that completes after the active runtime changes', async () => {
+    const unavailable = {
+      runtimeId: 'codex' as const,
+      available: false,
+      executablePath: null,
+      source: null,
+      version: null,
+      protocol: null,
+      failure: { code: 'runtime_not_found' as const }
+    }
+    let finishProbe!: (value: typeof unavailable) => void
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(() => new Promise<typeof unavailable>((resolve) => { finishProbe = resolve })),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'idle',
+      runtimeDiscovery: null,
+      activeAgentRuntime: 'codex',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+    state.probeRuntime = actions.probeRuntime
+
+    const task = actions.probeRuntime('user')
+    await Promise.resolve()
+    state.activeAgentRuntime = 'claude'
+    state.runtimeConnection = 'ready'
+    finishProbe(unavailable)
+    await task
+
+    expect(provider.connect).not.toHaveBeenCalled()
+    expect(state.runtimeDiscovery).toBeNull()
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toBeNull()
+  })
+
+  it('ignores probe and connect results after the runtime command identity changes', async () => {
+    let configurationIdentity = '/old/codex'
+    let finishProbe!: (value: typeof availableCodexDiscovery) => void
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => configurationIdentity),
+      probe: vi.fn(() => new Promise<typeof availableCodexDiscovery>((resolve) => {
+        finishProbe = resolve
+      })),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'idle',
+      runtimeDiscovery: null,
+      activeAgentRuntime: 'codex',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+
+    const task = actions.probeRuntime('user')
+    await Promise.resolve()
+    await Promise.resolve()
+    configurationIdentity = '/new/codex'
+    finishProbe(availableCodexDiscovery)
+    await task
+
+    expect(provider.connect).not.toHaveBeenCalled()
+    expect(state.runtimeDiscovery).toBeNull()
+    expect(state.runtimeConnection).toBe('idle')
+  })
+
+  it('does not publish discovery when the runtime switches during the post-probe identity check', async () => {
+    const postProbeIdentity = deferred<string>()
+    const postProbeIdentityStarted = deferred<void>()
+    let identityReads = 0
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => {
+        identityReads += 1
+        if (identityReads === 1) return '/old/codex'
+        postProbeIdentityStarted.resolve()
+        return postProbeIdentity.promise
+      }),
+      probe: vi.fn(async () => availableCodexDiscovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'idle',
+      runtimeDiscovery: null,
+      activeAgentRuntime: 'codex',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+
+    const task = actions.probeRuntime('user')
+    await postProbeIdentityStarted.promise
+    state.activeAgentRuntime = 'claude'
+    state.runtimeConnection = 'ready'
+    postProbeIdentity.resolve('/old/codex')
+    await task
+
+    expect(provider.connect).not.toHaveBeenCalled()
+    expect(state.runtimeDiscovery).toBeNull()
+    expect(state.runtimeConnection).toBe('ready')
+  })
+
+  it('does not mark a runtime ready when it switches during the post-connect identity check', async () => {
+    const postConnectIdentity = deferred<string>()
+    const postConnectIdentityStarted = deferred<void>()
+    let identityReads = 0
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => {
+        identityReads += 1
+        if (identityReads < 3) return '/old/codex'
+        postConnectIdentityStarted.resolve()
+        return postConnectIdentity.promise
+      }),
+      probe: vi.fn(async () => availableCodexDiscovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'idle',
+      runtimeDiscovery: null,
+      activeAgentRuntime: 'codex',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+
+    const task = actions.probeRuntime('user')
+    await postConnectIdentityStarted.promise
+    state.activeAgentRuntime = 'claude'
+    state.runtimeConnection = 'offline'
+    postConnectIdentity.resolve('/old/codex')
+    await task
+
+    expect(provider.connect).toHaveBeenCalledTimes(1)
+    expect(state.runtimeConnection).toBe('offline')
+  })
+
+  it('times out a stalled runtime probe instead of leaving the UI checking forever', async () => {
+    vi.useFakeTimers()
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(() => new Promise<typeof availableCodexDiscovery>(() => undefined)),
+      connect: vi.fn(() => new Promise<void>(() => undefined))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    runtimeClientMock.getSettings.mockResolvedValue({ activeAgentRuntime: 'codex' })
+    const state = {
+      runtimeConnection: 'idle',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn()
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    state.probeRuntime = actions.probeRuntime
+
+    const task = actions.probeRuntime('user')
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(state.runtimeConnection).toBe('checking')
+
+    await vi.advanceTimersByTimeAsync(8_000)
+    await task
+
+    expect(state.runtimeConnection).toBe('offline')
+    expect(state.error).toMatch(/timed out/)
+  })
+
+  it('refreshes sidebar threads after any successful runtime probe', async () => {
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(async () => availableCodexDiscovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'ready',
+      error: 'stale',
+      runtimeErrorDetail: 'stale detail',
+      activeThreadId: null,
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      watchTurnCompletion: {},
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('background')
+
+    expect(provider.connect).toHaveBeenCalledTimes(1)
+    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
+    expect(state.error).toBeNull()
+  })
+
+  it('rehydrates the persisted active thread after the runtime bridge reconnects', async () => {
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(async () => availableCodexDiscovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'offline',
+      error: 'bridge disconnected',
+      runtimeErrorDetail: 'bridge disconnected',
+      activeThreadId: 'persisted-thread',
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      watchTurnCompletion: {},
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(async () => undefined),
+      recoverActiveTurn: vi.fn(async () => false)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('background')
+
+    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
+    expect(state.selectThread).toHaveBeenCalledWith('persisted-thread')
+    expect(state.activeThreadId).toBe('persisted-thread')
+    expect(state.runtimeConnection).toBe('ready')
+  })
+
+  it('fails open when a persisted active thread no longer exists', async () => {
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(async () => availableCodexDiscovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'offline',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: 'deleted-thread',
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      threads: [],
+      queuedMessages: [{ id: 'kept-q', threadId: 'deleted-thread', text: 'preserve me' }],
+      watchTurnCompletion: {},
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(async () => {
+        state.error = 'thread not found'
+      }),
+      recoverActiveTurn: vi.fn(async () => false)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('background')
+
+    expect(state.activeThreadId).toBeNull()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'kept-q', text: 'preserve me' })
+    ])
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toMatch(/previous conversation|上次会话/i)
+  })
+
+  it('times out a late persisted-thread read without taking the runtime offline', async () => {
+    vi.useFakeTimers()
+    const provider = {
+      getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
+      probe: vi.fn(async () => availableCodexDiscovery),
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const lateThread = deferred<void>()
+    const state = {
+      runtimeConnection: 'offline',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: 'slow-restored-thread',
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      threads: [thread('slow-restored-thread', 'codex')],
+      queuedMessages: [],
+      watchTurnCompletion: {},
+      composerModel: '',
+      composerModelGroups: [],
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(() => lateThread.promise),
+      recoverActiveTurn: vi.fn(async () => false)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+    state.probeRuntime = actions.probeRuntime
+
+    const task = actions.probeRuntime('background')
+    await vi.advanceTimersByTimeAsync(8_000)
+    await task
+
+    expect(state.activeThreadId).toBeNull()
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toMatch(/previous conversation|上次会话/i)
+
+    lateThread.resolve()
+    await Promise.resolve()
+    expect(state.activeThreadId).toBeNull()
+  })
+})
+
+describe('chat-store-navigation-actions deleteWorkspace', () => {
+  beforeEach(() => {
+    registryMock.getProvider.mockReset()
+    runtimeClientMock.getSettings.mockReset()
+    lifecycleMock.disposeSessionRightPanelWorkspace.mockReset()
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn(() => null),
+        setItem: vi.fn(),
+        removeItem: vi.fn()
+      }
+    })
+  })
+
+  it('removes the workspace from the project list without deleting its threads', async () => {
+    const provider = {
+      deleteThread: vi.fn(async () => undefined),
+      rememberThreadRuntime: vi.fn<(threadId: string, runtimeId?: AgentRuntimeId) => void>()
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+
+    const staleThread = thread('stale-thread', 'codex')
+    const healthyThread = thread('healthy-thread', 'codex')
+    const otherThread = {
+      ...thread('other-thread', 'codex'),
+      workspace: '/workspace/other'
+    }
+    const state = {
+      activeThreadId: 'other-thread',
+      blocks: [],
+      busy: false,
+      codeWorkspaceRoots: ['/workspace/sciforge', '/workspace/other'],
+      hiddenCodeWorkspaceRoots: [],
+      error: 'previous error',
+      refreshThreads: vi.fn(async () => undefined),
+      route: 'chat',
+      runtimeConnection: 'idle',
+      threads: [staleThread, healthyThread, otherThread],
+      unreadThreadIds: { 'stale-thread': true },
+      watchTurnCompletion: { 'healthy-thread': true },
+      workspaceRoot: '/workspace/other'
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+
+    await actions.deleteWorkspace('/workspace/sciforge')
+
+    expect(provider.deleteThread).not.toHaveBeenCalled()
+    expect(lifecycleMock.disposeSessionRightPanelWorkspace.mock.calls).toEqual([
+      ['stale-thread'],
+      ['healthy-thread']
+    ])
+    expect(state.threads.map((item) => item.id)).toEqual([
+      'stale-thread',
+      'healthy-thread',
+      'other-thread'
+    ])
+    expect(state.codeWorkspaceRoots).toEqual(['/workspace/other'])
+    expect(state.hiddenCodeWorkspaceRoots).toEqual(['/workspace/sciforge'])
+    expect(state.unreadThreadIds).toEqual({})
+    expect(state.watchTurnCompletion).toEqual({})
+    expect(state.error).toBeNull()
+    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
+  })
+})

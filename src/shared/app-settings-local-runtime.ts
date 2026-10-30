@@ -1,0 +1,433 @@
+import {
+  DEFAULT_APPROVAL_POLICY,
+  DEFAULT_LOCAL_RUNTIME_DATA_DIR,
+  DEFAULT_LOCAL_RUNTIME_MODEL,
+  DEFAULT_LOCAL_RUNTIME_PORT,
+  DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
+  DEFAULT_SANDBOX_MODE,
+  type AppSettingsV1,
+  type LocalRuntimeContextCompactionSettingsV1,
+  type LocalRuntimeHistoryHygieneSettingsV1,
+  type LocalRuntimeMcpSearchSettingsV1,
+  type RuntimeGuardSettingsPatchV1,
+  type RuntimeGuardSettingsV1,
+  type LocalRuntimeSettingsPatchV1,
+  type LocalRuntimeSettingsV1,
+  type ResolvedLocalRuntimeSettingsV1,
+  type AgentRuntimeSettingsEnvelopePatchV1,
+  type AgentRuntimeSettingsEnvelopeV1,
+  type LocalRuntimeStorageSettingsV1,
+  type LocalRuntimeTokenEconomySettingsPatchV1,
+  type LocalRuntimeTokenEconomySettingsV1
+} from './app-settings-types'
+import { resolveRuntimeModelRouterSettings } from './app-settings-model-router'
+import {
+  defaultCodexRuntimeSettings,
+  mergeCodexRuntimeSettings
+} from './app-settings-codex'
+import {
+  defaultClaudeRuntimeSettings,
+  mergeClaudeRuntimeSettings
+} from './app-settings-claude'
+
+/**
+ * Legacy SciForge runtime settings retained so older settings files and
+ * internal tuning readers remain compatible. The runtime is not selected or
+ * started by default.
+ */
+export function defaultLocalRuntimeSettings(
+  port = DEFAULT_LOCAL_RUNTIME_PORT
+): LocalRuntimeSettingsV1 {
+  return {
+    binaryPath: '',
+    port,
+    autoStart: false,
+    runtimeToken: '',
+    dataDir: DEFAULT_LOCAL_RUNTIME_DATA_DIR,
+    model: DEFAULT_LOCAL_RUNTIME_MODEL,
+    approvalPolicy: DEFAULT_APPROVAL_POLICY,
+    sandboxMode: DEFAULT_SANDBOX_MODE,
+    tokenEconomyMode: false,
+    tokenEconomy: defaultLocalRuntimeTokenEconomySettings(),
+    insecure: false,
+    mcpSearch: defaultLocalRuntimeMcpSearchSettings(),
+    storage: defaultLocalRuntimeStorageSettings(),
+    contextCompaction: defaultLocalRuntimeContextCompactionSettings()
+  }
+}
+
+export function defaultLocalRuntimeMcpSearchSettings(): LocalRuntimeMcpSearchSettingsV1 {
+  return {
+    enabled: false,
+    mode: 'auto',
+    autoThresholdToolCount: 24,
+    topKDefault: 5,
+    topKMax: 10,
+    minScore: 0.15
+  }
+}
+
+export function defaultLocalRuntimeTokenEconomySettings(): LocalRuntimeTokenEconomySettingsV1 {
+  return {
+    enabled: false,
+    compressToolDescriptions: true,
+    compressToolResults: true,
+    conciseResponses: true,
+    historyHygiene: defaultLocalRuntimeHistoryHygieneSettings()
+  }
+}
+
+export function defaultLocalRuntimeHistoryHygieneSettings(): LocalRuntimeHistoryHygieneSettingsV1 {
+  return {
+    maxToolResultLines: 320,
+    maxToolResultBytes: 32 * 1024,
+    maxToolResultTokens: 8_000,
+    maxToolArgumentStringBytes: 8 * 1024,
+    maxToolArgumentStringTokens: 2_000,
+    maxArrayItems: 80
+  }
+}
+
+export function defaultLocalRuntimeStorageSettings(): LocalRuntimeStorageSettingsV1 {
+  return {
+    backend: 'hybrid',
+    sqlitePath: ''
+  }
+}
+
+export function defaultLocalRuntimeContextCompactionSettings(): LocalRuntimeContextCompactionSettingsV1 {
+  return {
+    defaultSoftThreshold: 16_000,
+    defaultHardThreshold: 24_000,
+    summaryMode: 'heuristic',
+    summaryTimeoutMs: 15_000,
+    summaryMaxTokens: 1_200,
+    summaryInputMaxBytes: 96 * 1024
+  }
+}
+
+export function defaultRuntimeGuardSettings(): RuntimeGuardSettingsV1 {
+  return {
+    execution: {
+      enabled: true,
+      windowSize: 8,
+      exactRepeatThreshold: 3
+    }
+  }
+}
+
+export function normalizeRuntimeGuardSettings(
+  input: Partial<RuntimeGuardSettingsV1> | undefined
+): RuntimeGuardSettingsV1 {
+  const defaults = defaultRuntimeGuardSettings()
+  const executionInput = input?.execution
+  const exactRepeatThreshold = Math.max(
+    2,
+    boundedPositiveInt(
+      executionInput?.exactRepeatThreshold,
+      defaults.execution.exactRepeatThreshold,
+      128
+    )
+  )
+  return {
+    execution: {
+      enabled: executionInput?.enabled !== false,
+      windowSize: boundedPositiveInt(executionInput?.windowSize, defaults.execution.windowSize, 256),
+      exactRepeatThreshold
+    }
+  }
+}
+
+export function mergeRuntimeGuardSettings(
+  current: RuntimeGuardSettingsV1 | undefined,
+  patch: RuntimeGuardSettingsPatchV1 | undefined
+): RuntimeGuardSettingsV1 {
+  const normalizedCurrent = normalizeRuntimeGuardSettings(current)
+  return normalizeRuntimeGuardSettings({
+    execution: {
+      ...normalizedCurrent.execution,
+      ...(patch?.execution ?? {})
+    }
+  })
+}
+
+export function getLocalRuntimeSettings(
+  settings: AppSettingsV1
+): LocalRuntimeSettingsV1 {
+  const raw = (settings as { agents?: { sciforge?: LocalRuntimeSettingsPatchV1 } }).agents?.sciforge
+  return mergeLocalRuntimeSettings(defaultLocalRuntimeSettings(), raw)
+}
+
+export function agentRuntimeSettingsEnvelope(
+  sciforge: LocalRuntimeSettingsV1
+): AgentRuntimeSettingsEnvelopeV1 {
+  return { sciforge }
+}
+
+export function localRuntimeSettingsPatch(
+  sciforge: LocalRuntimeSettingsPatchV1 | undefined
+): AgentRuntimeSettingsEnvelopePatchV1 {
+  return sciforge ? { sciforge } : {}
+}
+
+export function mergeLocalRuntimeSettings(
+  current: LocalRuntimeSettingsV1,
+  patch: LocalRuntimeSettingsPatchV1 | undefined
+): LocalRuntimeSettingsV1 {
+  const runtimePatch = supportedLocalRuntimePatch(patch)
+  const currentMcpSearch = normalizeLocalRuntimeMcpSearchSettings(current.mcpSearch)
+  const nextMcpSearch = normalizeLocalRuntimeMcpSearchSettings({
+    ...currentMcpSearch,
+    ...(runtimePatch?.mcpSearch ?? {})
+  })
+  const currentTokenEconomy = normalizeLocalRuntimeTokenEconomySettings(
+    current.tokenEconomy,
+    current.tokenEconomyMode
+  )
+  const patchedTokenEconomy = normalizeLocalRuntimeTokenEconomySettings({
+    ...currentTokenEconomy,
+    ...(runtimePatch?.tokenEconomy ?? {}),
+    historyHygiene: {
+      ...currentTokenEconomy.historyHygiene,
+      ...(runtimePatch?.tokenEconomy?.historyHygiene ?? {})
+    }
+  }, currentTokenEconomy.enabled)
+  const tokenEconomyEnabled = typeof runtimePatch?.tokenEconomy?.enabled === 'boolean'
+    ? runtimePatch.tokenEconomy.enabled
+    : typeof runtimePatch?.tokenEconomyMode === 'boolean'
+      ? runtimePatch.tokenEconomyMode
+      : patchedTokenEconomy.enabled
+  const nextTokenEconomy = {
+    ...patchedTokenEconomy,
+    enabled: tokenEconomyEnabled
+  }
+  const currentStorage = normalizeLocalRuntimeStorageSettings(current.storage)
+  const nextStorage = normalizeLocalRuntimeStorageSettings({
+    ...currentStorage,
+    ...(runtimePatch?.storage ?? {})
+  })
+  const currentContextCompaction = normalizeLocalRuntimeContextCompactionSettings(current.contextCompaction)
+  const nextContextCompaction = normalizeLocalRuntimeContextCompactionSettings({
+    ...currentContextCompaction,
+    ...(runtimePatch?.contextCompaction ?? {})
+  })
+  const sandboxMode = runtimePatch?.sandboxMode ?? current.sandboxMode
+  return {
+    ...current,
+    ...(runtimePatch ?? {}),
+    approvalPolicy: sandboxMode === 'danger-full-access'
+      ? 'auto'
+      : runtimePatch?.approvalPolicy ?? current.approvalPolicy,
+    sandboxMode,
+    dataDir: normalizeLocalRuntimeDataDir(runtimePatch?.dataDir ?? current.dataDir),
+    tokenEconomyMode: nextTokenEconomy.enabled,
+    tokenEconomy: nextTokenEconomy,
+    mcpSearch: nextMcpSearch,
+    storage: nextStorage,
+    contextCompaction: nextContextCompaction
+  }
+}
+
+function supportedLocalRuntimePatch(
+  patch: LocalRuntimeSettingsPatchV1 | undefined
+): LocalRuntimeSettingsPatchV1 | undefined {
+  if (!patch) return undefined
+  const source = patch as Record<string, unknown>
+  const next: LocalRuntimeSettingsPatchV1 = {}
+  if (typeof source.binaryPath === 'string') next.binaryPath = source.binaryPath
+  if (typeof source.port === 'number') next.port = source.port
+  if (typeof source.autoStart === 'boolean') next.autoStart = source.autoStart
+  if (typeof source.runtimeToken === 'string') next.runtimeToken = source.runtimeToken
+  if (typeof source.dataDir === 'string') next.dataDir = source.dataDir
+  if (typeof source.model === 'string') next.model = source.model
+  if (typeof source.approvalPolicy === 'string') {
+    next.approvalPolicy = source.approvalPolicy as LocalRuntimeSettingsPatchV1['approvalPolicy']
+  }
+  if (typeof source.sandboxMode === 'string') {
+    next.sandboxMode = source.sandboxMode as LocalRuntimeSettingsPatchV1['sandboxMode']
+  }
+  if (typeof source.tokenEconomyMode === 'boolean') next.tokenEconomyMode = source.tokenEconomyMode
+  if (isPlainObject(source.tokenEconomy)) {
+    next.tokenEconomy = source.tokenEconomy as LocalRuntimeTokenEconomySettingsPatchV1
+  }
+  if (typeof source.insecure === 'boolean') next.insecure = source.insecure
+  if (isPlainObject(source.mcpSearch)) {
+    next.mcpSearch = source.mcpSearch as LocalRuntimeSettingsPatchV1['mcpSearch']
+  }
+  if (isPlainObject(source.storage)) {
+    next.storage = source.storage as LocalRuntimeSettingsPatchV1['storage']
+  }
+  if (isPlainObject(source.contextCompaction)) {
+    next.contextCompaction = source.contextCompaction as LocalRuntimeSettingsPatchV1['contextCompaction']
+  }
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeLocalRuntimeTokenEconomySettings(
+  input: Partial<LocalRuntimeTokenEconomySettingsV1> | undefined,
+  enabledFallback = false
+): LocalRuntimeTokenEconomySettingsV1 {
+  return {
+    enabled: typeof input?.enabled === 'boolean' ? input.enabled : enabledFallback,
+    compressToolDescriptions: input?.compressToolDescriptions !== false,
+    compressToolResults: input?.compressToolResults !== false,
+    conciseResponses: input?.conciseResponses !== false,
+    historyHygiene: normalizeLocalRuntimeHistoryHygieneSettings(input?.historyHygiene)
+  }
+}
+
+function normalizeLocalRuntimeHistoryHygieneSettings(
+  input: Partial<LocalRuntimeHistoryHygieneSettingsV1> | undefined
+): LocalRuntimeHistoryHygieneSettingsV1 {
+  const defaults = defaultLocalRuntimeHistoryHygieneSettings()
+  return {
+    maxToolResultLines: boundedPositiveInt(input?.maxToolResultLines, defaults.maxToolResultLines, 100_000),
+    maxToolResultBytes: boundedPositiveInt(input?.maxToolResultBytes, defaults.maxToolResultBytes, 8 * 1024 * 1024),
+    maxToolResultTokens: boundedPositiveInt(input?.maxToolResultTokens, defaults.maxToolResultTokens, 256_000),
+    maxToolArgumentStringBytes: boundedPositiveInt(
+      input?.maxToolArgumentStringBytes,
+      defaults.maxToolArgumentStringBytes,
+      8 * 1024 * 1024
+    ),
+    maxToolArgumentStringTokens: boundedPositiveInt(
+      input?.maxToolArgumentStringTokens,
+      defaults.maxToolArgumentStringTokens,
+      64_000
+    ),
+    maxArrayItems: boundedPositiveInt(input?.maxArrayItems, defaults.maxArrayItems, 10_000)
+  }
+}
+
+function normalizeLocalRuntimeMcpSearchSettings(
+  input: Partial<LocalRuntimeMcpSearchSettingsV1> | undefined
+): LocalRuntimeMcpSearchSettingsV1 {
+  const defaults = defaultLocalRuntimeMcpSearchSettings()
+  const topKMax = positiveInt(input?.topKMax, defaults.topKMax)
+  const topKDefault = Math.min(positiveInt(input?.topKDefault, defaults.topKDefault), topKMax)
+  return {
+    enabled: input?.enabled === true,
+    mode: input?.mode === 'direct' || input?.mode === 'search' || input?.mode === 'auto'
+      ? input.mode
+      : defaults.mode,
+    autoThresholdToolCount: positiveInt(input?.autoThresholdToolCount, defaults.autoThresholdToolCount),
+    topKDefault,
+    topKMax,
+    minScore: nonNegativeNumber(input?.minScore, defaults.minScore)
+  }
+}
+
+function positiveInt(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback
+}
+
+function nonNegativeNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : fallback
+}
+
+function boundedPositiveInt(value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback
+  return Math.min(Math.floor(value), max)
+}
+
+function normalizeLocalRuntimeStorageSettings(
+  input: Partial<LocalRuntimeStorageSettingsV1> | undefined
+): LocalRuntimeStorageSettingsV1 {
+  const defaults = defaultLocalRuntimeStorageSettings()
+  return {
+    backend: input?.backend === 'file' || input?.backend === 'hybrid'
+      ? input.backend
+      : defaults.backend,
+    sqlitePath: typeof input?.sqlitePath === 'string' ? input.sqlitePath.trim() : defaults.sqlitePath
+  }
+}
+
+function normalizeLocalRuntimeContextCompactionSettings(
+  input: Partial<LocalRuntimeContextCompactionSettingsV1> | undefined
+): LocalRuntimeContextCompactionSettingsV1 {
+  const defaults = defaultLocalRuntimeContextCompactionSettings()
+  const defaultSoftThreshold = boundedPositiveInt(input?.defaultSoftThreshold, defaults.defaultSoftThreshold)
+  const requestedHardThreshold = boundedPositiveInt(input?.defaultHardThreshold, defaults.defaultHardThreshold)
+  return {
+    defaultSoftThreshold,
+    defaultHardThreshold: Math.max(defaultSoftThreshold, requestedHardThreshold),
+    summaryMode: input?.summaryMode === 'model' || input?.summaryMode === 'heuristic'
+      ? input.summaryMode
+      : defaults.summaryMode,
+    summaryTimeoutMs: boundedPositiveInt(input?.summaryTimeoutMs, defaults.summaryTimeoutMs, 120_000),
+    summaryMaxTokens: boundedPositiveInt(input?.summaryMaxTokens, defaults.summaryMaxTokens, 16_000),
+    summaryInputMaxBytes: boundedPositiveInt(input?.summaryInputMaxBytes, defaults.summaryInputMaxBytes, 8 * 1024 * 1024)
+  }
+}
+
+export function withLocalRuntimeSettings(
+  settings: AppSettingsV1,
+  sciforge: LocalRuntimeSettingsV1
+): AppSettingsV1 {
+  return {
+    ...settings,
+    agents: {
+      ...settings.agents,
+      sciforge
+    }
+  }
+}
+
+export function applyLocalRuntimePatch(
+  settings: AppSettingsV1,
+  patch: LocalRuntimeSettingsPatchV1 | undefined
+): AppSettingsV1 {
+  return withLocalRuntimeSettings(
+    settings,
+    mergeLocalRuntimeSettings(getLocalRuntimeSettings(settings), patch)
+  )
+}
+
+export function isLocalRuntimeInsecure(runtime: Pick<LocalRuntimeSettingsV1, 'insecure' | 'runtimeToken'>): boolean {
+  return runtime.insecure || !runtime.runtimeToken.trim()
+}
+
+export function getActiveAgentApiKey(settings: AppSettingsV1): string {
+  return resolveLocalRuntimeSettings(settings).apiKey?.trim() ?? ''
+}
+
+export function resolveLocalRuntimeSettings(settings: AppSettingsV1): ResolvedLocalRuntimeSettingsV1 {
+  const runtime = getLocalRuntimeSettings(settings)
+  const router = resolveRuntimeModelRouterSettings(settings)
+  return {
+    ...runtime,
+    apiKey: router.apiKey,
+    baseUrl: router.baseUrl,
+    model: router.model || DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+  }
+}
+
+export function mergeAgentRuntimeSettings(
+  defaults: AgentRuntimeSettingsEnvelopeV1,
+  patch: AgentRuntimeSettingsEnvelopePatchV1 | undefined
+): AgentRuntimeSettingsEnvelopeV1 {
+  return {
+    ...agentRuntimeSettingsEnvelope(mergeLocalRuntimeSettings(defaults.sciforge, patch?.sciforge)),
+    codex: mergeCodexRuntimeSettings(
+      defaults.codex ?? defaultCodexRuntimeSettings(),
+      patch?.codex
+    ),
+    claude: mergeClaudeRuntimeSettings(
+      defaults.claude ?? defaultClaudeRuntimeSettings(),
+      patch?.claude
+    )
+  }
+}
+
+function normalizeLocalRuntimeDataDir(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_LOCAL_RUNTIME_DATA_DIR
+  const trimmed = value.trim()
+  return trimmed || DEFAULT_LOCAL_RUNTIME_DATA_DIR
+}

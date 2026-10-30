@@ -1,0 +1,7 @@
+{
+  "sourceCommit": "376fc34e301b05a3abf5846d9196795ef15c191d",
+  "sourcePath": "packages/domains/evidence-dag/python/evidence_dag/snapshot_storage.py",
+  "sha256": "40e2ca4992850333a4f6acebf89446de98c273d5cdc1b71b00350659ef940e23",
+  "license": "Apache-2.0",
+  "scope": "test-only fixed publisher; never imported by production"
+}

@@ -1,0 +1,5 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens: light keeps the existing OpenBridge feel; dark follows the Codex-style theme-v1 palette. */

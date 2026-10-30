@@ -1,0 +1,49 @@
+{
+  "name": "@sciforge/ppt-master",
+  "version": "0.1.0",
+  "description": "SciForge first-party worker MCP adapter for ppt-master.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": false,
+  "bin": {
+    "sciforge-ppt-master": "./src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "dev": "node --env-file-if-exists=.env --watch --import tsx src/cli.ts",
+    "layout-check": "node --import tsx src/research-ui-kit-layout-check-cli.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./mcp-server": "./src/mcp-server.ts",
+    "./service": "./src/service.ts"
+  },
+  "files": [
+    "src",
+    "ui-kit",
+    "package.json",
+    "README.md"
+  ],
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": true,
+    "sideEffects": "filesystem, process",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": true
+  }
+}

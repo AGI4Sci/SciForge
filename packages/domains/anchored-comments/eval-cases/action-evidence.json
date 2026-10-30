@@ -1,0 +1,144 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "anchored-comments",
+  "actionEvidence": {
+    "anchored-comments.asset.read": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/anchored-comments/src/main/comment-service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/anchored-comments/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-asset-integrity-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "anchored-comments-read-asset-local-fixture"
+      }
+    },
+    "anchored-comments.delete": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/anchored-comments/src/main/comment-service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/anchored-comments/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-delete-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "anchored-comments-delete-local-fixture"
+      }
+    },
+    "anchored-comments.feedback.status": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/anchored-comments/src/main/feedback-service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/anchored-comments/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-feedback-state-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "anchored-comments-feedback-status-local-fixture"
+      }
+    },
+    "anchored-comments.get": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/anchored-comments/src/main/comment-service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/anchored-comments/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-thread-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "anchored-comments-get-local-fixture"
+      }
+    },
+    "anchored-comments.list": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/anchored-comments/src/main/comment-service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/anchored-comments/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-thread-list-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "anchored-comments-list-local-fixture"
+      }
+    },
+    "anchored-comments.upsert": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/anchored-comments/src/main/comment-service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/anchored-comments/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-thread-persistence-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "anchored-comments-upsert-local-fixture"
+      }
+    }
+  }
+}

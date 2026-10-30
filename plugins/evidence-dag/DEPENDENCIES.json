@@ -1,0 +1,358 @@
+{
+  "note": "Installed manifest fingerprint, not lockfile/SRI, installation approval, activation requirement, or cross-process Host delivery",
+  "roots": [
+    "zod",
+    "@deepseek-ai/dsh-tools",
+    "@deepseek-ai/cordis"
+  ],
+  "testHostServiceRoot": "@deepseek-ai/dsh-system-prompt",
+  "packages": {
+    "zod": {
+      "version": "4.4.3",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": null,
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "c630bd10b52dcf71c112a2bf78dbf2734b9db58d62de663b8d86c2ec2c8cda2e"
+    },
+    "@deepseek-ai/dsh-tools": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
+        "@deepseek-ai/schemastery": "~3.18.4"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-ptc-runtime": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-user-approval": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-sandbox-policy": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "fa34d96a62f4b40ee3add8e23dab87e50379781e04faeaceeddd084c258435af"
+    },
+    "@deepseek-ai/cordis": {
+      "version": "4.0.4",
+      "license": "MIT",
+      "dependencies": {
+        "@standard-schema/spec": "^1.1.0",
+        "@deepseek-ai/cosmokit": "~1.8.5"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis-plugin-include": "~1.0.9",
+        "@deepseek-ai/cordis-plugin-loader": "~1.0.5"
+      },
+      "peerDependenciesMeta": {
+        "@deepseek-ai/cordis-plugin-include": {
+          "optional": true
+        },
+        "@deepseek-ai/cordis-plugin-loader": {
+          "optional": true
+        }
+      },
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "41c9dee4715a89ef94f227384460c8445857c8faf33493eb545604a948828649"
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/schemastery": "~3.18.4"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "6d83e7a42f04ca54f86f8bc5dbbdd7cabb52968bf51c4d864a2634d70bfd1437"
+    },
+    "@deepseek-ai/dsh-brand": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "364e424abd6392b8ef47fccce82e50211697d3b5f85b1530d92a2d2dbc411bf6"
+    },
+    "@deepseek-ai/dsh-util-values": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "2a15152e51019eb526463b6a2a8b87d9ba08717af623af1b139d4fbcd87e0bb8"
+    },
+    "@deepseek-ai/schemastery": {
+      "version": "3.18.4",
+      "license": "MIT",
+      "dependencies": {
+        "@standard-schema/spec": "^1.1.0",
+        "@deepseek-ai/cosmokit": "~1.8.5"
+      },
+      "peerDependencies": null,
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "81c5663da570b5072eecaa9d823dd600315308538ed1fd931b276523fb40d95f"
+    },
+    "@deepseek-ai/dsh-agent": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-session-projection": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-workspace": "0.2.0-rc.2",
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": {
+        "@deepseek-ai/dsh-workspace": {
+          "optional": true
+        }
+      },
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "224385aa84ec7d522f81b169f2ac50443ead741e403a1489d6fbe78e12c73d49"
+    },
+    "@deepseek-ai/dsh-ptc-runtime": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "ced80cf971b6fccd3448a06e2e82df13bb24046453a99b0e1361c2454744620a"
+    },
+    "@deepseek-ai/dsh-invariants": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/schemastery": "~3.18.4"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "93b590aafc2fcb27be5b53bfbf3d74a02945981055b6f309ca03d2a216c1e11c"
+    },
+    "@deepseek-ai/dsh-llm": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "zod": "^4.4.3",
+        "@deepseek-ai/dsh-util-crypto": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-timeout": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+        "@deepseek-ai/schemastery": "~3.18.4",
+        "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-util-values": "0.2.0-rc.2"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "6fb2d880b26d0c69b792d2830efbb1642f1d849537e24114301e0d9fbe9e8e4e"
+    },
+    "@deepseek-ai/dsh-scope": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "5e7472b2722d3badae17e01da000138ac8af77396f05bc21e5621049ac9eaa48"
+    },
+    "@deepseek-ai/dsh-session": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-util-values": "0.2.0-rc.2"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-scope": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "5f513d38e301396ea82021593efc9e475817957e8f8dce0e64c3e5d722ed403e"
+    },
+    "@deepseek-ai/dsh-user-approval": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/schemastery": "~3.18.4"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-scope": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "301cb8ee3967a1190308a2ae44b804b4ed8bcad30c5bda527bcaf013f48b5a8a"
+    },
+    "@deepseek-ai/dsh-sandbox": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/dsh-util-values": "0.2.0-rc.2"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-session": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "def47b64b401fb7a9f4d2094397d0ec375ad75de5dc349679f832640aa954e48"
+    },
+    "@deepseek-ai/dsh-sandbox-policy": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "zod": "^4.4.3",
+        "@deepseek-ai/schemastery": "~3.18.4"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/dsh-sandbox": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+        "@deepseek-ai/cordis": "~4.0.4",
+        "@deepseek-ai/dsh-session-projection": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+        "@deepseek-ai/dsh-invariants": "0.2.0-rc.2"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "e32b6619022c84a2218aed1dff41ea61ea5e92f0c57766cb2bc952c78ca61106"
+    },
+    "@standard-schema/spec": {
+      "version": "1.1.0",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": null,
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "58e5bd75ddd0684c88b07cd799585cc72a37fd6efb8ab0c936d49e230d5164fb"
+    },
+    "@deepseek-ai/cosmokit": {
+      "version": "1.8.5",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": null,
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "eedc5e1a5575d05749e9bf3a22fa56e67a5fb8153ca02838fae961ddcd0cf4ef"
+    },
+    "@deepseek-ai/dsh-session-projection": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "zod": "^4.4.3"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "024051dfdd53bfd6542ada25415c4d5a382055f24d1688fd6c76764e134a067a"
+    },
+    "@deepseek-ai/dsh-typert-protocol": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": {
+        "@deepseek-ai/dsh-brand": "0.2.0-rc.2"
+      },
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "81f763ee84ae961f4f12cd893302950aeb90b6e8bdf6f3c456907b5dff03cceb"
+    },
+    "@deepseek-ai/dsh-util-crypto": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "e77a043b7837fc27c12bd0aa3cf849340f19e93a5ea1e98b203c87d39c7c2847"
+    },
+    "@deepseek-ai/dsh-timeout": {
+      "version": "0.2.0-rc.2",
+      "license": "MIT",
+      "dependencies": null,
+      "peerDependencies": {
+        "@deepseek-ai/cordis": "~4.0.4"
+      },
+      "peerDependenciesMeta": null,
+      "optionalDependencies": null,
+      "engines": null,
+      "manifestSha256": "ac1bab44dc411e4229ca5a3b013340fca4a80c22638d4510b6c72acb6411209a"
+    }
+  },
+  "missingRequiredAtShadowRoot": []
+}

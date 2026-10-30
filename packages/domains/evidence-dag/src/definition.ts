@@ -1,0 +1,77 @@
+import {
+  defineTrustedDomainPackage,
+  type DomainPackageProcess,
+  type TrustedDomainPackageDefinition,
+  type TrustedDomainPackageDefinitionInput
+} from '@sciforge/domain-sdk/contract'
+import { MAIN_CAPABILITY_EVAL_CONTRIBUTION_KIND } from '@sciforge/domain-sdk/capability-eval'
+import manifest from '../sciforge.domain.json' with { type: 'json' }
+
+export const domainPackageDefinition: TrustedDomainPackageDefinition =
+  defineTrustedDomainPackage(manifest as TrustedDomainPackageDefinitionInput)
+
+export const EVIDENCE_DAG_DOMAIN_MODULE_ID = domainPackageDefinition.module.id
+export const EVIDENCE_DAG_DOMAIN_PACKAGE_NAME = domainPackageDefinition.packageName
+
+export const EVIDENCE_DAG_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
+  'main',
+  'main.capability-factory'
+)
+export const EVIDENCE_DAG_CAPABILITY_EVAL_CONTRIBUTION = contributionFor(
+  'main',
+  MAIN_CAPABILITY_EVAL_CONTRIBUTION_KIND
+)
+export const EVIDENCE_DAG_CAPABILITY_EVAL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    EVIDENCE_DAG_CAPABILITY_EVAL_CONTRIBUTION.id
+  ]!
+export const EVIDENCE_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION = contributionFor(
+  'main',
+  'main.runtime-lifecycle'
+)
+export const EVIDENCE_DAG_ARTIFACT_CONSUMER_CONTRIBUTION = contributionFor(
+  'main',
+  'main.artifact-consumer'
+)
+export const EVIDENCE_DAG_WRITE_EXPORT_ACTION_GUARD_CONTRIBUTION = contributionFor(
+  'main',
+  'main.action-guard'
+)
+export const EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.workbench-right-panel'
+)
+export const EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
+  ]!
+export const EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.i18n-resource'
+)
+export const EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.research-summary.v1'
+)
+export const EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    'evidence-dag.research-summary'
+  ]!
+export const EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.resource-navigation'
+)
+export const EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    EVIDENCE_DAG_RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION.id
+  ]!
+
+function contributionFor(process: DomainPackageProcess, kind: string) {
+  const contribution = domainPackageDefinition.entrypoints
+    .find((entrypoint) => entrypoint.process === process)
+    ?.contributions.find((candidate) => candidate.kind === kind)
+  if (!contribution) {
+    throw new Error(`Evidence DAG manifest is missing ${process}:${kind}.`)
+  }
+  return contribution
+}

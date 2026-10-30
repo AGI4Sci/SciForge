@@ -1,0 +1,37 @@
+# 客户端最低限度 CI
+#
+# 只做三件能在 CI 上稳定复现的事：类型检查（Node/Web）+ 插件市场核心测试。
+# 刻意**不含**任何发布、部署、Pages、R2/产物上传或需要密钥的步骤（最小权限）：
+# 旧的 release.yml（R2 上传 + promote）与 research-needs-pages.yml（Pages 部署）
+# 属生产路径，已在拆仓时移除，不进入本仓。
+name: client-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 类型检查（主进程）
+        run: npx tsc -p tsconfig.node.json --noEmit
+      - name: 类型检查（界面）
+        run: npx tsc -p tsconfig.web.json --noEmit
+      - name: 插件市场核心测试（制品校验 / 签名 / 市场）
+        run: >-
+          npx vitest run
+          src/main/extensions/dsh-plugin-artifact.test.ts
+          src/main/extensions/dsh-plugin-signature.test.ts
+          src/main/extensions/dsh-plugin-market.test.ts

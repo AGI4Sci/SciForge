@@ -1,0 +1,10 @@
+[
+  {
+    "insert": [
+      {
+        "id": "sciforge.ws-scope-fixture",
+        "name": "./dist/main.js"
+      }
+    ]
+  }
+]

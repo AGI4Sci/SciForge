@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@sciforge/domain-evidence-dag/contract": [
+        "../evidence-dag/src/contract.ts"
+      ],
+      "@sciforge/domain-evidence-dag/definition": [
+        "../evidence-dag/src/definition.ts"
+      ]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "@sciforge/paper-radar",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge Paper Radar SQLite-backed service and metadata core.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "filesystem, network",
+    "publicContract": true,
+    "runtimeAdapter": false,
+    "mcpServer": false,
+    "packagingStrategy": "compile into the Paper Radar domain main entry; do not ship worker source as a parallel runtime"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./service": "./src/service.ts",
+    "./deepread": "./src/deepread-contract.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.3.2",
+    "pdfjs-dist": "5.4.394",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2",
+    "pdf-lib": "^1.17.1"
+  }
+}

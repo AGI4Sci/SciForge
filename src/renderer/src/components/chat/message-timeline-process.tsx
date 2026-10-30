@@ -1,0 +1,1131 @@
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactElement, RefObject } from 'react'
+import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { ChevronDown, ChevronRight, Minimize2 } from 'lucide-react'
+import type { ChatBlock, ToolBlock } from '../../agent/types'
+import { extractUnifiedDiffText } from '../../lib/diff-stats'
+import { useDeferredRender } from '../../hooks/use-deferred-render'
+import { openSafeExternalUrl } from '../../lib/open-external'
+import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
+import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
+import { useChatStore } from '../../store/chat-store'
+import { DiffView } from '../DiffView'
+import { AssistantMarkdown } from './AssistantMarkdown'
+import { blockHasPendingRuntimeWork, splitThink } from './message-timeline-turns'
+import { formatDuration, formatToolTitle } from './message-timeline-tools'
+import { remoteToolMetadataChips, remoteToolSummarySuffix } from './remote-tool-metadata'
+import {
+  MarkdownImageArtifactProvider,
+  timelineImagesFromMeta,
+  TimelineVisualCapturePreview
+} from './message-timeline-media'
+import type { TimelineImageReference } from './message-timeline-media'
+
+export type ProcessSection = {
+  id: string
+  kind: 'reasoning' | 'execution' | 'output'
+  blocks: ChatBlock[]
+}
+
+export function groupProcessSections(blocks: ChatBlock[]): ProcessSection[] {
+  const sections: ProcessSection[] = []
+
+  for (const block of blocks) {
+    const kind = 'execution'
+    const last = sections[sections.length - 1]
+    const canJoinLast =
+      block.kind !== 'reasoning' &&
+      block.kind !== 'assistant' &&
+      last?.kind === kind &&
+      last.blocks.every((item) => item.kind !== 'reasoning' && item.kind !== 'assistant')
+    if (canJoinLast && last) {
+      last.blocks.push(block)
+      continue
+    }
+    sections.push({
+      id: `${kind}-${block.id}`,
+      kind,
+      blocks: [block]
+    })
+  }
+
+  return sections
+}
+
+function reasoningBlockTime(createdAt: string): string {
+  const parsed = new Date(createdAt)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function getReasoningSectionText(section: ProcessSection): string {
+  if (section.kind !== 'reasoning') return ''
+  return section.blocks
+    .filter(
+      (block): block is Extract<ChatBlock, { kind: 'reasoning' }> => block.kind === 'reasoning'
+    )
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function sectionHasDetails(
+  section: ProcessSection,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): boolean {
+  if (section.kind === 'reasoning') {
+    return getReasoningSectionText(section).length > 0
+  }
+  if (section.kind === 'output') {
+    return section.blocks.some(
+      (block) => getProcessDetail(block, describeProcessBlock(block, t)).kind === 'assistant'
+    )
+  }
+  if (section.blocks.length > 1) return true
+  const [block] = section.blocks
+  return block ? getProcessDetail(block, describeProcessBlock(block, t)).kind !== 'none' : false
+}
+
+function isProcessSectionActive(section: ProcessSection, processing: boolean): boolean {
+  if (!processing) return false
+  if (section.kind === 'reasoning') {
+    return section.blocks.some((block) => block.id === 'live-reasoning')
+  }
+  if (section.kind === 'output') {
+    return section.blocks.some((block) => block.id === 'live-assistant')
+  }
+  return section.blocks.some(
+    (block) => block.id === 'live-assistant' || blockHasPendingRuntimeWork(block)
+  )
+}
+
+function isRequestUserInputTool(block: ChatBlock): boolean {
+  if (block.kind !== 'tool' || block.status !== 'running') return false
+  const toolName = typeof block.meta?.toolName === 'string' ? block.meta.toolName.trim() : ''
+  if (toolName === 'request_user_input' || toolName === 'user_input') return true
+  return /^request_user_input\s*:/i.test(block.summary.trim())
+}
+
+function sectionHasRequestUserInput(section: ProcessSection): boolean {
+  return section.blocks.some(isRequestUserInputTool)
+}
+
+type ReasoningMetadata = NonNullable<NonNullable<Extract<ChatBlock, { kind: 'reasoning' }>['meta']>['reasoning']>
+
+function reasoningSectionMetadata(blocks: ChatBlock[]): ReasoningMetadata | null {
+  let visibility: ReasoningMetadata['visibility']
+  let source: ReasoningMetadata['source']
+  for (const block of blocks) {
+    if (block.kind !== 'reasoning') continue
+    visibility ??= block.meta?.reasoning?.visibility
+    source ??= block.meta?.reasoning?.source
+    if (visibility && source) break
+  }
+  return visibility || source ? { ...(visibility ? { visibility } : {}), ...(source ? { source } : {}) } : null
+}
+
+function reasoningVisibilityLabel(
+  visibility: NonNullable<ReasoningMetadata['visibility']>,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  switch (visibility) {
+    case 'summary':
+      return t('reasoningVisibilitySummary')
+    case 'trace':
+      return t('reasoningVisibilityTrace')
+    case 'full_runtime_text':
+      return t('reasoningVisibilityFullRuntimeText')
+    case 'none':
+    default:
+      return t('reasoningVisibilityNone')
+  }
+}
+
+function reasoningSourceLabel(
+  source: NonNullable<ReasoningMetadata['source']>,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  switch (source) {
+    case 'model':
+      return t('reasoningSourceModel')
+    case 'runtime_summary':
+      return t('reasoningSourceRuntimeSummary')
+    case 'backend_redacted':
+      return t('reasoningSourceBackendRedacted')
+    case 'unknown':
+    default:
+      return t('reasoningSourceUnknown')
+  }
+}
+
+function ReasoningMetaBadges({
+  metadata,
+  t
+}: {
+  metadata: ReasoningMetadata | null
+  t: (key: string, opts?: Record<string, unknown>) => string
+}): ReactElement | null {
+  if (!metadata) return null
+  const chipClass = 'inline-flex max-w-full shrink-0 items-center rounded border border-ds-border-muted bg-ds-card/70 px-1.5 py-0.5 text-[10.5px] font-medium leading-none text-ds-faint'
+  return (
+    <>
+      {metadata.visibility ? (
+        <span className={chipClass} title={t('reasoningVisibility')}>
+          {reasoningVisibilityLabel(metadata.visibility, t)}
+        </span>
+      ) : null}
+      {metadata.source ? (
+        <span className={chipClass} title={t('reasoningSource')}>
+          {reasoningSourceLabel(metadata.source, t)}
+        </span>
+      ) : null}
+    </>
+  )
+}
+
+export function ProcessSectionRow({
+  section,
+  processing,
+  reasoningDurationMs,
+  liveStartedAtMs,
+  singleReasoningSection,
+  viewportRef,
+  markdownImages = []
+}: {
+  section: ProcessSection
+  processing: boolean
+  reasoningDurationMs?: number
+  liveStartedAtMs?: number
+  singleReasoningSection: boolean
+  viewportRef: RefObject<HTMLDivElement | null>
+  markdownImages?: TimelineImageReference[]
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!processing || typeof liveStartedAtMs !== 'number') return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [liveStartedAtMs, processing])
+
+  const liveDurationMs =
+    processing && typeof liveStartedAtMs === 'number'
+      ? Math.max(0, now - liveStartedAtMs)
+      : undefined
+  const assistantBlocks =
+    section.kind === 'output'
+      ? section.blocks.filter(
+          (block): block is Extract<ChatBlock, { kind: 'assistant' }> => block.kind === 'assistant'
+        )
+      : []
+  const hasDetails = sectionHasDetails(section, t)
+  const active = isProcessSectionActive(section, processing)
+  const hasError = section.blocks.some(
+    (block) =>
+      (block.kind === 'tool' && block.status === 'error') ||
+      (block.kind === 'system' && block.severity === 'error')
+  )
+  const defaultExpanded =
+    hasError ||
+    (active && section.kind === 'reasoning') ||
+    (processing && section.kind === 'execution' && sectionHasRequestUserInput(section))
+  const expanded = hasDetails && (userExpanded ?? defaultExpanded)
+  const title = describeProcessSection(section, t, {
+    processing,
+    reasoningDurationMs,
+    liveDurationMs,
+    singleReasoningSection
+  })
+  const reasoningMetadata = section.kind === 'reasoning' ? reasoningSectionMetadata(section.blocks) : null
+  const canToggleSection = hasDetails
+  const showActiveError = active && hasError
+  const { ref: deferredDetailRef, shouldRender: shouldRenderDetail } = useDeferredRender<HTMLDivElement>({
+    enabled: expanded,
+    immediate: active || section.kind === 'execution',
+    root: viewportRef
+  })
+
+  if (section.kind === 'execution' && section.blocks.length === 1) {
+    const [block] = section.blocks
+    if (block) {
+      return <ProcessEntryRow block={block} processing={processing} />
+    }
+  }
+
+  if (section.kind === 'output') {
+    return hasDetails ? (
+      <div className="min-w-0">
+        <div className="flex flex-col gap-2">
+          {assistantBlocks.map((block) => (
+            <ProcessEntryDetail
+              key={block.id}
+              block={block}
+              detail={getProcessDetail(block)}
+              processing={processing}
+            />
+          ))}
+        </div>
+      </div>
+    ) : (
+      <></>
+    )
+  }
+
+  return (
+    <div className="flex flex-col">
+      {canToggleSection ? (
+        <button
+          type="button"
+          onClick={() => setUserExpanded(!(userExpanded ?? defaultExpanded))}
+          className={`group flex w-fit max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-[14px] font-medium transition hover:opacity-85 ${
+            hasError ? 'text-red-600 dark:text-red-300' : 'text-ds-muted'
+          }`}
+        >
+          {showActiveError ? (
+            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+              <span className="h-2 w-2 rounded-full bg-red-500 dark:bg-red-300" />
+            </span>
+          ) : null}
+          <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
+          <ReasoningMetaBadges metadata={reasoningMetadata} t={t} />
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-45" strokeWidth={1.8} />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-55" strokeWidth={1.8} />
+          )}
+        </button>
+      ) : (
+        <div
+          className={`flex w-fit max-w-full items-center gap-1.5 py-0.5 text-[14px] font-medium ${
+            hasError ? 'text-red-600 dark:text-red-300' : 'text-ds-muted'
+          }`}
+        >
+          {showActiveError ? (
+            <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
+              <span className="h-2 w-2 rounded-full bg-red-500 dark:bg-red-300" />
+            </span>
+          ) : null}
+          <span className={active && !hasError ? 'ds-shiny-text' : ''}>{title}</span>
+          <ReasoningMetaBadges metadata={reasoningMetadata} t={t} />
+        </div>
+      )}
+
+      {expanded ? (
+        <div
+          ref={deferredDetailRef}
+          className="mt-1 border-l-2 border-ds-border-muted/35 pl-3"
+          style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 220px' }}
+        >
+          {shouldRenderDetail ? (
+            section.kind === 'reasoning' ? (
+            <MarkdownImageArtifactProvider images={[
+              ...markdownImages,
+              ...section.blocks.flatMap((block) => 'meta' in block ? timelineImagesFromMeta(block.meta) : [])
+            ]}>
+            <div className="flex flex-col gap-2">
+              {section.blocks
+                .filter(
+                  (block): block is Extract<ChatBlock, { kind: 'reasoning' }> =>
+                    block.kind === 'reasoning'
+                )
+                .map((block) => {
+                  const streaming = active && processing && block.id === 'live-reasoning'
+                  return (
+                    <div
+                      key={block.id}
+                      className="rounded-md border border-ds-border-muted/40 bg-ds-bg/45 px-2 py-1.5"
+                    >
+                      {block.createdAt ? (
+                        <span className="mb-1 block text-[9.5px] font-mono tabular-nums text-ds-faint">
+                          {reasoningBlockTime(block.createdAt)}
+                        </span>
+                      ) : null}
+                      <div className="ds-markdown text-[13.5px] leading-6 text-ds-muted">
+                        <AssistantMarkdown text={block.text} streaming={streaming} />
+                      </div>
+                    </div>
+                  )
+                })}
+            </div>
+            </MarkdownImageArtifactProvider>
+          ) : (
+            <ProcessStackRows blocks={section.blocks} processing={processing} />
+          )
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function processBlockIsRunningTool(block: ChatBlock, processing: boolean): boolean {
+  return processing && block.kind === 'tool' && block.status === 'running'
+}
+
+function processBlockIsAutoOpenPending(block: ChatBlock, processing: boolean): boolean {
+  return (
+    processing &&
+    block.kind === 'compaction' &&
+    block.status === 'running'
+  )
+}
+
+function processBlockIsActive(block: ChatBlock, processing: boolean): boolean {
+  return (
+    (processing && block.kind === 'reasoning' && block.id === 'live-reasoning') ||
+    processBlockIsRunningTool(block, processing) ||
+    processBlockIsAutoOpenPending(block, processing) ||
+    (processing && block.kind === 'assistant' && block.id === 'live-assistant')
+  )
+}
+
+function processBlockHasError(block: ChatBlock): boolean {
+  return (
+    (block.kind === 'tool' && block.status === 'error') ||
+    (block.kind === 'compaction' && block.status === 'error') ||
+    (block.kind === 'system' && block.severity === 'error')
+  )
+}
+
+function ProcessStackRows({
+  blocks,
+  processing
+}: {
+  blocks: ChatBlock[]
+  processing: boolean
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const [openBlockId, setOpenBlockId] = useState<string | null>(null)
+  const [closedDefaultOpenBlockIds, setClosedDefaultOpenBlockIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  )
+
+  return (
+    <div className="ds-work-stack">
+      {blocks.map((block) => {
+        const summary = describeProcessBlock(block, t)
+        const detail = getProcessDetail(block, summary)
+        const isRunningTool = processBlockIsRunningTool(block, processing)
+        const canExpand = detail.kind !== 'none'
+        const autoOpenRequestInput = processing && isRequestUserInputTool(block)
+        const autoOpenPending = processBlockIsAutoOpenPending(block, processing)
+        const isError = processBlockHasError(block)
+        const forceOpen = autoOpenPending || autoOpenRequestInput
+        const defaultOpen = isError
+        const userClosed = closedDefaultOpenBlockIds.has(block.id)
+        const userOpened = openBlockId === block.id
+        const open = canExpand && (forceOpen || userOpened || (defaultOpen && !userClosed))
+        const rowActive = processBlockIsActive(block, processing)
+        const canToggle = canExpand && !forceOpen
+        const handleToggle = (): void => {
+          if (!canToggle) return
+          if (open) {
+            setOpenBlockId((id) => (id === block.id ? null : id))
+            if (defaultOpen) {
+              setClosedDefaultOpenBlockIds((ids) => {
+                const next = new Set(ids)
+                next.add(block.id)
+                return next
+              })
+            }
+            return
+          }
+          setClosedDefaultOpenBlockIds((ids) => {
+            if (!ids.has(block.id)) return ids
+            const next = new Set(ids)
+            next.delete(block.id)
+            return next
+          })
+          setOpenBlockId(block.id)
+        }
+        const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+          if (!canToggle) return
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          handleToggle()
+        }
+
+        return (
+          <div key={block.id} className="min-w-0">
+            <div
+              role={canToggle ? 'button' : undefined}
+              tabIndex={canToggle ? 0 : undefined}
+              aria-expanded={canToggle ? open : undefined}
+              onClick={handleToggle}
+              onKeyDown={handleKeyDown}
+              className={`group flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13.5px] leading-6 transition ${
+                isError
+                  ? 'text-red-600 dark:text-red-300'
+                  : 'text-ds-faint hover:text-ds-muted'
+              } ${canToggle ? 'cursor-pointer hover:bg-ds-hover/45' : 'cursor-default'}`}
+            >
+              <span className={`min-w-0 flex-1 truncate ${rowActive && !isError ? 'ds-shiny-text' : ''}`}>
+                <ProcessSummaryText block={block} summary={summary} />
+              </span>
+              {canExpand ? (
+                open ? (
+                  <ChevronDown className="h-3 w-3 shrink-0 opacity-35" strokeWidth={2} />
+                ) : (
+                  <ChevronRight className="h-3 w-3 shrink-0 opacity-0 transition group-hover:opacity-35" strokeWidth={2} />
+                )
+              ) : null}
+            </div>
+            {open ? (
+              detail.kind === 'assistant' ? (
+                <div className="ml-1 mt-1">
+                  <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+                </div>
+              ) : (
+                <div className="ds-work-timeline-detail ml-1">
+                  <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+                </div>
+              )
+            ) : null}
+            {block.kind === 'tool' ? <TimelineVisualCapturePreview block={block} /> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** One line inside an execution section. */
+function ProcessEntryRow({
+  block,
+  processing
+}: {
+  block: ChatBlock
+  processing: boolean
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const [userOpen, setUserOpen] = useState<boolean | null>(null)
+  const summary = describeProcessBlock(block, t)
+  const detail = getProcessDetail(block, summary)
+  const canExpand = detail.kind !== 'none'
+  const isAssistantProcessText = block.kind === 'assistant'
+  const isAutoOpenPending = processBlockIsAutoOpenPending(block, processing)
+  const isStreamingAssistant = processing && block.kind === 'assistant' && block.id === 'live-assistant'
+  const isLiveReasoning = processing && block.kind === 'reasoning' && block.id === 'live-reasoning'
+  const isError = processBlockHasError(block)
+  const forceOpen = isAutoOpenPending || isAssistantProcessText || isStreamingAssistant || isLiveReasoning
+  const defaultOpen = isError
+  const open =
+    canExpand &&
+    (forceOpen || (userOpen ?? defaultOpen))
+
+  const { verb, rest } = splitVerb(summary)
+  const rowActive = processBlockIsActive(block, processing)
+  const wrapSummary = (block.kind === 'system' && !canExpand) || isAssistantProcessText || block.kind === 'reasoning'
+  const canToggle = canExpand && !forceOpen
+  const handleToggle = (): void => {
+    if (!canToggle) return
+    setUserOpen(!open)
+  }
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (!canToggle) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    handleToggle()
+  }
+
+  return (
+    <div className="flex flex-col">
+      <div
+        role={canToggle ? 'button' : undefined}
+        tabIndex={canToggle ? 0 : undefined}
+        aria-expanded={canToggle ? open : undefined}
+        onClick={handleToggle}
+        onKeyDown={handleKeyDown}
+        className={`group flex w-full items-start gap-2 rounded-md px-2 py-1 text-left text-[13.5px] leading-[1.55] transition ${
+          isError
+            ? 'text-red-600 dark:text-red-300'
+            : 'text-ds-faint hover:text-ds-ink'
+        } ${
+          canToggle
+            ? 'cursor-pointer hover:bg-ds-hover/70'
+            : 'cursor-default'
+        }`}
+      >
+        {!rowActive && block.kind === 'compaction' ? (
+          <Minimize2 className="mt-1 h-3 w-3 shrink-0 opacity-70" strokeWidth={2} />
+        ) : null}
+        <span
+          className={`min-w-0 flex-1 ${wrapSummary ? 'whitespace-pre-wrap break-words' : 'truncate'} ${
+            rowActive && !isError ? 'ds-shiny-text' : ''
+          }`}
+        >
+          {block.kind === 'reasoning' ? (
+            <span className="text-ds-muted">
+              <ProcessSummaryText block={block} summary={summary} />
+            </span>
+          ) : (
+            <>
+              <span
+                className={`font-medium ${isError ? '' : rowActive ? '' : 'text-ds-muted'}`}
+              >
+                {verb}
+              </span>
+              {rest ? (
+                <span className="ml-1.5 font-mono text-[13px]">
+                  <ProcessSummaryText block={block} summary={rest} />
+                </span>
+              ) : null}
+            </>
+          )}
+        </span>
+        {canExpand ? (
+          open ? (
+            <ChevronDown className="mt-1 h-3 w-3 shrink-0 opacity-40" strokeWidth={2} />
+          ) : (
+            <ChevronRight className="mt-1 h-3 w-3 shrink-0 opacity-0 transition group-hover:opacity-45" strokeWidth={2} />
+          )
+        ) : null}
+      </div>
+      <RuntimeMetaBadges block={block} t={t} />
+      {block.kind === 'tool' ? <TimelineVisualCapturePreview block={block} /> : null}
+      {canExpand && open ? (
+        detail.kind === 'assistant' ? (
+          <div className="mt-1">
+            <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+          </div>
+        ) : (
+          <div className="ds-work-timeline-detail">
+            <ProcessEntryDetail block={block} detail={detail} processing={processing} />
+          </div>
+        )
+      ) : null}
+    </div>
+  )
+}
+
+function describeProcessSection(
+  section: ProcessSection,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  opts: {
+    processing: boolean
+    reasoningDurationMs?: number
+    liveDurationMs?: number
+    singleReasoningSection: boolean
+  }
+): string {
+  if (section.kind === 'reasoning') {
+    if (opts.processing && isProcessSectionActive(section, true)) {
+      return typeof opts.liveDurationMs === 'number' && opts.liveDurationMs >= 1000
+        ? t('thinkingFor', { duration: formatDuration(opts.liveDurationMs) })
+        : t('thinkingNow')
+    }
+    if (
+      opts.singleReasoningSection &&
+      typeof opts.reasoningDurationMs === 'number' &&
+      opts.reasoningDurationMs >= 1000
+    ) {
+      return t('thoughtFor', { duration: formatDuration(opts.reasoningDurationMs) })
+    }
+    return section.blocks.length > 1
+      ? t('thoughtSteps', { count: section.blocks.length })
+      : t('thinkingLabel')
+  }
+
+  if (section.kind === 'output') {
+    return t('processTextLabel')
+  }
+
+  if (section.blocks.length === 1) {
+    return describeProcessBlock(section.blocks[0], t)
+  }
+
+  return summarizeExecutionSection(section.blocks, t)
+}
+
+function summarizeExecutionSection(
+  blocks: ChatBlock[],
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  let fileCount = 0
+  let commandCount = 0
+  let toolCount = 0
+
+  for (const block of blocks) {
+    if (block.kind !== 'tool') continue
+    if (block.toolKind === 'file_change') {
+      fileCount += 1
+    } else if (block.toolKind === 'command_execution') {
+      commandCount += 1
+    } else {
+      toolCount += 1
+    }
+  }
+
+  const parts: string[] = []
+  if (fileCount > 0) {
+    parts.push(
+      fileCount === 1 ? t('groupEditedFile') : t('groupEditedFiles', { count: fileCount })
+    )
+  }
+  if (commandCount > 0) {
+    parts.push(
+      commandCount === 1
+        ? t('groupRanCommand')
+        : t('groupRanCommands', { count: commandCount })
+    )
+  }
+  if (toolCount > 0) {
+    parts.push(toolCount === 1 ? t('groupUsedTool') : t('groupUsedTools', { count: toolCount }))
+  }
+
+  if (parts.length > 0) return parts.join(' · ')
+  return t('processSteps', { count: blocks.length })
+}
+
+function splitVerb(summary: string): { verb: string; rest: string } {
+  const trimmed = summary.trim()
+  if (!trimmed) return { verb: '', rest: '' }
+  const space = trimmed.search(/\s/)
+  if (space < 0) return { verb: trimmed, rest: '' }
+  return { verb: trimmed.slice(0, space), rest: trimmed.slice(space + 1).trim() }
+}
+
+function toolFilePath(block: ToolBlock): string | undefined {
+  const sourceText = [block.summary, block.detail ?? ''].filter(Boolean).join('\n')
+  return (
+    block.filePath ||
+    extractQuotedField(sourceText, 'path') ||
+    extractQuotedField(sourceText, 'file_path') ||
+    extractQuotedField(sourceText, 'file')
+  )
+}
+
+function ProcessFileReference({
+  path,
+  children
+}: {
+  path: string
+  children: string
+}): ReactElement {
+  const { t } = useTranslation('common')
+  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
+
+  const stopRowToggle = (event: ReactMouseEvent<HTMLElement>): void => {
+    event.stopPropagation()
+  }
+
+  const preview = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    previewWorkspaceFile({ path, workspaceRoot })
+  }
+
+  const openInEditor = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    void openWorkspacePathInEditor({ path }, workspaceRoot).then((result) => {
+      if (!result.ok) {
+        void window.sciforge?.logError?.('editor-open', 'Failed to open process file reference', {
+          message: result.message,
+          target: { path, workspaceRoot }
+        })?.catch(() => undefined)
+      }
+    })
+  }
+
+  return (
+    <button
+      type="button"
+      className="ds-process-file-reference"
+      title={t('processFileReferenceHint')}
+      onClick={preview}
+      onDoubleClick={openInEditor}
+      onMouseDown={stopRowToggle}
+    >
+      {children}
+    </button>
+  )
+}
+
+function ProcessSummaryText({
+  block,
+  summary
+}: {
+  block: ChatBlock
+  summary: string
+}): ReactElement {
+  if (block.kind !== 'tool') return <>{summary}</>
+  const path = toolFilePath(block)
+  if (!path) return <>{summary}</>
+  const index = summary.indexOf(path)
+  if (index < 0) return <>{summary}</>
+  const before = summary.slice(0, index)
+  const after = summary.slice(index + path.length)
+  return (
+    <>
+      {before}
+      <ProcessFileReference path={path}>{path}</ProcessFileReference>
+      {after}
+    </>
+  )
+}
+
+type ProcessDetail =
+  | { kind: 'none' }
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'assistant'; text: string }
+  | { kind: 'tool'; text: string; isPatch: boolean; isError: boolean; filePath?: string }
+  | { kind: 'text'; text: string }
+
+function summarizeProcessText(text: string, max = 96): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim()
+  if (!oneLine) return ''
+  if (oneLine.length <= max) return oneLine
+  return `${oneLine.slice(0, max - 1).trimEnd()}…`
+}
+
+function humanizeToolName(name: string): string {
+  const trimmed = name.trim().replace(/[_-]+/g, ' ')
+  if (!trimmed) return ''
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+}
+
+function builtInToolLabel(
+  toolName: string,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string | undefined {
+  switch (toolName) {
+    case 'read':
+    case 'read_file':
+      return t('toolBuiltinRead')
+    case 'write':
+    case 'write_file':
+      return t('toolBuiltinWrite')
+    case 'edit':
+    case 'edit_file':
+      return t('toolBuiltinEdit')
+    case 'grep':
+    case 'grep_files':
+    case 'search_files':
+      return t('toolBuiltinGrep')
+    case 'find':
+      return t('toolBuiltinFind')
+    case 'ls':
+      return t('toolBuiltinLs')
+    case 'bash':
+    case 'shell':
+      return t('toolBuiltinBash')
+    default:
+      return undefined
+  }
+}
+
+function extractToolName(summary: string): string {
+  const trimmed = summary.trim()
+  const callMatch = trimmed.match(/^call\s+([a-z0-9_-]+)/i)
+  if (callMatch?.[1]) return callMatch[1]
+  const match = trimmed.match(/^([a-z0-9_-]+)\s*:/i)
+  return match?.[1] ?? ''
+}
+
+function extractQuotedField(text: string, field: string): string | undefined {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const attr = new RegExp(`${escaped}="([^"]+)"`, 'i').exec(text)
+  if (attr?.[1]) return attr[1]
+  const json = new RegExp(`"${escaped}"\\s*:\\s*"([^"]+)"`, 'i').exec(text)
+  if (json?.[1]) return json[1]
+  return undefined
+}
+
+function readMetaString(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  if (!meta) return undefined
+  const value = meta[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function readMetaStringArray(meta: Record<string, unknown> | undefined, key: string): string[] {
+  const value = meta?.[key]
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+}
+
+function readMetaSources(meta: Record<string, unknown> | undefined): Array<{ title?: string; url?: string }> {
+  const value = meta?.sources
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const raw = entry as Record<string, unknown>
+      const title = typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim() : undefined
+      const url = typeof raw.url === 'string' && raw.url.trim() ? raw.url.trim() : undefined
+      return title || url ? { ...(title ? { title } : {}), ...(url ? { url } : {}) } : null
+    })
+    .filter((entry): entry is { title?: string; url?: string } => entry !== null)
+}
+
+function RuntimeMetaBadges({
+  block,
+  t
+}: {
+  block: ChatBlock
+  t: (key: string, opts?: Record<string, unknown>) => string
+}): ReactElement | null {
+  const meta = block.kind === 'tool' || block.kind === 'user' ? block.meta : undefined
+  if (!meta) return null
+  const sources = readMetaSources(meta)
+  const remoteChips = block.kind === 'tool' ? remoteToolMetadataChips(meta, t) : []
+  const attachmentIds = readMetaStringArray(meta, 'attachmentIds')
+  const activeSkillIds = readMetaStringArray(meta, 'activeSkillIds')
+  const injectedMemoryIds = readMetaStringArray(meta, 'injectedMemoryIds')
+  const child = meta.child && typeof meta.child === 'object' ? meta.child as Record<string, unknown> : null
+  const childLabel =
+    typeof child?.childLabel === 'string' && child.childLabel.trim()
+      ? child.childLabel.trim()
+      : typeof child?.childId === 'string'
+        ? child.childId
+        : ''
+  if (
+    sources.length === 0 &&
+    remoteChips.length === 0 &&
+    attachmentIds.length === 0 &&
+    activeSkillIds.length === 0 &&
+    injectedMemoryIds.length === 0 &&
+    !childLabel
+  ) {
+    return null
+  }
+  const chipClass = 'inline-flex max-w-full items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card/75 px-1.5 py-0.5 text-[11px] font-medium text-ds-faint'
+  return (
+    <div className="ml-7 mt-1 flex min-w-0 flex-wrap gap-1.5">
+      {childLabel ? (
+        <span className={chipClass} title={childLabel}>
+          <span>{t('toolChildAgent')}</span>
+          <span className="max-w-28 truncate font-mono text-ds-muted">{childLabel}</span>
+        </span>
+      ) : null}
+      {remoteChips.map((chip) => (
+        <span key={chip.key} className={chipClass} title={chip.title ?? chip.label}>
+          {chip.label}
+        </span>
+      ))}
+      {activeSkillIds.length > 0 ? (
+        <span className={chipClass} title={activeSkillIds.join(', ')}>
+          {t('toolActiveSkills')} {activeSkillIds.length}
+        </span>
+      ) : null}
+      {injectedMemoryIds.length > 0 ? (
+        <span className={chipClass} title={injectedMemoryIds.join(', ')}>
+          {t('toolInjectedMemories')} {injectedMemoryIds.length}
+        </span>
+      ) : null}
+      {attachmentIds.length > 0 ? (
+        <span className={chipClass} title={attachmentIds.join(', ')}>
+          {t('toolAttachments')} {attachmentIds.length}
+        </span>
+      ) : null}
+      {sources.slice(0, 4).map((source, index) =>
+        source.url ? (
+          <a
+            key={`${source.url}-${index}`}
+            href={source.url}
+            rel="noreferrer"
+            className={chipClass}
+            title={source.url}
+            onClick={(event) => {
+              event.preventDefault()
+              void openSafeExternalUrl(source.url).catch(() => undefined)
+            }}
+          >
+            {t('toolSources')} {index + 1}
+            <span className="max-w-32 truncate text-ds-muted">{source.title || source.url}</span>
+          </a>
+        ) : (
+          <span key={`${source.title}-${index}`} className={chipClass} title={source.title}>
+            {t('toolSources')} {index + 1}
+          </span>
+        )
+      )}
+    </div>
+  )
+}
+
+export function summarizeToolBlock(
+  block: ToolBlock,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  const withRemoteSummary = (summary: string): string => `${summary}${remoteToolSummarySuffix(block.meta, t)}`
+  const rawSummary = block.summary?.trim() ?? ''
+  const metaToolName = readMetaString(block.meta, 'toolName')
+  const toolName = extractToolName(rawSummary) || metaToolName || ''
+  const label = builtInToolLabel(toolName, t) || humanizeToolName(toolName) || formatToolTitle(block, t)
+  const sourceText = [rawSummary, block.detail ?? ''].filter(Boolean).join('\n')
+  const filePath = toolFilePath(block)
+  const pattern =
+    extractQuotedField(sourceText, 'pattern') ||
+    extractQuotedField(sourceText, 'query') ||
+    readMetaString(block.meta, 'pattern')
+  const command = readMetaString(block.meta, 'command')
+
+  if ((toolName === 'read_file' || toolName === 'read') && filePath) {
+    return withRemoteSummary(`${label} ${filePath}`)
+  }
+  if ((toolName === 'write' || toolName === 'edit' || toolName === 'write_file' || toolName === 'edit_file') && filePath) {
+    return withRemoteSummary(`${label} ${filePath}`)
+  }
+  if ((toolName === 'grep_files' || toolName === 'search_files' || toolName === 'grep' || toolName === 'find') && pattern) {
+    return withRemoteSummary(filePath ? `${label} ${pattern} · ${filePath}` : `${label} ${pattern}`)
+  }
+  if (toolName === 'ls' && filePath) {
+    return withRemoteSummary(`${label} ${filePath}`)
+  }
+  if (command && block.toolKind === 'command_execution') {
+    return withRemoteSummary(`${formatToolTitle(block, t)} ${summarizeProcessText(command, 72)}`)
+  }
+  if (filePath) {
+    return withRemoteSummary(`${label} ${filePath}`)
+  }
+  if (pattern) {
+    return withRemoteSummary(`${label} ${pattern}`)
+  }
+  if (rawSummary) {
+    const compact = toolName ? rawSummary.replace(/^([a-z0-9_-]+)\s*:\s*/i, '') : rawSummary
+    const summary = summarizeProcessText(compact, 72)
+    return withRemoteSummary(summary ? `${label} ${summary}` : label)
+  }
+  return withRemoteSummary(label)
+}
+
+function normalizeProcessText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function getProcessDetail(block: ChatBlock, summaryText?: string): ProcessDetail {
+  if (block.kind === 'reasoning') {
+    return block.text.trim() ? { kind: 'reasoning', text: block.text } : { kind: 'none' }
+  }
+  if (block.kind === 'assistant') {
+    const split = splitThink(block.text)
+    const text = split.content || split.think
+    return text.trim() ? { kind: 'assistant', text } : { kind: 'none' }
+  }
+  if (block.kind === 'tool') {
+    const detailText = block.detail?.trim() ?? ''
+    if (!detailText) return { kind: 'none' }
+    if (summaryText && normalizeProcessText(detailText) === normalizeProcessText(summaryText)) {
+      return { kind: 'none' }
+    }
+    const isError = block.status === 'error'
+    const patchText =
+      block.toolKind === 'file_change' && !isError
+        ? extractUnifiedDiffText(detailText)
+        : undefined
+    return {
+      kind: 'tool',
+      text: patchText ?? block.detail!,
+      isPatch: patchText !== undefined,
+      isError,
+      filePath: block.filePath
+    }
+  }
+  if (block.kind === 'compaction') {
+    const detailText = block.detail?.trim() ?? ''
+    if (!detailText) return { kind: 'none' }
+    if (summaryText && normalizeProcessText(detailText) === normalizeProcessText(summaryText)) {
+      return { kind: 'none' }
+    }
+    return { kind: 'text', text: detailText }
+  }
+  if (block.kind === 'system' && block.text.trim()) {
+    if (block.detail?.trim()) return { kind: 'text', text: block.detail }
+    // Short system messages already fit in the summary line — skip the
+    // expand affordance so we don't duplicate the same string.
+    if (block.text.length <= 140) return { kind: 'none' }
+    return { kind: 'text', text: block.text }
+  }
+  return { kind: 'none' }
+}
+
+function ProcessEntryDetail({
+  block,
+  detail,
+  processing
+}: {
+  block: ChatBlock
+  detail: ProcessDetail
+  processing: boolean
+}): ReactElement | null {
+  if (detail.kind === 'reasoning') {
+    const streamReason = block.id === 'live-reasoning' && processing
+    return (
+      <div className="ds-markdown text-[13.5px] leading-6 text-ds-muted">
+        <AssistantMarkdown text={detail.text} streaming={streamReason} />
+      </div>
+    )
+  }
+  if (detail.kind === 'assistant') {
+    return (
+      <div className="ds-markdown text-[13.5px] leading-6 text-ds-ink">
+        <AssistantMarkdown
+          text={detail.text}
+          streaming={processing && block.kind === 'assistant' && block.id === 'live-assistant'}
+        />
+      </div>
+    )
+  }
+  if (detail.kind === 'tool') {
+    if (detail.isPatch) {
+      return <DiffView patch={detail.text} filePath={detail.filePath} />
+    }
+    if (detail.isError) {
+      return (
+        <div className="overflow-hidden rounded-[10px] border border-red-200/80 bg-red-50/80 dark:border-red-800/40 dark:bg-red-500/10">
+          {detail.filePath ? (
+            <div className="border-b border-red-200/70 bg-red-100/50 px-3 py-1.5 font-mono text-[12px] text-red-700 dark:border-red-800/40 dark:bg-red-500/15 dark:text-red-300">
+              {detail.filePath}
+            </div>
+          ) : null}
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-[12px] leading-6 text-red-800 dark:text-red-200">
+            {detail.text}
+          </pre>
+        </div>
+      )
+    }
+    return (
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-ds-ink">
+        {detail.text}
+      </pre>
+    )
+  }
+  if (detail.kind === 'text') {
+    return <p className="whitespace-pre-wrap text-[13.5px] leading-6 text-ds-muted">{detail.text}</p>
+  }
+  return null
+}
+
+function describeProcessBlock(
+  block: ChatBlock,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  if (block.kind === 'reasoning') {
+    return summarizeProcessText(block.text, 96) || t('processed')
+  }
+  if (block.kind === 'assistant') {
+    return t('processTextLabel')
+  }
+  if (block.kind === 'tool') {
+    return summarizeToolBlock(block, t)
+  }
+  if (block.kind === 'compaction') {
+    if (block.status === 'running') return t('compactionRunning')
+    if (block.status === 'error') return block.summary || t('compactionFailed')
+    if (typeof block.messagesBefore === 'number' && typeof block.messagesAfter === 'number') {
+      return t('compactionCompletedWithCounts', {
+        before: block.messagesBefore,
+        after: block.messagesAfter
+      })
+    }
+    return block.auto === true ? t('compactionAutoCompleted') : t('compactionManualCompleted')
+  }
+  if (block.kind === 'system') {
+    return block.text
+  }
+  return 'text' in block ? block.text : t('processed')
+}

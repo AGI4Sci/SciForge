@@ -1,0 +1,33 @@
+{
+  "thread_id": "sample-vitamin-d",
+  "title": "Vitamin D & respiratory infections (3 turns · conflict + subgroup refinement + shared source)",
+  "note": "Real, checkable. Exercises: a source co-cited across turns (Martineau → shared node), a contradiction (VITAL vs blanket claim), and a scope refinement (effect conditional on baseline status).",
+  "trace": [
+    {"id": "vd_t1_u", "type": "message", "role": "user",
+     "content": "Does vitamin D supplementation prevent acute respiratory infections?"},
+    {"id": "vd_t1_call", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "vitamin D supplementation acute respiratory infection meta-analysis"}},
+    {"id": "vd_t1_res", "type": "tool_result", "tool_name": "web_search",
+     "content": "Martineau et al. 2017, BMJ — an individual-participant-data meta-analysis of 25 randomized controlled trials (~11,000 participants) found vitamin D supplementation reduced the risk of acute respiratory tract infection (adjusted odds ratio 0.88), with the strongest protective effect in participants with baseline 25(OH)D below 25 nmol/L (profoundly deficient)."},
+    {"id": "vd_t1_a", "type": "message", "role": "assistant",
+     "content": "A 2017 BMJ individual-participant-data meta-analysis (Martineau) found vitamin D supplementation modestly reduces acute respiratory infections overall, with the largest benefit in profoundly deficient individuals."},
+
+    {"id": "vd_t2_u", "type": "message", "role": "user",
+     "content": "But didn't a large trial find no effect?"},
+    {"id": "vd_t2_call", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "VITAL trial vitamin D respiratory infection no effect replete"}},
+    {"id": "vd_t2_res", "type": "tool_result", "tool_name": "web_search",
+     "content": "The VITAL trial (large RCT, ~25,000 US adults, the great majority vitamin-D-replete at baseline) reported that vitamin D3 2000 IU/day did NOT reduce the incidence of acute respiratory infections compared with placebo."},
+    {"id": "vd_t2_a", "type": "message", "role": "assistant",
+     "content": "The VITAL trial found no overall effect in a largely vitamin-D-replete population, which contradicts the blanket claim that vitamin D prevents respiratory infections for everyone."},
+    {"id": "vd_t2_reason", "type": "message", "role": "assistant",
+     "content": "These reconcile via baseline status: the benefit concentrates in deficient people (Martineau) while a replete population (VITAL) shows none, so the protective effect is conditional on vitamin D deficiency, not universal."},
+
+    {"id": "vd_t3_u", "type": "message", "role": "user",
+     "content": "So what's the bottom line for a healthy adult?"},
+    {"id": "vd_t3_res", "type": "tool_result", "tool_name": "web_search",
+     "content": "Martineau et al. 2017, BMJ — an individual-participant-data meta-analysis of 25 randomized controlled trials (~11,000 participants) found vitamin D supplementation reduced the risk of acute respiratory tract infection (adjusted odds ratio 0.88), with the strongest protective effect in participants with baseline 25(OH)D below 25 nmol/L (profoundly deficient)."},
+    {"id": "vd_t3_claim", "type": "message", "role": "assistant",
+     "content": "Bottom line: vitamin D supplementation reduces acute respiratory infections mainly in deficient individuals; for a vitamin-D-replete healthy adult, routine supplementation for infection prevention is not supported by the evidence."}
+  ]
+}

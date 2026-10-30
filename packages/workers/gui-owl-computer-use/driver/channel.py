@@ -1,0 +1,412 @@
+"""Target-bound execution channel used by the Computer Use runner."""
+from __future__ import annotations
+
+import threading
+import time
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Any, Mapping
+
+from cua.capabilities import BackendCapabilities, Verification
+from cua.isolation import IsolationDecision
+from cua.session_registry import RegistryError, RequestState, SessionRegistry, TargetLease
+from cua.target import TargetDescriptor
+
+from .backend import (
+    ActionReceipt,
+    BackendOperationError,
+    InputBackend,
+    Observation,
+)
+
+CLEANUP_WAIT_TIMEOUT_SECONDS = 5.0
+
+
+class ChannelError(RuntimeError):
+    def __init__(self, code: str, message: str, *, details: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
+@dataclass(frozen=True)
+class ActionOutcome:
+    action_id: str
+    target_id: str
+    committed: bool
+    may_have_taken_effect: bool
+    verification: Verification
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "actionId": self.action_id,
+            "targetId": self.target_id,
+            "committed": self.committed,
+            "mayHaveTakenEffect": self.may_have_taken_effect,
+            "verification": self.verification.value,
+            "evidence": dict(self.evidence),
+        }
+
+
+@dataclass
+class CleanupSummary:
+    closed: bool = False
+    lease_released: bool = False
+    errors: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "closed": self.closed,
+            "leaseReleased": self.lease_released,
+            "errors": list(self.errors),
+        }
+
+
+class SessionInputChannel:
+    """Couple observe/act/verify to one immutable target, handle and lease."""
+
+    def __init__(
+        self,
+        *,
+        registry: SessionRegistry,
+        session_id: str,
+        request_id: str,
+        target: TargetDescriptor,
+        lease: TargetLease,
+        backend: InputBackend,
+        handle: object,
+        capabilities: BackendCapabilities,
+        isolation: IsolationDecision,
+        cancellation: threading.Event,
+        deadline: float | None,
+        lease_ttl_seconds: float | None = None,
+    ) -> None:
+        self.registry = registry
+        self.session_id = session_id
+        self.request_id = request_id
+        self.target = target
+        self.lease = lease
+        self.backend = backend
+        self.handle = handle
+        self.capabilities = capabilities
+        self.isolation = isolation
+        self.cancellation = cancellation
+        self.deadline = deadline
+        self.lease_ttl_seconds = lease_ttl_seconds
+        self._latest_observation: Observation | None = None
+        self._close_lock = threading.Lock()
+        self._cancel_lock = threading.Lock()
+        self._backend_cancel_sent = False
+        self._action_dispatched = False
+        self._state = threading.Condition()
+        self._closing = False
+        self._in_flight = 0
+        self._closed = False
+        self._close_reason: str | None = None
+        self.last_verification = Verification.NOT_APPLICABLE
+        self.cleanup = CleanupSummary()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def cancelled(self) -> bool:
+        return self.cancellation.is_set()
+
+    @property
+    def remaining_seconds(self) -> float | None:
+        if self.deadline is None:
+            return None
+        return max(0.0, self.deadline - time.time())
+
+    def _check_available(self) -> None:
+        if self._closed or self._closing:
+            if self._close_reason == "lease_expired":
+                raise ChannelError("TIMEOUT", "request lease expired")
+            if self._close_reason == "target_lost":
+                raise ChannelError("TARGET_LOST", "request target was lost")
+            if self._close_reason in {"server_stop", "session_closed"}:
+                raise ChannelError("CANCEL_PENDING", "request was stopped during cleanup")
+            raise ChannelError("CLEANUP_INCOMPLETE", "channel is already closed")
+        if self.deadline is not None and time.time() >= self.deadline:
+            self.cancellation.set()
+            if self._action_dispatched:
+                raise self._action_outcome_unknown("request deadline expired after action dispatch")
+            raise ChannelError("TIMEOUT", "request deadline expired")
+        if self.cancelled:
+            if self._action_dispatched:
+                raise self._action_outcome_unknown("request was cancelled after action dispatch")
+            raise ChannelError("CANCEL_PENDING", "request cancellation was requested")
+
+    def observe(self) -> Observation:
+        # Observation can own a native handle and overlay state just like an
+        # action. Count it as in-flight so force-release/shutdown cannot close
+        # the handle while a capture is still using it.
+        with self.activity():
+            try:
+                observation = self.backend.observe(self.handle)
+            except BackendOperationError as error:
+                raise ChannelError(error.code or "BACKEND_UNAVAILABLE", str(error)) from error
+            self._check_available()
+            if observation.target_id != self.target.target_id:
+                raise ChannelError(
+                    "TARGET_LOST",
+                    "backend observation belongs to a different target",
+                    details={"expectedTargetId": self.target.target_id, "actualTargetId": observation.target_id},
+                )
+            self._latest_observation = observation
+            return observation
+
+    def perform(self, action: Mapping[str, Any], *, expected_revision: str) -> ActionOutcome:
+        self._check_available()
+        action_name = str(action.get("action") or "").lower()
+        if action_name not in self.capabilities.actions:
+            raise ChannelError(
+                "ACTION_UNSUPPORTED",
+                f"backend {self.capabilities.backend.value} does not support action {action_name}",
+            )
+        before = self._latest_observation
+        if before is None or before.revision != expected_revision:
+            raise ChannelError(
+                "STALE_OBSERVATION",
+                "action revision does not match the latest channel observation",
+                details={"expectedRevision": expected_revision, "latestRevision": before.revision if before else None},
+            )
+        action_id = f"action-{uuid.uuid4()}"
+        with self._state:
+            self._check_available()
+            self._in_flight += 1
+        try:
+            self._heartbeat()
+            self.registry.begin_action(self.lease.lease_id)
+        except Exception:
+            with self._state:
+                self._in_flight -= 1
+                self._state.notify_all()
+            raise
+        receipt: ActionReceipt | None = None
+        deadline_timer: threading.Timer | None = None
+        try:
+            # Crossing this boundary means a timeout, cancellation, transport
+            # loss, or unexpected verification failure can no longer prove the
+            # action had no side effect. Keep that fact for subsequent
+            # expectation/readback operations in this request too.
+            self._action_dispatched = True
+            deadline_timer = self._arm_action_deadline()
+            receipt = self.backend.perform(self.handle, action, expected_revision)
+            self._raise_if_action_interrupted(receipt)
+            if receipt.target_id != self.target.target_id:
+                raise self._action_outcome_unknown(
+                    "backend receipt belongs to a different target",
+                    receipt=receipt,
+                    backend_code="TARGET_LOST",
+                )
+            try:
+                self.registry.transition_request(self.request_id, RequestState.VERIFYING)
+            except RegistryError as error:
+                if error.code != "INVALID_STATE_TRANSITION" or not self.cancelled:
+                    raise
+            evidence = self.backend.verify(self.handle, action, receipt, before)
+            self._raise_if_action_interrupted(receipt)
+            if evidence.target_id != self.target.target_id:
+                raise self._action_outcome_unknown(
+                    "verification belongs to a different target",
+                    receipt=receipt,
+                    backend_code="TARGET_LOST",
+                )
+            self.last_verification = evidence.status
+            if not self.cancelled:
+                self.registry.transition_request(self.request_id, RequestState.RUNNING)
+            self._raise_if_action_interrupted(receipt)
+            if evidence.status is Verification.FAILED:
+                raise ChannelError(
+                    "ACTION_UNVERIFIED",
+                    "backend verification reported failure",
+                    details=dict(evidence.details),
+                )
+            self._raise_if_action_interrupted(receipt)
+            return ActionOutcome(
+                action_id=receipt.action_id or action_id,
+                target_id=receipt.target_id,
+                committed=receipt.committed,
+                may_have_taken_effect=receipt.may_have_taken_effect,
+                verification=evidence.status,
+                evidence={**dict(receipt.backend_evidence), **dict(evidence.details)},
+            )
+        except BackendOperationError as error:
+            interrupted = self._action_interruption_reason()
+            if error.may_have_taken_effect or receipt is not None or interrupted is not None:
+                # A more specific transport/target code must never weaken the
+                # unknown-outcome contract after dispatch may have occurred.
+                # Callers must inspect state before any retry.
+                raise self._action_outcome_unknown(
+                    interrupted or "backend action may have taken effect but its outcome is unknown",
+                    receipt=receipt,
+                    backend_code=error.code,
+                ) from error
+            raise ChannelError(error.code or "ACTION_UNSUPPORTED", str(error)) from error
+        finally:
+            if deadline_timer is not None:
+                deadline_timer.cancel()
+            try:
+                self.registry.finish_action(self.lease.lease_id)
+            except RegistryError as error:
+                if error.code not in {"LEASE_NOT_FOUND", "INVALID_STATE_TRANSITION"}:
+                    raise
+            finally:
+                self._heartbeat(ignore_errors=True)
+                with self._state:
+                    self._in_flight -= 1
+                    self._state.notify_all()
+
+    def _arm_action_deadline(self) -> threading.Timer | None:
+        remaining = self.remaining_seconds
+        if remaining is None:
+            return None
+        timer = threading.Timer(remaining, self._cancel_for_deadline)
+        timer.daemon = True
+        timer.start()
+        return timer
+
+    def _cancel_for_deadline(self) -> None:
+        """Best-effort propagation of the request deadline to the backend."""
+        try:
+            self.request_cancel("deadline_expired")
+        except Exception:
+            # The operation is still classified as unknown when control
+            # returns. Cleanup remains responsible for retrying cancellation
+            # or quarantining the handle.
+            self.cancellation.set()
+
+    def _action_interruption_reason(self) -> str | None:
+        if self.deadline is not None and time.time() >= self.deadline:
+            self.cancellation.set()
+            return "request deadline expired after action dispatch"
+        if self.cancelled:
+            return "request was cancelled after action dispatch"
+        return None
+
+    def _raise_if_action_interrupted(self, receipt: ActionReceipt | None = None) -> None:
+        reason = self._action_interruption_reason()
+        if reason is not None:
+            raise self._action_outcome_unknown(reason, receipt=receipt)
+
+    def _action_outcome_unknown(
+        self,
+        message: str,
+        *,
+        receipt: ActionReceipt | None = None,
+        backend_code: str | None = None,
+    ) -> ChannelError:
+        details: dict[str, Any] = {"mayHaveTakenEffect": True}
+        if receipt is not None:
+            details.update({
+                "actionId": receipt.action_id,
+                "committed": receipt.committed,
+            })
+        if backend_code:
+            details["backendCode"] = backend_code
+        return ChannelError("ACTION_OUTCOME_UNKNOWN", message, details=details)
+
+    def wait(self, seconds: float) -> None:
+        end = time.monotonic() + max(0.0, min(float(seconds), 30.0))
+        while True:
+            self._check_available()
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            self.cancellation.wait(min(0.1, remaining))
+
+    @contextmanager
+    def activity(self):
+        """Keep the lease non-reusable across model/reflection work."""
+        with self._state:
+            self._check_available()
+            self._in_flight += 1
+        try:
+            self._heartbeat()
+            self.registry.begin_action(self.lease.lease_id)
+        except Exception:
+            with self._state:
+                self._in_flight -= 1
+                self._state.notify_all()
+            raise
+        try:
+            yield
+        finally:
+            try:
+                self.registry.finish_action(self.lease.lease_id)
+            finally:
+                self._heartbeat(ignore_errors=True)
+                with self._state:
+                    self._in_flight -= 1
+                    self._state.notify_all()
+
+    def close(self, reason: str = "completed") -> CleanupSummary:
+        with self._close_lock:
+            if self._closed:
+                return self.cleanup
+            with self._state:
+                self._closing = True
+                self._close_reason = self._close_reason or reason
+            if self.cancelled:
+                try:
+                    self.request_cancel(reason)
+                except Exception as error:  # cleanup must continue
+                    self.cleanup.errors.append(f"backend cancel: {error}")
+            with self._state:
+                wait_deadline = time.monotonic() + CLEANUP_WAIT_TIMEOUT_SECONDS
+                while self._in_flight:
+                    remaining = wait_deadline - time.monotonic()
+                    if remaining <= 0:
+                        self._record_cleanup_error("in-flight cleanup wait timed out")
+                        return self.cleanup
+                    self._state.wait(remaining)
+            try:
+                self.registry.begin_release(self.lease.lease_id, reason)
+            except Exception as error:
+                self._record_cleanup_error(f"lease begin release: {error}")
+            if not self.cleanup.closed:
+                try:
+                    self.backend.close(self.handle, reason)
+                    self.cleanup.closed = True
+                except Exception as error:
+                    self._record_cleanup_error(f"backend close: {error}")
+            # A failed backend close may leave owned keys, buttons, overlay or
+            # target handles live. Keep the lease quarantined until a later
+            # close retry succeeds instead of allowing another request to
+            # overlap with that residual state.
+            if self.cleanup.closed and not self.cleanup.lease_released:
+                try:
+                    self.registry.finish_release(self.lease.lease_id)
+                    self.cleanup.lease_released = True
+                except Exception as error:
+                    self._record_cleanup_error(f"lease finish release: {error}")
+            with self._state:
+                self._closed = self.cleanup.closed and self.cleanup.lease_released
+            return self.cleanup
+
+    def request_cancel(self, reason: str) -> None:
+        """Deliver cancellation without waiting for an in-flight operation."""
+        self.cancellation.set()
+        with self._cancel_lock:
+            if self._backend_cancel_sent:
+                return
+            self.backend.cancel(self.handle, reason)
+            self._backend_cancel_sent = True
+
+    def _record_cleanup_error(self, message: str) -> None:
+        if message not in self.cleanup.errors:
+            self.cleanup.errors.append(message)
+
+    def _heartbeat(self, *, ignore_errors: bool = False) -> None:
+        if self.lease_ttl_seconds is None:
+            return
+        try:
+            self.registry.heartbeat_lease(self.lease.lease_id, self.lease_ttl_seconds)
+        except RegistryError:
+            if not ignore_errors:
+                raise

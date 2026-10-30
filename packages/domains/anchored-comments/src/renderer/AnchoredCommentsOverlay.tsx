@@ -1,0 +1,376 @@
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactElement
+} from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { MessageSquarePlus, X } from 'lucide-react'
+import type {
+  DomainRendererVisibleContextHost,
+  DomainRendererWorkbenchGlobalOverlayRenderContext
+} from '@sciforge/domain-sdk/host'
+import { CommentEditor } from './CommentEditor'
+import { CommentPanel } from './CommentPanel'
+import { ProductFeedbackDialog } from './ProductFeedbackDialog'
+import {
+  ANCHORED_COMMENTS_DELETE_EVENT,
+  ANCHORED_COMMENTS_STATUS_CHANGE_EVENT,
+  ANCHORED_COMMENTS_SUBMIT_FEEDBACK_EVENT,
+  type AnchoredCommentsSubmitFeedbackDetail,
+  useAnchoredCommentStore
+} from './anchored-comment-store'
+import {
+  captureAndPersistThread,
+  deletePersistedThread,
+  getAnchoredCommentView,
+  listAnchoredCommentViews,
+  persistThreadStatus,
+  submitAnchoredCommentFeedback,
+  type AnchoredCommentsCapabilityClient
+} from './renderer-bridge'
+import {
+  commentTargetFromInspection,
+  commentTargetFromTextSelection
+} from './registered-target'
+import type { AnchoredCommentKind, CommentTargetInspection } from './types'
+
+export function AnchoredCommentsOverlay({
+  client,
+  context,
+  visibleContext
+}: {
+  client: AnchoredCommentsCapabilityClient
+  context: DomainRendererWorkbenchGlobalOverlayRenderContext
+  visibleContext: DomainRendererVisibleContextHost
+}): ReactElement {
+  const inspectionGeneration = useRef(0)
+  const route =
+    context.activation?.payload &&
+    typeof context.activation.payload === 'object' &&
+    !Array.isArray(context.activation.payload) &&
+    typeof context.activation.payload.route === 'string'
+      ? context.activation.payload.route
+      : ''
+  const workspaceKey = context.session.workspaceRoot || 'global'
+  const commentMode = useAnchoredCommentStore((state) => state.commentMode)
+  const setCommentMode = useAnchoredCommentStore((state) => state.setCommentMode)
+  const panelOpen = useAnchoredCommentStore((state) => state.panelOpen)
+  const setPanelOpen = useAnchoredCommentStore((state) => state.setPanelOpen)
+  const threads = useAnchoredCommentStore((state) => state.threads)
+  const addThread = useAnchoredCommentStore((state) => state.addThread)
+  const replaceThreads = useAnchoredCommentStore((state) => state.replaceThreads)
+  const replaceThread = useAnchoredCommentStore((state) => state.replaceThread)
+  const productFeedbackThreadId = useAnchoredCommentStore(
+    (state) => state.productFeedbackThreadId
+  )
+  const closeProductFeedback = useAnchoredCommentStore(
+    (state) => state.closeProductFeedback
+  )
+  const submitProductFeedback = useAnchoredCommentStore(
+    (state) => state.submitProductFeedback
+  )
+  const markFeedbackStatus = useAnchoredCommentStore(
+    (state) => state.markFeedbackStatus
+  )
+  const [hovered, setHovered] = useState<CommentTargetInspection | null>(null)
+  const [editorTarget, setEditorTarget] =
+    useState<CommentTargetInspection | null>(null)
+  const [deniedMessage, setDeniedMessage] = useState<string | null>(null)
+  const [captureClean, setCaptureClean] = useState(false)
+
+  useEffect(() => {
+    setCommentMode(true)
+    return () => setCommentMode(false)
+  }, [setCommentMode])
+
+  useEffect(() => {
+    let cancelled = false
+    void listAnchoredCommentViews(client, workspaceKey)
+      .then((persisted) => {
+        if (!cancelled) replaceThreads(persisted)
+      })
+      .catch(() => {
+        // Local comments remain usable when the capability is unavailable.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [client, replaceThreads, workspaceKey])
+
+  useEffect(() => {
+    const onStatusChange = (event: Event): void => {
+      const detail = (event as CustomEvent<{
+        threadId?: string
+        status?: 'open' | 'attached' | 'ai_responded' | 'awaiting_verification' | 'resolved'
+      }>).detail
+      if (!detail?.threadId || !detail.status) return
+      void persistThreadStatus(client, detail.threadId, detail.status)
+    }
+    const onDelete = (event: Event): void => {
+      const threadId =
+        (event as CustomEvent<{ threadId?: string }>).detail?.threadId
+      if (threadId) void deletePersistedThread(client, threadId, workspaceKey)
+    }
+    window.addEventListener(ANCHORED_COMMENTS_STATUS_CHANGE_EVENT, onStatusChange)
+    window.addEventListener(ANCHORED_COMMENTS_DELETE_EVENT, onDelete)
+    return () => {
+      window.removeEventListener(
+        ANCHORED_COMMENTS_STATUS_CHANGE_EVENT,
+        onStatusChange
+      )
+      window.removeEventListener(ANCHORED_COMMENTS_DELETE_EVENT, onDelete)
+    }
+  }, [client, workspaceKey])
+
+  useEffect(() => {
+    const onSubmitFeedback = (event: Event): void => {
+      const detail =
+        (event as CustomEvent<AnchoredCommentsSubmitFeedbackDetail>).detail
+      if (!detail?.threadId) return
+      void submitAnchoredCommentFeedback(
+        client,
+        detail.threadId,
+        detail.disclosure
+      ).then(async (result) => {
+        if (!result.ok) {
+          markFeedbackStatus(detail.threadId, 'failed', result.message)
+          return
+        }
+        const persisted = await getAnchoredCommentView(client, detail.threadId)
+        if (persisted) replaceThread(persisted)
+        else markFeedbackStatus(detail.threadId, 'submitted')
+        closeProductFeedback()
+      }).catch((error) => {
+        markFeedbackStatus(
+          detail.threadId,
+          'failed',
+          error instanceof Error ? error.message : String(error)
+        )
+      })
+    }
+    window.addEventListener(
+      ANCHORED_COMMENTS_SUBMIT_FEEDBACK_EVENT,
+      onSubmitFeedback
+    )
+    return () =>
+      window.removeEventListener(
+        ANCHORED_COMMENTS_SUBMIT_FEEDBACK_EVENT,
+        onSubmitFeedback
+      )
+  }, [
+    client,
+    closeProductFeedback,
+    markFeedbackStatus,
+    replaceThread
+  ])
+
+  useEffect(() => {
+    if (!productFeedbackThreadId) return
+    let cancelled = false
+    void getAnchoredCommentView(client, productFeedbackThreadId)
+      .then((persisted) => {
+        if (!cancelled && persisted) replaceThread(persisted)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [client, productFeedbackThreadId, replaceThread])
+
+  useEffect(() => {
+    if (!commentMode) {
+      setHovered(null)
+      setDeniedMessage(null)
+      return
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setCommentMode(false)
+      setHovered(null)
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [commentMode, setCommentMode])
+
+  const inspectAt = async (
+    clientX: number,
+    clientY: number
+  ): Promise<CommentTargetInspection | null> => {
+    const inspection = await visibleContext.inspectRegisteredTargetAt?.({
+      clientX,
+      clientY
+    })
+    if (!inspection) return null
+    return commentTargetFromInspection(inspection, route)
+  }
+
+  const moveCommentCursor = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const generation = ++inspectionGeneration.current
+    const { clientX, clientY } = event
+    void inspectAt(clientX, clientY)
+      .then((target) => {
+        if (generation === inspectionGeneration.current) setHovered(target)
+      })
+      .catch(() => {
+        if (generation === inspectionGeneration.current) setHovered(null)
+      })
+  }
+
+  const selectCommentTarget = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const generation = ++inspectionGeneration.current
+    const { clientX, clientY } = event
+    void (async () => {
+      const selectionInspection =
+        await visibleContext.inspectRegisteredTextSelection?.()
+      const selectedTextTarget = selectionInspection
+        ? commentTargetFromTextSelection(selectionInspection, route)
+        : null
+      const target = selectedTextTarget ?? await inspectAt(clientX, clientY)
+      if (generation !== inspectionGeneration.current) return
+      if (!target) {
+        setDeniedMessage(
+          'This area is not a registered comment target or is marked sensitive.'
+        )
+        return
+      }
+      setEditorTarget(target)
+      setHovered(null)
+      setCommentMode(false)
+    })().catch(() => {
+      if (generation !== inspectionGeneration.current) return
+      setDeniedMessage(
+        'This area is not a registered comment target or is marked sensitive.'
+      )
+    })
+  }
+
+  const saveComment = (comment: string, kind: AnchoredCommentKind): void => {
+    if (!editorTarget || !comment.trim()) return
+    const thread = addThread({ target: editorTarget, comment, kind })
+    setEditorTarget(null)
+    setPanelOpen(false)
+    setCaptureClean(true)
+    window.requestAnimationFrame(() => {
+      void captureAndPersistThread(client, thread, workspaceKey)
+        .then(replaceThread)
+        .finally(() => {
+          setCaptureClean(false)
+          setPanelOpen(true)
+        })
+    })
+  }
+
+  const feedbackThread = productFeedbackThreadId
+    ? threads.find((thread) => thread.id === productFeedbackThreadId) ?? null
+    : null
+
+  if (captureClean) return <></>
+
+  return (
+    <>
+      {commentMode ? (
+        <div
+          data-sciforge-comments-ui
+          className="ds-no-drag fixed inset-0 z-[990] cursor-crosshair"
+          aria-label="Select a registered target to comment on"
+          onPointerMove={moveCommentCursor}
+          onPointerLeave={() => {
+            inspectionGeneration.current += 1
+            setHovered(null)
+          }}
+          onClick={selectCommentTarget}
+        />
+      ) : null}
+
+      {commentMode && hovered ? (
+        <div
+          data-sciforge-comments-ui
+          className="pointer-events-none fixed z-[995] rounded-[5px] border-2 border-indigo-500 bg-indigo-500/20 shadow-[0_0_0_3px_rgba(99,102,241,0.18)]"
+          style={{
+            left: hovered.bounds.x,
+            top: hovered.bounds.y,
+            width: hovered.bounds.width,
+            height: hovered.bounds.height
+          }}
+        >
+          <span className="absolute -top-7 left-0 max-w-80 truncate rounded-md bg-indigo-600 px-2 py-1 text-[10px] font-semibold text-white shadow-lg">
+            {hovered.label} · {hovered.bounds.width}×{hovered.bounds.height}
+          </span>
+        </div>
+      ) : null}
+
+      {commentMode ? (
+        <div
+          data-sciforge-comments-ui
+          className="ds-no-drag fixed left-1/2 top-4 z-[1000] flex -translate-x-1/2 items-center gap-2 rounded-full border border-indigo-300/60 bg-ds-card/95 py-1.5 pl-3 pr-1.5 text-ds-ink shadow-[0_12px_40px_rgba(30,41,59,0.22)] backdrop-blur-xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <MessageSquarePlus className="h-3.5 w-3.5 text-indigo-500" />
+          <span className="text-[11px] font-semibold">
+            Select a registered target to comment
+          </span>
+          <span className="text-[9.5px] text-ds-muted">Esc to cancel</span>
+          <button
+            type="button"
+            className="rounded-full p-1 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            aria-label="Exit comment mode"
+            onClick={() => setCommentMode(false)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
+
+      {deniedMessage ? (
+        <div
+          data-sciforge-comments-ui
+          className="ds-no-drag fixed left-1/2 top-16 z-[1002] -translate-x-1/2 rounded-lg bg-red-700 px-3 py-2 text-[11px] font-medium text-white shadow-xl"
+          role="alert"
+        >
+          {deniedMessage}
+        </div>
+      ) : null}
+
+      {editorTarget ? (
+        <CommentEditor
+          target={editorTarget}
+          onCancel={() => setEditorTarget(null)}
+          onSave={saveComment}
+        />
+      ) : null}
+
+      {panelOpen ? <CommentPanel /> : null}
+
+      {feedbackThread ? (
+        <ProductFeedbackDialog
+          thread={feedbackThread}
+          onClose={closeProductFeedback}
+          onConfirm={(disclosure) =>
+            submitProductFeedback(feedbackThread.id, disclosure)}
+        />
+      ) : null}
+
+      {!commentMode && !panelOpen && !editorTarget ? (
+        <button
+          type="button"
+          className="ds-no-drag fixed right-4 top-16 z-[1000] rounded-full border border-ds-border bg-ds-card px-3 py-2 text-[11px] font-semibold text-ds-ink shadow-lg"
+          onClick={() => {
+            setPanelOpen(true)
+            setCommentMode(true)
+          }}
+        >
+          Continue commenting
+        </button>
+      ) : null}
+
+      <button
+        type="button"
+        className="sr-only"
+        aria-label="Close Anchored Comments overlay"
+        onClick={context.onClose}
+      />
+    </>
+  )
+}

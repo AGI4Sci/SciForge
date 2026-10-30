@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "kind": "capability",
+  "namespace": "visual-review",
+  "hostApiRange": ">=1.0.0 <2.0.0",
+  "permissions": [],
+  "reloadPolicy": "live"
+}

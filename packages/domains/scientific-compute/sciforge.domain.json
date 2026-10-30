@@ -1,0 +1,44 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-scientific-compute",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.scientific-compute",
+    "displayName": "Scientific Compute",
+    "version": "0.1.2",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 155
+  },
+  "contributionContracts": {
+    "scientific-compute.capability-eval": {
+      "actionSource": "scientific-compute.capability-registry",
+      "contractVersion": 1,
+      "kind": "capability-evaluation"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+        "kind": "main.capability-factory",
+        "id": "scientific-compute.capabilities",
+        "priority": 155
+      },
+      {
+        "kind": "main.capability-eval",
+        "id": "scientific-compute.capability-eval",
+        "priority": 155
+      }
+      ]
+    }
+  ]
+}

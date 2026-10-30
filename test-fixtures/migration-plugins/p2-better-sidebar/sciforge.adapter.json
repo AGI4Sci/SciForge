@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "renderer",
+  "namespace": "better-sidebar",
+  "hostApiRange": "^1.0.0",
+  "permissions": [],
+  "reloadPolicy": "live",
+  "ui": {
+    "entry": "dist/renderer.html",
+    "stateVersion": 1
+  }
+}

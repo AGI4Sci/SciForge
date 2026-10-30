@@ -1,0 +1,2502 @@
+import {
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest'
+import { z } from 'zod'
+import type {
+  CapabilityCallerContext,
+  CapabilityDescriptor,
+  CapabilityInvocationResult,
+  CapabilityObservation,
+  CapabilityResourceHandle
+} from '../../shared/capability-broker'
+import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
+import {
+  CAPABILITY_AGENT_TOOL_NAMES,
+  CapabilityAgentToolError,
+  createCapabilityAgentToolSurface,
+  type AgentCapabilityEvent,
+  type AgentVisualRuntime,
+  type CapabilityAgentApprovalRequest,
+  type CapabilityAgentBroker,
+  type CapabilityAgentToolRequestContext
+} from './agent-tools'
+import { CapabilityBroker } from './broker'
+import {
+  CapabilityRegistry,
+  defineCapability,
+  type CapabilityHandlerContext
+} from './registry'
+
+const nestedArtifactInputSchema = z.object({
+  task: z.string().min(1),
+  artifacts: z.array(z.object({
+    id: z.string().min(1),
+    path: z.string().min(1),
+    regions: z.array(z.object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number()
+    }).strict()).optional()
+  }).strict()).min(1)
+}).strict()
+
+const observedResourceStateSchema = z.object({
+  resources: z.array(z.object({
+    kind: z.string().min(1),
+    resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
+  }).strict())
+}).passthrough()
+
+const caller: CapabilityCallerContext = {
+  audience: 'agent',
+  callerId: 'thread-1',
+  workspaceId: '/workspace',
+  approvals: []
+}
+
+const context: CapabilityAgentToolRequestContext = {
+  requestId: 'request-1',
+  runtimeId: 'test',
+  threadId: 'thread-1',
+  workspaceId: '/workspace'
+}
+
+describe('CapabilityAgentToolSurface', () => {
+  it('keeps capability and provider event attribution structurally distinct', () => {
+    const capabilityEvent: AgentCapabilityEvent = {
+      eventId: 'event_abcdefghijklmnopqrstuvwxyz',
+      type: 'resource.changed',
+      origin: 'capability',
+      occurredAt: '2026-07-16T11:00:00.000Z',
+      resourceRef: 'res_document_abcdefghijklmnopqrstuvwxyz',
+      resourceStatus: 'live',
+      resourceKind: 'document',
+      operationRef: 'op_abcdefghijklmnopqrstuvwxyz'
+    }
+    const providerEvent: AgentCapabilityEvent = {
+      eventId: 'event_provider_abcdefghijklmnop',
+      type: 'resource.changed',
+      origin: 'provider',
+      occurredAt: '2026-07-16T11:01:00.000Z',
+      resourceRef: 'res_provider_abcdefghijklmnopqrstuvwxyz',
+      resourceStatus: 'live',
+      resourceKind: 'document'
+    }
+
+    expect(capabilityEvent.operationRef).toMatch(/^op_/u)
+    expect(providerEvent).not.toHaveProperty('operationRef')
+  })
+
+  it('fails closed when the Host cannot match a tool request to its captured Principal lease', async () => {
+    const discover = vi.fn(async () => [])
+    const assertPrincipalLease = vi.fn(() => {
+      throw new CapabilityAgentToolError(
+        'principal_changed',
+        'The turn Principal lease is unknown.'
+      )
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover },
+      assertPrincipalLease,
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: { ...context, turnId: 'forged-turn' }
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(discover).not.toHaveBeenCalled()
+  })
+
+  it('publishes the broker meta-tools and native visual tools without authority fields', () => {
+    const surface = createCapabilityAgentToolSurface({ broker: brokerStub(), resolveCaller: () => caller })
+
+    expect(surface.tools().map((tool) => tool.name)).toEqual([
+      'sciforge_discover',
+      'sciforge_observe',
+      'sciforge_invoke',
+      'sciforge_events',
+      'sciforge_look',
+      'sciforge_capture'
+    ])
+    expect(surface.tools().every((tool) => tool.inputSchema.type === 'object')).toBe(true)
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.discover)?.description)
+      .toMatch(/native.*before.*managed|native.*first/iu)
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.invoke)?.description)
+      .toMatch(/directly.*input.*JSON object.*not.*JSON-encoded string/iu)
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.observe)?.description)
+      .toMatch(/operationRefs.*input shapes.*directly.*rediscovering/iu)
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.description)
+      .toMatch(/omitting frame inspects frame 1, not the page currently shown in the UI/iu)
+    expect(JSON.stringify(surface.tools())).not.toMatch(
+      /snapshotToken|componentId|expectedRevision|semanticRevision|invocationId|actionId|coordinates/u
+    )
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.inputSchema)
+      .toMatchObject({
+        required: ['task'],
+        properties: {
+          sourceRef: { type: 'string' },
+          targetRef: { type: 'string' },
+          frame: { type: 'integer' },
+          task: { type: 'string' },
+          intent: { enum: ['describe', 'ocr', 'locate', 'quality-review'] },
+          capture: { enum: ['snapshot', 'region'] },
+          timeoutMs: {
+            type: 'integer',
+            minimum: 30_000,
+            maximum: 600_000
+          }
+        }
+      })
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.inputSchema)
+      .not.toHaveProperty('properties.path')
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.capture)?.inputSchema)
+      .toMatchObject({
+        required: ['snapshotRef'],
+        properties: {
+          snapshotRef: { type: 'string' },
+          regionRef: { type: 'string' },
+          purpose: { enum: ['workspace-asset', 'visual-evidence'] }
+        }
+      })
+  })
+
+  it('forwards native look and capture through one typed visual runtime boundary', async () => {
+    const look = vi.fn<AgentVisualRuntime['look']>(async () => visualLookOutput())
+    const capture = vi.fn<AgentVisualRuntime['capture']>(async () => visualCaptureOutput())
+    const surface = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      visualRuntime: { look, capture },
+      resolveCaller: () => caller
+    })
+    const turnContext = { ...context, turnId: 'turn-visual', callId: 'call-visual' }
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        sourceRef: visualRefs.source,
+        targetRef: visualRefs.target,
+        task: 'Locate the method overview figure.',
+        intent: 'locate'
+      },
+      context: turnContext
+    })).resolves.toEqual({
+      tool: CAPABILITY_AGENT_TOOL_NAMES.look,
+      value: visualLookOutput()
+    })
+    expect(look).toHaveBeenCalledWith({
+      sourceRef: visualRefs.source,
+      targetRef: visualRefs.target,
+      task: 'Locate the method overview figure.',
+      intent: 'locate'
+    }, {
+      caller,
+      request: turnContext,
+      signal: expect.any(AbortSignal)
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.capture,
+      arguments: {
+        snapshotRef: visualRefs.snapshot,
+        regionRef: visualRefs.region,
+        purpose: 'workspace-asset'
+      },
+      context: turnContext
+    })).resolves.toEqual({
+      tool: CAPABILITY_AGENT_TOOL_NAMES.capture,
+      value: visualCaptureOutput()
+    })
+    expect(capture).toHaveBeenCalledWith({
+      snapshotRef: visualRefs.snapshot,
+      regionRef: visualRefs.region,
+      purpose: 'workspace-asset'
+    }, {
+      caller,
+      request: turnContext,
+      signal: expect.any(AbortSignal)
+    })
+  })
+
+  it('rejects file paths so workspace visuals use the canonical resource pipeline', async () => {
+    const look = vi.fn<AgentVisualRuntime['look']>(async () => visualLookOutput())
+    const surface = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      visualRuntime: {
+        look,
+        capture: async () => visualCaptureOutput()
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        path: 'paper.pdf',
+        task: 'Inspect the paper.'
+      },
+      context
+    })).rejects.toThrow()
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        task: 'Extract a figure.',
+        intent: 'describe',
+        capture: 'region'
+      },
+      context
+    })).resolves.toEqual({
+      tool: CAPABILITY_AGENT_TOOL_NAMES.look,
+      value: visualLookOutput()
+    })
+    expect(look).toHaveBeenCalledWith(expect.objectContaining({
+      task: 'Extract a figure.',
+      intent: 'locate',
+      capture: 'region'
+    }), expect.objectContaining({ caller, request: context }))
+  })
+
+  it('fails closed when the visual runtime is missing or returns an invalid proof', async () => {
+    const unavailable = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      resolveCaller: () => caller
+    })
+    await expect(unavailable.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        sourceRef: visualRefs.source,
+        task: 'Inspect the figure.'
+      },
+      context
+    })).rejects.toMatchObject({ code: 'visual_runtime_unavailable' })
+
+    const invalid = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      visualRuntime: {
+        look: async () => ({
+          ...visualLookOutput(),
+          proof: { ...visualLookOutput().proof, snapshotRef: `snapshot_${'x'.repeat(26)}` }
+        }),
+        capture: async () => visualCaptureOutput()
+      },
+      resolveCaller: () => caller
+    })
+    await expect(invalid.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        sourceRef: visualRefs.source,
+        task: 'Inspect the figure.'
+      },
+      context
+    })).rejects.toMatchObject({
+      code: 'visual_invalid_result',
+      failureClass: 'contract_violation',
+      retryable: false
+    })
+  })
+
+  it('discovers live operations as opaque refs and expands only a requested compact schema', async () => {
+    const registry = new CapabilityRegistry()
+    const broker = new CapabilityBroker(registry)
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })).rejects.toMatchObject({
+      code: 'capability_discovery_empty',
+      failureClass: 'capability_not_found',
+      retryable: true,
+      recovery: {
+        action: 'use_suggested_query',
+        instruction: expect.stringContaining('suggestedQueries')
+      },
+      details: {
+        outcome: 'empty',
+        registryReadiness: { status: 'ready' },
+        appliedFilters: { limit: 8 },
+        suggestedQueries: expect.any(Array)
+      }
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: `op_${'x'.repeat(24)}`,
+        includeSchema: true,
+        limit: 1
+      },
+      context
+    })).rejects.toMatchObject({
+      code: 'invalid_arguments',
+      failureClass: 'invalid_arguments',
+      retryable: false,
+      recovery: {
+        action: 'use_operation_ref',
+        instruction: expect.stringContaining('operationRef')
+      },
+      details: {
+        receivedReference: `op_${'x'.repeat(24)}`
+      }
+    })
+    registry.register(readCapability('test.hot-discovered'))
+
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { text: 'hot-discovered' },
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+    const operation = discovered.value[0]
+    expect(operation).toMatchObject({
+      operationRef: expect.stringMatching(/^op_/u),
+      schemaRef: expect.stringMatching(/^schema_/u),
+      title: 'Hot-discovered capability',
+      providerFamily: 'native',
+      acceptedResourceKinds: [],
+      producedResourceKinds: []
+    })
+    expect(operation).not.toHaveProperty('id')
+    expect(operation).not.toHaveProperty('inputShape')
+
+    const discoveredWithSchema = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        capabilityId: 'test.hot-discovered',
+        includeSchema: true,
+        limit: 1
+      },
+      context
+    })
+    if (discoveredWithSchema.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected discover result.')
+    }
+    expect(discoveredWithSchema.value[0]).toMatchObject({
+      inputShape: {
+        properties: {
+          query: {
+            pattern: '^query_[A-Za-z0-9_-]{4,32}$',
+            description: 'A caller-generated query identifier.'
+          }
+        }
+      }
+    })
+
+    const expanded = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef: operation?.operationRef, includeSchema: true },
+      context
+    })
+    if (expanded.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+    expect(expanded.value[0]).toMatchObject({
+      inputShape: {
+        properties: {
+          query: {
+            pattern: '^query_[A-Za-z0-9_-]{4,32}$',
+            description: 'A caller-generated query identifier.'
+          }
+        }
+      }
+    })
+  })
+
+  it('suggests managed MCP first when a failed native search looks like a tool name', async () => {
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry()),
+      resolveCaller: () => caller
+    })
+
+    const error = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {
+        text: 'visual_generate scientific plotting route',
+        limit: 5
+      },
+      context
+    }).catch((value: unknown) => value)
+    expect(error).toMatchObject({ code: 'capability_discovery_empty' })
+    const suggestions = (error as CapabilityAgentToolError).details as {
+      suggestedQueries?: unknown
+    }
+    expect(suggestions.suggestedQueries).toEqual(expect.arrayContaining([{
+      text: 'visual_generate scientific plotting route',
+      providerFamily: 'managed-mcp',
+      limit: 5
+    }]))
+    expect((suggestions.suggestedQueries as unknown[])[0]).toEqual({
+      text: 'visual_generate scientific plotting route',
+      providerFamily: 'managed-mcp',
+      limit: 5
+    })
+  })
+
+  it('matches conservative English inflections without relaxing explicit scope filters', () => {
+    const planEdit = defineCapability({
+      id: 'fixture.document.update',
+      version: '1',
+      title: 'Update local document',
+      description: 'Updates (CAS) document items and exact contributor choices.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      tags: ['project', 'plan', 'tasks'],
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([planEdit])
+
+    expect(registry.discover(caller, {
+      text: 'update plan',
+      scope: 'global'
+    }).map(({ id }) => id)).toEqual(['fixture.document.update'])
+    expect(registry.discover(caller, {
+      text: 'tasks',
+      scope: 'global'
+    }).map(({ id }) => id)).toEqual(['fixture.document.update'])
+    // Scope remains an intentional security/query boundary: metadata recall
+    // must not turn a global operation into a workspace-scoped match.
+    expect(registry.discover(caller, {
+      text: 'update plan',
+      scope: 'workspace'
+    })).toEqual([])
+  })
+
+  it('projects current event resource liveness without treating retired refs as reusable', async () => {
+    const eventOperation = descriptor('document.update', 'Update document', 'resource', 'workspace-write')
+    const resourceRef = 'res_document_abcdefghijklmnopqrstuvwxyz'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [eventOperation]),
+        listEvents: vi.fn(async () => [{
+          id: 'event_abcdefghijklmnopqrstuvwxyz',
+          type: 'resource.changed' as const,
+          origin: 'capability' as const,
+          occurredAt: '2026-07-16T11:00:00.000Z',
+          workspaceId: '/workspace',
+          resourceRef,
+          resourceStatus: 'retired' as const,
+          resourceKind: 'document',
+          actionId: eventOperation.id,
+          invocationId: 'update-1',
+          beforeRevision: '1',
+          afterRevision: '2'
+        }])
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.events,
+      arguments: {},
+      context
+    })).resolves.toMatchObject({
+      value: [{
+        resourceRef,
+        resourceStatus: 'retired',
+        origin: 'capability',
+        operationRef: expect.stringMatching(/^op_/u)
+      }]
+    })
+  })
+
+  it('projects provider-originated changes without inventing an operation reference', async () => {
+    const resourceRef = 'res_provider_abcdefghijklmnopqrstuvwxyz'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => []),
+        listEvents: vi.fn(async () => [{
+          id: 'event_provider_abcdefghijklmnop',
+          type: 'resource.changed' as const,
+          origin: 'provider' as const,
+          occurredAt: '2026-07-16T11:01:00.000Z',
+          workspaceId: '/workspace',
+          resourceRef,
+          resourceStatus: 'live' as const,
+          resourceKind: 'document',
+          beforeRevision: '2',
+          afterRevision: '3'
+        }])
+      },
+      resolveCaller: () => caller
+    })
+
+    const result = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.events,
+      arguments: {},
+      context
+    })
+    if (result.tool !== CAPABILITY_AGENT_TOOL_NAMES.events) throw new Error('Expected events result.')
+    expect(result.value).toEqual([{
+      eventId: 'event_provider_abcdefghijklmnop',
+      type: 'resource.changed',
+      origin: 'provider',
+      occurredAt: '2026-07-16T11:01:00.000Z',
+      resourceRef,
+      resourceStatus: 'live',
+      resourceKind: 'document'
+    }])
+    expect(result.value[0]).not.toHaveProperty('operationRef')
+  })
+
+  it('filters resource-change events by a previously discovered operation reference', async () => {
+    const eventOperation = descriptor('document.update', 'Update document', 'resource', 'workspace-write')
+    const otherOperation = descriptor('document.rename', 'Rename document', 'resource', 'workspace-write')
+    const operationRef = 'op_document_update_abcdefghijklmnop'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [eventOperation, otherOperation]),
+        listEvents: vi.fn(async () => [
+          {
+            id: 'event_update_abcdefghijklmnop',
+            type: 'resource.changed' as const,
+            origin: 'capability' as const,
+            occurredAt: '2026-07-16T11:00:00.000Z',
+            workspaceId: '/workspace',
+            resourceRef: 'res_document_abcdefghijklmnopqrstuvwxyz',
+            resourceStatus: 'live' as const,
+            resourceKind: 'document',
+            actionId: eventOperation.id,
+            invocationId: 'update-1',
+            beforeRevision: '1',
+            afterRevision: '2'
+          },
+          {
+            id: 'event_rename_abcdefghijklmnop',
+            type: 'resource.changed' as const,
+            origin: 'capability' as const,
+            occurredAt: '2026-07-16T11:01:00.000Z',
+            workspaceId: '/workspace',
+            resourceRef: 'res_document_abcdefghijklmnopqrstuvwxyz',
+            resourceStatus: 'live' as const,
+            resourceKind: 'document',
+            actionId: otherOperation.id,
+            invocationId: 'rename-1',
+            beforeRevision: '2',
+            afterRevision: '3'
+          }
+        ])
+      },
+      resolveCaller: () => caller
+    })
+
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: eventOperation.id, includeSchema: true, limit: 1 },
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery result.')
+    const discoveredRef = discovered.value[0]?.operationRef
+    expect(discoveredRef).toMatch(/^op_/u)
+
+    const result = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.events,
+      arguments: { operationRef: discoveredRef },
+      context
+    })
+    if (result.tool !== CAPABILITY_AGENT_TOOL_NAMES.events) throw new Error('Expected events result.')
+    expect(result.value).toHaveLength(1)
+    expect(result.value[0]).toMatchObject({ eventId: 'event_update_abcdefghijklmnop' })
+  })
+
+  it('preserves nested array items and discriminated union variants in compact schemas', async () => {
+    const capability = defineCapability({
+      id: 'artifact.review-nested',
+      version: '1',
+      title: 'Inspect nested artifact input',
+      description: 'Verifies compact nested schemas.',
+      audiences: ['agent'],
+      scope: 'workspace',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: nestedArtifactInputSchema.extend({
+        fields: z.record(z.string(), z.object({
+          type: z.enum(['string', 'array']),
+          required: z.boolean().optional()
+        }).strict()),
+        request: z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('page'), page: z.number().int().positive() }).strict(),
+          z.object({ kind: z.literal('region'), regionId: z.string().min(1) }).strict()
+        ])
+      }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([capability])
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(registry),
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { text: 'nested' },
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+    const operation = discovered.value[0]
+    const expanded = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef: operation?.operationRef, includeSchema: true },
+      context
+    })
+    if (expanded.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+
+    expect(expanded.value[0]?.inputShape).toMatchObject({
+      properties: {
+        fields: {
+          type: 'object',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['string', 'array'], required: true },
+              required: { type: 'boolean', required: false }
+            },
+            additionalProperties: false
+          }
+        },
+        artifacts: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', required: true },
+              path: { type: 'string', required: true },
+              regions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'number', required: true },
+                    width: { type: 'number', required: true }
+                  }
+                }
+              }
+            }
+          }
+        },
+        request: {
+          type: 'union',
+          variants: expect.arrayContaining([
+            expect.objectContaining({
+              properties: expect.objectContaining({
+                kind: expect.objectContaining({ const: 'page' }),
+                page: expect.objectContaining({ type: 'integer' })
+              })
+            }),
+            expect.objectContaining({
+              properties: expect.objectContaining({
+                kind: expect.objectContaining({ const: 'region' }),
+                regionId: expect.objectContaining({ type: 'string' })
+              })
+            })
+          ])
+        }
+      }
+    })
+  })
+
+  it('evicts the oldest caller cache once more than 32 callers hold caches', async () => {
+    const registry = new CapabilityRegistry([readCapability('cache.eviction-check')])
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(registry),
+      resolveCaller: (requestContext) => ({
+        ...caller,
+        callerId: requestContext.threadId ?? 'missing-thread'
+      })
+    })
+    const callerContext = (threadId: string): CapabilityAgentToolRequestContext => ({
+      ...context,
+      threadId
+    })
+    const discoverRef = async (threadId: string): Promise<string> => {
+      const result = await surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+        arguments: { capabilityId: 'cache.eviction-check' },
+        context: callerContext(threadId)
+      })
+      if (result.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+      const operationRef = result.value[0]?.operationRef
+      if (!operationRef) throw new Error('Expected a discovered operationRef.')
+      return operationRef
+    }
+
+    const evictedThread = 'thread-evicted'
+    const evictedRef = await discoverRef(evictedThread)
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: evictedRef, input: {} },
+      context: callerContext(evictedThread)
+    })).resolves.toMatchObject({ tool: CAPABILITY_AGENT_TOOL_NAMES.invoke })
+
+    for (let index = 0; index < 32; index += 1) {
+      await discoverRef(`thread-lru-${index}`)
+    }
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: evictedRef, input: {} },
+      context: callerContext(evictedThread)
+    })).rejects.toMatchObject({ code: 'unknown_operation_ref' })
+
+    const renewedRef = await discoverRef(evictedThread)
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: renewedRef, input: {} },
+      context: callerContext(evictedThread)
+    })).resolves.toMatchObject({ tool: CAPABILITY_AGENT_TOOL_NAMES.invoke })
+  })
+
+  it('keeps handles, revisions, action ids, and mutation ids inside the adapter', async () => {
+    const surfaceHandle = handle('surface-revision')
+    const documentHandle = handle('document-revision', 'b')
+    const open = descriptor('surface.current', 'Open current surface', 'global', 'read')
+    const inspect = descriptor('surface.describe', 'Describe surface', 'resource', 'read')
+    const mutate = {
+      ...descriptor('document.update', 'Update document', 'resource', 'workspace-write'),
+      approval: 'confirmation' as const
+    }
+    const surfaceObservation = observation(
+      surfaceHandle,
+      'res_surface_abcdefghijklmnopqrstuvwxyz',
+      'surface',
+      {
+        layoutFreshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+        targets: [],
+        resources: [{ kind: 'workspace-preview', resource: documentHandle }]
+      },
+      [inspect, mutate]
+    )
+    const documentObservation = observation(
+      documentHandle,
+      'res_document_abcdefghijklmnopqrstuvwxyz',
+      'workspace-preview',
+      { title: 'Paper' },
+      [mutate]
+    )
+    const discover = vi.fn(async () => [open, inspect, mutate])
+    const observe = vi.fn(async (_caller, request) => (
+      request.resource.token === surfaceHandle.token ? surfaceObservation : documentObservation
+    ))
+    const invoke = vi.fn(async (_caller, request): Promise<CapabilityInvocationResult> => ({
+      actionId: request.actionId,
+      ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+      output: request.actionId === open.id ? { surface: surfaceHandle } : { ok: true },
+      changed: request.actionId === mutate.id,
+      replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const requestApproval = vi.fn(async (_request: CapabilityAgentApprovalRequest) => 'allowed' as const)
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        discover,
+        observe,
+        describeResourceHandle: vi.fn((_caller, resource) => (
+          resource.token === surfaceHandle.token
+            ? {
+                resourceRef: surfaceObservation.resourceRef
+              }
+            : {
+                resourceRef: documentObservation.resourceRef
+              }
+        )),
+        bindResourceRef: vi.fn(async () => documentHandle),
+        invoke,
+        listEvents: vi.fn(async () => [])
+      },
+      resolveCaller: () => caller,
+      requestApproval
+    })
+
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+    const operations = discovered.value
+    const openRef = operations.find((candidate) => candidate.title === open.title)?.operationRef
+    const mutateRef = operations.find((candidate) => candidate.title === mutate.title)?.operationRef
+    const opened = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: openRef, input: JSON.stringify({}) },
+      context
+    })
+    if (opened.tool !== CAPABILITY_AGENT_TOOL_NAMES.invoke) throw new Error('Expected invoke result.')
+    expect(opened.value.capabilityId).toBe(open.id)
+    const surfaceRef = (opened.value.output as { surface: { resourceRef: string } }).surface.resourceRef
+    expect(invoke).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ actionId: open.id, input: {} }),
+      expect.anything()
+    )
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: surfaceRef },
+      context
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) throw new Error('Expected observe result.')
+    const sanitizedState = observedResourceStateSchema.parse(observed.value.state)
+    const documentRef = sanitizedState.resources[0]?.resourceRef
+
+    const mutationContext = { ...context, turnId: 'turn-update', callId: 'call-update' }
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: mutateRef, resourceRef: documentRef, input: { title: 'Updated' } },
+      context: mutationContext
+    })
+
+    const approvedInvocationId = requestApproval.mock.calls[0]?.[0].invocationId
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: mutate.id,
+      resourceRef: documentRef,
+      input: { title: 'Updated' }
+    }), expect.any(Object))
+    expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({
+      ...caller,
+      approvals: [{ actionId: mutate.id, invocationId: approvedInvocationId, mode: 'confirmation' }]
+    }), expect.objectContaining({
+      actionId: mutate.id,
+      resource: documentHandle,
+      expectedRevision: documentHandle.semanticRevision,
+      invocationId: approvedInvocationId,
+      input: { title: 'Updated' }
+    }), { context: mutationContext, signal: expect.any(AbortSignal) })
+    expect(JSON.stringify({ opened, observed })).not.toMatch(
+      /cap_|semanticRevision|expiresAt|actionId|invocationId|expectedRevision|snapshotToken|componentId/u
+    )
+  })
+
+  it('fails closed when the broker returns a different capability identity', async () => {
+    const read = descriptor('document.identity-check', 'Identity check', 'global', 'read')
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [read]),
+        invoke: vi.fn(async (): Promise<CapabilityInvocationResult> => ({
+          actionId: 'document.forged-identity',
+          output: { ok: true },
+          changed: false,
+          replayed: false,
+          completedAt: '2026-07-16T11:00:00.000Z'
+        }))
+      },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {} },
+      context
+    })).rejects.toMatchObject({ code: 'capability_identity_mismatch' })
+  })
+
+  it('preflights resource scope and keeps a misplaced nested resourceRef out of the broker', async () => {
+    const operation = descriptor('document.requires-resource', 'Requires resource', 'resource', 'read')
+    const invoke = vi.fn(async (_caller, request): Promise<CapabilityInvocationResult> => ({
+      actionId: request.actionId,
+      output: { ok: true },
+      changed: false,
+      replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover: vi.fn(async () => [operation]), invoke },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef,
+        input: { resourceRef: `res_${'n'.repeat(26)}` }
+      },
+      context
+    })).rejects.toMatchObject({
+      code: 'resource_required',
+      failureClass: 'invalid_arguments',
+      retryable: false,
+      recovery: { action: 'provide_resource_ref' }
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('preflights and reports an unexpected resource on global and workspace operations', async () => {
+    const global = descriptor('document.global-read', 'Global read', 'global', 'read')
+    const workspace = descriptor('document.workspace-read', 'Workspace read', 'workspace', 'read')
+    const invoke = vi.fn()
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover: vi.fn(async () => [global, workspace]), invoke },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    for (const operation of discovered.value as Array<{ operationRef: string }>) {
+      await expect(surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        arguments: {
+          operationRef: operation.operationRef,
+          resourceRef: `res_${'u'.repeat(26)}`,
+          input: {}
+        },
+        context
+      })).rejects.toMatchObject({
+        code: 'unexpected_resource',
+        failureClass: 'invalid_arguments',
+        retryable: false,
+        recovery: { action: 'remove_resource_ref' }
+      })
+      await expect(surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        arguments: {
+          operationRef: operation.operationRef,
+          input: { resourceRef: `res_${'u'.repeat(26)}` }
+        },
+        context
+      })).rejects.toMatchObject({
+        code: 'unexpected_resource',
+        failureClass: 'invalid_arguments',
+        retryable: false,
+        recovery: { action: 'remove_resource_ref' }
+      })
+    }
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('preserves the Host-resolved operation identity on invocation failures', async () => {
+    const operation = descriptor('document.failed-invocation', 'Failed invocation', 'global', 'read')
+    const invoke = vi.fn(async () => {
+      throw Object.assign(new Error('Capability output must be JSON serializable.'), {
+        code: 'non_serializable_output',
+        failureClass: 'failed'
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation]),
+        invoke
+      },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery result.')
+    const operationRef = discovered.value[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {} },
+      context
+    })).rejects.toMatchObject({
+      code: 'non_serializable_output',
+      operationRef,
+      capabilityId: operation.id,
+      cause: expect.objectContaining({ code: 'non_serializable_output' })
+    })
+    expect(invoke).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ actionId: operation.id }),
+      expect.anything()
+    )
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {}, unexpected: true },
+      context
+    })).rejects.toMatchObject({
+      code: 'invalid_arguments',
+      operationRef,
+      capabilityId: operation.id
+    })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('passes a Host workspace locator only through the private caller context', async () => {
+    const locator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'workspace-host-session-1',
+      path: '/remote/workspace'
+    }
+    const discover = vi.fn(async () => [descriptor('document.remote-read', 'Remote read', 'global', 'read')])
+    const resolveCaller = vi.fn((request: CapabilityAgentToolRequestContext) => ({
+      audience: 'agent' as const,
+      callerId: 'remote-agent',
+      workspaceId: request.workspaceId,
+      workspaceLocator: request.workspaceLocator
+    }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover },
+      resolveCaller
+    })
+    const remoteContext = {
+      ...context,
+      workspaceId: '/remote/workspace',
+      workspaceLocator: locator
+    }
+
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: remoteContext
+    })
+
+    expect(resolveCaller).toHaveBeenCalledWith(remoteContext)
+    expect(discover).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceId: '/remote/workspace',
+      workspaceLocator: locator
+    }), expect.any(Object), { context: remoteContext })
+    expect(JSON.stringify(surface.tools())).not.toContain('workspaceLocator')
+  })
+
+  it('isolates opaque caches by exact Principal context lease and workspace locator', async () => {
+    const operation = descriptor('document.lease-read', 'Lease read', 'global', 'read')
+    let identityVersion = 1
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation])
+      },
+      assertPrincipalLease: () => ({ identityVersion, principal: null }),
+      resolveCaller: (request) => ({
+        ...caller,
+        ...(request.workspaceLocator ? { workspaceLocator: request.workspaceLocator } : {})
+      })
+    })
+    const firstLocator = {
+      contractVersion: 1 as const,
+      hostSessionId: 'workspace-host-session-1',
+      path: '/remote/workspace'
+    }
+    const first = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: { ...context, workspaceLocator: firstLocator }
+    })
+    if (first.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
+    const operationRef = first.value[0]!.operationRef
+
+    identityVersion = 2
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef },
+      context: { ...context, workspaceLocator: firstLocator }
+    })).rejects.toMatchObject({ code: 'unknown_operation_ref' })
+
+    identityVersion = 1
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef },
+      context: {
+        ...context,
+        workspaceLocator: {
+          ...firstLocator,
+          hostSessionId: 'workspace-host-session-2'
+        }
+      }
+    })).rejects.toMatchObject({ code: 'unknown_operation_ref' })
+  })
+
+  it('rechecks the Principal lease after async caller resolution before direct discovery delivery', async () => {
+    const operation = descriptor('document.resolve-barrier', 'Resolve barrier', 'global', 'read')
+    let leaseCurrent = true
+    let switchDuringResolve = false
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover: vi.fn(async () => [operation]) },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: async () => {
+        await Promise.resolve()
+        if (switchDuringResolve) leaseCurrent = false
+        return caller
+      }
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery.')
+
+    switchDuringResolve = true
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { operationRef: discovered.value[0]!.operationRef },
+      context
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+  })
+
+  it('rechecks the Principal lease after an async resource-reference bind', async () => {
+    let leaseCurrent = true
+    const observe = vi.fn()
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        bindResourceRef: vi.fn(async () => {
+          await Promise.resolve()
+          leaseCurrent = false
+          return handle('1', 'b')
+        }),
+        observe
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: `res_${'b'.repeat(26)}` },
+      context
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(observe).not.toHaveBeenCalled()
+  })
+
+  it('rechecks the Principal lease after nested resource-handle projection', async () => {
+    const outerHandle = handle('1', 'o')
+    const nestedHandle = handle('1', 'n')
+    let leaseCurrent = true
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        bindResourceRef: vi.fn(async () => outerHandle),
+        observe: vi.fn(async () => observation(
+          outerHandle,
+          `res_${'o'.repeat(26)}`,
+          'document',
+          nestedHandle,
+          []
+        )),
+        describeResourceHandle: vi.fn(async () => {
+          await Promise.resolve()
+          leaseCurrent = false
+          return {
+            resourceRef: `res_${'n'.repeat(26)}`
+          }
+        })
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: `res_${'o'.repeat(26)}` },
+      context
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+  })
+
+  it('preserves an observation failure before a resource mutation is dispatched', async () => {
+    const mutate = defineCapability({
+      id: 'provider-administration.create-before-observation',
+      version: '1',
+      title: 'Create after administration observation',
+      description: 'Requires a live provider-administration resource.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['provider-administration'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: vi.fn(async () => ({
+        output: { ok: true as const },
+        changed: true,
+        semanticRevision: '2'
+      }))
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutate]))
+    let observationFails = false
+    const adminHandle = broker.issueResourceHandle(caller, {
+      resourceId: 'provider-administration-before-observation',
+      resourceKind: 'provider-administration',
+      workspaceId: caller.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe: async () => {
+        if (observationFails) throw new Error('Administration observation unavailable.')
+        return {
+          state: { providerInstanceRef: 'provider-instance-fixture' },
+          semanticRevision: '1',
+          operationIds: [mutate.descriptor.id]
+        }
+      }
+    })
+    const transferred = await broker.observe(caller, { resource: adminHandle })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    observationFails = true
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })).rejects.toMatchObject({ code: 'observation_failed' })
+    expect(mutate.handler).not.toHaveBeenCalled()
+  })
+
+  it('delivers a committed mutation resource without an implicit Provider observation', async () => {
+    const rootHandleSchema = z.object({
+      token: z.string(),
+      semanticRevision: z.string(),
+      expiresAt: z.string()
+    }).strict()
+    const dispatch = vi.fn()
+    const mutate = defineCapability({
+      id: 'provider-administration.create-output-observation',
+      version: '1',
+      title: 'Create provider root with observable output',
+      description: 'Creates a root and returns its Broker resource.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['provider-administration'],
+      producedResourceKinds: ['content-root'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ root: rootHandleSchema }).strict(),
+      handler: async (_input, handlerContext) => {
+        dispatch()
+        return {
+          output: {
+            root: handlerContext.issueResource({
+              resourceId: 'created-content-root',
+              resourceKind: 'content-root',
+              workspaceId: handlerContext.caller.workspaceId,
+              audiences: ['agent'],
+              semanticRevision: '1',
+              observe: async () => {
+                throw new Error('Created root observation unavailable.')
+              }
+            })
+          },
+          changed: true,
+          semanticRevision: '2'
+        }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutate]))
+    const adminHandle = broker.issueResourceHandle(caller, {
+      resourceId: 'provider-administration-output-observation',
+      resourceKind: 'provider-administration',
+      workspaceId: caller.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { providerInstanceRef: 'provider-instance-fixture' },
+        semanticRevision: '1',
+        operationIds: [mutate.descriptor.id]
+      })
+    })
+    const transferred = await broker.observe(caller, { resource: adminHandle })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) {
+      throw new Error('Expected provider-administration observation.')
+    }
+    expect(observed.value.operations[0]).toMatchObject({
+      operationRef: expect.stringMatching(/^op_/u),
+      inputShape: expect.any(Object)
+    })
+
+    const invoked = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef: transferred.resourceRef,
+        input: {}
+      },
+      context: { ...context, turnId: 'turn-output-observation', callId: 'call-create-root' }
+    })
+    expect(invoked).toMatchObject({
+      value: {
+        output: { root: { resourceRef: expect.stringMatching(/^res_/u) } },
+        changed: true
+      }
+    })
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords()).toContainEqual(expect.objectContaining({
+      actionId: mutate.descriptor.id,
+      status: 'success'
+    }))
+    if (invoked.tool !== CAPABILITY_AGENT_TOOL_NAMES.invoke) {
+      throw new Error('Expected provider-administration invocation.')
+    }
+    const rootResourceRef = (invoked.value.output as {
+      root: { resourceRef: string }
+    }).root.resourceRef
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: rootResourceRef },
+      context: { ...context, turnId: 'turn-output-observation', callId: 'call-observe-root' }
+    })).rejects.toMatchObject({ code: 'observation_failed' })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('reports outcome_unknown when a committed mutation nested handle expires before projection', async () => {
+    let now = new Date('2026-07-16T11:00:00.000Z')
+    const nestedDispatch = vi.fn()
+    const issueExpiringResource = (
+      handlerContext: CapabilityHandlerContext,
+      resourceId: string
+    ): CapabilityResourceHandle => {
+      const resource = handlerContext.issueResource({
+        resourceId,
+        resourceKind: 'content-root',
+        workspaceId: handlerContext.caller.workspaceId,
+        audiences: ['agent'],
+        semanticRevision: '1',
+        expiresInMs: 1,
+        observe: async () => ({ state: {}, semanticRevision: '1' })
+      })
+      now = new Date(now.getTime() + 2)
+      return resource
+    }
+    const nestedOutputMutation = defineCapability({
+      id: 'provider-administration.create-expired-nested-output',
+      version: '1',
+      title: 'Create an expiring nested output resource',
+      description: 'Commits an external write before returning a nested resource.',
+      audiences: ['agent'],
+      scope: 'global',
+      producedResourceKinds: ['content-root'],
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({
+        created: z.object({ resource: capabilityResourceHandleSchema }).strict()
+      }).strict(),
+      handler: async (_input, handlerContext) => {
+        nestedDispatch()
+        const resource = issueExpiringResource(handlerContext, 'expired-nested-output-root')
+        return {
+          output: {
+            created: { resource }
+          },
+          changed: false
+        }
+      }
+    })
+    const broker = new CapabilityBroker(
+      new CapabilityRegistry([nestedOutputMutation]),
+      { now: () => now }
+    )
+    const surface = createCapabilityAgentToolSurface({
+      broker,
+      resolveCaller: () => caller,
+      requestApproval: async () => 'allowed' as const
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: nestedOutputMutation.descriptor.id },
+      context: { ...context, turnId: 'expired-nested-output', callId: 'discover-expired-nested' }
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected mutation discovery.')
+    }
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: { ...context, turnId: 'expired-nested-output', callId: 'invoke-expired-nested' }
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(nestedDispatch).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords()).toContainEqual(expect.objectContaining({
+      actionId: nestedOutputMutation.descriptor.id,
+      status: 'success'
+    }))
+  })
+
+  it('reports outcome_unknown when a committed mutation result resource expires before projection', async () => {
+    let now = new Date('2026-07-16T11:00:00.000Z')
+    const dispatch = vi.fn()
+    const mutation = defineCapability({
+      id: 'provider-administration.update-expired-result-resource',
+      version: '1',
+      title: 'Update an expiring result resource',
+      description: 'Commits an external write before returning its refreshed resource.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['provider-administration'],
+      effect: 'external-write',
+      approval: 'none',
+      autonomousWrite: 'resource-authorized',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async () => {
+        dispatch()
+        return {
+          output: { ok: true as const },
+          changed: true,
+          semanticRevision: '2'
+        }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutation]), {
+      now: () => now,
+      handleTtlMs: 100
+    })
+    const administration = broker.issueResourceHandle(caller, {
+      resourceId: 'expiring-result-resource-administration',
+      resourceKind: 'provider-administration',
+      workspaceId: caller.workspaceId,
+      audiences: ['agent'],
+      semanticRevision: '1',
+      observe: async () => ({
+        state: { providerInstanceRef: 'provider-instance-fixture' },
+        semanticRevision: '1',
+        operationIds: [mutation.descriptor.id]
+      })
+    })
+    const transferred = await broker.observe(caller, { resource: administration })
+    let expireProjection = false
+    const expiringProjectionBroker: CapabilityAgentBroker = {
+      discover: (invokeCaller, query) => broker.discover(invokeCaller, query),
+      observe: (invokeCaller, request) => broker.observe(invokeCaller, request),
+      bindResourceRef: (invokeCaller, resourceRef) => (
+        broker.bindResourceRef(invokeCaller, resourceRef)
+      ),
+      describeResourceHandle: (invokeCaller, resource) => {
+        if (expireProjection) now = new Date(now.getTime() + 101)
+        return broker.describeResourceHandle(invokeCaller, resource)
+      },
+      invoke: (invokeCaller, request, options) => (
+        broker.invoke(invokeCaller, request, { signal: options?.signal })
+      ),
+      listEvents: (invokeCaller, query) => broker.listEvents(invokeCaller, query)
+    }
+    const surface = createCapabilityAgentToolSurface({
+      broker: expiringProjectionBroker,
+      resolveCaller: () => caller
+    })
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context: { ...context, turnId: 'expired-result-resource', callId: 'observe-administration' }
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) {
+      throw new Error('Expected administration observation.')
+    }
+    expireProjection = true
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef: transferred.resourceRef,
+        input: {}
+      },
+      context: { ...context, turnId: 'expired-result-resource', callId: 'invoke-expired-result' }
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(broker.listAuditRecords()).toContainEqual(expect.objectContaining({
+      actionId: mutation.descriptor.id,
+      status: 'success'
+    }))
+  })
+
+  it('preserves Broker output validation failures before mutation result delivery', async () => {
+    const dispatch = vi.fn()
+    const mutation = defineCapability({
+      id: 'provider-administration.invalid-output-before-delivery',
+      version: '1',
+      title: 'Return an invalid mutation output',
+      description: 'Fails Broker output validation before a result is delivered.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.literal(true) }).strict(),
+      handler: async () => {
+        dispatch()
+        return { output: { ok: false } as never, changed: false }
+      }
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutation]))
+    const surface = createCapabilityAgentToolSurface({
+      broker,
+      resolveCaller: () => caller,
+      requestApproval: async () => 'allowed' as const
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: mutation.descriptor.id },
+      context: { ...context, turnId: 'invalid-output', callId: 'discover-invalid-output' }
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected mutation discovery.')
+    }
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: { ...context, turnId: 'invalid-output', callId: 'invoke-invalid-output' }
+    })).rejects.toMatchObject({ code: 'invalid_output' })
+    expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('reports outcome_unknown when Principal changes while sanitizing a committed mutation result', async () => {
+    const operation = globalMutationDescriptor('document.sanitize-barrier', 'Sanitize barrier')
+    const outputHandle = handle('1', 's')
+    let leaseCurrent = true
+    const invoke = vi.fn(async (): Promise<CapabilityInvocationResult> => ({
+      actionId: operation.id,
+      output: outputHandle,
+      changed: true,
+      replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation]),
+        invoke,
+        describeResourceHandle: vi.fn(async () => {
+          await Promise.resolve()
+          leaseCurrent = false
+          return {
+            resourceRef: `res_${'s'.repeat(26)}`
+          }
+        })
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+      },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery.')
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: { ...context, turnId: 'turn-sanitize-barrier', callId: 'call-sanitize-barrier' }
+    })).rejects.toMatchObject({ code: 'outcome_unknown' })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('normalizes a Broker Principal rejection after mutation dispatch as non-retryable outcome_unknown', async () => {
+    const operation = globalMutationDescriptor('document.dispatch-principal-barrier', 'Dispatch barrier')
+    const invoke = vi.fn(async () => {
+      throw Object.assign(new Error('Principal changed at Broker delivery.'), {
+        code: 'principal_changed'
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [operation]),
+        invoke
+      },
+      resolveCaller: () => caller
+    })
+    const invocationContext = {
+      ...context,
+      turnId: 'turn-dispatch-principal-barrier',
+      callId: 'call-dispatch-principal-barrier'
+    }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: invocationContext
+    })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery.')
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} },
+      context: invocationContext
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
+  it('normalizes outcome_unknown after an expired resource renewal without a blind retry', async () => {
+    const mutation = defineCapability({
+      id: 'document.renewed-dispatch-barrier',
+      version: '1',
+      title: 'Renewed dispatch barrier',
+      description: 'Exercises outcome classification after one expired handle renewal.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }).descriptor
+    const resourceRef = `res_${'r'.repeat(26)}`
+    const expired = handle('1', 'e')
+    const renewed = handle('1', 'u')
+    const bindResourceRef = vi.fn()
+      .mockResolvedValueOnce(expired)
+      .mockResolvedValueOnce(renewed)
+    const observe = vi.fn(async () => observation(
+      expired,
+      resourceRef,
+      'document',
+      { title: 'Renewable document' },
+      [mutation]
+    ))
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('expired'), { code: 'resource_handle_expired' }))
+      .mockRejectedValueOnce(Object.assign(new Error('unknown'), { code: 'outcome_unknown' }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), bindResourceRef, observe, invoke },
+      resolveCaller: () => caller
+    })
+    const invocationContext = {
+      ...context,
+      turnId: 'turn-renewed-dispatch-barrier',
+      callId: 'call-renewed-dispatch-barrier'
+    }
+    const observed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef },
+      context: invocationContext
+    })
+    if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) throw new Error('Expected observation.')
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef,
+        input: {}
+      },
+      context: invocationContext
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(bindResourceRef).toHaveBeenCalledTimes(2)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a prior Principal resource reference before approval or label projection', async () => {
+    const protectedOperation = defineCapability({
+      id: 'document.publish-principal-bound-resource',
+      version: '1',
+      title: 'Publish Principal-bound resource',
+      description: 'Requires confirmation without exposing another Principal resource label.',
+      audiences: ['agent'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    }).descriptor
+    const priorResourceRef = `res_${'p'.repeat(26)}`
+    const resourceHandle = handle('1', 'p')
+    const bindResourceRef = vi.fn(async () => resourceHandle)
+    const observe = vi.fn(async () => observation(
+      resourceHandle,
+      priorResourceRef,
+      'document',
+      { title: 'Principal A confidential title' },
+      [protectedOperation]
+    ))
+    const invoke = vi.fn()
+    const requestApproval = vi.fn(async () => 'allowed' as const)
+    let principalVersion = 1
+    let principalSubject = 'person-a'
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [protectedOperation]),
+        bindResourceRef,
+        observe,
+        invoke
+      },
+      assertPrincipalLease: () => ({
+        identityVersion: principalVersion,
+        principal: {
+          authority: 'sciforge.identity-access',
+          subject: principalSubject,
+          assurance: 'local-selection' as const,
+          deviceId: 'installation-1',
+          identityVersion: principalVersion
+        }
+      }),
+      resolveCaller: () => caller,
+      requestApproval
+    })
+
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: priorResourceRef },
+      context
+    })
+
+    principalVersion = 2
+    principalSubject = 'person-b'
+    const discoveredForB = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    if (discoveredForB.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) {
+      throw new Error('Expected discover result.')
+    }
+    const operationRefForB = discoveredForB.value[0]!.operationRef
+    const error = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: {
+        operationRef: operationRefForB,
+        resourceRef: priorResourceRef,
+        input: {}
+      },
+      context: { ...context, turnId: 'turn-b', callId: 'call-b' }
+    }).then(() => undefined, (caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'unknown_resource_ref' })
+    expect(String((error as Error).message)).not.toContain('Principal A confidential title')
+    expect(requestApproval).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('derives one stable mutation identity from trusted provider call context', async () => {
+    const handler = vi.fn(async (input: { value: string }) => ({ output: { value: input.value } }))
+    const mutate = defineCapability({
+      id: 'test.stable-mutation',
+      version: '1',
+      title: 'Stable mutation',
+      description: 'Verifies provider-call idempotency after response loss.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'workspace-write',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ value: z.string() }).strict(),
+      outputSchema: z.object({ value: z.string() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([mutate]))
+    const invoke = vi.spyOn(broker, 'invoke')
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    const mutationContext = {
+      ...context,
+      runtimeId: 'codex',
+      threadId: 'thread-stable',
+      turnId: 'turn-stable',
+      callId: 'provider-call-stable'
+    }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: mutationContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    const first = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'first' } },
+      context: mutationContext
+    })
+    const replay = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'first' } },
+      context: { ...mutationContext, requestId: 'request-after-response-loss' }
+    })
+
+    expect(first.value).toMatchObject({ output: { value: 'first' }, replayed: false })
+    expect(replay.value).toMatchObject({ output: { value: 'first' }, replayed: true })
+    const firstInvocationId = invoke.mock.calls[0]?.[1].invocationId
+    expect(firstInvocationId).toMatch(/^agent_inv_[a-f0-9]{64}$/u)
+    expect(invoke.mock.calls[1]?.[1].invocationId).toBe(firstInvocationId)
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'changed' } },
+      context: mutationContext
+    })).rejects.toMatchObject({ code: 'idempotency_conflict' })
+    expect(invoke.mock.calls[2]?.[1].invocationId).toBe(firstInvocationId)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('separates mutation identities by operation and exact provider call context', async () => {
+    const firstMutation = globalMutationDescriptor('document.first-update', 'First update')
+    const secondMutation = globalMutationDescriptor('document.second-update', 'Second update')
+    const invoke = vi.fn(async (_caller, request): Promise<CapabilityInvocationResult> => ({
+      actionId: request.actionId,
+      ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+      output: { ok: true },
+      changed: true,
+      replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [firstMutation, secondMutation]),
+        invoke
+      },
+      resolveCaller: () => caller
+    })
+    const mutationContext = { ...context, turnId: 'turn-separated', callId: 'call-shared' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: mutationContext
+    })
+    const operations = discovered.value as Array<{ operationRef: string }>
+
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: operations[0]!.operationRef, input: {} },
+      context: mutationContext
+    })
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: operations[1]!.operationRef, input: {} },
+      context: mutationContext
+    })
+    await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: operations[0]!.operationRef, input: {} },
+      context: { ...mutationContext, callId: 'call-distinct' }
+    })
+
+    const invocationIds = invoke.mock.calls.map((call) => call[1].invocationId)
+    expect(invocationIds).toHaveLength(3)
+    expect(new Set(invocationIds).size).toBe(3)
+  })
+
+  it('fails closed for mutation without exact thread, turn, and call context but preserves reads', async () => {
+    const read = descriptor('document.read-contextless', 'Read without exact context', 'global', 'read')
+    const mutate = globalMutationDescriptor('document.update-contextless', 'Update without exact context')
+    const invoke = vi.fn(async (_caller, request): Promise<CapabilityInvocationResult> => ({
+      actionId: request.actionId,
+      ...(request.invocationId ? { invocationId: request.invocationId } : {}),
+      output: { ok: true },
+      changed: request.actionId === mutate.id,
+      replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [read, mutate]),
+        invoke
+      },
+      resolveCaller: () => caller
+    })
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })
+    const operations = discovered.value as Array<{ operationRef: string; title: string }>
+    const readRef = operations.find((operation) => operation.title === read.title)!.operationRef
+    const mutateRef = operations.find((operation) => operation.title === mutate.title)!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: readRef, input: {} },
+      context
+    })).resolves.toMatchObject({ value: { output: { ok: true } } })
+    expect(invoke.mock.calls[0]?.[1]).not.toHaveProperty('invocationId')
+
+    for (const incomplete of [
+      context,
+      { ...context, runtimeId: '   ', turnId: 'turn-1', callId: 'call-1' },
+      { ...context, threadId: '   ', turnId: 'turn-1', callId: 'call-1' },
+      { ...context, turnId: '   ', callId: 'call-1' },
+      { ...context, turnId: 'turn-1', callId: '   ' }
+    ]) {
+      await expect(surface.call({
+        name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        arguments: { operationRef: mutateRef, input: {} },
+        context: incomplete
+      })).rejects.toMatchObject({ code: 'missing_invocation_context' })
+    }
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('binds a transferred resourceRef and renews its expired cached handle on observation', async () => {
+    let now = new Date('2026-07-16T11:00:00.000Z')
+    const read = defineCapability({
+      id: 'document.read',
+      version: '1',
+      title: 'Read document',
+      description: 'Reads a bound document resource.',
+      audiences: ['agent', 'ui'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([read])
+    const broker = new CapabilityBroker(registry, { now: () => now, handleTtlMs: 1_000 })
+    const uiCaller: CapabilityCallerContext = {
+      audience: 'ui',
+      callerId: 'window-1',
+      workspaceId: '/workspace',
+      approvals: []
+    }
+    const uiHandle = broker.issueResourceHandle(uiCaller, {
+      resourceId: 'internal-paper',
+      resourceKind: 'document',
+      workspaceId: '/workspace',
+      audiences: ['ui', 'agent'],
+      semanticRevision: '1',
+      expiresInMs: 1_000,
+      observe: async () => ({
+        state: { title: 'Paper' },
+        semanticRevision: '1',
+        operationIds: ['document.read']
+      })
+    })
+    const transferred = await broker.observe(uiCaller, { resource: uiHandle })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+
+    const first = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })
+    expect(first.value).toMatchObject({ resourceRef: transferred.resourceRef, state: { title: 'Paper' } })
+    if (first.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) throw new Error('Expected observe result.')
+    const readRef = first.value.operations[0]?.operationRef
+
+    now = new Date('2026-07-16T11:00:02.000Z')
+    const invoked = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: readRef, resourceRef: transferred.resourceRef, input: {} },
+      context
+    })
+    expect(invoked.value).toMatchObject({ resourceRef: transferred.resourceRef, output: { ok: true } })
+    const renewed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })
+    expect(renewed.value).toMatchObject({ resourceRef: transferred.resourceRef, state: { title: 'Paper' } })
+  })
+
+  it('waits for human confirmation and grants only the approved action invocation', async () => {
+    const handler = vi.fn(async () => ({ output: { ok: true } }))
+    const publish = defineCapability({
+      id: 'test.publish',
+      version: '1',
+      title: 'Publish result',
+      description: 'Publishes a result outside the workspace.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ value: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([publish]))
+    let nextDecision: 'allowed' | 'denied' | 'cancelled' = 'allowed'
+    const confirmation = vi.fn(async (
+      _request: CapabilityAgentApprovalRequest
+    ): Promise<'allowed' | 'denied' | 'cancelled'> => nextDecision)
+    const invoke = vi.spyOn(broker, 'invoke')
+    const cancelApprovalTurn = vi.fn(() => 1)
+    const surface = createCapabilityAgentToolSurface({
+      broker,
+      resolveCaller: () => caller,
+      requestApproval: confirmation,
+      cancelApprovalTurn
+    })
+    const approvalContext = { ...context, turnId: 'turn-1', callId: 'call-1' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: approvalContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'result' } },
+      context: approvalContext
+    })).resolves.toMatchObject({ value: { output: { ok: true } } })
+
+    const approvalRequest = confirmation.mock.calls[0]?.[0]
+    if (!approvalRequest) throw new Error('Expected a confirmation request.')
+    expect(approvalRequest).toMatchObject({
+      context: approvalContext,
+      actionId: 'test.publish',
+      invocationId: expect.stringMatching(/^agent_inv_/u),
+      mode: 'confirmation',
+      input: { value: 'result' }
+    })
+    expect(approvalRequest.remoteApproval).toEqual({
+      eligible: true,
+      safeSummary: 'Publish result',
+      ttlMs: 4 * 60_000 + 30_000
+    })
+    expect(invoke.mock.calls[0]![0].approvals).toEqual([{
+      actionId: 'test.publish',
+      invocationId: approvalRequest.invocationId,
+      mode: 'confirmation'
+    }])
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    nextDecision = 'denied'
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'denied' } },
+      context: { ...approvalContext, callId: 'call-2' }
+    })).rejects.toMatchObject({ code: 'approval_denied' })
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    expect(surface.abortTurn({ runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1' }, 'user_stop')).toBe(1)
+    expect(cancelApprovalTurn).toHaveBeenCalledWith(
+      { runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1' },
+      'user_stop'
+    )
+  })
+
+  it('marks a confirmed workspace write as remotely approvable with a safe summary', async () => {
+    const write = defineCapability({
+      id: 'test.workspace.write',
+      version: '1',
+      title: 'Write workspace result',
+      description: 'Writes one result inside the current workspace.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'workspace-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ value: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const approval = vi.fn(async () => 'denied' as const)
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry([write])),
+      resolveCaller: () => caller,
+      requestApproval: approval
+    })
+    const approvalContext = { ...context, turnId: 'turn-remote-write', callId: 'call-remote-write' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: approvalContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'safe fixture' } },
+      context: approvalContext
+    })).rejects.toMatchObject({ code: 'approval_denied' })
+
+    expect(approval).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: 'test.workspace.write',
+      remoteApproval: {
+        eligible: true,
+        safeSummary: 'Write workspace result',
+        ttlMs: 4 * 60_000 + 30_000
+      }
+    }), expect.any(Object))
+  })
+
+  it('rechecks the captured Principal lease after approval and before dispatch', async () => {
+    const protectedCapability = defineCapability({
+      id: 'test.principal-bound-publish',
+      version: '1',
+      title: 'Principal-bound publish',
+      description: 'Requires confirmation and one unchanged Principal lease.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const protectedDescriptor = protectedCapability.descriptor
+    const invoke = vi.fn()
+    let leaseCurrent = true
+    const surface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        discover: vi.fn(async () => [protectedDescriptor]),
+        invoke
+      },
+      assertPrincipalLease: () => {
+        if (!leaseCurrent) {
+          throw new CapabilityAgentToolError('principal_changed', 'Principal changed.')
+        }
+      },
+      resolveCaller: () => caller,
+      requestApproval: async () => {
+        leaseCurrent = false
+        return 'allowed' as const
+      }
+    })
+    const invocationContext = { ...context, turnId: 'turn-a', callId: 'call-a' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: invocationContext
+    })
+    const operationRef = discovered.tool === CAPABILITY_AGENT_TOOL_NAMES.discover
+      ? discovered.value[0]?.operationRef
+      : undefined
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {} },
+      context: invocationContext
+    })).rejects.toMatchObject({ code: 'principal_changed' })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('aborts an active native broker invocation when its runtime turn stops', async () => {
+    const started = vi.fn()
+    let handlerSignal: AbortSignal | undefined
+    const execute = defineCapability({
+      id: 'test.long-native-write',
+      version: '1',
+      title: 'Long native write',
+      description: 'Runs until its host turn is stopped.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ script: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async (_input, handlerContext) => new Promise((_, reject) => {
+        handlerSignal = handlerContext.signal
+        started()
+        const fail = (): void => reject(new Error('native invoke aborted'))
+        if (handlerContext.signal?.aborted) fail()
+        else handlerContext.signal?.addEventListener('abort', fail, { once: true })
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry([execute])),
+      resolveCaller: () => caller,
+      requestApproval: async () => 'allowed' as const
+    })
+    const turnContext = { ...context, runtimeId: 'codex', turnId: 'turn-native', callId: 'call-native' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: turnContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+    const invocation = surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { script: 'sleep 600' } },
+      context: turnContext
+    })
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1))
+
+    expect(surface.abortTurn({ runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-native' })).toBe(1)
+    await expect(invocation).rejects.toMatchObject({
+      code: 'handler_failed',
+      details: { reasonCode: 'handler_failed', reasonMessage: 'native invoke aborted' }
+    })
+    expect(handlerSignal?.aborted).toBe(true)
+  })
+
+  it('aborts an active native visual call when its runtime turn stops', async () => {
+    let visualSignal: AbortSignal | undefined
+    const lookStarted = vi.fn()
+    const surface = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      visualRuntime: {
+        look: async (_input, visualContext) => new Promise((_, reject) => {
+          visualSignal = visualContext.signal
+          lookStarted()
+          const fail = (): void => reject(new Error('native visual look aborted'))
+          if (visualContext.signal.aborted) fail()
+          else visualContext.signal.addEventListener('abort', fail, { once: true })
+        }),
+        capture: async () => visualCaptureOutput()
+      },
+      resolveCaller: () => caller
+    })
+    const turnContext = { ...context, turnId: 'turn-visual-abort', callId: 'call-visual-abort' }
+    const visualCall = surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        sourceRef: visualRefs.source,
+        task: 'Inspect until the turn is stopped.'
+      },
+      context: turnContext
+    })
+    await vi.waitFor(() => expect(lookStarted).toHaveBeenCalledTimes(1))
+
+    expect(surface.abortTurn({
+      runtimeId: 'test',
+      threadId: 'thread-1',
+      turnId: 'turn-visual-abort'
+    })).toBe(1)
+    await expect(visualCall).rejects.toThrow('native visual look aborted')
+    expect(visualSignal?.aborted).toBe(true)
+  })
+
+  it('derives caller identity from transport and rejects non-agent callers and unknown refs', async () => {
+    const surface = createCapabilityAgentToolSurface({ broker: brokerStub(), resolveCaller: () => caller })
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' },
+      context
+    })).rejects.toMatchObject({ code: 'unknown_resource_ref' })
+
+    const retiredSurface = createCapabilityAgentToolSurface({
+      broker: {
+        ...brokerStub(),
+        bindResourceRef: vi.fn(() => {
+          throw Object.assign(new Error('retired'), { code: 'resource_ref_retired' })
+        })
+      },
+      resolveCaller: () => caller
+    })
+    await expect(retiredSurface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' },
+      context
+    })).rejects.toMatchObject({ code: 'resource_ref_retired' })
+
+    const uiSurface = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      resolveCaller: () => ({ ...caller, audience: 'ui' })
+    })
+    await expect(uiSurface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context
+    })).rejects.toEqual(expect.objectContaining<Partial<CapabilityAgentToolError>>({
+      code: 'invalid_caller_audience'
+    }))
+  })
+})
+
+function handle(revision: string, suffix = 'a'): CapabilityResourceHandle {
+  return {
+    token: `cap_${suffix.repeat(26)}`,
+    semanticRevision: revision,
+    expiresAt: '2026-07-16T12:00:00.000Z'
+  }
+}
+
+const visualRefs = {
+  source: `res_${'s'.repeat(26)}`,
+  target: `target_${'t'.repeat(26)}`,
+  snapshot: `snapshot_${'n'.repeat(26)}`,
+  region: `region_${'r'.repeat(26)}`,
+  artifact: `artifact_${'a'.repeat(26)}`,
+  lookProof: `visual_proof_${'l'.repeat(26)}`,
+  captureProof: `visual_proof_${'c'.repeat(26)}`
+} as const
+
+function visualLookOutput() {
+  return {
+    snapshotRef: visualRefs.snapshot,
+    regions: [{
+      regionRef: visualRefs.region,
+      label: 'Method overview',
+      confidence: 0.98
+    }],
+    evidence: {
+      summary: 'The method overview figure is tightly bounded by the returned region.',
+      claims: [{
+        kind: 'observation' as const,
+        text: 'The region contains the complete method overview.',
+        regionRef: visualRefs.region,
+        confidence: 0.98
+      }],
+      uncertainties: []
+    },
+    proof: {
+      schema: 'sciforge.visual-proof.v1' as const,
+      kind: 'look' as const,
+      status: 'verified' as const,
+      proofRef: visualRefs.lookProof,
+      sourceRef: visualRefs.source,
+      snapshotRef: visualRefs.snapshot,
+      provider: 'model-router' as const,
+      attestation: `sha256:${'b'.repeat(64)}` as const,
+      createdAt: '2026-07-26T10:00:00.000Z'
+    }
+  }
+}
+
+function visualCaptureOutput() {
+  return {
+    artifactRef: visualRefs.artifact,
+    relativePath: 'assets/method-overview.png',
+    mimeType: 'image/png',
+    width: 640,
+    height: 320,
+    size: 2_048,
+    sha256: 'd'.repeat(64),
+    changed: true,
+    proof: {
+      schema: 'sciforge.visual-proof.v1' as const,
+      kind: 'capture' as const,
+      status: 'persisted' as const,
+      proofRef: visualRefs.captureProof,
+      inspectionProofRef: visualRefs.lookProof,
+      snapshotRef: visualRefs.snapshot,
+      regionRef: visualRefs.region,
+      artifactRef: visualRefs.artifact,
+      sha256: 'd'.repeat(64),
+      cropped: true,
+      createdAt: '2026-07-26T10:01:00.000Z'
+    }
+  }
+}
+
+function observation(
+  resource: CapabilityResourceHandle,
+  resourceRef: string,
+  resourceKind: string,
+  state: CapabilityObservation['state'],
+  operations: CapabilityDescriptor[]
+): CapabilityObservation {
+  return {
+    resource,
+    resourceRef,
+    resourceKind,
+    semanticRevision: resource.semanticRevision,
+    observedAt: '2026-07-16T11:00:00.000Z',
+    state,
+    operations
+  }
+}
+
+function descriptor(
+  id: string,
+  title: string,
+  scope: CapabilityDescriptor['scope'],
+  effect: CapabilityDescriptor['effect']
+): CapabilityDescriptor {
+  return defineCapability({
+    id,
+    version: '2',
+    title,
+    description: `${title} through the broker.`,
+    audiences: ['agent'],
+    scope,
+    ...(scope === 'resource' ? { resourceKinds: ['surface', 'workspace-preview'] } : {}),
+    effect,
+    approval: 'none',
+    concurrency: effect === 'read'
+      ? { revision: 'none', idempotency: 'none' }
+      : { revision: 'optimistic', idempotency: 'required' },
+    inputSchema: z.object({ title: z.string().optional() }).strict(),
+    outputSchema: z.object({ ok: z.boolean() }).strict(),
+    handler: async () => ({ output: { ok: true } })
+  }).descriptor
+}
+
+function globalMutationDescriptor(id: string, title: string): CapabilityDescriptor {
+  return defineCapability({
+    id,
+    version: '1',
+    title,
+    description: `${title} through the broker.`,
+    audiences: ['agent'],
+    scope: 'global',
+    effect: 'workspace-write',
+    approval: 'none',
+    concurrency: { revision: 'none', idempotency: 'required' },
+    inputSchema: z.object({}).strict(),
+    outputSchema: z.object({ ok: z.boolean() }).strict(),
+    handler: async () => ({ output: { ok: true } })
+  }).descriptor
+}
+
+function brokerStub(): CapabilityAgentBroker {
+  return {
+    discover: vi.fn(async () => []),
+    observe: vi.fn(),
+    describeResourceHandle: vi.fn((_caller, resource) => ({
+      resourceRef: `res_${resource.token.slice('cap_'.length)}`
+    })),
+    bindResourceRef: vi.fn(() => {
+      throw new CapabilityAgentToolError('unknown_resource_ref', 'The resource reference is unknown or expired.')
+    }),
+    invoke: vi.fn(),
+    listEvents: vi.fn(async () => [])
+  }
+}
+
+function readCapability(id: string) {
+  return defineCapability({
+    id,
+    version: '1',
+    title: 'Hot-discovered capability',
+    description: 'Used to verify current-registry discovery.',
+    audiences: ['agent'],
+    scope: 'global',
+    effect: 'read',
+    approval: 'none',
+    concurrency: { revision: 'none', idempotency: 'none' },
+    inputSchema: z.object({
+      query: z.string()
+        .regex(/^query_[A-Za-z0-9_-]{4,32}$/u)
+        .describe('A caller-generated query identifier.')
+        .optional()
+    }).strict(),
+    outputSchema: z.object({ ok: z.boolean() }).strict(),
+    handler: async () => ({ output: { ok: true } })
+  })
+}

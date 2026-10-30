@@ -1,0 +1,11 @@
+sample,group,response
+C01,Control,1.1
+C02,Control,1.3
+C03,Control,1.0
+C04,Control,1.4
+C05,Control,1.2
+T01,Treatment,2.0
+T02,Treatment,2.4
+T03,Treatment,2.1
+T04,Treatment,2.6
+T05,Treatment,2.3

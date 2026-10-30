@@ -1,0 +1,4 @@
+interface:
+  display_name: "MinerU"
+  short_description: "Parse PDFs and documents with MinerU APIs"
+  default_prompt: "Use $mineru to parse this PDF into Markdown and save the result."

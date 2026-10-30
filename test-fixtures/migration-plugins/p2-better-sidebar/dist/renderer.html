@@ -1,0 +1,14 @@
+<!doctype html><html><body><main id="sciforge-plugin"><h1>Better Sidebar</h1><p id="status">Waiting for SciForge...</p><button id="ping" type="button">Ping host</button></main><script type="module">
+const status = document.querySelector('#status')
+window.addEventListener('message', (event) => {
+  if (event.data?.type === 'host.init') {
+    status.textContent = `Plugin ${event.data.version} / generation ${event.data.generation}`
+    window.parent.postMessage({ type: 'ready' }, '*')
+  }
+  if (event.data?.type === 'pong') status.textContent = 'Host bridge connected'
+})
+window.parent.postMessage({ type: 'ready' }, '*')
+document.querySelector('#ping').addEventListener('click', () => {
+  window.parent.postMessage({ type: 'ping', requestId: String(Date.now()) }, '*')
+})
+</script></body></html>

@@ -1,0 +1,14 @@
+{
+  "stateRoot": "../../.e2e-runtime",
+  "roots": [],
+  "task": {
+    "role": "electron-domain-source",
+    "command": "node",
+    "args": ["scripts/electron-domain-smoke.mjs"],
+    "cwd": "../..",
+    "timeoutMs": 180000
+  },
+  "ports": [],
+  "profileDirectories": ["profiles/electron-domain-smoke"],
+  "stopGraceMs": 10000
+}

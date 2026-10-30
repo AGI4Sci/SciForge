@@ -1,0 +1,10 @@
+[
+  {
+    "insert": [
+      {
+        "id": "sciforge.mcp-bridge-compat",
+        "name": "./dist/main.js"
+      }
+    ]
+  }
+]

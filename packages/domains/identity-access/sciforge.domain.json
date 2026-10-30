@@ -1,0 +1,131 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-identity-access",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.identity-access",
+    "displayName": "Identity and Access",
+    "version": "5.0.2",
+    "hostApi": {
+      "minimum": "1.6.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 900
+  },
+  "contributionContracts": {
+    "identity-access.authenticated-cloud-transport": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.authenticated-cloud-transport",
+      "contractVersion": "4.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.collaboration"
+      ]
+    },
+    "identity-access.device-fact-attestation-signing": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.device-fact-attestation-signing",
+      "contractVersion": "2.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.collaboration"
+      ]
+    },
+    "identity-access.agent-cloud-runtime": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.agent-cloud-runtime",
+      "contractVersion": "4.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.collaboration"
+      ]
+    },
+    "identity-access.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "identity-access.open-account",
+      "label": "identityAccountToolbar"
+    },
+    "identity-access.account-overlay": {
+      "location": "workbench.global-overlay",
+      "title": "Identity"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "id": "identity-access.capabilities",
+          "kind": "main.capability-factory",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.principal-provider",
+          "kind": "main.principal-provider",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.runtime-lifecycle",
+          "kind": "main.runtime-lifecycle",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.authenticated-cloud-transport",
+          "kind": "main.extension",
+          "version": "4.0.0",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.device-fact-attestation-signing",
+          "kind": "main.extension",
+          "version": "2.0.0",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.agent-cloud-runtime",
+          "kind": "main.extension",
+          "version": "4.0.0",
+          "priority": 900
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "id": "identity-access.open-account",
+          "kind": "renderer.command",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.workbench-toolbar-action",
+          "kind": "renderer.workbench-toolbar-action",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.account-overlay",
+          "kind": "renderer.workbench-global-overlay",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.lifecycle",
+          "kind": "renderer.lifecycle",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.translations",
+          "kind": "renderer.i18n-resource",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.toolbar-translations",
+          "kind": "renderer.i18n-resource",
+          "priority": 900
+        }
+      ]
+    }
+  ]
+}

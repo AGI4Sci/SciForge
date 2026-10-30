@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Example Plugin</title>
+    <style>
+      :root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
+      body { margin: 0; padding: 16px; background: Canvas; color: CanvasText; }
+      main { display: grid; gap: 12px; }
+      input { box-sizing: border-box; width: 100%; padding: 8px; }
+      ul { display: grid; gap: 6px; margin: 0; padding-left: 20px; }
+      .muted { opacity: .7; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Example Plugin</h1>
+      <label>
+        Filter items
+        <input id="filter" type="search" placeholder="Type to filter">
+      </label>
+      <p id="status" class="muted">Connecting to SciForge...</p>
+      <ul id="items"></ul>
+    </main>
+    <script type="module">
+      import { createSciForgeUiSdk } from './sdk.mjs'
+
+      const sdk = createSciForgeUiSdk()
+      const items = ['Alpha', 'Beta', 'Gamma']
+      const filter = document.querySelector('#filter')
+      const list = document.querySelector('#items')
+      const status = document.querySelector('#status')
+
+      function render() {
+        const query = filter.value.trim().toLowerCase()
+        list.replaceChildren(...items
+          .filter((item) => item.toLowerCase().includes(query))
+          .map((item) => {
+            const element = document.createElement('li')
+            element.textContent = item
+            return element
+          }))
+      }
+
+      filter.addEventListener('input', render)
+      window.addEventListener('message', (event) => {
+        if (event.source === window.parent && event.data?.type === 'host.init') {
+          status.textContent = `Connected: ${event.data.version ?? 'unknown'}`
+        }
+      })
+      render()
+
+      window.addEventListener('unload', () => sdk.dispose(), { once: true })
+    </script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- New project-authored plain-text layout; Apache-2.0. No inherited artwork. -->
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+  <text x="80" y="96" font-family="sans-serif" font-size="32" fill="#17212B" data-max-width="1100">{{PAGE_TITLE}}</text>
+  <text x="80" y="140" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{PAGE_SUBTITLE}}</text>
+  <text x="80" y="220" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{QUESTION_LABEL}}</text>
+  <text x="80" y="254" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{QUESTION_LINE_1}}</text>
+  <text x="80" y="288" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{QUESTION_LINE_2}}</text>
+  <text x="80" y="322" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{WHY_IT_MATTERS_LINE_1}}</text>
+  <text x="80" y="356" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{WHY_IT_MATTERS_LINE_2}}</text>
+  <text x="80" y="390" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{BOUNDARY_LINE}}</text>
+  <text x="80" y="424" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{GUARDRAIL}}</text>
+  <text x="660" y="220" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_LABEL}}</text>
+  <text x="660" y="254" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_1_TITLE}}</text>
+  <text x="660" y="288" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_1_TEXT}}</text>
+  <text x="660" y="322" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_2_TITLE}}</text>
+  <text x="660" y="356" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_2_TEXT}}</text>
+  <text x="660" y="390" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_3_TITLE}}</text>
+  <text x="660" y="424" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="520">{{EVIDENCE_3_TEXT}}</text>
+  <text x="80" y="650" font-family="sans-serif" font-size="14" fill="#17212B" data-max-width="1100" data-role="footer">{{SOURCE_TRACE}}</text>
+</svg>

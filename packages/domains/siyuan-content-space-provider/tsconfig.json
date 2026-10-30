@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ES2023",
+      "DOM"
+    ],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "types": [
+      "node",
+      "react"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@sciforge/domain-sdk/*": [
+        "../../domain-sdk/src/*"
+      ],
+      "@sciforge/domain-content-space/contract": [
+        "../content-space/src/contract.ts"
+      ]
+    },
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "vitest.config.ts",
+    "src/**/*.tsx"
+  ]
+}

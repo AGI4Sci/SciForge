@@ -1,0 +1,1598 @@
+import {
+  claudeSettingsPatch,
+  codexSettingsPatch,
+  getActiveAgentRuntime,
+  getClaudeRuntimeSettings,
+  getCodexRuntimeSettings,
+  getDshRuntimeSettings,
+  getPiRuntimeSettings,
+  type AgentRuntimeId
+} from '@shared/app-settings'
+import type {
+  AgentRuntimeAuxiliaryOperation,
+  AgentRuntimeCapabilities,
+  AgentRuntimeDiscoveryResult,
+  AgentRuntimeEvent,
+  AgentRuntimeHandoffStartResult,
+  AgentRuntimeItem,
+  AgentRuntimeListThreadChildrenResponse,
+  AgentRuntimeMemoryRecord,
+  AgentRuntimeReadChildTranscriptInput,
+  AgentRuntimeReadChildTranscriptResponse,
+  AgentRuntimeThreadRelation,
+  AgentRuntimeThread,
+  AgentRuntimeThreadPage,
+  AgentRuntimeUsage
+} from '@shared/agent-runtime-contract'
+import {
+  createAgentRuntimeCapabilityMatrix,
+  createDefaultAgentRuntimeCapabilities,
+  isAgentRuntimeActiveTurnState,
+  isAgentRuntimeTerminalTurnState,
+  normalizeAgentRuntimeTurnState
+} from '@shared/agent-runtime-contract'
+import { runtimeErrorToError } from '@shared/runtime-error'
+import { agentRuntimeClient } from './agent-runtime-client'
+import {
+  agentRuntimeEventBelongsToThread,
+  batchThreadEventSinkDeltas,
+  dispatchAgentRuntimeEvent
+} from './agent-runtime-event-dispatcher'
+import { rendererRuntimeClient } from './runtime-client'
+import { preserveMessageMetadata } from './runtime-message-metadata'
+import type {
+  AgentProvider,
+  ChatBlock,
+  CompactionBlock,
+  NormalizedThread,
+  ReviewBlock,
+  RuntimeDisclosureMetadata,
+  ThreadEventSink,
+  ThreadUsageSnapshot,
+  ToolBlock,
+  UserInputAnswer,
+  UserInputQuestion
+} from './types'
+import { extractScientificObjectMetadata } from '@shared/scientific-objects'
+import type { LocalRuntimeMemoryRecordJson } from './local-runtime-contract'
+import { getDisplayThreadTitle } from '../lib/thread-title'
+import {
+  describeRuntimeError,
+  isExecutionIntegrityErrorCode
+} from '../lib/format-runtime-error'
+import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+
+type LegacyCapabilities = ReturnType<AgentProvider['getCapabilities']>
+type SendUserMessageOptions = NonNullable<Parameters<AgentProvider['sendUserMessage']>[2]>
+type AgentRuntimeThreadMetadata = Partial<Pick<
+  NormalizedThread,
+  | 'threadSource'
+  | 'visibility'
+  | 'sidebarVisibility'
+  | 'titleSource'
+  | 'parentTurnId'
+  | 'agentNickname'
+  | 'agentRole'
+>>
+type InteractionRequestRef = {
+  threadId: string
+  runtimeId: AgentRuntimeId
+  requestId?: string
+}
+
+export function defaultCapabilities(runtimeId: AgentRuntimeId = 'codex'): AgentRuntimeCapabilities {
+  if (runtimeId === 'dsh') return dshDefaultCapabilities()
+  if (runtimeId === 'pi') return piDefaultCapabilities()
+  return createDefaultAgentRuntimeCapabilities({
+    runtimeId,
+    transport: runtimeId === 'claude' ? 'cli_process' : 'jsonrpc_stdio'
+  })
+}
+
+// Pre-connect renderer fallback for Pi (custom JSONL RPC over stdio, verified
+// against @earendil-works/pi-coding-agent@1.4.0). Conversation capabilities
+// (streaming text, interrupt, replay, restart resume of host-managed sessions)
+// are safe to show pre-connect; governed tool calling is declared by the
+// connected adapter when the Host tool surface is wired, so this fallback
+// keeps tools, steering, reasoning and fork unavailable.
+function piDefaultCapabilities(): AgentRuntimeCapabilities {
+  return {
+    ...createDefaultAgentRuntimeCapabilities({
+      runtimeId: 'pi',
+      transport: 'jsonl_stdio'
+    }),
+    matrix: createAgentRuntimeCapabilityMatrix({
+      nativeHistory: true,
+      nativeResume: true,
+      eventReplay: true,
+      usage: true,
+      reasons: { steer: 'unverified' }
+    }),
+    events: { live: true, replayable: true, sequenced: true, delivery: 'async_iterable' },
+    controls: {
+      interrupt: true,
+      steer: false,
+      approval: 'unsupported',
+      userInput: 'unsupported',
+      compact: 'unsupported',
+      fork: false,
+      review: false,
+      goals: false,
+      todos: false,
+      resumeSession: false
+    }
+  }
+}
+
+// Pre-connect renderer fallback for DSH (DeepSeek Harness over ACP v1 stdio,
+// served by the @sciforge/dsh-runtime engine and the production Host adapter).
+// Declared truthfully and conservatively: control/thread/turn and Host MCP
+// tool calling are supported; fork, mid-turn steer, transcript replay, image
+// input/attachments, session deletion, and DSH's own built-in command/file
+// tools (disabled by the pinned host-safety patch) are not; anything unlisted
+// stays at the unavailable defaults.
+function dshDefaultCapabilities(): AgentRuntimeCapabilities {
+  const caps = createDefaultAgentRuntimeCapabilities({
+    runtimeId: 'dsh',
+    transport: 'jsonrpc_stdio'
+  })
+  return {
+    ...caps,
+    matrix: createAgentRuntimeCapabilityMatrix({
+      nativeHistory: true,
+      reasons: {
+        steer: 'DSH does not support mid-turn steering through the ACP session yet.',
+        fork: 'DSH does not support fork through the ACP session yet.',
+        eventReplay: 'DSH does not expose transcript replay through the ACP session yet.'
+      }
+    }),
+    events: {
+      live: true,
+      replayable: false,
+      sequenced: true,
+      delivery: 'ipc'
+    },
+    threadMaterialization: 'after_first_user_message',
+    reasoning: {
+      available: true,
+      streaming: true,
+      visibility: 'summary',
+      source: 'model'
+    },
+    model: {
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true
+    },
+    tools: {
+      ...caps.tools,
+      toolCalling: true,
+      mcp: {
+        available: true,
+        search: { available: false, reason: 'DSH MCP tool search is not exposed yet.' }
+      }
+    },
+    controls: {
+      ...caps.controls,
+      interrupt: true,
+      approval: 'async'
+    },
+    storage: {
+      ...caps.storage,
+      guiOwnedThreads: true,
+      backendThreadIdStable: true
+    }
+  }
+}
+
+function legacyCapabilities(capabilities: AgentRuntimeCapabilities): LegacyCapabilities {
+  return {
+    interrupt: capabilities.controls.interrupt,
+    stream: capabilities.events.live,
+    approvals: capabilities.controls.approval === 'sync' || capabilities.controls.approval === 'async',
+    attachFiles: capabilities.storage.attachments.available,
+    review: capabilities.controls.review === true,
+    compact: capabilities.controls.compact === 'native' || capabilities.controls.compact === 'noop',
+    fork: capabilities.controls.fork === true,
+    steer: capabilities.controls.steer === true,
+    goals: capabilities.controls.goals === true,
+    todos: capabilities.controls.todos === true,
+    skills: capabilities.tools.skills.available === true,
+    checkpoints: capabilities.storage.checkpoints?.available === true,
+    sideConversations: capabilities.controls.fork === true
+  }
+}
+
+function turnOptionsForRuntime(runtimeId: AgentRuntimeId, options: SendUserMessageOptions): SendUserMessageOptions {
+  if (runtimeId === 'dsh') {
+    // DSH's model is selected by the Host ModelRouter, not inherited composer
+    // hints from another runtime. The neutral default agent mode needs no ACP
+    // override; retain other modes so unsupported requests still fail closed.
+    const { model: _model, reasoningEffort: _reasoning, serviceTier: _tier, mode, ...rest } = options
+    return { ...rest, ...(mode && mode !== 'agent' ? { mode } : {}) }
+  }
+  if (runtimeId !== 'claude') return options
+  const { model: _model, ...rest } = options
+  return rest
+}
+
+function unresolvedInteraction(feature: string, requestId: string): Error {
+  return runtimeErrorToError({
+    code: 'capability_unavailable',
+    message: `Agent runtime provider cannot resolve ${feature} without a neutral thread mapping.`,
+    details: { feature, requestId }
+  })
+}
+
+function unresolvedThreadRuntime(threadId: string): Error {
+  return runtimeErrorToError({
+    code: 'capability_unavailable',
+    message: `Agent runtime provider cannot route thread-bound operation without a known thread runtime: ${threadId}.`,
+    details: { feature: 'thread_runtime', threadId }
+  })
+}
+
+function normalizeThread(thread: AgentRuntimeThread): NormalizedThread {
+  const threadMetadata = thread as AgentRuntimeThread & AgentRuntimeThreadMetadata
+  const normalized = {
+    id: thread.id,
+    runtimeId: thread.runtimeId,
+    workspaceLocator: thread.workspaceLocator,
+    title: thread.title,
+    updatedAt: thread.updatedAt,
+    model: thread.model ?? '',
+    mode: thread.mode ?? '',
+    workspace: thread.workspace,
+    workspaceDisplayName: thread.workspaceDisplayName,
+    status: thread.status,
+    archived: thread.archived,
+    preview: thread.preview,
+    latestTurnId: thread.latestTurnId,
+    latestTurnStatus: thread.latestTurnStatus,
+    threadSource: threadMetadata.threadSource,
+    visibility: threadMetadata.visibility,
+    sidebarVisibility: threadMetadata.sidebarVisibility,
+    titleSource: threadMetadata.titleSource,
+    relation: thread.relation,
+    parentThreadId: thread.parentThreadId,
+    parentTurnId: threadMetadata.parentTurnId,
+    forkedFromThreadId: thread.forkedFromThreadId,
+    forkedFromTitle: thread.forkedFromTitle,
+    forkedAt: thread.forkedAt,
+    forkedFromMessageCount: thread.forkedFromMessageCount,
+    forkedFromTurnCount: thread.forkedFromTurnCount,
+    agentNickname: threadMetadata.agentNickname,
+    agentRole: threadMetadata.agentRole,
+    goal: thread.goal ?? null,
+    todos: thread.todos ?? null,
+    guiPlan: thread.guiPlan ?? null,
+    hasUserMessage: thread.hasUserMessage
+  }
+  return {
+    ...normalized,
+    title: getDisplayThreadTitle(normalized)
+  }
+}
+
+function disclosureMeta(meta: Record<string, unknown> | undefined, preserveMessageFacts = false): RuntimeDisclosureMetadata | undefined {
+  if (!meta) return undefined
+  const next: RuntimeDisclosureMetadata = {}
+  if (typeof meta.displayText === 'string') next.displayText = meta.displayText
+  if (typeof meta.source === 'string') next.source = meta.source
+  if (typeof meta.sourceLabel === 'string') next.sourceLabel = meta.sourceLabel
+  if (Array.isArray(meta.attachmentIds)) {
+    const attachmentIds = meta.attachmentIds.filter((value): value is string => typeof value === 'string')
+    if (attachmentIds.length) next.attachmentIds = attachmentIds
+  }
+  if (Array.isArray(meta.attachments)) {
+    next.attachments = meta.attachments.filter(
+      (value): value is NonNullable<RuntimeDisclosureMetadata['attachments']>[number] =>
+        typeof value === 'object' && value !== null
+    )
+  }
+  const generatedFiles = Array.isArray(meta.generatedFiles)
+    ? meta.generatedFiles
+    : Array.isArray(meta.generatedImages)
+      ? meta.generatedImages
+      : Array.isArray(meta.images)
+        ? meta.images
+        : undefined
+  if (generatedFiles) {
+    next.generatedFiles = generatedFiles.filter(
+      (value): value is NonNullable<RuntimeDisclosureMetadata['generatedFiles']>[number] =>
+        typeof value === 'object' && value !== null
+    )
+  }
+  if (Array.isArray(meta.activeSkillIds)) {
+    const activeSkillIds = meta.activeSkillIds.filter((value): value is string => typeof value === 'string')
+    if (activeSkillIds.length) next.activeSkillIds = activeSkillIds
+  }
+  if (Array.isArray(meta.injectedMemoryIds)) {
+    const injectedMemoryIds = meta.injectedMemoryIds.filter((value): value is string => typeof value === 'string')
+    if (injectedMemoryIds.length) next.injectedMemoryIds = injectedMemoryIds
+  }
+  if (typeof meta.skillInjectionBytes === 'number') next.skillInjectionBytes = meta.skillInjectionBytes
+  const scientific = extractScientificObjectMetadata(meta)
+  if (scientific.scientificObjects.length) next.scientificObjects = scientific.scientificObjects
+  if (scientific.comparisons.length) next.scientificObjectComparisons = scientific.comparisons
+  if (scientific.workspaceObservations.length) next.workspaceObservations = scientific.workspaceObservations
+  return preserveMessageFacts ? preserveMessageMetadata(meta, next) : Object.keys(next).length ? next : undefined
+}
+
+function visibleStatus(status: AgentRuntimeItem['status']): 'running' | 'success' | 'error' {
+  if (status === 'error' || status === 'failed' || status === 'aborted') return 'error'
+  if (status === 'running' || status === 'pending') return 'running'
+  return 'success'
+}
+
+function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function requestIdMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = meta?.[key]
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function questionsMeta(meta: Record<string, unknown> | undefined): UserInputQuestion[] {
+  const rawQuestions = meta?.questions
+  if (!Array.isArray(rawQuestions)) return []
+  return rawQuestions.map(normalizeMetaQuestion).filter((question): question is UserInputQuestion => question != null)
+}
+
+function normalizeMetaQuestion(raw: unknown): UserInputQuestion | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const id = stringValue(record.id)
+  const question = stringValue(record.question)
+  if (!id || !question) return null
+  return {
+    id,
+    header: stringValue(record.header) || 'Input',
+    question,
+    options: Array.isArray(record.options)
+      ? record.options.map(normalizeMetaOption).filter((option): option is UserInputQuestion['options'][number] => option != null)
+      : []
+  }
+}
+
+function normalizeMetaOption(raw: unknown): UserInputQuestion['options'][number] | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const label = stringValue(record.label)
+  if (!label) return null
+  return {
+    label,
+    description: stringValue(record.description) || ''
+  }
+}
+
+function toolBlock(item: AgentRuntimeItem): ToolBlock {
+  return {
+    kind: 'tool',
+    id: item.id,
+    createdAt: item.createdAt,
+    summary: item.summary?.trim() || item.text?.trim() || 'Tool',
+    status: visibleStatus(item.status),
+    toolKind: item.toolKind,
+    detail: item.detail,
+    detailArtifact: item.detailArtifact,
+    outputStatus: item.outputStatus,
+    meta: item.meta
+  }
+}
+
+function compactionBlock(item: AgentRuntimeItem): CompactionBlock {
+  return {
+    kind: 'compaction',
+    id: item.id,
+    createdAt: item.createdAt,
+    summary: item.summary?.trim() || item.text?.trim() || 'Context compacted',
+    status: visibleStatus(item.status),
+    detail: item.detail
+  }
+}
+
+function reviewBlock(item: AgentRuntimeItem): ReviewBlock {
+  return {
+    kind: 'review',
+    id: item.id,
+    createdAt: item.createdAt,
+    title: item.summary?.trim() || 'Review',
+    status: visibleStatus(item.status),
+    reviewText: item.text,
+    output: item.meta?.output as ReviewBlock['output']
+  }
+}
+
+function systemBlock(item: AgentRuntimeItem): Extract<ChatBlock, { kind: 'system' }> {
+  const code = stringMeta(item.meta, 'code')
+  if (isExecutionIntegrityErrorCode(code)) {
+    const view = describeRuntimeError(new Error(JSON.stringify({
+      code,
+      message: item.text ?? item.summary ?? '',
+      ...(item.detail ? { details: item.detail } : {}),
+      severity: 'error'
+    })))
+    return {
+      kind: 'system',
+      id: item.id,
+      createdAt: item.createdAt,
+      text: view.summary,
+      ...(view.code ? { code: view.code } : {}),
+      ...(view.detail ? { detail: view.detail } : {}),
+      severity: 'error'
+    }
+  }
+  return {
+    kind: 'system',
+    id: item.id,
+    createdAt: item.createdAt,
+    text: item.text ?? item.summary ?? '',
+    detail: item.detail,
+    severity: visibleStatus(item.status) === 'error' ? 'error' : 'info'
+  }
+}
+
+function blockFromItem(item: AgentRuntimeItem, turnStatus?: string): ChatBlock | null {
+  const kind = item.kind
+  switch (kind) {
+    case 'user_message':
+      return {
+        kind: 'user',
+        id: item.id,
+        ...(item.turnId ? { turnId: item.turnId } : {}),
+        createdAt: item.createdAt,
+        text: item.text ?? '',
+        meta: disclosureMeta(item.meta, true),
+        ...(turnStatus ? { turnStatus } : {})
+      }
+    case 'assistant_message':
+      {
+        const meta = disclosureMeta(item.meta, true)
+        return {
+          kind: 'assistant',
+          id: item.id,
+          createdAt: item.createdAt,
+          text: item.text ?? '',
+          ...(meta ? { meta } : {})
+        }
+      }
+    case 'reasoning':
+      return { kind: 'reasoning', id: item.id, createdAt: item.createdAt, text: item.text ?? '' }
+    case 'tool':
+      return toolBlock(item)
+    case 'compaction':
+      return compactionBlock(item)
+    case 'review':
+      return reviewBlock(item)
+    case 'system':
+      return systemBlock(item)
+    case 'approval':
+      return {
+        kind: 'approval',
+        id: item.id,
+        createdAt: item.createdAt,
+        approvalId:
+          requestIdMeta(item.meta, 'codexRequestId') ??
+          stringMeta(item.meta, 'approvalId') ??
+          item.id,
+        summary: item.summary?.trim() || item.text?.trim() || 'Approval required',
+        toolName: stringMeta(item.meta, 'toolName'),
+        status: visibleStatus(item.status) === 'error'
+          ? 'error'
+          : visibleStatus(item.status) === 'success'
+            ? 'allowed'
+            : 'pending',
+        meta: disclosureMeta(item.meta)
+      }
+    case 'user_input':
+      {
+        const requestId =
+          requestIdMeta(item.meta, 'codexRequestId') ??
+          stringMeta(item.meta, 'requestId') ??
+          item.id
+        const questions = questionsMeta(item.meta)
+        return {
+          kind: 'user_input',
+          id: item.id,
+          createdAt: item.createdAt,
+          requestId,
+          questions: questions.length > 0
+            ? questions
+            : [{
+                id: stringMeta(item.meta, 'questionId') ?? item.id,
+                header: 'Input',
+                question: item.summary?.trim() || item.text?.trim() || 'Input requested',
+                options: []
+              }],
+          status: visibleStatus(item.status) === 'error'
+            ? 'error'
+            : visibleStatus(item.status) === 'success'
+              ? 'submitted'
+              : 'pending'
+        }
+      }
+    default: {
+      const neverKind: never = kind
+      return neverKind
+    }
+  }
+}
+
+function pageItems(page: AgentRuntimeThreadPage): AgentRuntimeItem[] {
+  return page.turns.flatMap((turn) => turn.items ?? [])
+}
+
+type DetailTurn = AgentRuntimeThreadPage['turns'][number]
+
+function latestTurnFromPage(page: AgentRuntimeThreadPage, latestTurnId?: string): DetailTurn | undefined {
+  if (!page.turns.length) return undefined
+  const normalizedId = latestTurnId?.trim()
+  return (normalizedId ? page.turns.find((turn) => turn.id === normalizedId) : undefined) ?? page.turns.at(-1)
+}
+
+function blocksFromPage(page: AgentRuntimeThreadPage, latestTurnId?: string): {
+  blocks: ChatBlock[]
+  items: AgentRuntimeItem[]
+  latestTurn?: DetailTurn
+} {
+  const items = pageItems(page)
+  const latestTurn = latestTurnFromPage(page, latestTurnId)
+  const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
+  const turnStatusById = new Map(page.turns.map((turn) => [turn.id, turn.status]))
+  const blocks = mergeRepeatedUserInputBlocks(mergeRepeatedToolBlocks(items.flatMap((item) => {
+    const turnStatus = item.turnId
+      ? turnStatusById.get(item.turnId)
+      : item.id === latestUserMessageId
+        ? latestTurn?.status
+        : undefined
+    const block = blockFromItem(item, turnStatus)
+    return block ? [block] : []
+  })))
+  return { blocks, items, latestTurn }
+}
+
+type TerminalSnapshotOutcome = 'success' | 'error'
+
+function normalizedStatus(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function statusLooksRunning(value: string): boolean {
+  return isAgentRuntimeActiveTurnState(value)
+}
+
+function statusLooksError(value: string): boolean {
+  const normalized = normalizeAgentRuntimeTurnState(value)
+  return normalized === 'failed' || normalized === 'aborted' || normalized === 'cancelled'
+}
+
+function statusLooksSuccess(value: string): boolean {
+  const normalized = normalizeAgentRuntimeTurnState(value)
+  return normalized === 'completed' || normalized === 'idle' || value === 'ready'
+}
+
+function terminalSnapshotOutcome(
+  threadStatus: string | undefined,
+  turnStatus: string | undefined
+): TerminalSnapshotOutcome | null {
+  const normalizedThreadStatus = normalizedStatus(threadStatus)
+  const normalizedTurnStatus = normalizedStatus(turnStatus)
+  if (statusLooksRunning(normalizedThreadStatus) || statusLooksRunning(normalizedTurnStatus)) return null
+  if (statusLooksError(normalizedThreadStatus) || statusLooksError(normalizedTurnStatus)) return 'error'
+  if (
+    isAgentRuntimeTerminalTurnState(normalizedTurnStatus) ||
+    isAgentRuntimeTerminalTurnState(normalizedThreadStatus) ||
+    statusLooksSuccess(normalizedTurnStatus) ||
+    statusLooksSuccess(normalizedThreadStatus)
+  ) return 'success'
+  return null
+}
+
+function toolIdentity(block: ToolBlock): string | null {
+  const callId =
+    stringMeta(block.meta, 'callId') ??
+    stringMeta(block.meta, 'toolCallId') ??
+    stringMeta(block.meta, 'call_id') ??
+    stringMeta(block.meta, 'tool_call_id')
+  return callId ? `call:${callId}` : null
+}
+
+function removeSupersededRunningToolBlocks(blocks: ChatBlock[]): ChatBlock[] {
+  const completedToolIdentities = new Set<string>()
+  let changed = false
+  const reversed: ChatBlock[] = []
+  for (let idx = blocks.length - 1; idx >= 0; idx -= 1) {
+    const block = blocks[idx]
+    if (block.kind !== 'tool') {
+      reversed.push(block)
+      continue
+    }
+    const identity = toolIdentity(block)
+    if (!identity) {
+      reversed.push(block)
+      continue
+    }
+    if (block.status === 'running') {
+      if (completedToolIdentities.has(identity)) {
+        changed = true
+        continue
+      }
+      reversed.push(block)
+      continue
+    }
+    completedToolIdentities.add(identity)
+    reversed.push(block)
+  }
+  return changed ? reversed.reverse() : blocks
+}
+
+function mergeRepeatedToolBlocks(blocks: ChatBlock[]): ChatBlock[] {
+  let changed = false
+  const merged: ChatBlock[] = []
+  const toolIndexes = new Map<string, number>()
+  for (const block of blocks) {
+    if (block.kind !== 'tool') {
+      merged.push(block)
+      continue
+    }
+    const existingIndex = toolIndexes.get(block.id)
+    if (existingIndex === undefined) {
+      toolIndexes.set(block.id, merged.length)
+      merged.push(block)
+      continue
+    }
+    const existing = merged[existingIndex]
+    if (!existing || existing.kind !== 'tool') {
+      merged.push(block)
+      continue
+    }
+    changed = true
+    merged[existingIndex] = {
+      ...existing,
+      ...block,
+      createdAt: existing.createdAt ?? block.createdAt,
+      summary: block.summary || existing.summary,
+      detail: block.detail ?? existing.detail,
+      meta: {
+        ...(existing.meta ?? {}),
+        ...(block.meta ?? {})
+      }
+    }
+  }
+  return changed ? merged : blocks
+}
+
+function mergeRepeatedUserInputBlocks(blocks: ChatBlock[]): ChatBlock[] {
+  let changed = false
+  const merged: ChatBlock[] = []
+  const inputIndexes = new Map<string, number>()
+  for (const block of blocks) {
+    if (block.kind !== 'user_input') {
+      merged.push(block)
+      continue
+    }
+    const key = block.requestId.trim() || block.id
+    const existingIndex = inputIndexes.get(key)
+    if (existingIndex === undefined) {
+      inputIndexes.set(key, merged.length)
+      merged.push(block)
+      continue
+    }
+    const existing = merged[existingIndex]
+    if (!existing || existing.kind !== 'user_input') {
+      merged.push(block)
+      continue
+    }
+    changed = true
+    merged[existingIndex] = {
+      ...existing,
+      ...block,
+      createdAt: existing.createdAt ?? block.createdAt,
+      questions: block.questions.length > 0 ? block.questions : existing.questions,
+      answers: block.answers ?? existing.answers,
+      errorMessage: block.errorMessage ?? existing.errorMessage
+    }
+  }
+  return changed ? merged : blocks
+}
+
+function settleTerminalSnapshotBlocks(blocks: ChatBlock[], outcome: TerminalSnapshotOutcome | null): ChatBlock[] {
+  if (!outcome) return blocks
+  let changed = false
+  const dedupedBlocks = removeSupersededRunningToolBlocks(blocks)
+  if (dedupedBlocks !== blocks) changed = true
+  const nextBlocks = dedupedBlocks.map((block): ChatBlock => {
+    if (block.kind === 'tool' && block.status === 'running') {
+      changed = true
+      return { ...block, status: 'error' }
+    }
+    if (block.kind === 'compaction' && block.status === 'running') {
+      changed = true
+      return { ...block, status: outcome }
+    }
+    if (block.kind === 'review' && block.status === 'running') {
+      changed = true
+      return { ...block, status: outcome }
+    }
+    if (block.kind === 'approval' && block.status === 'pending') {
+      changed = true
+      return { ...block, status: 'error' }
+    }
+    if (block.kind === 'user_input' && block.status === 'pending') {
+      changed = true
+      return { ...block, status: 'cancelled' }
+    }
+    return block
+  })
+  return changed ? nextBlocks : blocks
+}
+
+function usageFromRuntime(usage: AgentRuntimeUsage | undefined): ThreadUsageSnapshot | undefined {
+  if (!usage) return undefined
+  const inputTokens = usage.inputTokens ?? 0
+  const outputTokens = usage.outputTokens ?? 0
+  const cachedTokens = usage.cacheReadTokens ?? 0
+  const cacheMissTokens = usage.cacheWriteTokens ?? 0
+  const cacheTotal = cachedTokens + cacheMissTokens
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens: usage.reasoningTokens ?? 0,
+    cachedTokens,
+    cacheMissTokens,
+    cacheHitRate: cacheTotal > 0 ? cachedTokens / cacheTotal : null,
+    totalTokens: usage.totalTokens ?? inputTokens + outputTokens + (usage.reasoningTokens ?? 0),
+    costUsd: usage.costUsd ?? 0,
+    costCny: null,
+    cacheSavingsUsd: 0,
+    cacheSavingsCny: null,
+    tokenEconomySavingsTokens: 0,
+    tokenEconomySavingsUsd: 0,
+    tokenEconomySavingsCny: null,
+    turns: detailTurnCount(usage)
+  }
+}
+
+function normalizeSharedMemoryRecord(value: unknown): LocalRuntimeMemoryRecordJson {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  const updatedAt = stringValue(record.updatedAt) || new Date().toISOString()
+  return {
+    id: stringValue(record.id),
+    content: stringValue(record.content) || stringValue(record.text),
+    scope: normalizeMemoryScope(record.scope),
+    ...(stringValue(record.workspace) ? { workspace: stringValue(record.workspace) } : {}),
+    ...(stringValue(record.project) ? { project: stringValue(record.project) } : {}),
+    ...(normalizeMemoryThreadMode(record.threadMode) ? { threadMode: normalizeMemoryThreadMode(record.threadMode) } : {}),
+    ...(normalizeMemoryTaskType(record.taskType) ? { taskType: normalizeMemoryTaskType(record.taskType) } : {}),
+    tags: Array.isArray(record.tags)
+      ? record.tags.filter((tag): tag is string => typeof tag === 'string')
+      : [],
+    ...(typeof record.confidence === 'number' ? { confidence: record.confidence } : {}),
+    createdAt: stringValue(record.createdAt) || updatedAt,
+    updatedAt,
+    ...(stringValue(record.disabledAt)
+      ? { disabledAt: stringValue(record.disabledAt) }
+      : record.disabled === true
+        ? { disabledAt: updatedAt }
+        : {}),
+    ...(stringValue(record.deletedAt)
+      ? { deletedAt: stringValue(record.deletedAt) }
+      : record.deleted === true
+        ? { deletedAt: updatedAt }
+        : {})
+  }
+}
+
+function normalizeMemoryScope(value: unknown): LocalRuntimeMemoryRecordJson['scope'] {
+  return value === 'workspace' || value === 'project' || value === 'user' ? value : 'user'
+}
+
+function normalizeMemoryThreadMode(value: unknown): LocalRuntimeMemoryRecordJson['threadMode'] | undefined {
+  return value === 'agent' || value === 'plan' ? value : undefined
+}
+
+function normalizeMemoryTaskType(value: unknown): LocalRuntimeMemoryRecordJson['taskType'] | undefined {
+  return value === 'agent' || value === 'plan' || value === 'plan_draft' || value === 'plan_refine'
+    ? value
+    : undefined
+}
+
+function detailTurnCount(_usage: AgentRuntimeUsage): number {
+  return 0
+}
+
+export class AgentRuntimeProvider implements AgentProvider {
+  readonly displayName = 'Agent Runtime'
+  private capabilitiesCache: AgentRuntimeCapabilities = defaultCapabilities()
+  private readonly threadRuntimes = new Map<string, AgentRuntimeId>()
+  private readonly threadWorkspaceLocators = new Map<string, WorkspaceLocator>()
+  private readonly threadSummaries = new Map<string, NormalizedThread>()
+  private readonly approvalThreads = new Map<string, Map<string, InteractionRequestRef>>()
+  private readonly userInputThreads = new Map<string, InteractionRequestRef>()
+
+  get id(): AgentRuntimeId {
+    return this.capabilitiesCache.runtimeId
+  }
+
+  getCapabilities(): LegacyCapabilities {
+    return legacyCapabilities(this.capabilitiesCache)
+  }
+
+  private capabilityRequestSequence = 0
+
+  async getRuntimeCapabilities(runtimeId?: AgentRuntimeId): Promise<AgentRuntimeCapabilities> {
+    const sequence = ++this.capabilityRequestSequence
+    const targetRuntimeId = runtimeId ?? await this.activeRuntimeId()
+    const capabilities = await agentRuntimeClient.capabilities(targetRuntimeId)
+    if (targetRuntimeId === await this.activeRuntimeId() && sequence === this.capabilityRequestSequence) {
+      this.capabilitiesCache = capabilities
+    }
+    return capabilities
+  }
+
+  async refreshCapabilities(): Promise<AgentRuntimeCapabilities> {
+    const runtimeId = await this.activeRuntimeId()
+    const capabilities = await this.getRuntimeCapabilities(runtimeId)
+    return capabilities
+  }
+
+  async connect(): Promise<void> {
+    const sequence = ++this.capabilityRequestSequence
+    const runtimeId = await this.activeRuntimeId()
+    await agentRuntimeClient.connect(runtimeId)
+    let capabilities: AgentRuntimeCapabilities
+    try {
+      capabilities = await agentRuntimeClient.capabilities(runtimeId)
+    } catch {
+      capabilities = defaultCapabilities(runtimeId)
+    }
+    if (runtimeId === await this.activeRuntimeId() && sequence === this.capabilityRequestSequence) {
+      this.capabilitiesCache = capabilities
+    }
+  }
+
+  async probe(runtimeId?: AgentRuntimeId, command?: string): Promise<AgentRuntimeDiscoveryResult> {
+    return agentRuntimeClient.probe(runtimeId ?? await this.activeRuntimeId(), command)
+  }
+
+  getRecoveryOptions(runtimeId: AgentRuntimeId): ReturnType<AgentProvider['getRecoveryOptions']> {
+    if (runtimeId === 'dsh') return { canChooseExecutable: true, installGuideUrl: null }
+    if (runtimeId === 'pi') return { canChooseExecutable: true, installGuideUrl: 'https://pi.dev' }
+    if (runtimeId === 'codex') {
+      return {
+        canChooseExecutable: true,
+        installGuideUrl: 'https://developers.openai.com/codex/cli/'
+      }
+    }
+    if (runtimeId === 'claude') {
+      return {
+        canChooseExecutable: true,
+        installGuideUrl: 'https://code.claude.com/docs/en/overview'
+      }
+    }
+    return { canChooseExecutable: false, installGuideUrl: null }
+  }
+
+  normalizeExecutablePath(runtimeId: AgentRuntimeId, selectedPath: string): string {
+    return runtimeId === 'codex' && selectedPath.endsWith('/ChatGPT.app')
+      ? `${selectedPath}/Contents/Resources/codex`
+      : selectedPath
+  }
+
+  async configureExecutable(runtimeId: AgentRuntimeId, selectedPath: string): Promise<string> {
+    const command = this.normalizeExecutablePath(runtimeId, selectedPath)
+    if (runtimeId === 'dsh') {
+      await rendererRuntimeClient.setSettings({ agents: { dsh: { command } } })
+      return command
+    }
+    if (runtimeId === 'pi') {
+      await rendererRuntimeClient.setSettings({ agents: { pi: { command } } })
+      return command
+    }
+    if (runtimeId === 'codex') {
+      await rendererRuntimeClient.setSettings({ agents: codexSettingsPatch({ command }) })
+      return command
+    }
+    if (runtimeId === 'claude') {
+      await rendererRuntimeClient.setSettings({ agents: claudeSettingsPatch({ command }) })
+      return command
+    }
+    throw new Error('runtime_executable_configuration_unsupported')
+  }
+
+  async getConfigurationIdentity(runtimeId: AgentRuntimeId): Promise<string> {
+    const settings = await rendererRuntimeClient.getSettings()
+    if (runtimeId === 'codex') return getCodexRuntimeSettings(settings).command
+    if (runtimeId === 'claude') return getClaudeRuntimeSettings(settings).command
+    if (runtimeId === 'dsh') return getDshRuntimeSettings(settings).command
+    if (runtimeId === 'pi') return getPiRuntimeSettings(settings).command
+    return runtimeId
+  }
+
+  async listThreads(options: Parameters<AgentProvider['listThreads']>[0] = {}): Promise<NormalizedThread[]> {
+    const threads = await agentRuntimeClient.listThreads(options)
+    return threads.map((thread) => this.normalizeRememberedThread(thread))
+  }
+
+  async createThread(input: Parameters<AgentProvider['createThread']>[0]): Promise<NormalizedThread> {
+    const runtimeId = await this.activeRuntimeId()
+    const thread = await agentRuntimeClient.startThread({ runtimeId, ...input })
+    const workspaceLocator = thread.workspaceLocator ?? input.workspaceLocator
+    return this.normalizeRememberedThread({ ...thread, ...(workspaceLocator ? { workspaceLocator } : {}) })
+  }
+
+  async getRecentThreadView(threadId: string): ReturnType<AgentProvider['getRecentThreadView']> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const request = { runtimeId, threadId, ...(workspaceLocator ? { workspaceLocator } : {}) }
+    const [status, page] = await Promise.all([
+      agentRuntimeClient.readThreadStatus(request),
+      agentRuntimeClient.readThreadPage({ ...request, limit: 20 })
+    ])
+    const { blocks, items, latestTurn } = blocksFromPage(page, status.latestTurnId)
+    const summary = this.threadSummaries.get(threadId)
+    const resolvedWorkspaceLocator = summary?.workspaceLocator ?? workspaceLocator
+    this.rememberThreadRuntime(
+      status.id,
+      status.runtimeId,
+      resolvedWorkspaceLocator
+    )
+    this.rememberInteractionRequests(status.id, status.runtimeId, items)
+    const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
+    return {
+      runtimeId: status.runtimeId,
+      ...(resolvedWorkspaceLocator ? { workspaceLocator: resolvedWorkspaceLocator } : {}),
+      blocks: settleTerminalSnapshotBlocks(
+        blocks,
+        terminalSnapshotOutcome(status.status, latestTurn?.status)
+      ),
+      latestSeq: status.latestSeq,
+      threadStatus: status.status ?? latestTurn?.status,
+      latestTurnId: status.latestTurnId ?? latestTurn?.id,
+      latestUserMessageId,
+      usage: usageFromRuntime(status.usage),
+      goal: summary?.goal ?? null,
+      todos: summary?.todos ?? null,
+      guiPlan: summary?.guiPlan ?? null,
+      nextCursor: page.nextCursor
+    }
+  }
+
+  async getThreadStatus(threadId: string): ReturnType<AgentProvider['getThreadStatus']> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const status = await agentRuntimeClient.readThreadStatus({
+      runtimeId,
+      threadId,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    this.rememberThreadRuntime(status.id, status.runtimeId, workspaceLocator)
+    return {
+      runtimeId: status.runtimeId,
+      latestSeq: status.latestSeq,
+      threadStatus: status.status,
+      latestTurnId: status.latestTurnId,
+      latestTurnStatus: status.latestTurnStatus,
+      usage: usageFromRuntime(status.usage)
+    }
+  }
+
+  async getThreadPage(threadId: string, cursor?: string): ReturnType<AgentProvider['getThreadPage']> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const page = await agentRuntimeClient.readThreadPage({
+      runtimeId,
+      threadId,
+      ...(cursor ? { cursor } : {}),
+      limit: 20,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    const { blocks, items } = blocksFromPage(page)
+    this.rememberInteractionRequests(threadId, runtimeId, items)
+    return { blocks, latestSeq: page.latestSeq, nextCursor: page.nextCursor }
+  }
+
+  async readToolArtifact(ref: Parameters<AgentProvider['readToolArtifact']>[0]): Promise<string> {
+    const artifact = await agentRuntimeClient.readToolArtifact({
+      ...ref,
+      ...(this.workspaceLocatorForThread(ref.threadId)
+        ? { workspaceLocator: this.workspaceLocatorForThread(ref.threadId) }
+        : {})
+    })
+    return artifact.content
+  }
+
+  async sendUserMessage(
+    threadId: string,
+    text: string,
+    options: Parameters<AgentProvider['sendUserMessage']>[2] = {}
+  ): ReturnType<AgentProvider['sendUserMessage']> {
+    const { title, ...turnOptions } = options
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator =
+      turnOptions.workspaceLocator ?? this.workspaceLocatorForThread(threadId)
+    const placedTurnOptions = {
+      ...turnOptions,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    }
+    const activeRuntimeId = await this.activeRuntimeId()
+    if (activeRuntimeId !== runtimeId) {
+      const result = await this.auxiliary<AgentRuntimeHandoffStartResult>('startRuntimeHandoff', {
+        sourceThreadId: threadId,
+        targetRuntimeId: activeRuntimeId,
+        targetThreadId: threadId,
+        text,
+        ...(title ? { title } : {}),
+        ...(await turnOptionsForRuntime(activeRuntimeId, placedTurnOptions))
+      }, runtimeId, workspaceLocator)
+      const targetThread = this.normalizeRememberedThread(result.targetThread)
+      this.rememberThreadRuntime(
+        targetThread.id,
+        targetThread.runtimeId,
+        targetThread.workspaceLocator ?? workspaceLocator
+      )
+      return {
+        ...result.turn,
+        threadId: targetThread.id || result.turn.threadId || threadId,
+        threadIdChange: 'handoff'
+      }
+    }
+    return agentRuntimeClient.startTurn({
+      runtimeId,
+      threadId,
+      text,
+      ...(await turnOptionsForRuntime(runtimeId, placedTurnOptions))
+    })
+  }
+
+  reviewThread(
+    threadId: string,
+    target: Parameters<NonNullable<AgentProvider['reviewThread']>>[1],
+    options?: Parameters<NonNullable<AgentProvider['reviewThread']>>[2]
+  ): ReturnType<NonNullable<AgentProvider['reviewThread']>> {
+    return this.threadAuxiliary(threadId, 'reviewThread', { target, model: options?.model })
+  }
+
+  async steerUserMessage(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options: Parameters<NonNullable<AgentProvider['steerUserMessage']>>[3] = {}
+  ): Promise<void> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.steerTurn({
+      runtimeId,
+      threadId,
+      turnId,
+      text,
+      ...options,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+  }
+
+  async interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.interruptTurn({
+      runtimeId,
+      threadId,
+      turnId,
+      ...(workspaceLocator ? { workspaceLocator } : {}),
+      ...(options?.discard === undefined
+        ? runtimeId === 'claude'
+          ? { discard: true }
+          : runtimeId === 'dsh'
+            // DSH ACP cancel stops the turn but keeps what the session already
+            // persisted; never silently discard in-flight state.
+            ? { discard: false }
+            : {}
+        : { discard: options.discard })
+    })
+  }
+
+  async renameThread(threadId: string, title: string): Promise<void> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.renameThread({
+      runtimeId,
+      threadId,
+      title,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.deleteThread({
+      runtimeId,
+      threadId,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    this.threadRuntimes.delete(threadId)
+    this.threadWorkspaceLocators.delete(threadId)
+    this.threadSummaries.delete(threadId)
+  }
+
+  getRuntimeInfo(): ReturnType<NonNullable<AgentProvider['getRuntimeInfo']>> {
+    return this.auxiliary('getRuntimeInfo')
+  }
+
+  getToolDiagnostics(): ReturnType<NonNullable<AgentProvider['getToolDiagnostics']>> {
+    return this.auxiliary('getToolDiagnostics')
+  }
+
+  listSkills(): ReturnType<NonNullable<AgentProvider['listSkills']>> {
+    return this.auxiliary('listSkills')
+  }
+
+  async uploadAttachment(
+    input: Parameters<NonNullable<AgentProvider['uploadAttachment']>>[0]
+  ): ReturnType<NonNullable<AgentProvider['uploadAttachment']>> {
+    const runtimeId = input.threadId ? await this.runtimeIdForThread(input.threadId) : undefined
+    const workspaceLocator = input.threadId
+      ? this.workspaceLocatorForThread(input.threadId)
+      : undefined
+    return this.auxiliary('uploadAttachment', input, runtimeId, workspaceLocator)
+  }
+
+  async getAttachmentContent(
+    attachmentId: string,
+    options?: Parameters<NonNullable<AgentProvider['getAttachmentContent']>>[1]
+  ): ReturnType<NonNullable<AgentProvider['getAttachmentContent']>> {
+    const runtimeId = options?.threadId ? await this.runtimeIdForThread(options.threadId) : undefined
+    const workspaceLocator = options?.threadId
+      ? this.workspaceLocatorForThread(options.threadId)
+      : undefined
+    return this.auxiliary(
+      'getAttachmentContent',
+      { attachmentId, options },
+      runtimeId,
+      workspaceLocator
+    )
+  }
+
+  runCodeNavigation(
+    input: Parameters<NonNullable<AgentProvider['runCodeNavigation']>>[0]
+  ): ReturnType<NonNullable<AgentProvider['runCodeNavigation']>> {
+    return this.auxiliary('runCodeNavigation', input)
+  }
+
+  getContextState(threadId: string): ReturnType<NonNullable<AgentProvider['getContextState']>> {
+    return this.threadAuxiliary(threadId, 'getContextState')
+  }
+
+  async createMemory(
+    input: Parameters<NonNullable<AgentProvider['createMemory']>>[0]
+  ): ReturnType<NonNullable<AgentProvider['createMemory']>> {
+    const record = await this.auxiliary<AgentRuntimeMemoryRecord>('createMemory', {
+      ...input,
+      text: input.content
+    })
+    return normalizeSharedMemoryRecord(record)
+  }
+
+  listMemories(
+    options?: Parameters<NonNullable<AgentProvider['listMemories']>>[0]
+  ): Promise<LocalRuntimeMemoryRecordJson[]> {
+    return this.auxiliary<unknown[]>('listMemories', { options })
+      .then((records) => records.map(normalizeSharedMemoryRecord))
+  }
+
+  async updateMemory(
+    memoryId: string,
+    patch: Parameters<NonNullable<AgentProvider['updateMemory']>>[1]
+  ): ReturnType<NonNullable<AgentProvider['updateMemory']>> {
+    const { content, ...rest } = patch
+    const record = await this.auxiliary<AgentRuntimeMemoryRecord>('updateMemory', {
+      memoryId,
+      patch: {
+        ...rest,
+        ...(content !== undefined ? { text: content } : {})
+      }
+    })
+    return normalizeSharedMemoryRecord(record)
+  }
+
+  async deleteMemory(memoryId: string): ReturnType<NonNullable<AgentProvider['deleteMemory']>> {
+    return normalizeSharedMemoryRecord(await this.auxiliary('deleteMemory', { memoryId }))
+  }
+
+  listWorkspaceReferences(
+    input: Parameters<NonNullable<AgentProvider['listWorkspaceReferences']>>[0]
+  ): ReturnType<NonNullable<AgentProvider['listWorkspaceReferences']>> {
+    return this.auxiliary('listWorkspaceReferences', input)
+  }
+
+  previewWorkspaceReference(
+    input: Parameters<NonNullable<AgentProvider['previewWorkspaceReference']>>[0]
+  ): ReturnType<NonNullable<AgentProvider['previewWorkspaceReference']>> {
+    return this.auxiliary('previewWorkspaceReference', input)
+  }
+
+  async updateThreadWorkspace(threadId: string, workspace: string): Promise<void> {
+    await this.threadAuxiliary(threadId, 'updateThreadWorkspace', { workspace })
+  }
+
+  async archiveThread(threadId: string, archived: boolean): Promise<void> {
+    await this.threadAuxiliary(threadId, 'archiveThread', { archived })
+  }
+
+  async compactThread(threadId: string, reason?: string): Promise<void> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.compactThread({
+      runtimeId,
+      threadId,
+      reason,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+  }
+
+  getThreadGoal(threadId: string): ReturnType<NonNullable<AgentProvider['getThreadGoal']>> {
+    return this.threadAuxiliary(threadId, 'getThreadGoal')
+  }
+
+  setThreadGoal(
+    threadId: string,
+    patch: Parameters<NonNullable<AgentProvider['setThreadGoal']>>[1]
+  ): ReturnType<NonNullable<AgentProvider['setThreadGoal']>> {
+    return this.threadAuxiliary(threadId, 'setThreadGoal', { patch })
+  }
+
+  clearThreadGoal(threadId: string): ReturnType<NonNullable<AgentProvider['clearThreadGoal']>> {
+    return this.threadAuxiliary(threadId, 'clearThreadGoal')
+  }
+
+  getThreadTodos(threadId: string): ReturnType<NonNullable<AgentProvider['getThreadTodos']>> {
+    return this.threadAuxiliary(threadId, 'getThreadTodos')
+  }
+
+  setThreadTodos(
+    threadId: string,
+    todos: Parameters<NonNullable<AgentProvider['setThreadTodos']>>[1]
+  ): ReturnType<NonNullable<AgentProvider['setThreadTodos']>> {
+    return this.threadAuxiliary(threadId, 'setThreadTodos', { todos })
+  }
+
+  clearThreadTodos(threadId: string): ReturnType<NonNullable<AgentProvider['clearThreadTodos']>> {
+    return this.threadAuxiliary(threadId, 'clearThreadTodos')
+  }
+
+  async listThreadChildren(
+    threadId: string,
+    options: Parameters<NonNullable<AgentProvider['listThreadChildren']>>[1] = {}
+  ): Promise<AgentRuntimeListThreadChildrenResponse> {
+    return this.threadAuxiliary(threadId, 'listThreadChildren', options)
+  }
+
+  async readChildTranscript(
+    input: AgentRuntimeReadChildTranscriptInput
+  ): Promise<AgentRuntimeReadChildTranscriptResponse> {
+    const runtimeId = input.runtimeId ?? await this.runtimeIdForThread(input.parentThreadId)
+    return this.auxiliary(
+      'readChildTranscript',
+      input as unknown as Record<string, unknown>,
+      runtimeId,
+      this.workspaceLocatorForThread(input.parentThreadId)
+    )
+  }
+
+  async forkThread(
+    threadId: string,
+    options: { relation?: AgentRuntimeThreadRelation; title?: string; parentTurnId?: string; replaceFromUserMessageId?: string } = {}
+  ): Promise<NormalizedThread> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    const thread = await agentRuntimeClient.forkThread({
+      runtimeId,
+      threadId,
+      ...options,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+    const forkWorkspaceLocator = thread.workspaceLocator ?? workspaceLocator
+    this.rememberThreadRuntime(thread.id, thread.runtimeId, forkWorkspaceLocator)
+    return {
+      ...normalizeThread(thread),
+      ...(forkWorkspaceLocator ? { workspaceLocator: forkWorkspaceLocator } : {})
+    }
+  }
+
+  async resumeSession(
+    sessionId: string,
+    options: {
+      model?: string
+      mode?: string
+      maxResumeCount?: number
+      workspaceLocator?: WorkspaceLocator
+    } = {}
+  ): Promise<{ threadId: string; sessionId: string }> {
+    const runtimeId = await this.activeRuntimeId()
+    const result = await agentRuntimeClient.resumeSession({ runtimeId, sessionId, ...options })
+    this.rememberThreadRuntime(result.threadId, runtimeId, options.workspaceLocator)
+    return result
+  }
+
+  async resumeIncompleteWork(workId: string): Promise<{ turnId: string }> {
+    return agentRuntimeClient.resumeIncompleteWork(workId)
+  }
+
+  async updateThreadRelation(threadId: string, relation: AgentRuntimeThreadRelation): Promise<void> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    const workspaceLocator = this.workspaceLocatorForThread(threadId)
+    await agentRuntimeClient.updateThreadRelation({
+      runtimeId,
+      threadId,
+      relation,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+  }
+
+  async submitApprovalDecision(
+    approvalId: string,
+    decision: 'allow' | 'deny',
+    _remember?: boolean,
+    threadId?: string
+  ): Promise<void> {
+    const requests = this.approvalThreads.get(approvalId)
+    const ownerThreadId = threadId?.trim()
+    const request = ownerThreadId
+      ? requests?.get(ownerThreadId)
+      : requests?.size === 1
+        ? requests.values().next().value
+        : undefined
+    if (!request) throw unresolvedInteraction('approval', approvalId)
+    const workspaceLocator = this.workspaceLocatorForThread(request.threadId)
+    try {
+      await agentRuntimeClient.resolveApproval({
+        runtimeId: request.runtimeId,
+        threadId: request.threadId,
+        approvalId: request.requestId ?? approvalId,
+        decision: decision === 'allow' ? 'allowed' : 'denied',
+        ...(workspaceLocator ? { workspaceLocator } : {})
+      })
+    } finally {
+      this.forgetApprovalRequest(request)
+    }
+  }
+
+  async submitUserInputResponse(requestId: string, answers: UserInputAnswer[]): Promise<void> {
+    const request = this.userInputThreads.get(requestId)
+    if (!request) throw unresolvedInteraction('user input', requestId)
+    const runtimeRequestId = request.requestId ?? requestId
+    const workspaceLocator = this.workspaceLocatorForThread(request.threadId)
+    await agentRuntimeClient.resolveUserInput({
+      runtimeId: request.runtimeId,
+      threadId: request.threadId,
+      requestId: runtimeRequestId,
+      ...(workspaceLocator ? { workspaceLocator } : {}),
+      answers: answers.map((answer) => ({
+        id: answer.id,
+        label: answer.label,
+        value: answer.value
+      }))
+    })
+  }
+
+  async cancelUserInput(requestId: string): Promise<void> {
+    const request = this.userInputThreads.get(requestId)
+    if (!request) throw unresolvedInteraction('user input', requestId)
+    await this.auxiliary(
+      'cancelUserInput',
+      { threadId: request.threadId, requestId: request.requestId ?? requestId },
+      request.runtimeId,
+      this.workspaceLocatorForThread(request.threadId)
+    )
+  }
+
+  async subscribeThreadEvents(
+    threadId: string,
+    sinceSeq: number,
+    sink: ThreadEventSink,
+    signal: AbortSignal
+  ): Promise<void> {
+    const batching = batchThreadEventSinkDeltas(sink)
+    const flushOnAbort = (): void => batching.flush()
+    try {
+      const runtimeId = await this.runtimeIdForThread(threadId)
+      const workspaceLocator = this.workspaceLocatorForThread(threadId)
+      signal.addEventListener('abort', flushOnAbort)
+      await agentRuntimeClient.subscribeEvents(threadId, sinceSeq, (event) => {
+        if (!agentRuntimeEventBelongsToThread(event.threadId, threadId)) return
+        this.rememberInteractionEvent(threadId, event, runtimeId)
+        dispatchAgentRuntimeEvent(event, batching.sink)
+      }, signal, runtimeId, workspaceLocator)
+    } catch (error) {
+      batching.sink.onError(error instanceof Error ? error : new Error(String(error)))
+    } finally {
+      signal.removeEventListener('abort', flushOnAbort)
+      batching.dispose()
+    }
+  }
+
+  private async activeRuntimeId(): Promise<AgentRuntimeId> {
+    return getActiveAgentRuntime(await rendererRuntimeClient.getSettings())
+  }
+
+  private async runtimeIdForThread(threadId: string): Promise<AgentRuntimeId> {
+    const runtimeId = this.threadRuntimes.get(threadId)
+    if (runtimeId) return runtimeId
+    throw unresolvedThreadRuntime(threadId)
+  }
+
+  rememberThreadRuntime(
+    threadId: string,
+    runtimeId: AgentRuntimeId | undefined,
+    workspaceLocator?: WorkspaceLocator
+  ): void {
+    if (runtimeId) this.threadRuntimes.set(threadId, runtimeId)
+    if (workspaceLocator) this.threadWorkspaceLocators.set(threadId, workspaceLocator)
+  }
+
+  private normalizeRememberedThread(thread: AgentRuntimeThread): NormalizedThread {
+    this.rememberThreadRuntime(thread.id, thread.runtimeId, thread.workspaceLocator)
+    const normalized = normalizeThread(thread)
+    this.threadSummaries.set(thread.id, normalized)
+    return normalized
+  }
+
+  private workspaceLocatorForThread(threadId: string): WorkspaceLocator | undefined {
+    return this.threadWorkspaceLocators.get(threadId)
+  }
+
+  private async auxiliary<T>(
+    operation: AgentRuntimeAuxiliaryOperation,
+    payload: Record<string, unknown> = {},
+    runtimeId?: AgentRuntimeId,
+    workspaceLocator?: WorkspaceLocator
+  ): Promise<T> {
+    const selectedRuntimeId = runtimeId ?? await this.activeRuntimeId()
+    return agentRuntimeClient.auxiliary<T>({
+      runtimeId: selectedRuntimeId,
+      operation,
+      payload,
+      ...(workspaceLocator ? { workspaceLocator } : {})
+    })
+  }
+
+  private async threadAuxiliary<T>(
+    threadId: string,
+    operation: AgentRuntimeAuxiliaryOperation,
+    payload: Record<string, unknown> = {}
+  ): Promise<T> {
+    const runtimeId = await this.runtimeIdForThread(threadId)
+    return this.auxiliary<T>(
+      operation,
+      { threadId, ...payload },
+      runtimeId,
+      this.workspaceLocatorForThread(threadId)
+    )
+  }
+
+  private rememberInteractionRequests(threadId: string, runtimeId: AgentRuntimeId, items: AgentRuntimeItem[]): void {
+    for (const item of items) {
+      if (item.kind === 'approval') {
+        const requestId =
+          requestIdMeta(item.meta, 'codexRequestId') ??
+          stringMeta(item.meta, 'approvalId') ??
+          item.id
+        const ref = { threadId, runtimeId, requestId }
+        if (item.status === 'pending') {
+          this.rememberApprovalAliases(ref, [
+            item.id,
+            stringMeta(item.meta, 'approvalId'),
+            requestId
+          ])
+        } else {
+          this.forgetApprovalRequest(ref)
+        }
+      }
+      if (item.kind === 'user_input') {
+        const requestId =
+          requestIdMeta(item.meta, 'codexRequestId') ??
+          stringMeta(item.meta, 'requestId') ??
+          item.id
+        const ref = { threadId, runtimeId, requestId }
+        this.rememberInteractionAliases(this.userInputThreads, ref, [
+          item.id,
+          stringMeta(item.meta, 'requestId'),
+          requestId
+        ])
+      }
+    }
+  }
+
+  private rememberInteractionAliases(
+    target: Map<string, InteractionRequestRef>,
+    ref: InteractionRequestRef,
+    aliases: Array<string | undefined>
+  ): void {
+    for (const alias of aliases) {
+      if (alias) target.set(alias, ref)
+    }
+  }
+
+  private rememberApprovalAliases(
+    ref: InteractionRequestRef,
+    aliases: Array<string | undefined>
+  ): void {
+    for (const alias of aliases) {
+      if (!alias) continue
+      let requests = this.approvalThreads.get(alias)
+      if (!requests) {
+        requests = new Map()
+        this.approvalThreads.set(alias, requests)
+      }
+      requests.set(ref.threadId, ref)
+    }
+  }
+
+  private forgetApprovalRequest(ref: InteractionRequestRef): void {
+    for (const [alias, requests] of this.approvalThreads) {
+      const current = requests.get(ref.threadId)
+      if (
+        current?.runtimeId !== ref.runtimeId ||
+        current.requestId !== ref.requestId
+      ) continue
+      requests.delete(ref.threadId)
+      if (requests.size === 0) this.approvalThreads.delete(alias)
+    }
+  }
+
+  private forgetApprovalAliases(threadId: string, aliases: Array<string | undefined>): void {
+    const requests = new Map<string, InteractionRequestRef>()
+    for (const alias of aliases) {
+      if (!alias) continue
+      const request = this.approvalThreads.get(alias)?.get(threadId)
+      if (request) requests.set(`${request.runtimeId}\u0000${request.requestId}`, request)
+    }
+    for (const request of requests.values()) this.forgetApprovalRequest(request)
+  }
+
+  private rememberInteractionEvent(threadId: string, event: AgentRuntimeEvent, fallbackRuntimeId: AgentRuntimeId): void {
+    const runtimeId = event.runtimeId ?? fallbackRuntimeId
+    switch (event.kind) {
+      case 'approval_requested':
+        this.rememberApprovalAliases({
+          threadId,
+          runtimeId,
+          requestId: requestIdMeta(event.meta, 'codexRequestId') ?? event.approvalId
+        }, [
+          event.itemId,
+          event.approvalId,
+          requestIdMeta(event.meta, 'codexRequestId')
+        ])
+        return
+      case 'approval_resolved':
+        this.forgetApprovalAliases(threadId, [event.itemId, event.approvalId])
+        return
+      case 'user_input_requested':
+        this.rememberInteractionAliases(this.userInputThreads, {
+          threadId,
+          runtimeId,
+          requestId: event.requestId
+        }, [
+          event.itemId,
+          event.requestId
+        ])
+        return
+      case 'item_snapshot':
+        this.rememberInteractionRequests(threadId, runtimeId, [event.item])
+        return
+      default:
+        return
+    }
+  }
+}

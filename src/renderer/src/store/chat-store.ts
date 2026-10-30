@@ -1,0 +1,259 @@
+import { create } from 'zustand'
+import type { NormalizedThread } from '../agent/types'
+import { getProvider } from '../agent/registry'
+import { rendererRuntimeClient } from '../agent/runtime-client'
+import i18n from '../i18n'
+import { applyDocumentLocale, applyTheme, applyUiFontScale } from '../lib/apply-theme'
+import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
+import { formatRuntimeError } from '../lib/format-runtime-error'
+import {
+  deriveThreadTitleFromPrompt,
+  getDefaultThreadTitle,
+  shouldAutoTitleThread
+} from '../lib/thread-title'
+import { filterThreadsForSidebar } from '../lib/thread-sidebar-visibility'
+import {
+  enrichThreadsWithForkInfo,
+  forgetThreadFork,
+  hydrateThreadForkRegistry,
+  markThreadFork,
+  readThreadForkRegistry,
+  saveThreadForkRegistry
+} from '../lib/thread-fork-registry'
+import { workspaceLabelFromPath } from '../lib/workspace-label'
+import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
+import { getActiveAgentApiKey } from '@shared/app-settings'
+import type {
+  AppRoute,
+  ChatState,
+  InitialSetupMode,
+  PluginHostRoute,
+  QueuedUserMessage,
+  SendMessageOverrides,
+  SettingsRouteSection
+} from './chat-store-types'
+import { createAppActions } from './chat-store-app-actions'
+import { createSideActions } from './chat-store-side-actions'
+import {
+  compactCodeWorkspaceRoots,
+  forgetCodeWorkspaceRoot,
+  hydrateBlockModelLabels,
+  mergeComposerPickList,
+  optimisticUserModelLabel,
+  readCodeWorkspaceRoots,
+  rememberCodeWorkspaceRoots,
+  rememberTurnModel
+} from './chat-store-helpers'
+import {
+  clearedThreadSelection,
+  collectAssistantTextForTurn,
+  findLatestUserBlockId,
+  findReusableEmptyThreadId,
+  hasPendingRuntimeWork,
+  threadBelongsToWorkspace
+} from './chat-store-runtime-helpers'
+import {
+  clearBusyWatchdog,
+  resetBusyRecoveryAttempts,
+  scheduleStartupRuntimeProbe,
+  stopTurnCompletionPoll
+} from './chat-store-schedulers'
+import {
+  armBusyWatchdog,
+  buildThreadEventSink,
+  clearWatchedCompletionNotification,
+  finalizeTurnTiming,
+  flushLiveBlocks,
+  forkedMessageCount,
+  forkedTurnCount,
+  isCodeThread,
+  latestThread,
+  runtimeErrorDetail,
+  runtimeStreamRecoveringMessage,
+  shouldOpenSettingsForError,
+  syncTurnCompletionPoll,
+  watchTurnCompletionNotification
+} from './chat-store-runtime'
+import { createNavigationActions } from './chat-store-navigation-actions'
+import { createThreadActions } from './chat-store-thread-actions'
+import { createMaintenanceActions } from './chat-store-maintenance-actions'
+import { createFocusActions, clearedAgentFocusState } from './chat-store-focus-actions'
+import { trackZustandSet } from '../lib/performance-monitor'
+import { persistChatSession, readPersistedChatSession } from './chat-session-persistence'
+import {
+  forgetThreadBlocks,
+  moveThreadBlocks,
+  withThreadBlockCache
+} from './chat-store-thread-blocks'
+import {
+  subscribeSessionRightPanelDisposals,
+  subscribeSessionRightPanelRekeys
+} from '../lib/session-right-panel-lifecycle'
+
+export type { AppRoute, SettingsRouteSection } from './chat-store-types'
+
+let sseAbort: AbortController | null = null
+const sseAbortRef = {
+  get current(): AbortController | null {
+    return sseAbort
+  },
+  set current(value: AbortController | null) {
+    sseAbort = value
+  }
+}
+let composerModelLoadPromise: Promise<void> | null = null
+const restoredChatSession = readPersistedChatSession()
+const restoredConversationSettings = restoredChatSession.activeThreadId
+  ? restoredChatSession.conversationSettingsByThread?.[restoredChatSession.activeThreadId]
+  : restoredChatSession.draftConversationSettings ?? undefined
+
+export const useChatStore = create<ChatState>((set, get) => {
+  const trackedSet = withThreadBlockCache(trackZustandSet<ChatState>('chat', set))
+  return {
+  route: 'chat',
+  settingsReturnRoute: 'chat',
+  pluginHostRoute: 'chat',
+  settingsSection: 'general',
+  initialSetupOpen: false,
+  initialSetupMode: 'required',
+  workspaceRoot: '',
+  workspaceLabel: i18n.t('common:workingDirectory'),
+  runtimeConnection: 'idle',
+  runtimeDiscovery: null,
+  activeAgentRuntime: 'codex',
+  modelAccessMode: null,
+  codeWorkspaceRoots: [],
+  hiddenCodeWorkspaceRoots: [],
+  threads: [],
+  threadSearch: '',
+  showArchivedThreads: false,
+  activeThreadId: restoredChatSession.activeThreadId,
+  ...clearedAgentFocusState(),
+  activeThreadGoal: null,
+  activeThreadTodos: null,
+  activeThreadContextState: null,
+  threadBlocksById: {},
+  blocks: [],
+  liveReasoning: '',
+  liveReasoningMeta: null,
+  liveAssistant: '',
+  lastSeq: 0,
+  threadHistoryCursor: null,
+  threadHistoryLoading: false,
+  usageRefreshKey: 0,
+  childRefreshKey: 0,
+  busy: false,
+  deliveryStateByThread: {},
+  deliveryWorkIdByThread: {},
+  deliveryReasonByThread: {},
+  deliveryPendingChildrenByThread: {},
+  error: null,
+  runtimeErrorDetail: null,
+  currentTurnId: null,
+  currentTurnUserId: null,
+  turnStartedAtByUserId: {},
+  turnDurationByUserId: {},
+  turnReasoningFirstAtByUserId: {},
+  turnReasoningLastAtByUserId: {},
+  composerModel: restoredConversationSettings?.model ?? '',
+  composerReasoningEffort: restoredConversationSettings?.reasoningEffort ?? '',
+  composerServiceTier: restoredConversationSettings?.serviceTier ?? '',
+  composerModelCatalog: null,
+  composerReasoningEffortReset: null,
+  conversationSettingsByThread: restoredChatSession.conversationSettingsByThread ?? {},
+  draftConversationSettings: restoredChatSession.draftConversationSettings ?? null,
+  composerPickList: mergeComposerPickList(false, []),
+  composerModelGroups: [],
+  composerReasoningDiscovery: null,
+  queuedMessages: restoredChatSession.queuedMessages,
+  chatSessionPersistenceDegraded: restoredChatSession.persistenceDegraded,
+  watchTurnCompletion: {},
+  unreadThreadIds: {},
+  sideConversations: {},
+  sidePanel: { open: false, activeSideId: null },
+  workspaceLocator: null,
+  setWorkspaceLocator: (locator) => trackedSet({ workspaceLocator: locator }),
+
+  ...createAppActions({
+    set: trackedSet,
+    get,
+    i18n,
+    mergeComposerPickList,
+    getComposerModelLoadPromise: () => composerModelLoadPromise,
+    setComposerModelLoadPromise: (promise) => {
+      composerModelLoadPromise = promise
+    },
+    applyTheme,
+    applyUiFontScale,
+    applyDocumentLocale,
+    workspaceLabelFromPath,
+    normalizeWorkspaceRoot: (workspaceRoot) => normalizeWorkspaceRoot(workspaceRoot ?? undefined)
+  }),
+
+  ...createSideActions({
+    set: trackedSet,
+    get,
+    getProvider,
+    t: (key) => i18n.t(key),
+    formatRuntimeError,
+    shouldOpenSettingsForError
+  }),
+
+  ...createFocusActions(trackedSet, get),
+
+  ...createNavigationActions({ set: trackedSet, get, sseAbortRef }),
+
+  ...createThreadActions({ set: trackedSet, get, sseAbortRef }),
+
+  ...createMaintenanceActions({ set: trackedSet, get, sseAbortRef })
+  }
+})
+
+const unsubscribeChatSessionPersistence = useChatStore.subscribe((state, previousState) => {
+  if (
+    state.activeThreadId === previousState.activeThreadId &&
+    state.queuedMessages === previousState.queuedMessages &&
+    state.conversationSettingsByThread === previousState.conversationSettingsByThread &&
+    state.draftConversationSettings === previousState.draftConversationSettings
+  ) return
+  const result = persistChatSession({
+    activeThreadId: state.activeThreadId,
+    queuedMessages: state.queuedMessages,
+    conversationSettingsByThread: state.conversationSettingsByThread,
+    draftConversationSettings: state.draftConversationSettings
+  })
+  if (state.chatSessionPersistenceDegraded !== result.degraded) {
+    useChatStore.setState({ chatSessionPersistenceDegraded: result.degraded })
+  }
+})
+
+const unsubscribeSessionRightPanelDisposals = subscribeSessionRightPanelDisposals((sessionId) => {
+  useChatStore.setState((state) => ({
+    threadBlocksById: forgetThreadBlocks(state.threadBlocksById, [sessionId])
+  }))
+})
+
+const unsubscribeSessionRightPanelRekeys = subscribeSessionRightPanelRekeys((previous, next) => {
+  useChatStore.setState((state) => ({
+    threadBlocksById: moveThreadBlocks(state.threadBlocksById, previous, next)
+  }))
+})
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => unsubscribeChatSessionPersistence())
+  import.meta.hot.dispose(() => unsubscribeSessionRightPanelDisposals())
+  import.meta.hot.dispose(() => unsubscribeSessionRightPanelRekeys())
+}
+
+if (import.meta.env.DEV && typeof document !== 'undefined') {
+  const publishDevState = (): void => {
+    const state = useChatStore.getState()
+    const root = document.documentElement
+    root.dataset.sciforgeRuntimeConnection = state.runtimeConnection
+    root.dataset.sciforgeThreadCount = String(state.threads.length)
+    root.dataset.sciforgeActiveRuntime = state.activeAgentRuntime
+    root.dataset.sciforgeRuntimeError = state.error ?? ''
+  }
+  publishDevState()
+  useChatStore.subscribe(publishDevState)
+}

@@ -1,0 +1,196 @@
+import { createElement } from 'react'
+import { describe, expect, it } from 'vitest'
+import { RIGHT_PANEL_MODES } from './chat/WorkbenchTopBar'
+import { buildRightPanelVisibleContextComponent } from './Workbench'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
+
+const UPDATED_AT = '2026-07-19T00:00:00.000Z'
+
+describe('Workbench right-panel visible context', () => {
+  it('publishes every right-panel mode through the same session-owned component', () => {
+    for (const mode of RIGHT_PANEL_MODES) {
+      const component = buildRightPanelVisibleContextComponent({
+        mode,
+        sessionId: 'session-a',
+        surfaceId: 'pane-a',
+        focused: true,
+        width: 420,
+        workspaceRoot: '/workspace/a',
+        updatedAt: UPDATED_AT
+      })
+
+      expect(component.id).toBe('right-sidebar:session:session-a:surface:pane-a')
+      expect(component.region).toBe('right-sidebar')
+      expect(component.component).toBe('right-panel')
+      expect(component.state).toMatchObject({
+        mode,
+        sessionId: 'session-a',
+        surfaceId: 'pane-a',
+        focused: true,
+        width: 420,
+        currentResource: {
+          sessionId: 'session-a',
+          surfaceId: 'pane-a',
+          workspaceRoot: '/workspace/a'
+        }
+      })
+    }
+  })
+
+  it('derives contributed panel context metadata from the registry', () => {
+    const registration = installedRendererContributions.rightPanels.register({
+      id: 'fixture.right-panel',
+      ownerId: 'fixture.domain',
+      contract: {
+        location: 'workbench.right-panel',
+        title: 'Fixture panel',
+        resourceKind: 'fixture-resource'
+      },
+      value: {
+        render: () => createElement('div')
+      }
+    })
+    try {
+      const component = buildRightPanelVisibleContextComponent({
+        mode: 'fixture.right-panel',
+        sessionId: 'session-a',
+        surfaceId: 'pane-a',
+        focused: true,
+        width: 420,
+        workspaceRoot: '/workspace/a',
+        updatedAt: UPDATED_AT
+      })
+
+      expect(component.title).toBe('Fixture panel')
+      expect(component.state?.currentResource).toMatchObject({
+        kind: 'fixture-resource',
+        title: 'Fixture panel',
+        sessionId: 'session-a'
+      })
+    } finally {
+      registration.dispose()
+    }
+  })
+
+  it('switches modes without retaining resource state from the previous panel', () => {
+    const file = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session-a',
+      surfaceId: 'pane-file',
+      focused: false,
+      width: 420,
+      workspaceRoot: '/workspace/a',
+      filePreviewTarget: {
+        path: 'papers/current.pdf',
+        workspaceRoot: '/workspace/a'
+      },
+      updatedAt: UPDATED_AT
+    })
+    const changes = buildRightPanelVisibleContextComponent({
+      mode: 'changes',
+      sessionId: 'session-a',
+      surfaceId: 'pane-changes',
+      focused: true,
+      width: 500,
+      workspaceRoot: '/workspace/a',
+      updatedAt: UPDATED_AT
+    })
+
+    expect(file.state?.currentResource).toMatchObject({
+      kind: 'workspace-file-preview',
+      path: 'papers/current.pdf'
+    })
+    expect(changes.state).toMatchObject({
+      mode: 'changes',
+      width: 500,
+      currentResource: {
+        kind: 'changes'
+      }
+    })
+    expect(changes.state?.currentResource).not.toHaveProperty('path')
+  })
+
+  it('isolates otherwise identical panels by their owning session', () => {
+    const first = buildRightPanelVisibleContextComponent({
+      mode: 'todo',
+      sessionId: 'session-a',
+      surfaceId: 'pane-a',
+      focused: true,
+      width: 360,
+      workspaceRoot: '/workspace/a',
+      updatedAt: UPDATED_AT
+    })
+    const second = buildRightPanelVisibleContextComponent({
+      mode: 'todo',
+      sessionId: 'session-b',
+      surfaceId: 'pane-b',
+      focused: true,
+      width: 640,
+      workspaceRoot: '/workspace/b',
+      updatedAt: UPDATED_AT
+    })
+
+    expect(first.state).toMatchObject({
+      sessionId: 'session-a',
+      width: 360,
+      currentResource: { sessionId: 'session-a', workspaceRoot: '/workspace/a' }
+    })
+    expect(second.state).toMatchObject({
+      sessionId: 'session-b',
+      width: 640,
+      currentResource: { sessionId: 'session-b', workspaceRoot: '/workspace/b' }
+    })
+  })
+
+  it('points at the canonical file-preview component without republishing its resource', () => {
+    const component = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session-a',
+      surfaceId: 'pane-file',
+      focused: true,
+      width: 480,
+      workspaceRoot: '/workspace/a',
+      filePreviewTarget: {
+        path: 'papers/current.pdf',
+        workspaceRoot: '/workspace/a'
+      },
+      updatedAt: UPDATED_AT
+    })
+
+    expect(component.resources).toBeUndefined()
+    expect(component.state?.currentResource).toMatchObject({
+      kind: 'workspace-file-preview',
+      title: 'current.pdf',
+      summary: 'Canonical workspace preview for current.pdf.',
+      sessionId: 'session-a',
+      workspaceRoot: '/workspace/a',
+      path: 'papers/current.pdf',
+      canonicalComponentId: 'right-sidebar.file-preview:session:session-a:surface:pane-file'
+    })
+  })
+
+  it('isolates duplicate panes by Session and Host surface identity', () => {
+    const first = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session/a',
+      surfaceId: 'pane:1',
+      focused: false,
+      width: 420,
+      updatedAt: UPDATED_AT
+    })
+    const second = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session/a',
+      surfaceId: 'pane:2',
+      focused: true,
+      width: 480,
+      updatedAt: UPDATED_AT
+    })
+
+    expect(first.id).toBe('right-sidebar:session:session%2Fa:surface:pane%3A1')
+    expect(second.id).toBe('right-sidebar:session:session%2Fa:surface:pane%3A2')
+    expect(first.id).not.toBe(second.id)
+    expect(first.state).toMatchObject({ surfaceId: 'pane:1', focused: false })
+    expect(second.state).toMatchObject({ surfaceId: 'pane:2', focused: true })
+  })
+})

@@ -1,0 +1,1950 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Evidence DAG - SciForge</title>
+<script>
+  try {
+    const params = new URLSearchParams(location.search);
+    const embedded = params.get('embed') === '1' || window.self !== window.top;
+    document.documentElement.dataset.embedded = embedded ? '1' : '0';
+    // Embedded panels are scoped to one runtime thread via the URL; the thread
+    // picker is only useful in the standalone browser view.
+    document.documentElement.dataset.threadLocked = embedded && params.get('thread') ? '1' : '0';
+  } catch (_) {
+    document.documentElement.dataset.embedded = '1';
+    document.documentElement.dataset.threadLocked = '0';
+  }
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f8fb;
+    --panel: #ffffff;
+    --panel-soft: #f8fafc;
+    --ink: #172033;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --line: #d9e2ee;
+    --line-strong: #bdcad9;
+    --accent: #2563eb;
+    --accent-soft: #e8f1ff;
+    --source: #0d9488;
+    --source-soft: #ecfdf5;
+    --reasoning: #7c3aed;
+    --reasoning-soft: #f4efff;
+    --claim: #b77912;
+    --claim-soft: #fff8e8;
+    --repro-input: #0f766e;
+    --repro-input-soft: #ecfdf5;
+    --repro-spec: #6d28d9;
+    --repro-spec-soft: #f5f3ff;
+    --activity: #0369a1;
+    --activity-soft: #f0f9ff;
+    --evidence: #15803d;
+    --evidence-soft: #f0fdf4;
+    --conclusion: #b91c1c;
+    --conclusion-soft: #fff1f2;
+    --support: #16a34a;
+    --contra: #dc2626;
+    --warn: #d97706;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 12px 28px rgba(15, 23, 42, .08);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; min-width: 0; }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, .95);
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .03);
+    flex-wrap: wrap;
+  }
+  html[data-embedded="1"] .brand-title { display: none; }
+  html[data-thread-locked="1"] #thread { display: none; }
+  .brand {
+    display: flex;
+    flex-direction: column;
+    min-width: 118px;
+    margin-right: 2px;
+  }
+  .brand-title {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 720;
+    letter-spacing: 0;
+    color: #0f172a;
+  }
+  .brand-subtitle {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+  select, button {
+    height: 29px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 12px;
+    outline: none;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .02);
+  }
+  select { max-width: min(320px, 100%); padding: 5px 8px; color: #334155; }
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 5px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { border-color: #9db6e8; background: #f3f7ff; color: #174ea6; }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--accent-soft); border-color: #b8ccf8; color: #174ea6; }
+  .topbar-spacer { flex: 1; min-width: 8px; }
+  #status {
+    min-width: 110px;
+    text-align: right;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  #main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(300px, 1fr) clamp(238px, 32vw, 320px);
+  }
+  .graph-pane { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .graph-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(248, 250, 252, .86);
+    min-height: 42px;
+    overflow: hidden;
+  }
+  .strip-stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 5px 8px;
+    color: var(--muted);
+    font-size: 10.5px;
+  }
+  .strip-stat b { color: #0f172a; font-size: 13px; }
+  .strip-hint {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--faint);
+    font-size: 11px;
+  }
+  #stageScroll {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    background-color: #f7f9fc;
+    background-image:
+      linear-gradient(rgba(37, 99, 235, .055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(37, 99, 235, .055) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  #stage {
+    position: relative;
+    min-width: 720px;
+    min-height: 420px;
+  }
+  #laneLayer, #nodeLayer, #edgeLayer {
+    position: absolute;
+    inset: 0;
+  }
+  #edgeLayer { overflow: visible; pointer-events: none; }
+  .lane {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid rgba(148, 163, 184, .28);
+    border-right: 1px solid rgba(148, 163, 184, .14);
+    background: linear-gradient(180deg, rgba(255, 255, 255, .50), rgba(255, 255, 255, .20));
+  }
+  .lane:nth-child(even) { background: linear-gradient(180deg, rgba(232, 241, 255, .32), rgba(255, 255, 255, .14)); }
+  .lane-label {
+    position: sticky;
+    top: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 12px 0 0 14px;
+    padding: 4px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .92);
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .28px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, .05);
+  }
+  .node-card {
+    position: absolute;
+    width: 232px;
+    min-height: 78px;
+    border: 1px solid #cdd8e6;
+    border-radius: 8px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    padding: 8px 10px 8px 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  }
+  .node-card:focus-visible { outline: 2px solid rgba(37, 99, 235, .55); outline-offset: 3px; }
+  .node-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    border-radius: 8px 0 0 8px;
+    background: var(--accent);
+  }
+  .node-card.source_assertion { background: linear-gradient(180deg, #fff, var(--source-soft)); }
+  .node-card.source_assertion::before { background: var(--source); }
+  .node-card.reasoning { background: linear-gradient(180deg, #fff, var(--reasoning-soft)); }
+  .node-card.reasoning::before { background: var(--reasoning); }
+  .node-card.claim { background: linear-gradient(180deg, #fff, var(--claim-soft)); }
+  .node-card.claim::before { background: var(--claim); }
+  .node-card[data-node-type] {
+    background: linear-gradient(180deg, #fff, var(--node-soft, var(--accent-soft)));
+  }
+  .node-card[data-node-type]::before { background: var(--node-accent, var(--accent)); }
+  .node-card.staging {
+    border-color: #60a5fa;
+    border-style: dashed;
+    background: linear-gradient(180deg, rgba(239, 246, 255, .96), rgba(219, 234, 254, .88));
+    opacity: .82;
+  }
+  .node-card.staging::after {
+    content: "待验证";
+    position: absolute;
+    right: 7px;
+    bottom: 5px;
+    color: #1d4ed8;
+    font-size: 9px;
+    font-weight: 760;
+  }
+  .node-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, .22), 0 16px 32px rgba(37, 99, 235, .16);
+    transform: translateY(-1px);
+  }
+  .node-card.in-path { border-color: #73a3f7; }
+  .node-card.faded { opacity: .22; }
+  .node-card.blast-source { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, .28), var(--shadow); }
+  .node-card.blast-inval { border-color: var(--contra); box-shadow: 0 0 0 2px rgba(220, 38, 38, .24), var(--shadow); }
+  .node-card.blast-weak { border-color: #fb923c; box-shadow: 0 0 0 2px rgba(251, 146, 60, .24), var(--shadow); }
+  body[data-review-heat="1"] .node-card.review-optional:not(.selected) {
+    border: 2px solid #f8c77e;
+  }
+  body[data-review-heat="1"] .node-card.review-recommended:not(.selected) {
+    border: 3px solid #e89127;
+    box-shadow: 0 0 0 2px rgba(232, 145, 39, .14), var(--shadow);
+  }
+  body[data-review-heat="1"] .node-card.review-required:not(.selected) {
+    border: 4px double #c9363e;
+    box-shadow: 0 0 0 3px rgba(201, 54, 62, .16), var(--shadow);
+  }
+  body[data-review-heat="1"] .node-card.review-approved:not(.selected) {
+    border: 2px solid #4e9b70;
+  }
+  body[data-review-heat="1"] .node-card.review-expired:not(.selected) {
+    border-style: dashed;
+  }
+  .human-review-badge { letter-spacing: .02em; }
+  .human-review-badge::before { content: "👤"; font-size: 9px; }
+  .human-review-badge.review-required { background:#fee2e2;border-color:#fca5a5;color:#991b1b; }
+  .human-review-badge.review-recommended { background:#ffedd5;border-color:#fdba74;color:#9a3412; }
+  .human-review-badge.review-optional { background:#fff7ed;border-color:#fed7aa;color:#9a5b12; }
+  .human-review-badge.review-approved { background:#dcfce7;border-color:#86efac;color:#166534; }
+  .node-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    margin-bottom: 4px;
+  }
+  .node-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #526174;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .32px;
+  }
+  .node-head-spacer { flex: 1; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+    color: var(--muted);
+    padding: 1px 6px;
+    font-size: 9.5px;
+    font-weight: 720;
+    white-space: nowrap;
+  }
+  .badge.ok { background: #dcfce7; border-color: #bbf7d0; color: #15803d; }
+  .badge.warn { background: #ffedd5; border-color: #fed7aa; color: #9a3412; }
+  .badge.info { background: #dbeafe; border-color: #bfdbfe; color: #1d4ed8; }
+  .badge.danger { background: #fee2e2; border-color: #fecaca; color: #991b1b; }
+  .node-text {
+    color: #172033;
+    font-size: 11.5px;
+    line-height: 1.36;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .node-foot {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    min-height: 16px;
+    color: var(--faint);
+    font-size: 9.5px;
+  }
+  .edge-path {
+    fill: none;
+    stroke: #94a3b8;
+    stroke-width: 2;
+    pointer-events: none;
+    opacity: .82;
+  }
+  .edge-path.supports { stroke: var(--support); }
+  .edge-path.contradicts { stroke: var(--contra); stroke-dasharray: 6 4; }
+  .edge-path.refines { stroke: var(--accent); stroke-dasharray: 2 4; }
+  .edge-path.prerequisite { stroke: var(--warn); stroke-dasharray: 7 4; }
+  .edge-path.used, .edge-path.generated_by { stroke: #0284c7; }
+  .edge-path.part_of { stroke: #7c3aed; stroke-dasharray: 3 3; }
+  .edge-path.authorized_by { stroke: #c2410c; stroke-dasharray: 7 3; }
+  .edge-path.rerun_of { stroke: #475569; stroke-dasharray: 9 4; }
+  .edge-path.replicates { stroke: var(--support); stroke-width: 2.6; }
+  .edge-path.fails_to_replicate { stroke: var(--contra); stroke-width: 2.6; stroke-dasharray: 6 4; }
+  .edge-path.staging { stroke: #3b82f6; stroke-dasharray: 5 5; opacity: .7; }
+  .edge-label.staging { opacity: .72; }
+  .edge-path.faded { opacity: .12; }
+  .edge-path.in-path { opacity: 1; stroke-width: 3.2; }
+  .edge-label text { font-size: 10px; font-weight: 760; fill: #334155; }
+  .edge-label rect { fill: rgba(255, 255, 255, .94); stroke: var(--line); rx: 5; }
+  .edge-label.faded { opacity: .14; }
+  .edge-label.in-path { opacity: 1; }
+  .side-panel {
+    min-width: 0;
+    border-left: 1px solid var(--line);
+    background: rgba(255, 255, 255, .96);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel-section {
+    border-bottom: 1px solid var(--line);
+    padding: 11px 12px;
+  }
+  .panel-section.scroll {
+    overflow: auto;
+  }
+  #nodeInspector {
+    flex: 1;
+    min-height: 180px;
+  }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .metric {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-soft);
+    padding: 8px 9px;
+  }
+  .metric .v { color: #0f172a; font-size: 17px; font-weight: 780; line-height: 1.1; }
+  .metric .k { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: .34px; margin-top: 2px; }
+  h2 {
+    margin: 0 0 8px;
+    color: #526174;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .45px;
+  }
+  .empty {
+    display: flex;
+    min-height: 112px;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--muted);
+    padding: 20px;
+    line-height: 1.55;
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 12px;
+  }
+  .row .lab { width: 72px; flex-shrink: 0; color: var(--muted); }
+  .row .val { flex: 1; min-width: 0; word-break: break-word; }
+  .content {
+    margin-top: 8px;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-soft);
+    padding: 9px;
+    color: #263247;
+    font-size: 12px;
+  }
+  .detail-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .detail-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 14px;
+  }
+  .detail-heading {
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 760;
+  }
+  .detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .preview-status {
+    margin-top: 8px;
+    border: 1px solid #bfdbfe;
+    border-radius: 7px;
+    background: #eff6ff;
+    padding: 7px 8px;
+    color: #1e40af;
+    font-size: 11px;
+  }
+  .preview-status.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+  .lineage-box {
+    margin-top: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 8px;
+    color: #334155;
+    font-size: 11px;
+  }
+  .lineage-box.blocked { border-color: #fca5a5; background: #fff5f5; color: #991b1b; }
+  .lineage-components { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .lineage-breakpoints { margin: 6px 0 0; padding-left: 18px; }
+  .metadata-json {
+    margin-top: 8px;
+    max-height: 210px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #475569;
+    font: 10.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .mini-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 8px;
+  }
+  .mini-item {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--panel-soft);
+    padding: 6px 7px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .mini-item:hover { border-color: #9db6e8; background: #f3f7ff; color: #334155; }
+  #auditFindings, #analysis { max-height: 210px; overflow: auto; }
+  #reviewQueue { max-height: 260px; overflow: auto; }
+  .review-queue-item { position:relative;padding-left:10px; }
+  .review-queue-item.required { border-left:4px double #c9363e; }
+  .review-queue-item.recommended { border-left:3px solid #e89127; }
+  .review-queue-item.optional { border-left:2px solid #f8c77e; }
+  .review-reasons { margin-top:4px;color:var(--faint);font-size:10px; }
+  .review-detail { margin-top:10px;padding:9px;border:1px solid #fed7aa;border-radius:8px;background:#fffaf2; }
+  .review-detail.blocking { border-color:#fca5a5;background:#fff5f5; }
+  .review-detail h3 { margin:0 0 6px;font-size:11px; }
+  .review-detail ul { margin:5px 0;padding-left:18px; }
+  .review-actions { display:flex;gap:6px;flex-wrap:wrap;margin-top:8px; }
+  .review-actions button { height:27px;padding:4px 8px;font-size:10.5px; }
+  .review-actions .approve { border-color:#86c7a3;color:#17613d; }
+  .review-actions .reject { border-color:#e0a1a6;color:#9e2f37; }
+  .riskbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 7px;
+  }
+  .legend {
+    flex-shrink: 0;
+    padding: 10px 12px;
+    border-bottom: 0;
+  }
+  .legend > summary {
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 10.5px;
+    font-weight: 760;
+    letter-spacing: .45px;
+    list-style: none;
+    text-transform: uppercase;
+    user-select: none;
+  }
+  .legend > summary::-webkit-details-marker { display: none; }
+  .legend > summary::before { content: "> "; }
+  .legend[open] > summary { margin-bottom: 8px; }
+  .legend-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 12px;
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .legend-group-title { width: 100%; color: #334155; font-weight: 760; }
+  .sw {
+    display: inline-block;
+    width: 13px;
+    height: 13px;
+    border-radius: 3px;
+    border: 1px solid #0002;
+    vertical-align: -2px;
+    margin-right: 4px;
+  }
+  @media (max-width: 500px) {
+    #main { grid-template-columns: 1fr; grid-template-rows: minmax(360px, 1fr) minmax(240px, 44vh); }
+    .side-panel { border-left: 0; border-top: 1px solid var(--line); }
+    #nodeInspector { min-height: 150px; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1 class="brand-title">Evidence DAG</h1>
+      <div class="brand-subtitle" id="subtitle">Structured evidence graph</div>
+    </div>
+    <select id="thread" title="thread"></select>
+    <button id="refresh" title="Refresh">Refresh</button>
+    <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit</button>
+    <span class="topbar-spacer"></span>
+    <span id="status">-</span>
+  </header>
+
+  <main id="main">
+    <section class="graph-pane" aria-label="Evidence DAG canvas">
+      <div class="graph-strip" id="graphSummary">
+        <span class="strip-stat"><b id="sumNodes">0</b> nodes</span>
+        <span class="strip-stat"><b id="sumEdges">0</b> edges</span>
+        <span class="strip-stat"><b id="sumEvidence">0</b> evidence</span>
+        <span class="strip-stat"><b id="sumActivities">0</b> activities</span>
+        <span class="strip-stat"><b id="sumConclusions">0</b> conclusions</span>
+        <span class="strip-hint" id="sumHint">Select a node to inspect its evidence path.</span>
+      </div>
+      <div id="stageScroll">
+        <div id="stage">
+          <div id="laneLayer"></div>
+          <svg id="edgeLayer" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <marker id="arrow-default" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8"></path>
+              </marker>
+              <marker id="arrow-support" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#16a34a"></path>
+              </marker>
+              <marker id="arrow-contra" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#dc2626"></path>
+              </marker>
+              <marker id="arrow-accent" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#2563eb"></path>
+              </marker>
+              <marker id="arrow-warn" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L8,4 L0,8 Z" fill="#d97706"></path>
+              </marker>
+            </defs>
+          </svg>
+          <div id="nodeLayer"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <div class="panel-section">
+        <div class="metric-grid">
+          <div class="metric"><div class="v" id="m-cov">-</div><div class="k">Coverage</div></div>
+          <div class="metric"><div class="v" id="m-snd">-</div><div class="k">Soundness</div></div>
+        </div>
+      </div>
+      <div class="panel-section scroll" id="nodeInspector">
+        <h2>Node Detail</h2>
+        <div class="empty">Click a node in the structured DAG to inspect content, support, provenance, and connected evidence.</div>
+      </div>
+      <div class="panel-section scroll" id="reviewQueue">
+        <h2>Human Review Queue</h2>
+        <div class="empty" style="min-height:70px;padding:8px">No human review needed.</div>
+      </div>
+      <div class="panel-section scroll" id="auditFindings">
+        <h2>Evidence Audit</h2>
+        <div class="empty" style="min-height:70px;padding:8px">No audit run loaded.</div>
+      </div>
+      <div class="panel-section scroll" id="analysis">
+        <h2>Load-Bearing / Shared Source</h2>
+        <div class="empty" style="min-height:70px;padding:8px">-</div>
+      </div>
+      <details class="panel-section legend">
+        <summary>Legend</summary>
+        <div id="typeLegend"></div>
+        <div class="legend-row">
+          <span><i class="sw" style="background:#fff7ed;border:2px solid #f8c77e"></i>H1 optional</span>
+          <span><i class="sw" style="background:#fff7ed;border:3px solid #e89127"></i>H2 recommended</span>
+          <span><i class="sw" style="background:#fff5f5;border:4px double #c9363e"></i>H3 required</span>
+          <span>👤 human checkpoint</span>
+        </div>
+        <div class="legend-row">
+          <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px solid var(--support);border-radius:0"></i>Support</span>
+          <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px dashed var(--contra);border-radius:0"></i>Contradicts</span>
+          <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px dashed var(--warn);border-radius:0"></i>Prerequisite</span>
+          <span>used / generated_by</span>
+          <span>part_of / authorized_by</span>
+          <span>rerun_of / replicates / fails_to_replicate</span>
+        </div>
+      </details>
+    </aside>
+  </main>
+</div>
+
+<script>
+const API = location.origin;
+const $ = (id) => document.getElementById(id);
+const Q_THREAD = new URLSearchParams(location.search).get('thread');
+const Q_NODE = new URLSearchParams(location.search).get('node');
+const Q_PREVIEW_TRUSTED = new URLSearchParams(location.search).get('preview') === 'trusted';
+
+function readAuthToken() {
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const token = (hash.get('token') || '').trim();
+  if (token) {
+    hash.delete('token');
+    const nextHash = hash.toString();
+    history.replaceState(null, '', location.pathname + location.search + (nextHash ? '#' + nextHash : ''));
+  }
+  return token;
+}
+
+const AUTH_TOKEN = readAuthToken();
+const TYPE_META = {
+  source_assertion: { label: 'SOURCE ASSERTION', icon: 'DOC', floor: 0, group: 'Evidence inputs', color: '#0d9488', soft: '#ecfdf5' },
+  artifact: { label: 'ARTIFACT', icon: 'FILE', floor: 0, group: 'Evidence inputs', color: '#0f766e', soft: '#ecfdf5' },
+  dataset_version: { label: 'DATASET VERSION', icon: 'DATA', floor: 0, group: 'Evidence inputs', color: '#0f766e', soft: '#ecfdf5' },
+  observation: { label: 'OBSERVATION', icon: 'OBS', floor: 0, group: 'Evidence inputs', color: '#0f766e', soft: '#ecfdf5' },
+  software_version: { label: 'SOFTWARE VERSION', icon: 'CODE', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  environment: { label: 'ENVIRONMENT', icon: 'ENV', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  parameter_set: { label: 'PARAMETER SET', icon: 'PARAM', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  agent: { label: 'AGENT', icon: 'AGENT', floor: 1, group: 'Reproducibility spec', color: '#6d28d9', soft: '#f5f3ff' },
+  approval_decision: { label: 'APPROVAL DECISION', icon: 'APPROVE', floor: 1, group: 'Reproducibility spec', color: '#c2410c', soft: '#fff7ed' },
+  experiment_run: { label: 'EXPERIMENT RUN', icon: 'EXP', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  analysis_run: { label: 'ANALYSIS RUN', icon: 'ANALYZE', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  workflow_run: { label: 'WORKFLOW RUN', icon: 'FLOW', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  tool_invocation: { label: 'TOOL INVOCATION', icon: 'TOOL', floor: 2, group: 'Execution activities', color: '#0369a1', soft: '#f0f9ff' },
+  reasoning: { label: 'REASONING', icon: 'THINK', floor: 3, group: 'Scientific evidence', color: '#7c3aed', soft: '#f4efff' },
+  assumption: { label: 'ASSUMPTION', icon: 'ASSUME', floor: 3, group: 'Scientific evidence', color: '#b77912', soft: '#fff8e8' },
+  finding: { label: 'FINDING', icon: 'FIND', floor: 3, group: 'Scientific evidence', color: '#15803d', soft: '#f0fdf4' },
+  claim: { label: 'CLAIM', icon: 'CLAIM', floor: 4, group: 'Conclusions', color: '#b77912', soft: '#fff8e8' },
+  conclusion: { label: 'CONCLUSION', icon: 'CONCLUDE', floor: 4, group: 'Conclusions', color: '#b91c1c', soft: '#fff1f2' }
+};
+const NODE_W = 232;
+const NODE_H = 78;
+const COL_GAP = 94;
+const ROW_GAP = 28;
+const PAD_X = 34;
+const PAD_Y = 72;
+
+function renderTypeLegend() {
+  const groups = new Map();
+  Object.entries(TYPE_META).forEach(([type, meta]) => {
+    if (!groups.has(meta.group)) groups.set(meta.group, []);
+    groups.get(meta.group).push({ type, ...meta });
+  });
+  $('typeLegend').innerHTML = [...groups.entries()].map(([group, items]) => `
+    <div class="legend-row">
+      <span class="legend-group-title">${esc(group)}</span>
+      ${items.map((item) => `<span title="${escAttr(item.type)}"><i class="sw" style="background:${escAttr(item.soft)};border-color:${escAttr(item.color)}"></i>${esc(item.label)}</span>`).join('')}
+    </div>`).join('');
+}
+
+let currentThread = Q_THREAD || null;
+let lastGraph = null;
+let stageModel = null;
+let renderedStagingSig = null;
+let selectedNodeId = null;
+let timer = null;
+let currentSnapshot = null;
+let lbMap = {};
+let fragMap = {};
+let prMap = {};
+let weakMap = {};
+let blastState = null;
+let requestedNodeId = Q_NODE || null;
+let previewFeedback = null;
+const pendingPreviewRequests = new Map();
+const rerunSpecCache = new Map();
+
+function esc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escAttr(value) {
+  return esc(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function compact(value, max = 120) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function setStatus(text) {
+  $('status').textContent = text;
+}
+
+function setSubtitle(text) {
+  $('subtitle').textContent = text || 'Structured evidence graph';
+}
+
+async function api(path, opts) {
+  const init = opts ? { ...opts } : {};
+  const headers = new Headers(init.headers || {});
+  if (AUTH_TOKEN && !headers.has('authorization')) headers.set('authorization', `Bearer ${AUTH_TOKEN}`);
+  init.headers = headers;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(API + path, { ...init, signal: controller.signal });
+    return response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildAnalysisMaps(data) {
+  lbMap = {};
+  fragMap = {};
+  prMap = {};
+  weakMap = {};
+  (data?.load_bearing || []).forEach((item) => { lbMap[item.id] = item; });
+  (data?.fragile || []).forEach((item) => { fragMap[item.id] = item; });
+  (data?.pseudo_robust || []).forEach((item) => { prMap[item.id] = item; });
+  (data?.weakly_supported || []).forEach((item) => { weakMap[item.id] = item; });
+}
+
+const REVIEW_LEVEL_RANK = { none: 0, optional: 1, recommended: 2, required: 3 };
+const REVIEW_LEVEL_LABEL = { none: 'H0', optional: 'H1', recommended: 'H2', required: 'H3' };
+const REVIEW_STATUS_LABEL = {
+  not_needed: 'not needed', pending: 'pending', approved: 'approved', rejected: 'rejected',
+  deferred: 'deferred', expired: 'expired'
+};
+
+function reviewReason(reason) {
+  if (typeof reason === 'string') return { code: reason, message: reason };
+  const value = object(reason);
+  return {
+    code: String(value.code || value.reason || 'human_review'),
+    message: String(value.message || value.description || value.code || value.reason || 'Human review requested'),
+    sourceType: value.sourceType || value.source_type,
+    sourceId: value.sourceId || value.source_id
+  };
+}
+
+function normalizeHumanReview(value, fallback = {}) {
+  const raw = object(value);
+  const level = Object.hasOwn(REVIEW_LEVEL_RANK, raw.level) ? raw.level : (fallback.level || 'none');
+  const validStatuses = new Set(['not_needed', 'pending', 'approved', 'rejected', 'deferred', 'expired']);
+  const legacyStatus = { not_required: 'not_needed', completed: 'approved', overridden: 'rejected', open: 'pending', resolved: 'approved' };
+  const statusValue = legacyStatus[raw.status] || raw.status || fallback.status || (level === 'none' ? 'not_needed' : 'pending');
+  const status = validStatuses.has(statusValue) ? statusValue : (level === 'none' ? 'not_needed' : 'pending');
+  const scoreValue = Number(raw.score ?? fallback.score ?? 0);
+  const score = Number.isFinite(scoreValue) ? Math.max(0, Math.min(1, scoreValue > 1 ? scoreValue / 100 : scoreValue)) : 0;
+  const checkerRaw = object(raw.checker || fallback.checker);
+  return {
+    level, score, status,
+    reasons: (Array.isArray(raw.reasons) ? raw.reasons : (fallback.reasons || [])).map(reviewReason),
+    blocking: Boolean(raw.blocking ?? fallback.blocking),
+    reviewPacketId: raw.reviewPacketId || raw.review_packet_id || raw.id || fallback.reviewPacketId || null,
+    policyVersion: raw.policyVersion || raw.policy_version || fallback.policyVersion || '',
+    computedAt: raw.computedAt || raw.computed_at || raw.createdAt || fallback.computedAt || '',
+    reviewedBy: raw.reviewedBy || raw.reviewed_by || fallback.reviewedBy || '',
+    reviewedAt: raw.reviewedAt || raw.reviewed_at || raw.resolvedAt || fallback.reviewedAt || '',
+    checker: {
+      actorType: checkerRaw.actorType || checkerRaw.actor_type || '',
+      actor: checkerRaw.actor || '', method: checkerRaw.method || '', authority: checkerRaw.authority || ''
+    },
+    question: raw.question || fallback.question || '',
+    machineChecks: raw.machineChecks || raw.machine_checks || fallback.machineChecks || [],
+    delta: raw.delta || fallback.delta || null,
+    blastRadius: raw.blastRadius || raw.blast_radius || fallback.blastRadius || null,
+    recommendedAction: raw.recommendedAction || raw.recommended_action || fallback.recommendedAction || '',
+    options: raw.options || fallback.options || [],
+    targetIds: raw.targetIds || raw.target_ids || fallback.targetIds || []
+  };
+}
+
+function graphReviewPackets(graph = lastGraph) {
+  const root = object(graph?.humanReview || graph?.human_review);
+  return Array.isArray(root.reviewPackets) ? root.reviewPackets
+    : Array.isArray(root.review_packets) ? root.review_packets
+    : Array.isArray(graph?.reviewPackets) ? graph.reviewPackets
+    : Array.isArray(graph?.review_packets) ? graph.review_packets : [];
+}
+
+function humanReviewForNode(node, graph = lastGraph) {
+  const candidates = [];
+  const direct = node?.humanReview || node?.human_review || object(node?.attributes).humanReview || object(node?.attributes).human_review;
+  if (direct) candidates.push(normalizeHumanReview(direct));
+  const index = graph?.humanReviews || graph?.human_reviews;
+  if (Array.isArray(index)) {
+    for (const item of index) if ((item.targetId || item.target_id || item.nodeId || item.node_id) === node?.id) candidates.push(normalizeHumanReview(item));
+  } else if (object(index)[node?.id]) candidates.push(normalizeHumanReview(object(index)[node.id]));
+  for (const assessment of (graph?.assessments || [])) {
+    if ((assessment.targetId || assessment.target_id) === node?.id && (assessment.humanReview || assessment.human_review)) {
+      candidates.push(normalizeHumanReview(assessment.humanReview || assessment.human_review));
+    }
+  }
+  for (const packet of graphReviewPackets(graph)) {
+    const targetIds = packet.targetIds || packet.target_ids || packet.subjectIds || packet.subject_ids || [];
+    if (targetIds.includes(node?.id)) candidates.push(normalizeHumanReview(packet, { targetIds }));
+  }
+  candidates.sort((a, b) => Number(b.blocking) - Number(a.blocking) || REVIEW_LEVEL_RANK[b.level] - REVIEW_LEVEL_RANK[a.level] || b.score - a.score);
+  return candidates[0] || normalizeHumanReview(null);
+}
+
+function reviewClass(review) {
+  if (review.status === 'approved') return 'review-approved';
+  if (review.status === 'expired') return `review-${review.level} review-expired`;
+  if (review.level === 'none' || review.status === 'not_needed') return '';
+  return `review-${review.level}`;
+}
+
+function humanReviewBadge(node) {
+  const review = humanReviewForNode(node);
+  if (review.level === 'none' || review.status === 'not_needed') return '';
+  const stateClass = review.status === 'approved' ? 'review-approved' : `review-${review.level}`;
+  const marker = review.status === 'approved' ? '\u2713' : review.status === 'expired' ? '\u21bb' : review.blocking ? '!' : '';
+  const title = `${REVIEW_LEVEL_LABEL[review.level]} ${REVIEW_STATUS_LABEL[review.status]}${review.reasons.length ? `: ${review.reasons.map(item => item.message).join(' · ')}` : ''}`;
+  return `<span class="badge human-review-badge ${stateClass}" title="${escAttr(title)}">${esc(REVIEW_LEVEL_LABEL[review.level])}${marker}</span>`;
+}
+
+function reviewQueueModel(graph = lastGraph) {
+  const nodes = graph?.nodes || [];
+  const byPacket = new Map();
+  for (const node of nodes) {
+    const review = humanReviewForNode(node, graph);
+    if (review.level === 'none' || ['not_needed', 'approved', 'rejected'].includes(review.status)) continue;
+    const key = review.reviewPacketId || `node:${node.id}`;
+    const current = byPacket.get(key);
+    const item = { key, review, node, targetIds: review.targetIds.length ? review.targetIds : [node.id] };
+    if (!current || Number(review.blocking) > Number(current.review.blocking) || REVIEW_LEVEL_RANK[review.level] > REVIEW_LEVEL_RANK[current.review.level]) byPacket.set(key, item);
+  }
+  return [...byPacket.values()].sort((a, b) => Number(b.review.blocking) - Number(a.review.blocking) || REVIEW_LEVEL_RANK[b.review.level] - REVIEW_LEVEL_RANK[a.review.level] || b.review.score - a.review.score || String(a.node.id).localeCompare(String(b.node.id)));
+}
+
+function setPanelVisible(id, visible) {
+  const section = $(id);
+  if (section) section.style.display = visible ? '' : 'none';
+}
+
+function renderReviewQueue(graph = lastGraph) {
+  const container = $('reviewQueue');
+  if (!container) return;
+  const items = reviewQueueModel(graph);
+  if (!items.length) {
+    // An empty queue means machine checks passed; hide the section instead of
+    // reserving space for a placeholder.
+    container.innerHTML = '<h2>Human Review Queue</h2>';
+    setPanelVisible('reviewQueue', false);
+    return;
+  }
+  setPanelVisible('reviewQueue', true);
+  container.innerHTML = `<h2>Human Review Queue <span class="badge ${items.some(item => item.review.blocking) ? 'danger' : 'warn'}">${items.length}</span></h2>` + items.map(({ review, node }) => {
+    const reason = review.reasons[0]?.message || 'Human judgment requested';
+    return `<div class="mini-item review-queue-item ${escAttr(review.level)}" data-node-id="${escAttr(node.id)}" role="button" tabindex="0"><span class="badge human-review-badge review-${escAttr(review.level)}">${esc(REVIEW_LEVEL_LABEL[review.level])}${review.blocking ? '!' : ''}</span> <b>${esc(compact(review.question || node.content || node.id, 82))}</b><div class="review-reasons">${esc(compact(reason, 120))} · score ${(review.score * 100).toFixed(0)}%</div></div>`;
+  }).join('');
+  container.querySelectorAll('[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+    item.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(item.dataset.nodeId); } };
+  });
+}
+
+function graphCounts(graph) {
+  const nodes = graph?.nodes || [];
+  const edges = graph?.edges || [];
+  const activityTypes = new Set(['experiment_run', 'analysis_run', 'workflow_run', 'tool_invocation']);
+  const evidenceTypes = new Set(['source_assertion', 'artifact', 'dataset_version', 'observation', 'finding']);
+  return {
+    nodes: nodes.length,
+    edges: edges.length,
+    sources: nodes.filter((n) => n.type === 'source_assertion').length,
+    reasoning: nodes.filter((n) => n.type === 'reasoning').length,
+    evidence: nodes.filter((n) => evidenceTypes.has(n.type)).length,
+    activities: nodes.filter((n) => activityTypes.has(n.type)).length,
+    conclusions: nodes.filter((n) => n.type === 'claim' || n.type === 'conclusion' || object(n.attributes).semanticRole === 'conclusion').length
+  };
+}
+
+function updateSummary(graph) {
+  const counts = graphCounts(graph);
+  $('sumNodes').textContent = counts.nodes;
+  $('sumEdges').textContent = counts.edges;
+  $('sumEvidence').textContent = counts.evidence;
+  $('sumActivities').textContent = counts.activities;
+  $('sumConclusions').textContent = counts.conclusions;
+  $('sumHint').textContent = `${counts.sources} sources · ${counts.reasoning} reasoning · ${counts.activities} activities`;
+}
+
+function buildGraphModel(graph) {
+  const nodes = [...(graph.nodes || [])];
+  const nodeById = Object.fromEntries(nodes.map((node) => [node.id, node]));
+  const edges = (graph.edges || []).filter((edge) => nodeById[edge.src] && nodeById[edge.dst]);
+  const incoming = {};
+  const outgoing = {};
+  nodes.forEach((node) => {
+    incoming[node.id] = [];
+    outgoing[node.id] = [];
+  });
+  edges.forEach((edge) => {
+    incoming[edge.dst].push(edge);
+    outgoing[edge.src].push(edge);
+  });
+
+  const indegree = Object.fromEntries(nodes.map((node) => [node.id, incoming[node.id].length]));
+  const typeFloor = (node) => TYPE_META[node.type]?.floor ?? 1;
+  const rank = Object.fromEntries(nodes.map((node) => [node.id, typeFloor(node)]));
+  const queue = nodes
+    .filter((node) => indegree[node.id] === 0)
+    .sort(compareNodes);
+  const order = [];
+  while (queue.length) {
+    const node = queue.shift();
+    order.push(node.id);
+    outgoing[node.id].forEach((edge) => {
+      const dst = nodeById[edge.dst];
+      rank[edge.dst] = Math.max(rank[edge.dst], rank[node.id] + 1, typeFloor(dst));
+      indegree[edge.dst] -= 1;
+      if (indegree[edge.dst] === 0) {
+        queue.push(dst);
+        queue.sort(compareNodes);
+      }
+    });
+  }
+  nodes.forEach((node) => {
+    if (!order.includes(node.id)) order.push(node.id);
+  });
+
+  const rawLayers = new Map();
+  nodes.forEach((node) => {
+    const r = rank[node.id];
+    if (!rawLayers.has(r)) rawLayers.set(r, []);
+    rawLayers.get(r).push(node.id);
+  });
+  const rawRanks = [...rawLayers.keys()].sort((a, b) => a - b);
+  const rankIndex = Object.fromEntries(rawRanks.map((r, index) => [r, index]));
+  const layers = rawRanks.map((r) => rawLayers.get(r).sort((a, b) => compareNodes(nodeById[a], nodeById[b])));
+
+  refineLayerOrder(layers, nodeById, incoming, outgoing);
+
+  const positions = {};
+  const layerWidth = NODE_W + COL_GAP;
+  let maxRows = 1;
+  layers.forEach((layer, layerIdx) => {
+    maxRows = Math.max(maxRows, layer.length);
+    layer.forEach((id, rowIdx) => {
+      positions[id] = {
+        x: PAD_X + layerIdx * layerWidth,
+        y: PAD_Y + rowIdx * (NODE_H + ROW_GAP)
+      };
+    });
+  });
+  const width = Math.max(720, PAD_X * 2 + layers.length * NODE_W + Math.max(0, layers.length - 1) * COL_GAP);
+  const height = Math.max(420, PAD_Y * 2 + maxRows * NODE_H + Math.max(0, maxRows - 1) * ROW_GAP);
+  return { graph, nodes, nodeById, edges, incoming, outgoing, layers, rawRanks, rankIndex, positions, width, height };
+}
+
+function compareNodes(a, b) {
+  const ta = TYPE_META[a.type]?.floor ?? 1;
+  const tb = TYPE_META[b.type]?.floor ?? 1;
+  if (ta !== tb) return ta - tb;
+  return String(a.content || a.id).localeCompare(String(b.content || b.id));
+}
+
+function refineLayerOrder(layers, nodeById, incoming, outgoing) {
+  const indexByLayer = () => {
+    const result = {};
+    layers.forEach((layer) => layer.forEach((id, index) => { result[id] = index; }));
+    return result;
+  };
+  for (let pass = 0; pass < 4; pass += 1) {
+    let index = indexByLayer();
+    for (let i = 1; i < layers.length; i += 1) {
+      layers[i].sort((a, b) => bary(a, incoming, index, true) - bary(b, incoming, index, true) || compareNodes(nodeById[a], nodeById[b]));
+    }
+    index = indexByLayer();
+    for (let i = layers.length - 2; i >= 0; i -= 1) {
+      layers[i].sort((a, b) => bary(a, outgoing, index, false) - bary(b, outgoing, index, false) || compareNodes(nodeById[a], nodeById[b]));
+    }
+  }
+}
+
+function bary(id, edgeMap, index, incomingMode) {
+  const edges = edgeMap[id] || [];
+  if (!edges.length) return 9999;
+  const values = edges
+    .map((edge) => index[incomingMode ? edge.src : edge.dst])
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return 9999;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function layerLabel(model, layer, index) {
+  const groups = new Set(layer.map((id) => TYPE_META[model.nodeById[id]?.type]?.group).filter(Boolean));
+  if (groups.size === 1) return [...groups][0];
+  return `Layer ${index + 1}`;
+}
+
+function renderGraph(graph) {
+  lastGraph = graph;
+  stageModel = buildGraphModel(graph);
+  updateSummary(graph);
+  const stage = $('stage');
+  const edgeLayer = $('edgeLayer');
+  stage.style.width = `${stageModel.width}px`;
+  stage.style.height = `${stageModel.height}px`;
+  edgeLayer.setAttribute('width', String(stageModel.width));
+  edgeLayer.setAttribute('height', String(stageModel.height));
+  renderLanes(stageModel);
+  renderEdges(stageModel);
+  renderNodes(stageModel);
+  renderReviewQueue(graph);
+  let restoredNodeId = null;
+  if (!selectedNodeId && requestedNodeId && stageModel.nodeById[requestedNodeId]) {
+    selectedNodeId = requestedNodeId;
+    restoredNodeId = requestedNodeId;
+    requestedNodeId = null;
+  }
+  if (selectedNodeId && !stageModel.nodeById[selectedNodeId]) selectedNodeId = null;
+  applyGraphState();
+  if (selectedNodeId) {
+    showNodeDetail(selectedNodeId);
+    if (restoredNodeId) requestAnimationFrame(() => centerNode(restoredNodeId));
+  }
+  setStatus(`${stageModel.nodes.length} nodes · ${stageModel.layers.length} layers`);
+}
+
+function renderLanes(model) {
+  const layerWidth = NODE_W + COL_GAP;
+  $('laneLayer').innerHTML = model.layers.map((layer, index) => {
+    const left = Math.max(0, PAD_X - 18 + index * layerWidth);
+    const width = NODE_W + 36;
+    return `<div class="lane" style="left:${left}px;width:${width}px"><span class="lane-label">${esc(layerLabel(model, layer, index))}</span></div>`;
+  }).join('');
+}
+
+function renderNodes(model) {
+  $('nodeLayer').innerHTML = model.nodes.map((node) => nodeHtml(node, model.positions[node.id])).join('');
+  $('nodeLayer').querySelectorAll('.node-card').forEach((card) => {
+    card.addEventListener('click', (event) => {
+      event.stopPropagation();
+      selectNode(card.dataset.nodeId);
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectNode(card.dataset.nodeId);
+      }
+    });
+  });
+}
+
+function nodeHtml(node, pos) {
+  const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
+  const review = humanReviewForNode(node);
+  const badges = nodeBadges(node);
+  const ref = sourceRefLabel(node);
+  const foot = [
+    node.trace_refs?.length ? `trace ${compact(node.trace_refs[0], 28)}` : '',
+    ref ? compact(ref, 38) : ''
+  ].filter(Boolean).join(' · ');
+  return `
+    <div class="node-card ${escAttr(node.type)} ${escAttr(reviewClass(review))} ${node._dagLayer === 'staging' ? 'staging' : ''}" data-node-id="${escAttr(node.id)}" data-node-type="${escAttr(node.type)}" data-dag-layer="${escAttr(node._dagLayer || 'committed')}" data-human-review-level="${escAttr(review.level)}" data-human-review-status="${escAttr(review.status)}" role="button" tabindex="0"
+      aria-label="${escAttr(`${meta.label}: ${node.content || node.id}; human review ${REVIEW_LEVEL_LABEL[review.level]} ${REVIEW_STATUS_LABEL[review.status]}`)}"
+      style="left:${pos.x}px;top:${pos.y}px;--node-accent:${escAttr(meta.color || '#2563eb')};--node-soft:${escAttr(meta.soft || '#e8f1ff')}">
+      <div class="node-head">
+        <span class="node-type"><span>${esc(meta.icon)}</span><span>${esc(meta.label)}</span></span>
+        <span class="node-head-spacer"></span>
+        ${badges}
+      </div>
+      <div class="node-text">${esc(node.content || node.id)}</div>
+      <div class="node-foot">${esc(foot || node.status || '')}</div>
+    </div>`;
+}
+
+function nodeBadges(node) {
+  const badges = [humanReviewBadge(node)];
+  if (prMap[node.id]) badges.push(`<span class="badge info" title="Looks multi-supported but funnels through one source">shared</span>`);
+  else if (fragMap[node.id]) badges.push(`<span class="badge warn" title="${escAttr((fragMap[node.id].reasons || []).join(' · '))}">fragile</span>`);
+  else if (weakMap[node.id]) badges.push('<span class="badge warn">weak</span>');
+  else if (lbMap[node.id]) badges.push(`<span class="badge warn" title="Load-bearing node">${esc(lbMap[node.id].critical_count)}x</span>`);
+  else if (node.type === 'source_assertion' || node.status === 'supported') badges.push('<span class="badge ok">ok</span>');
+  else if (node.status === 'conflicted') badges.push('<span class="badge danger">conflict</span>');
+  return badges.filter(Boolean).join('');
+}
+
+function sourceRefLabel(node) {
+  return node.source_anchor_id || node.artifact_id || '';
+}
+
+function renderEdges(model) {
+  const defs = $('edgeLayer').querySelector('defs').outerHTML;
+  const edgeGroups = model.edges.map((edge, index) => edgeHtml(edge, model, index)).join('');
+  $('edgeLayer').innerHTML = defs + edgeGroups;
+}
+
+function edgeHtml(edge, model, index) {
+  const src = model.positions[edge.src];
+  const dst = model.positions[edge.dst];
+  if (!src || !dst) return '';
+  const sx = src.x + NODE_W;
+  const sy = src.y + NODE_H / 2;
+  const tx = dst.x;
+  const ty = dst.y + NODE_H / 2;
+  const dy = ty - sy;
+  const dx = tx - sx;
+  const sameLayer = Math.abs(dx) < 12;
+  const spread = ((index % 5) - 2) * 9;
+  let path;
+  let lx;
+  let ly;
+  if (sameLayer || dx < 0) {
+    const arc = 44 + Math.abs(dy) * .18 + Math.abs(spread);
+    path = `M ${sx} ${sy} C ${sx + arc} ${sy - arc + spread}, ${tx - arc} ${ty - arc + spread}, ${tx} ${ty}`;
+    lx = (sx + tx) / 2;
+    ly = Math.min(sy, ty) - arc + spread;
+  } else {
+    const bend = Math.max(44, dx * .48);
+    path = `M ${sx} ${sy} C ${sx + bend} ${sy + spread}, ${tx - bend} ${ty + spread}, ${tx} ${ty}`;
+    lx = (sx + tx) / 2;
+    ly = (sy + ty) / 2 + spread;
+  }
+  const rel = edge.rel || 'supports';
+  const label = edgeLabel(edge);
+  const marker = markerForRel(rel);
+  return `
+    <path class="edge-path ${escAttr(rel)} ${edge._dagLayer === 'staging' ? 'staging' : ''}" data-edge-id="${escAttr(edge.id)}" data-src="${escAttr(edge.src)}" data-dst="${escAttr(edge.dst)}" data-dag-layer="${escAttr(edge._dagLayer || 'committed')}"
+      d="${path}" marker-end="url(#${marker})"></path>
+    ${label ? edgeLabelHtml(edge.id, label, lx, ly, edge._dagLayer) : ''}`;
+}
+
+function edgeLabel(edge) {
+  if (edge.rel === 'supports' && edge.nli_score != null) return `ν ${Number(edge.nli_score).toFixed(2)}`;
+  if (edge.rel === 'contradicts') return edge.nli_score != null ? `× ${Number(edge.nli_score).toFixed(2)}` : 'contradicts';
+  if (edge.rel && edge.rel !== 'supports') return edge.rel;
+  return '';
+}
+
+function edgeLabelHtml(id, label, x, y, layer) {
+  const width = Math.max(42, label.length * 6 + 12);
+  return `<g class="edge-label ${layer === 'staging' ? 'staging' : ''}" data-edge-id="${escAttr(id)}" transform="translate(${x - width / 2} ${y - 10})">
+    <rect width="${width}" height="20"></rect>
+    <text x="${width / 2}" y="14" text-anchor="middle">${esc(label)}</text>
+  </g>`;
+}
+
+function markerForRel(rel) {
+  if (rel === 'supports') return 'arrow-support';
+  if (rel === 'contradicts') return 'arrow-contra';
+  if (rel === 'refines') return 'arrow-accent';
+  if (rel === 'prerequisite') return 'arrow-warn';
+  return 'arrow-default';
+}
+
+function selectNode(id) {
+  if (!id || !stageModel?.nodeById[id]) return;
+  if (selectedNodeId !== id) previewFeedback = null;
+  selectedNodeId = id;
+  blastState = null;
+  applyGraphState();
+  showNodeDetail(id);
+  centerNode(id);
+}
+
+function clearSelection() {
+  selectedNodeId = null;
+  previewFeedback = null;
+  blastState = null;
+  applyGraphState();
+  $('nodeInspector').innerHTML = '<h2>Node Detail</h2><div class="empty">Click a node in the structured DAG to inspect content, support, provenance, and connected evidence.</div>';
+}
+
+function contextForNode(id) {
+  const nodes = new Set([id]);
+  const edges = new Set();
+  const up = [id];
+  const down = [id];
+  while (up.length) {
+    const current = up.pop();
+    (stageModel.incoming[current] || []).forEach((edge) => {
+      edges.add(edge.id);
+      if (!nodes.has(edge.src)) {
+        nodes.add(edge.src);
+        up.push(edge.src);
+      }
+    });
+  }
+  while (down.length) {
+    const current = down.pop();
+    (stageModel.outgoing[current] || []).forEach((edge) => {
+      edges.add(edge.id);
+      if (!nodes.has(edge.dst)) {
+        nodes.add(edge.dst);
+        down.push(edge.dst);
+      }
+    });
+  }
+  return { nodes, edges };
+}
+
+function applyGraphState() {
+  if (!stageModel) return;
+  const context = selectedNodeId ? contextForNode(selectedNodeId) : { nodes: new Set(), edges: new Set() };
+  document.querySelectorAll('.node-card').forEach((card) => {
+    const id = card.dataset.nodeId;
+    card.classList.toggle('selected', id === selectedNodeId);
+    card.classList.toggle('in-path', Boolean(selectedNodeId && context.nodes.has(id)));
+    card.classList.toggle('faded', Boolean(selectedNodeId && !context.nodes.has(id)));
+    card.classList.toggle('blast-source', Boolean(blastState?.source === id));
+    card.classList.toggle('blast-inval', Boolean(blastState?.invalidated?.has(id)));
+    card.classList.toggle('blast-weak', Boolean(blastState?.weakened?.has(id)));
+  });
+  document.querySelectorAll('.edge-path,.edge-label').forEach((el) => {
+    const id = el.dataset.edgeId;
+    el.classList.toggle('in-path', Boolean(selectedNodeId && context.edges.has(id)));
+    el.classList.toggle('faded', Boolean(selectedNodeId && !context.edges.has(id)));
+  });
+}
+
+function centerNode(id) {
+  const card = document.querySelector(`.node-card[data-node-id="${CSS.escape(id)}"]`);
+  if (!card) return;
+  card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+}
+
+function noisyOr(scores) {
+  let p = 1;
+  scores.forEach((score) => { p *= (1 - Math.max(0, Math.min(1, Number(score) || 0))); });
+  return 1 - p;
+}
+
+function supportStrength(id) {
+  const scores = (stageModel?.incoming[id] || [])
+    .filter((edge) => edge.rel === 'supports' && edge.nli_score != null)
+    .map((edge) => edge.nli_score);
+  if (!scores.length) return null;
+  return { value: noisyOr(scores), count: scores.length };
+}
+
+function object(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function accessRestricted(value) {
+  const policy = object(value);
+  return value === 'restricted' || policy.read === false || policy.classification === 'restricted';
+}
+
+function sourcePreviewModel(node) {
+  if (node?.type !== 'source_assertion') return { kind: 'not-source', message: '' };
+  if (!Q_PREVIEW_TRUSTED) return { kind: 'disabled', message: '请从绑定具体 runtime thread 的 Evidence DAG 面板打开本地证据。' };
+  const sourceType = String(node.source_type || '').toLowerCase();
+  if (sourceType === 'citation' || sourceType === 'web') {
+    return { kind: 'remote', message: '远程或 citation 来源不会作为本地 workspace 路径打开。' };
+  }
+  if (sourceType === 'runtime' || sourceType === 'trace') {
+    return { kind: 'runtime', message: 'runtime / trace 来源仅保留运行时引用，不能作为 workspace 文件打开。' };
+  }
+  const registry = object(lastGraph?.artifact_registry);
+  const versions = Array.isArray(registry.artifactVersions) ? registry.artifactVersions : [];
+  const anchors = Array.isArray(registry.sourceAnchors) ? registry.sourceAnchors : [];
+  const artifacts = Array.isArray(registry.artifacts) ? registry.artifacts : [];
+  const version = versions.find((item) => item.versionId === node.artifact_version_id);
+  const anchor = anchors.find((item) => item.anchorId === node.source_anchor_id);
+  const artifact = artifacts.find((item) => item.artifactId === node.artifact_id);
+  if (!node.artifact_version_id || !node.source_anchor_id || !version || !anchor) {
+    return { kind: 'missing', message: '未记录可验证的 ArtifactVersion / SourceAnchor，无法定位原始文件。' };
+  }
+  if (artifact?.availability === 'restricted' || accessRestricted(artifact?.accessPolicy) || accessRestricted(anchor?.accessPolicy)) {
+    return { kind: 'restricted', message: '该来源受访问策略限制，不能在文件预览中打开。' };
+  }
+  const locator = String(version.locator || '').trim();
+  if (/^(runtime|trace):/i.test(locator)) return { kind: 'runtime', message: 'runtime / trace 来源仅保留运行时引用，不能作为 workspace 文件打开。' };
+  if (/^(https?:|doi:)/i.test(locator)) {
+    return { kind: 'remote', message: '远程或 citation 来源不会作为本地 workspace 路径打开。' };
+  }
+  if (!locator) return { kind: 'missing', message: '该来源没有可定位的本地 Artifact locator。' };
+  return { kind: 'local', message: '已绑定本地 ArtifactVersion；打开前会由主进程按固定 Snapshot 重新验证。' };
+}
+
+function renderPreviewFeedback() {
+  const container = $('detailPreviewFeedback');
+  if (!container) return;
+  container.innerHTML = previewFeedback
+    ? `<div class="preview-status ${previewFeedback.status === 'error' ? 'error' : ''}">${esc(previewFeedback.message)}</div>`
+    : '';
+}
+
+function requestEvidencePreview(node) {
+  const requestId = `preview-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  if (!currentThread || !currentSnapshot?.digest || !node?.id || !node.artifact_version_id || !node.source_anchor_id) {
+    previewFeedback = { status: 'error', message: '缺少当前 thread、Snapshot 或溯源标识，无法打开证据。' };
+    renderPreviewFeedback();
+    return;
+  }
+  const message = {
+    type: 'sciforge.evidence-dag.preview-workspace-evidence',
+    version: 1,
+    requestId,
+    threadId: currentThread,
+    snapshotDigest: currentSnapshot.digest,
+    sourceAssertionId: node.id,
+    artifactVersionId: node.artifact_version_id,
+    sourceAnchorId: node.source_anchor_id
+  };
+  pendingPreviewRequests.set(requestId, node.id);
+  previewFeedback = { status: 'pending', message: '正在验证并打开原始证据…' };
+  renderPreviewFeedback();
+  window.parent.postMessage(message, '*');
+}
+
+function isConclusionLike(node) {
+  return ['claim', 'conclusion', 'finding'].includes(node?.type) ||
+    object(node?.attributes).semanticRole === 'conclusion';
+}
+
+function nodeMetadataHtml(node) {
+  const metadata = {
+    ...(node.external_id ? { externalId: node.external_id } : {}),
+    ...(node.attributes && Object.keys(object(node.attributes)).length ? { attributes: node.attributes } : {})
+  };
+  if (!Object.keys(metadata).length) return '';
+  return `<details><summary>Structured metadata</summary><pre class="metadata-json">${esc(JSON.stringify(metadata, null, 2))}</pre></details>`;
+}
+
+function conclusionQuery(node) {
+  if (!currentThread || !currentSnapshot?.digest || !node?.id) return null;
+  const base = `/threads/${encodeURIComponent(currentThread)}`;
+  const query = `snapshotDigest=${encodeURIComponent(currentSnapshot.digest)}&conclusionId=${encodeURIComponent(node.id)}`;
+  return { base, query, cacheKey: `${currentSnapshot.digest}\0${node.id}` };
+}
+
+function lineageCoverageHtml(lineage) {
+  const coverage = object(lineage?.coverage);
+  const structuralComplete = coverage.structuralClosureComplete ?? coverage.complete === true;
+  const sufficiency = object(coverage.scientificSufficiency);
+  const sufficiencyLabel = sufficiency.status === 'assessed'
+    ? (sufficiency.sufficient === true ? 'sufficient' : sufficiency.sufficient === false ? 'insufficient' : 'undetermined')
+    : 'not assessed by structural closure';
+  const components = object(coverage.components);
+  const badges = Object.entries(components)
+    .filter(([, values]) => Array.isArray(values) && values.length)
+    .map(([name, values]) => `<span class="badge info">${esc(name)} ${values.length}</span>`)
+    .join('');
+  const breakpoints = Array.isArray(coverage.breakpoints) ? coverage.breakpoints : [];
+  return `<div class="lineage-box ${structuralComplete ? '' : 'blocked'}">
+    <b>Structural trace closure · ${structuralComplete ? 'closed' : 'open'}</b><br/>
+    Scientific sufficiency · ${esc(sufficiencyLabel)}<br/>
+    ${Number(coverage.groundedEvidenceCount || 0)} / ${Number(coverage.evidenceCount || 0)} evidence grounded
+    <div class="lineage-components">${badges || '<span class="badge warn">no components</span>'}</div>
+    ${breakpoints.length ? `<ul class="lineage-breakpoints">${breakpoints.map((point) => `<li><b>${esc(point.component || 'lineage')}</b>: ${esc(point.reason || 'incomplete')} ${Array.isArray(point.nodeIds) && point.nodeIds.length ? `(${point.nodeIds.length} node(s))` : ''}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function rerunStatusHtml(spec) {
+  const breakpoints = Array.isArray(spec?.breakpoints) ? spec.breakpoints : [];
+  const blocked = spec?.executionReady !== true;
+  return `<div class="lineage-box ${blocked ? 'blocked' : ''}">
+    <b>Rerun spec · executionReady=${spec?.executionReady === true ? 'true' : 'false'}</b><br/>
+    ${esc(spec?.reproducibility || 'unknown')} · ${breakpoints.length} breakpoint(s)
+    ${breakpoints.length ? `<ul class="lineage-breakpoints">${breakpoints.map((point) => `<li>${point.blocking ? '<b>BLOCKING</b> ' : ''}${esc(point.component || 'lineage')}: ${esc(point.message || point.code || '')}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+async function loadConclusionDetails(node) {
+  const query = conclusionQuery(node);
+  const lineageContainer = $('detailLineage');
+  const rerunContainer = $('detailRerunStatus');
+  if (!query || !lineageContainer || !rerunContainer) {
+    if (lineageContainer) lineageContainer.innerHTML = '<div class="lineage-box blocked">No committed Snapshot is available.</div>';
+    return;
+  }
+  const [lineageResponse, rerunResponse] = await Promise.all([
+    api(`${query.base}/conclusion-lineage?${query.query}`).catch((error) => ({ ok: false, error: { message: error.message } })),
+    api(`${query.base}/rerun-spec?${query.query}`).catch((error) => ({ ok: false, error: { message: error.message } }))
+  ]);
+  if (selectedNodeId !== node.id || !$('detailLineage')) return;
+  lineageContainer.innerHTML = lineageResponse?.ok
+    ? lineageCoverageHtml(lineageResponse.data)
+    : `<div class="lineage-box blocked">Lineage unavailable: ${esc(lineageResponse?.error?.message || 'unknown error')}</div>`;
+  if (rerunResponse?.ok) {
+    rerunSpecCache.set(query.cacheKey, rerunResponse.data);
+    rerunContainer.innerHTML = rerunStatusHtml(rerunResponse.data);
+  } else {
+    rerunContainer.innerHTML = `<div class="lineage-box blocked">Rerun spec unavailable: ${esc(rerunResponse?.error?.message || 'unknown error')}</div>`;
+  }
+}
+
+async function downloadRerunSpec(node) {
+  const query = conclusionQuery(node);
+  if (!query) {
+    setStatus('rerun export unavailable: no committed snapshot');
+    return;
+  }
+  let spec = rerunSpecCache.get(query.cacheKey);
+  if (!spec) {
+    const response = await api(`${query.base}/rerun-spec?${query.query}`).catch((error) => ({ ok: false, error: { message: error.message } }));
+    if (!response?.ok) {
+      setStatus(`rerun export failed: ${response?.error?.message || 'unknown error'}`);
+      return;
+    }
+    spec = response.data;
+    rerunSpecCache.set(query.cacheKey, spec);
+  }
+  const blob = new Blob([JSON.stringify(spec, null, 2) + '\n'], { type: 'application/json' });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  const stem = String(spec.specId || spec.specDigest || 'sciforge-rerun')
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'sciforge-rerun';
+  anchor.download = `${stem}.sciforge-rerun.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 0);
+  setStatus(spec.executionReady === true
+    ? 'rerun spec downloaded · executionReady=true'
+    : `rerun spec downloaded · executionReady=false · ${(spec.breakpoints || []).filter((point) => point.blocking).length} blocking breakpoint(s)`);
+}
+
+function showNodeDetail(id) {
+  const node = stageModel.nodeById[id];
+  const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
+  const support = supportStrength(id);
+  const refRows = refHtml(node);
+  const preview = sourcePreviewModel(node);
+  const incoming = (stageModel.incoming[id] || []).slice(0, 6);
+  const outgoing = (stageModel.outgoing[id] || []).slice(0, 6);
+  const review = humanReviewForNode(node);
+  $('nodeInspector').innerHTML = `
+    <h2>Node Detail</h2>
+    <div class="detail-title">
+      <span class="detail-icon">${esc(meta.icon)}</span>
+      <div>
+        <div class="detail-heading">${esc(meta.label)}</div>
+        <div style="font-size:10.5px;color:var(--faint)">${esc(node.id)}</div>
+      </div>
+    </div>
+    <div class="row"><span class="lab">status</span><span class="val">${nodeBadges(node) || esc(node.status || '-')}</span></div>
+    ${support ? `<div class="row"><span class="lab">support</span><span class="val"><span class="badge ${support.value >= .7 ? 'ok' : 'warn'}">ν ${support.value.toFixed(2)}</span> ${support.count} edge(s)</span></div>` : ''}
+    ${analysisRowsHtml(node)}
+    ${humanReviewDetailHtml(review)}
+    <div class="row"><span class="lab">trace</span><span class="val">${esc((node.trace_refs || []).join(', ') || '-')}</span></div>
+    ${refRows}
+    ${node.type === 'source_assertion' ? `<div class="row"><span class="lab">preview</span><span class="val">${esc(preview.message)}</span></div>` : ''}
+    <div class="content">${esc(node.content || '')}</div>
+    ${nodeMetadataHtml(node)}
+    ${isConclusionLike(node) ? '<div id="detailLineage"><div class="lineage-box">Loading conclusion lineage…</div></div><div id="detailRerunStatus"><div class="lineage-box">Loading rerun readiness…</div></div>' : ''}
+    <div id="detailPreviewFeedback" aria-live="polite"></div>
+    <div class="detail-actions">
+      <button id="detailClear">Clear</button>
+      ${preview.kind === 'local' ? '<button id="detailPreview" class="primary">查看原始证据</button>' : ''}
+      ${isConclusionLike(node) ? '<button id="detailRerunDownload" class="primary">Download rerun spec</button>' : ''}
+      <button id="detailWhatIf" class="primary">What if removed?</button>
+    </div>
+    ${connectedHtml('Incoming', incoming, true)}
+    ${connectedHtml('Outgoing', outgoing, false)}
+  `;
+  $('detailClear').onclick = clearSelection;
+  if ($('detailPreview')) $('detailPreview').onclick = () => requestEvidencePreview(node);
+  if ($('detailRerunDownload')) $('detailRerunDownload').onclick = () => downloadRerunSpec(node);
+  $('detailWhatIf').onclick = () => whatIf(id);
+  $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+  bindHumanReviewActions($('nodeInspector'));
+  renderPreviewFeedback();
+  if (isConclusionLike(node)) void loadConclusionDetails(node);
+}
+
+function humanReviewDetailHtml(review) {
+  if (review.level === 'none' || review.status === 'not_needed') return '<div class="row"><span class="lab">human</span><span class="val"><span class="badge ok">H0 machine checks sufficient</span></span></div>';
+  const reasons = review.reasons.length ? `<ul>${review.reasons.map(item => `<li><b>${esc(item.code)}</b> — ${esc(item.message)}</li>`).join('')}</ul>` : '<p>No structured reason recorded.</p>';
+  const checks = Array.isArray(review.machineChecks) && review.machineChecks.length ? `<details><summary>Completed machine checks (${review.machineChecks.length})</summary><pre>${esc(JSON.stringify(review.machineChecks, null, 2))}</pre></details>` : '';
+  const context = [review.delta ? `<details><summary>Delta</summary><pre>${esc(JSON.stringify(review.delta, null, 2))}</pre></details>` : '', review.blastRadius ? `<details><summary>Blast radius</summary><pre>${esc(JSON.stringify(review.blastRadius, null, 2))}</pre></details>` : ''].join('');
+  const actions = review.reviewPacketId && !['approved', 'rejected', 'expired'].includes(review.status) ? `<div class="review-actions" data-review-packet="${escAttr(review.reviewPacketId)}"><button class="approve" data-review-decision="approve">Approve</button><button class="reject" data-review-decision="reject">Reject</button><button data-review-decision="request_evidence">Request evidence</button><button data-review-decision="defer">Defer</button></div>` : '';
+  return `<section class="review-detail ${review.blocking ? 'blocking' : ''}" aria-label="Human review checkpoint"><h3>👤 ${esc(REVIEW_LEVEL_LABEL[review.level])} · ${esc(REVIEW_STATUS_LABEL[review.status])}${review.blocking ? ' · blocking' : ''}</h3>${review.question ? `<p><b>${esc(review.question)}</b></p>` : ''}${reasons}${checks}${context}${review.recommendedAction ? `<p><b>Recommended:</b> ${esc(review.recommendedAction)}</p>` : ''}<p class="review-reasons">score ${(review.score * 100).toFixed(0)}% · policy ${esc(review.policyVersion || 'unversioned')}${review.reviewPacketId ? ` · packet ${esc(review.reviewPacketId)}` : ''}</p>${actions}</section>`;
+}
+
+async function submitHumanReviewDecision(packetId, action) {
+  if (!currentThread || !currentSnapshot?.digest || !packetId) return;
+  const buttons = [...document.querySelectorAll('[data-review-decision]')];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const response = await api(`/threads/${encodeURIComponent(currentThread)}/reviews/${encodeURIComponent(packetId)}/decision`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, expectedSnapshotDigest: currentSnapshot.digest, actor: 'human:evidence-dag-ui', rationale: `Human ${action} decision from Evidence DAG review packet` })
+    });
+    if (!response?.ok) throw new Error(response?.error?.message || 'Human review decision failed.');
+    await loadGraph();
+  } catch (error) {
+    setStatus(`review failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function bindHumanReviewActions(container) {
+  container.querySelectorAll('[data-review-packet]').forEach((group) => {
+    group.querySelectorAll('[data-review-decision]').forEach((button) => {
+      button.onclick = () => submitHumanReviewDecision(group.dataset.reviewPacket, button.dataset.reviewDecision);
+    });
+  });
+}
+
+function refHtml(node) {
+  const rows = [];
+  if (node.external_id) rows.push(`<div class="row"><span class="lab">external</span><span class="val">${esc(node.external_id)}</span></div>`);
+  if (node.source_type) rows.push(`<div class="row"><span class="lab">source</span><span class="val">${esc(node.source_type)}${node.credibility ? ` · ${esc(node.credibility)} credibility` : ''}</span></div>`);
+  if (node.artifact_id) rows.push(`<div class="row"><span class="lab">artifact</span><span class="val">${esc(node.artifact_id)}</span></div>`);
+  if (node.artifact_version_id) rows.push(`<div class="row"><span class="lab">version</span><span class="val">${esc(node.artifact_version_id)}</span></div>`);
+  if (node.source_anchor_id) rows.push(`<div class="row"><span class="lab">anchor</span><span class="val">${esc(node.source_anchor_id)}</span></div>`);
+  return rows.join('');
+}
+
+function analysisRowsHtml(node) {
+  const rows = [];
+  if (lbMap[node.id]) rows.push(`<div class="row"><span class="lab">load</span><span class="val"><span class="badge warn">${esc(lbMap[node.id].critical_count)} claims depend on it</span></span></div>`);
+  if (fragMap[node.id]) rows.push(`<div class="row"><span class="lab">fragile</span><span class="val"><span class="badge warn">${esc((fragMap[node.id].reasons || []).join(' · '))}</span></span></div>`);
+  if (weakMap[node.id]) rows.push(`<div class="row"><span class="lab">weak</span><span class="val"><span class="badge warn">support ${Number(weakMap[node.id].support_strength || 0).toFixed(2)}</span></span></div>`);
+  if (prMap[node.id]) rows.push(`<div class="row"><span class="lab">shared</span><span class="val"><span class="badge info">${esc(prMap[node.id].n_support_edges)} paths funnel through one source</span></span></div>`);
+  return rows.join('');
+}
+
+function connectedHtml(title, edges, incomingMode) {
+  if (!edges.length) return '';
+  const items = edges.map((edge) => {
+    const peerId = incomingMode ? edge.src : edge.dst;
+    const peer = stageModel.nodeById[peerId];
+    return `<div class="mini-item" data-node-id="${escAttr(peerId)}">
+      <b>${esc(edge.rel)}</b> · ${esc(TYPE_META[peer?.type]?.label || peer?.type || 'node')}<br/>
+      ${esc(compact(peer?.content || peerId, 92))}
+    </div>`;
+  }).join('');
+  return `<div class="mini-list"><h2 style="margin-top:10px">${esc(title)}</h2>${items}</div>`;
+}
+
+function showMetrics(metrics) {
+  $('m-cov').textContent = metrics ? `${(Number(metrics.provenance_coverage || 0) * 100).toFixed(0)}%` : '-';
+  $('m-snd').textContent = metrics ? Number(metrics.provenance_soundness || 0).toFixed(2) : '-';
+}
+
+function showAnalysis(data) {
+  const lb = data?.load_bearing || [];
+  const pr = data?.pseudo_robust || [];
+  const weak = data?.weakly_supported || [];
+  if (!lb.length && !pr.length && !weak.length) {
+    $('analysis').innerHTML = '<h2>Load-Bearing / Shared Source</h2>';
+    setPanelVisible('analysis', false);
+    return;
+  }
+  setPanelVisible('analysis', true);
+  let html = '<h2>Load-Bearing / Shared Source</h2>';
+  lb.slice(0, 5).forEach((item) => {
+    html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge warn">${esc(item.critical_count)}x</span> ${esc(compact(item.content, 76))}</div>`;
+  });
+  pr.slice(0, 5).forEach((item) => {
+    html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge info">${esc(item.n_support_edges)}→1</span> ${esc(compact(item.content, 72))}</div>`;
+  });
+  weak.slice(0, 5).forEach((item) => {
+    html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge warn">ν ${Number(item.support_strength || 0).toFixed(2)}</span> ${esc(compact(item.content, 72))}</div>`;
+  });
+  $('analysis').innerHTML = html;
+  $('analysis').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+function showAuditRun(run) {
+  if (!run) {
+    $('auditFindings').innerHTML = '<h2>Evidence Audit</h2>';
+    setPanelVisible('auditFindings', false);
+    return;
+  }
+  setPanelVisible('auditFindings', true);
+  const counts = run.risk_digest?.counts_by_severity || {};
+  let html = '<h2>Evidence Audit</h2>';
+  html += `<div class="riskbar">
+    <span class="badge danger">${counts.blocker || 0} blocker</span>
+    <span class="badge warn">${counts.major || 0} major</span>
+    <span class="badge warn">${counts.minor || 0} minor</span>
+    <span class="badge info">${counts.info || 0} info</span>
+  </div>`;
+  const findings = run.findings || [];
+  if (!findings.length) {
+    html += '<div class="empty" style="min-height:70px;padding:8px">No audit risks found for the current graph.</div>';
+  } else {
+    findings.slice(0, 8).forEach((finding) => {
+      const severity = finding.severity || 'info';
+      const badgeClass = severity === 'blocker' ? 'danger' : severity === 'info' ? 'info' : 'warn';
+      const target = finding.target?.content || finding.target_id || '';
+      html += `<div class="mini-item" data-node-id="${escAttr(finding.target_id || '')}">
+        <span class="badge ${badgeClass}">${esc(severity)}</span> <b>${esc(finding.title || finding.finding_type || 'finding')}</b><br/>
+        ${esc(compact(target, 96))}
+      </div>`;
+    });
+  }
+  $('auditFindings').innerHTML = html;
+  $('auditFindings').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    if (item.dataset.nodeId) item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+async function loadThreads() {
+  const response = await api('/threads');
+  const threads = response.data?.threads || [];
+  const options = [...threads];
+  if (currentThread && !options.includes(currentThread)) options.unshift(currentThread);
+  const select = $('thread');
+  select.innerHTML = options.length ? options.map((thread) => `<option value="${escAttr(thread)}">${esc(thread)}</option>`).join('') : '<option value="">(no threads)</option>';
+  if (options.length && !currentThread) currentThread = options[0];
+  if (currentThread) select.value = currentThread;
+  setSubtitle(currentThread || 'All threads');
+}
+
+let graphLoadInFlight = false;
+let graphReloadPending = false;
+
+async function loadGraph() {
+  if (!currentThread) {
+    renderEmptyGraph('No thread selected.');
+    return;
+  }
+  // Overlapping loads (watch poll + manual refresh) must not interleave DOM
+  // rebuilds, but the newest request must still be observed. Coalesce any
+  // overlap into exactly one follow-up load after the current pass finishes.
+  if (graphLoadInFlight) {
+    graphReloadPending = true;
+    return;
+  }
+  graphLoadInFlight = true;
+  setStatus('loading...');
+  try {
+    const encoded = encodeURIComponent(currentThread);
+    // Fetch everything in parallel and render ONCE with analysis maps ready,
+    // instead of painting the graph and immediately repainting it.
+    const [graphResponse, stagingResponse, metrics, analysis, audits] = await Promise.all([
+      api(`/threads/${encoded}/graph`).catch(() => null),
+      api(`/threads/${encoded}/staging`).catch(() => null),
+      api(`/threads/${encoded}/metrics`).catch(() => null),
+      api(`/threads/${encoded}/analysis`).catch(() => null),
+      api(`/audits?threadId=${encoded}`).catch(() => null)
+    ]);
+    if (!graphResponse?.ok && !stagingResponse?.ok) {
+      renderEmptyGraph('No DAG yet for this thread. The graph appears after extraction succeeds.');
+      setStatus('no graph');
+      return;
+    }
+    const committedGraph = graphResponse?.data?.graph || {nodes: [], edges: []};
+    const committedNodeIds = new Set((committedGraph.nodes || []).map((node) => node.id));
+    const committedEdgeIds = new Set((committedGraph.edges || []).map((edge) => edge.id));
+    const stagingGraph = stagingResponse?.data?.graph;
+    const graph = stagingGraph ? {
+      ...stagingGraph,
+      nodes: (stagingGraph.nodes || []).map((node) => ({
+        ...node,
+        _dagLayer: committedNodeIds.has(node.id) ? 'committed' : 'staging'
+      })),
+      edges: (stagingGraph.edges || []).map((edge) => ({
+        ...edge,
+        _dagLayer: committedEdgeIds.has(edge.id) ? 'committed' : 'staging'
+      }))
+    } : {
+      ...committedGraph,
+      nodes: (committedGraph.nodes || []).map((node) => ({...node, _dagLayer: 'committed'})),
+      edges: (committedGraph.edges || []).map((edge) => ({...edge, _dagLayer: 'committed'}))
+    };
+    currentSnapshot = graphResponse?.data?.snapshot || null;
+    selectedNodeId = selectedNodeId && graph.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : null;
+    blastState = null;
+    showMetrics(metrics?.ok ? metrics.data : null);
+    buildAnalysisMaps(analysis?.ok ? analysis.data : null);
+    showAnalysis(analysis?.ok ? analysis.data : null);
+    renderGraph(graph);
+    showAuditRun(audits?.ok ? audits.data.latest : null);
+    markUpdated(false);
+    const stagingNodes = graph.nodes.filter((node) => node._dagLayer === 'staging').length;
+    setStatus(stagingNodes
+      ? `${committedNodeIds.size} committed · ${stagingNodes} staging · 待验证`
+      : `${graph.nodes.length} nodes · ${graph.edges.length} edges`);
+  } catch (error) {
+    renderEmptyGraph(error instanceof Error ? error.message : String(error));
+    setStatus('error');
+  } finally {
+    graphLoadInFlight = false;
+    if (graphReloadPending) {
+      graphReloadPending = false;
+      void loadGraph();
+    }
+  }
+}
+
+function renderEmptyGraph(message) {
+  lastGraph = null;
+  currentSnapshot = null;
+  stageModel = null;
+  selectedNodeId = null;
+  $('stage').style.width = '720px';
+  $('stage').style.height = '420px';
+  $('laneLayer').innerHTML = '';
+  $('nodeLayer').innerHTML = `<div class="empty" style="position:absolute;inset:0">${esc(message)}</div>`;
+  const defs = $('edgeLayer').querySelector('defs')?.outerHTML || '';
+  $('edgeLayer').innerHTML = defs;
+  updateSummary({ nodes: [], edges: [] });
+  showMetrics(null);
+  showAuditRun(null);
+  showAnalysis(null);
+  renderReviewQueue(null);
+}
+
+async function loadAuditRuns() {
+  if (!currentThread) return;
+  const response = await api(`/audits?threadId=${encodeURIComponent(currentThread)}`).catch(() => null);
+  if (response?.ok) showAuditRun(response.data.latest);
+}
+
+async function runAuditNow() {
+  if (!currentThread) return;
+  setStatus('auditing...');
+  if (!currentSnapshot?.digest) {
+    setStatus('audit unavailable: no committed snapshot');
+    return;
+  }
+  const response = await api(`/audits`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ threadId: currentThread, targetDigest: currentSnapshot.digest,
+      level: 'L0', trigger: 'manual', threshold: 0.7 })
+  }).catch((error) => ({ ok: false, error: { message: error.message } }));
+  if (!response.ok) {
+    setStatus(`audit failed: ${response.error?.message || ''}`);
+    return;
+  }
+  showAuditRun(response.data);
+  setStatus(`audit: ${response.data.risk_digest.total_findings} finding(s)`);
+}
+
+async function whatIf(nodeId) {
+  if (!currentThread || !stageModel) return;
+  setStatus('simulating...');
+  const response = await api(`/threads/${encodeURIComponent(currentThread)}/reconcile`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ remove_nodes: [nodeId], threshold: 0.7 })
+  }).catch((error) => ({ ok: false, error: { message: error.message } }));
+  if (!response.ok) {
+    setStatus(`reconcile failed: ${response.error?.message || ''}`);
+    return;
+  }
+  const result = response.data;
+  blastState = {
+    source: nodeId,
+    invalidated: new Set((result.invalidated || []).map((item) => item.id)),
+    weakened: new Set([...(result.weakened || []), ...(result.now_conflicted || [])].map((item) => item.id))
+  };
+  selectedNodeId = nodeId;
+  applyGraphState();
+  showReconcile(nodeId, result);
+  setStatus(`remove → ${result.summary.n_invalidated} collapse · ${result.summary.n_weakened} weakened`);
+}
+
+function showReconcile(nodeId, result) {
+  const node = stageModel.nodeById[nodeId];
+  const itemHtml = (item, cls) => `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge ${cls}">${cls === 'danger' ? 'collapse' : 'weakened'}</span> ${esc(compact(item.content || item.id, 92))}<br/><span style="color:var(--faint)">${esc(item.why || '')}</span></div>`;
+  let html = `<h2>What If Removed</h2>
+    <div class="row"><span class="lab">removing</span><span class="val">${esc(compact(node?.content || nodeId, 110))}</span></div>
+    <div class="row"><span class="lab">impact</span><span class="val"><span class="badge danger">${result.summary.n_invalidated} collapse</span> <span class="badge warn">${result.summary.n_weakened} weakened</span></span></div>
+    <div class="detail-actions"><button id="detailClear">Clear</button></div>`;
+  (result.invalidated || []).forEach((item) => { html += itemHtml(item, 'danger'); });
+  (result.weakened || []).forEach((item) => { html += itemHtml(item, 'warn'); });
+  (result.now_conflicted || []).forEach((item) => { html += itemHtml(item, 'warn'); });
+  if (!(result.invalidated || []).length && !(result.weakened || []).length && !(result.now_conflicted || []).length) {
+    html += '<div class="empty" style="min-height:70px;padding:8px">No downstream conclusion depends on this node.</div>';
+  }
+  $('nodeInspector').innerHTML = html;
+  $('detailClear').onclick = clearSelection;
+  $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+  });
+}
+
+function markUpdated(on) {
+  const button = $('refresh');
+  if (on) {
+    button.textContent = 'Refresh *';
+    button.style.color = '#a16207';
+    button.style.borderColor = '#facc15';
+    button.title = 'Graph updated - click to refresh';
+  } else {
+    button.textContent = 'Refresh';
+    button.style.color = '';
+    button.style.borderColor = '';
+    button.title = 'Refresh';
+  }
+}
+
+async function pollChanges() {
+  if (!currentThread) return;
+  const response = await api(`/updates/status?threadId=${encodeURIComponent(currentThread)}`).catch(() => null);
+  if (!response?.ok) return;
+  const staging = response.data?.staging || null;
+  const stagingSig = JSON.stringify([
+    response.data?.graphState || null,
+    staging?.status || null,
+    staging?.batchDigest || null,
+    staging?.newTraceCount || 0
+  ]);
+  if (stagingSig !== renderedStagingSig) {
+    // The first poll after load records the baseline; reloading here would
+    // repaint an unchanged graph right after the initial render.
+    const isBaseline = renderedStagingSig === null;
+    renderedStagingSig = stagingSig;
+    if (!isBaseline) {
+      await loadGraph();
+      return;
+    }
+  }
+  const nextDigest = response.data?.snapshot?.digest;
+  if (nextDigest && nextDigest !== currentSnapshot?.digest) markUpdated(true);
+}
+
+$('thread').onchange = (event) => {
+  currentThread = event.target.value;
+  selectedNodeId = null;
+  previewFeedback = null;
+  renderedStagingSig = null;
+  markUpdated(false);
+  setSubtitle(currentThread || 'All threads');
+  loadGraph();
+};
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent) return;
+  const result = object(event.data);
+  const allowed = new Set(['type', 'version', 'requestId', 'ok', 'message']);
+  if (Object.keys(result).some((key) => !allowed.has(key)) ||
+      result.type !== 'sciforge.evidence-dag.preview-workspace-evidence-result' ||
+      result.version !== 1 || typeof result.requestId !== 'string' || typeof result.ok !== 'boolean' ||
+      (result.message !== undefined && typeof result.message !== 'string')) return;
+  const nodeId = pendingPreviewRequests.get(result.requestId);
+  if (!nodeId) return;
+  pendingPreviewRequests.delete(result.requestId);
+  previewFeedback = result.ok
+    ? { status: 'opened', message: '已打开原始证据；文件预览顶部可返回当前 Evidence 节点。' }
+    : { status: 'error', message: String(result.message || '无法打开原始证据。').slice(0, 2000) };
+  if (selectedNodeId === nodeId) renderPreviewFeedback();
+});
+$('refresh').onclick = loadGraph;
+$('auditNow').onclick = runAuditNow;
+$('stageScroll').addEventListener('click', (event) => {
+  if (event.target === $('stageScroll') || event.target === $('stage') || event.target === $('laneLayer') || event.target === $('edgeLayer')) clearSelection();
+});
+
+// Human-review heat overlay is always on; change watching is always on.
+document.body.dataset.reviewHeat = '1';
+renderTypeLegend();
+// A URL-scoped thread can paint immediately; the thread picker (and its
+// /threads listing) only matters in the standalone, non-locked view.
+const THREAD_LOCKED = document.documentElement.dataset.threadLocked === '1';
+const initialGraphLoad = currentThread ? loadGraph() : null;
+const bootstrap = THREAD_LOCKED
+  ? Promise.resolve(setSubtitle(currentThread))
+  : loadThreads();
+bootstrap.then(() => {
+  return initialGraphLoad || loadGraph();
+}).catch((error) => {
+  renderEmptyGraph(error instanceof Error ? error.message : String(error));
+  setStatus('error');
+});
+timer = setInterval(pollChanges, 3000);
+</script>
+</body>
+</html>

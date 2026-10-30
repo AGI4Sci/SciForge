@@ -1,0 +1,7 @@
+{
+  "sourceCommit": "376fc34e301b05a3abf5846d9196795ef15c191d",
+  "sourcePath": "packages/domains/project-dag/src/runtime.ts",
+  "sha256": "36f50cead195817f4c891ec05c5e9447d065e72b43ba0e3327ef6eb926e83af4",
+  "license": "Apache-2.0",
+  "scope": "test-only historical contract reference"
+}

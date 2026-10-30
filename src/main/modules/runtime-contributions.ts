@@ -1,0 +1,514 @@
+import { randomUUID } from 'node:crypto'
+import {
+  domainPackageJsonValueSchema,
+  type DomainPackageJsonValue
+} from '@sciforge/domain-sdk'
+import {
+  MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
+  MAIN_AGENT_ROUTING_CONTRIBUTION_KIND,
+  MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+  MAIN_EXTENSION_CONTRIBUTION_KIND,
+  MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+  MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+  domainMainAgentRoutingContractSchema,
+  domainMainFiniteCapabilityBatchPlanSchema,
+  domainMainRuntimeLifecycleContractSchema,
+  domainMainExtensionContractSchema,
+  isDomainArtifactConsumer,
+  isDomainMainAgentRoutingContract,
+  isDomainMainActionGuard,
+  isDomainMainRuntimeLifecycleContribution,
+  isDomainMainSystemCapabilityGrant,
+  type DomainArtifactConsumer,
+  type DomainMainAgentRoutingContract,
+  type DomainMainActionGuard,
+  type DomainMainActionGuardInput,
+  type DomainMainContribution,
+  type DomainMainRuntimeDisposer,
+  type DomainMainRuntimeLifecycleContribution,
+  type DomainMainRuntimeLifecycleHost,
+  type DomainMainSystemCapabilityInvoker,
+  type DomainMainSystemCapabilityGrant,
+  type DomainRuntimeContributionOwner
+} from '@sciforge/domain-sdk/host'
+import type { DomainExecutionEventInput } from '@sciforge/domain-sdk/reproducibility'
+import {
+  MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+  isDomainWorkflowExecutionReceiptProvider,
+  type DomainWorkflowExecutionReceiptProvider
+} from '@sciforge/domain-sdk/workflow-template'
+import { capabilityJsonValueSchema } from '../../shared/capability-broker'
+import { CapabilityBroker } from '../capabilities/broker'
+import { DomainModuleCatalog } from './catalog'
+
+type ActivatedLifecycle = Readonly<{
+  controller: AbortController
+  disposer?: DomainMainRuntimeDisposer
+}>
+
+export type ActivatedMainRuntimeContributions = Readonly<{
+  artifactConsumers: readonly DomainArtifactConsumer[]
+  readonly disposed: boolean
+  dispose: () => Promise<void>
+}>
+
+export type MainActionGuardEvaluation = Readonly<{
+  allowed: boolean
+  message?: string
+  metadata?: Readonly<Record<string, DomainPackageJsonValue>>
+}>
+
+export type MainActionGuardEvaluator = Readonly<{
+  evaluate: (input: DomainMainActionGuardInput) => Promise<MainActionGuardEvaluation>
+}>
+
+export function listMainArtifactConsumers(
+  catalog: DomainModuleCatalog
+): readonly DomainArtifactConsumer[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+    (value): value is DomainArtifactConsumer => isDomainArtifactConsumer(value)
+  ).map((contribution) => contribution.value))
+}
+
+/**
+ * Projects package-owned Agent routing contracts from the canonical domain
+ * catalog. The Host consumes these as an ordered prompt catalog and does not
+ * recognize any domain-specific intent IDs itself.
+ */
+export function listMainAgentRoutingContributions(
+  catalog: DomainModuleCatalog
+): readonly DomainMainAgentRoutingContract[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_AGENT_ROUTING_CONTRIBUTION_KIND,
+    (_value, metadata): _value is unknown =>
+      isDomainMainAgentRoutingContract(metadata.contract)
+  ).map((contribution) => {
+    if (!contribution.contract) {
+      throw new Error(
+        `Agent routing contribution ${contribution.declaration.id} is missing its canonical contract.`
+      )
+    }
+    return Object.freeze(
+      // The runtime catalog has already validated the package contract. Parse
+      // again here to expose a strongly typed, immutable projection.
+      domainMainAgentRoutingContractSchema.parse(contribution.contract)
+    )
+  }))
+}
+
+export function listMainWorkflowExecutionReceiptProviders(
+  catalog: DomainModuleCatalog
+): readonly DomainWorkflowExecutionReceiptProvider[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_WORKFLOW_EXECUTION_RECEIPT_PROVIDER_CONTRIBUTION_KIND,
+    (value): value is DomainWorkflowExecutionReceiptProvider =>
+      isDomainWorkflowExecutionReceiptProvider(value)
+  ).map((contribution) => contribution.value))
+}
+
+export function listMainExtensionContributions(
+  catalog: DomainModuleCatalog
+): readonly DomainMainContribution[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_EXTENSION_CONTRIBUTION_KIND,
+    (value, metadata): value is unknown =>
+      domainMainExtensionContractSchema.safeParse(metadata.contract).success
+  ).map((contribution) => Object.freeze({
+    id: contribution.declaration.id,
+    kind: MAIN_EXTENSION_CONTRIBUTION_KIND,
+    packageName: contribution.packageName,
+    owner: contribution.owner,
+    ...(contribution.declaration.version === undefined
+      ? {}
+      : { version: contribution.declaration.version }),
+    ...(contribution.declaration.publicRelease === undefined
+      ? {}
+      : { publicRelease: contribution.declaration.publicRelease }),
+    contract: contribution.contract!,
+    value: contribution.value
+  })))
+}
+
+export function listMainSystemCapabilityGrants(
+  catalog: DomainModuleCatalog
+): readonly DomainMainSystemCapabilityGrant[] {
+  return Object.freeze(catalog.listContributions(
+    MAIN_SYSTEM_CAPABILITY_GRANT_CONTRIBUTION_KIND,
+    (value): value is DomainMainSystemCapabilityGrant =>
+      isDomainMainSystemCapabilityGrant(value)
+  ).map((contribution) => {
+    if (contribution.value.id !== contribution.declaration.id) {
+      throw new Error(
+        `System capability grant ${contribution.declaration.id} must match its provider-owned value ID.`
+      )
+    }
+    return contribution.value
+  }))
+}
+
+export function createMainActionGuardEvaluator(
+  catalog: DomainModuleCatalog
+): MainActionGuardEvaluator {
+  const guards = catalog.listContributions(
+    MAIN_ACTION_GUARD_CONTRIBUTION_KIND,
+    (value): value is DomainMainActionGuard => isDomainMainActionGuard(value)
+  )
+
+  return Object.freeze({
+    evaluate: async (input) => {
+      const actionId = input.actionId.trim()
+      if (!actionId) throw new TypeError('Action guard evaluation requires a non-empty actionId.')
+      const guardInput = Object.freeze({
+        actionId,
+        payload: domainPackageJsonValueSchema.parse(input.payload)
+      })
+      const metadata: Record<string, DomainPackageJsonValue> = {}
+
+      for (const contribution of guards) {
+        if (!contribution.value.actions.includes(actionId)) continue
+        const result = parseActionGuardResult(
+          await contribution.value.evaluate(guardInput),
+          contribution.declaration.id
+        )
+        if (result.metadata !== undefined) {
+          metadata[contribution.declaration.id] = result.metadata
+        }
+        if (!result.allowed) {
+          return Object.freeze({
+            allowed: false,
+            ...(result.message ? { message: result.message } : {}),
+            ...(Object.keys(metadata).length > 0
+              ? { metadata: Object.freeze({ ...metadata }) }
+              : {})
+          })
+        }
+      }
+
+      return Object.freeze({
+        allowed: true,
+        ...(Object.keys(metadata).length > 0
+          ? { metadata: Object.freeze({ ...metadata }) }
+          : {})
+      })
+    }
+  })
+}
+
+export type MainSystemCapabilityInvokerFactory = Readonly<{
+  forDomain: (
+    owner: DomainRuntimeContributionOwner,
+    systemCapabilityGrants?: readonly string[]
+  ) => DomainMainSystemCapabilityInvoker
+}>
+
+export function createMainSystemCapabilityInvokerFactory(
+  broker: CapabilityBroker,
+  options: Readonly<{
+    createInvocationId?: () => string
+  }> = {}
+): MainSystemCapabilityInvokerFactory {
+  const createInvocationId = options.createInvocationId ?? randomUUID
+  return Object.freeze({
+    forDomain: (owner, systemCapabilityGrants = []) => {
+      const moduleId = owner.moduleId.trim()
+      if (!moduleId) throw new TypeError('A package-scoped capability invoker requires a module ID.')
+      const parsedContract = domainMainRuntimeLifecycleContractSchema.parse({
+        requestedSystemCapabilityGrants: [...systemCapabilityGrants]
+      })
+      return createSystemCapabilityInvoker(
+        broker,
+        `domain-runtime:${moduleId}`,
+        parsedContract.requestedSystemCapabilityGrants,
+        createInvocationId
+      )
+    }
+  })
+}
+
+function createSystemCapabilityInvoker(
+  broker: CapabilityBroker,
+  callerId: string,
+  systemCapabilityGrants: readonly string[],
+  createInvocationId: () => string
+): DomainMainSystemCapabilityInvoker {
+  return Object.freeze({
+    createApprovedBatch: (rawPlan) => {
+      const plan = domainMainFiniteCapabilityBatchPlanSchema.parse(rawPlan)
+      const batch = broker.createHostApprovedBatch({
+        callerId,
+        capabilityGrants: [...systemCapabilityGrants]
+      }, plan)
+      return Object.freeze({
+        revision: batch.revision,
+        planDigest: batch.planDigest,
+        invoke: async (operationId, contract, invokeOptions) => {
+          const operation = plan.operations.find((candidate) =>
+            candidate.operationId === operationId
+          )
+          try {
+            if (!operation || operation.actionId !== contract.actionId) {
+              throw new Error('The capability contract does not match the finite batch operation.')
+            }
+            contract.inputSchema.parse(operation.input)
+            const result = await batch.invoke(operationId, {
+              actionId: contract.actionId,
+              effect: contract.effect
+            }, invokeOptions)
+            return contract.outputSchema.parse(result.output)
+          } catch (error) {
+            batch.discard()
+            throw error
+          }
+        },
+        discard: () => batch.discard()
+      })
+    },
+    invoke: async (contract, input, invokeOptions) => {
+      const definition = broker.registry.require(contract.actionId)
+      if (definition.descriptor.effect !== contract.effect) {
+        throw new Error(
+          `Capability ${contract.actionId} effect does not match its public domain contract.`
+        )
+      }
+      const parsedInput = capabilityJsonValueSchema.parse(
+        contract.inputSchema.parse(input)
+      )
+      const invocationId = contract.effect === 'read'
+        ? invokeOptions?.systemExecutionContext !== undefined
+          ? createInvocationId()
+          : undefined
+        : invokeOptions?.idempotencyKey?.trim() || createInvocationId()
+      const approval = definition.descriptor.approval
+      const inherited = invokeOptions?.authorization?.mode === 'inherit-current-action'
+        ? broker.currentInvocation()
+        : undefined
+      if (invokeOptions?.authorization?.mode === 'inherit-current-action') {
+        const inheritedWorkspace = inherited?.caller.workspaceId?.trim()
+        const requestedWorkspace = invokeOptions.workspaceId?.trim()
+        if (
+          !inherited ||
+          !inherited.approved ||
+          inherited.approval === 'none' ||
+          inherited.effect !== 'destructive' ||
+          definition.descriptor.effect !== 'destructive' ||
+          !inherited.invocationId ||
+          !inheritedWorkspace ||
+          inheritedWorkspace !== requestedWorkspace
+        ) {
+          throw new Error(
+            `Capability ${contract.actionId} cannot inherit approval outside a matching approved destructive action.`
+          )
+        }
+        broker.assertPrincipalCurrent(
+          inherited.caller.principal,
+          inherited.caller.principalContextVersion
+        )
+      }
+      let resource = invokeOptions?.resource
+      // Explicit Host-approved DSH workspace reads use the formal per-operation
+      // opener protocol. No Session is synthesized and the Broker owns both calls.
+      if (!resource && contract.effect === 'read' && definition.descriptor.scope === 'resource' &&
+        definition.descriptor.tags?.includes('dsh-workspace-read') && definition.descriptor.resourceKinds.includes('dsh-workspace')) {
+        const openerId = `${contract.actionId}.open`
+        const opener = broker.registry.require(openerId).descriptor
+        if (opener.effect !== 'read' || opener.scope !== 'workspace' || !opener.tags?.includes('dsh-workspace-opener') || !opener.producedResourceKinds?.includes('dsh-workspace')) throw new Error('Invalid workspace read opener contract.')
+        const opened = await broker.invokeHostSystem({ callerId,
+          ...(systemCapabilityGrants.length ? { capabilityGrants: [...systemCapabilityGrants] } : {}),
+          ...(invokeOptions?.workspaceId?.trim() ? { workspaceId: invokeOptions.workspaceId.trim() } : {})
+        }, { actionId: openerId, input: {} }, { signal: invokeOptions?.signal })
+        resource = opened.output as NonNullable<typeof resource>
+      }
+      const result = await broker.invokeHostSystem({
+        callerId,
+        ...(systemCapabilityGrants.length > 0
+          ? { capabilityGrants: [...systemCapabilityGrants] }
+          : {}),
+        ...(invokeOptions?.workspaceId?.trim()
+          ? { workspaceId: invokeOptions.workspaceId.trim() }
+          : {}),
+        ...(invokeOptions?.systemExecutionContext !== undefined
+          ? {
+              systemExecutionContext: domainPackageJsonValueSchema.parse(
+                invokeOptions.systemExecutionContext
+              )
+            }
+          : {}),
+        ...(approval === 'none' || !inherited || !invocationId
+          ? {}
+          : {
+              approvals: [{
+                actionId: contract.actionId,
+                invocationId,
+                mode: approval
+              }]
+            })
+      }, {
+        actionId: contract.actionId,
+        ...(invocationId ? { invocationId } : {}),
+        ...(resource ? { resource } : {}),
+        ...(invokeOptions?.expectedRevision?.trim()
+          ? { expectedRevision: invokeOptions.expectedRevision.trim() }
+          : {}),
+        input: parsedInput
+      }, { signal: invokeOptions?.signal })
+      return contract.outputSchema.parse(result.output)
+    }
+  })
+}
+
+/**
+ * Activates package-owned main runtimes and projects generic artifact
+ * consumers from the canonical domain catalog.
+ */
+export async function activateMainRuntimeContributions(
+  catalog: DomainModuleCatalog,
+  host: Omit<DomainMainRuntimeLifecycleHost, 'capabilities'> & Readonly<{
+    capabilityInvokers: MainSystemCapabilityInvokerFactory
+  }>
+): Promise<ActivatedMainRuntimeContributions> {
+  // Validate every value before starting package-owned side effects.
+  const lifecycleContributions = catalog.listContributions(
+    MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+    (value): value is DomainMainRuntimeLifecycleContribution =>
+      isDomainMainRuntimeLifecycleContribution(value)
+  )
+  const artifactConsumers = listMainArtifactConsumers(catalog)
+  const workflowExecutionReceipts = listMainWorkflowExecutionReceiptProviders(catalog)
+  const mainExtensions = listMainExtensionContributions(catalog)
+  const registeredSystemCapabilityGrants = new Set(
+    listMainSystemCapabilityGrants(catalog).map((grant) => grant.id)
+  )
+  const lifecycleActivations = lifecycleContributions.map((contribution) => {
+    const contract = domainMainRuntimeLifecycleContractSchema.parse(
+      contribution.contract ?? {}
+    )
+    for (const requestedGrant of contract.requestedSystemCapabilityGrants) {
+      if (!registeredSystemCapabilityGrants.has(requestedGrant)) {
+        throw new Error(
+          `Runtime ${contribution.owner.moduleId} requests unregistered system capability grant ${requestedGrant}.`
+        )
+      }
+    }
+    return Object.freeze({ contribution, contract })
+  })
+  const contributionHost = Object.freeze({
+    list: (kind: typeof MAIN_EXTENSION_CONTRIBUTION_KIND) =>
+      kind === MAIN_EXTENSION_CONTRIBUTION_KIND ? mainExtensions : Object.freeze([])
+  })
+
+  const activated: ActivatedLifecycle[] = []
+  try {
+    for (const { contribution, contract: lifecycleContract } of lifecycleActivations) {
+      const controller = new AbortController()
+      const owner = Object.freeze({ ...contribution.owner })
+      const { enablement, executionEvents, capabilityInvokers, ...sharedHost } = host
+      const lifecycle: { controller: AbortController; disposer?: DomainMainRuntimeDisposer } = {
+        controller
+      }
+      activated.push(lifecycle)
+      const disposer = await contribution.value.activate(Object.freeze({
+        ...sharedHost,
+        owner,
+        capabilities: capabilityInvokers.forDomain(
+          owner,
+          lifecycleContract.requestedSystemCapabilityGrants
+        ),
+        executionEvents: Object.freeze({
+          publish: (event: DomainExecutionEventInput) => executionEvents.publish(owner, event)
+        }),
+        workflowExecutionReceipts,
+        contributions: contributionHost,
+        enablement: Object.freeze({
+          isEnabled: () => enablement.isEnabled(owner.moduleId),
+          subscribe: (listener: (enabled: boolean) => void) =>
+            enablement.subscribe(owner.moduleId, listener)
+        }),
+        signal: controller.signal
+      }))
+      if (disposer !== undefined && typeof disposer !== 'function') {
+        throw new TypeError(
+          `Runtime lifecycle contribution ${contribution.declaration.id} returned an invalid disposer.`
+        )
+      }
+      if (typeof disposer === 'function') lifecycle.disposer = disposer
+    }
+  } catch (error) {
+    const cleanupErrors = await disposeActivatedLifecycles(activated)
+    if (cleanupErrors.length === 0) throw error
+    throw new AggregateError(
+      [error, ...cleanupErrors],
+      'Main runtime contribution activation failed and rollback was incomplete.'
+    )
+  }
+
+  let disposed = false
+  return Object.freeze({
+    artifactConsumers: Object.freeze([...artifactConsumers]),
+    get disposed() {
+      return disposed
+    },
+    dispose: async () => {
+      if (disposed) return
+      disposed = true
+      const errors = await disposeActivatedLifecycles(activated)
+      throwDisposalErrors(errors)
+    }
+  })
+}
+
+async function disposeActivatedLifecycles(
+  activated: readonly ActivatedLifecycle[]
+): Promise<unknown[]> {
+  for (const lifecycle of activated) lifecycle.controller.abort()
+  const errors: unknown[] = []
+  for (const lifecycle of [...activated].reverse()) {
+    if (!lifecycle.disposer) continue
+    try {
+      await lifecycle.disposer()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  return errors
+}
+
+function throwDisposalErrors(errors: readonly unknown[]): void {
+  if (errors.length === 1) throw errors[0]
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'Main runtime contribution disposal failed.')
+  }
+}
+
+function parseActionGuardResult(
+  value: unknown,
+  contributionId: string
+): Readonly<{
+  allowed: boolean
+  message?: string
+  metadata?: DomainPackageJsonValue
+}> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`Action guard ${contributionId} returned a non-object result.`)
+  }
+  const result = value as Record<string, unknown>
+  if (typeof result.allowed !== 'boolean') {
+    throw new TypeError(`Action guard ${contributionId} returned an invalid allowed decision.`)
+  }
+  if (result.message !== undefined && typeof result.message !== 'string') {
+    throw new TypeError(`Action guard ${contributionId} returned an invalid message.`)
+  }
+  const metadata = result.metadata === undefined
+    ? undefined
+    : domainPackageJsonValueSchema.safeParse(result.metadata)
+  if (metadata && !metadata.success) {
+    throw new TypeError(`Action guard ${contributionId} returned non-JSON-safe metadata.`)
+  }
+  return Object.freeze({
+    allowed: result.allowed,
+    ...(typeof result.message === 'string' && result.message.trim()
+      ? { message: result.message.trim() }
+      : {}),
+    ...(metadata?.success ? { metadata: metadata.data } : {})
+  })
+}

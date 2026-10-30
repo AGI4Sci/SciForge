@@ -1,0 +1,27 @@
+{
+  "name": "@sciforge/example-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal SciForge renderer plugin intended for Agent-driven development.",
+  "engines": {
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "exports": {
+    ".": "./dist/main.mjs",
+    "./client": "./dist/ui/sdk.mjs"
+  },
+  "dsh": {
+    "client": {
+      "platform": "desktop",
+      "inject": [
+        "./dist/ui/sdk.mjs"
+      ]
+    }
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/template.test.mjs",
+    "build": "node scripts/build.mjs"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "name": "@sciforge/scientific-plotting",
+  "version": "0.1.2",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge controlled scientific plotting and K-Dense scientific skills MCP workers.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": true,
+    "sideEffects": "filesystem",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": true
+  },
+  "bin": {
+    "sciforge-scientific-plotting": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./mcp-server": "./src/mcp-server.ts",
+    "./visual-style-extractor": "./src/visual-style-extractor.ts",
+    "./scientific-plotting-engine": "./src/scientific-plotting-engine.ts",
+    "./scientific-skills-index": "./src/scientific-skills-index.ts",
+    "./scientific-skills-installer": "./src/scientific-skills-installer.ts",
+    "./service": "./src/service.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sciforge/domain-artifact-versions": "^1.1.0",
+    "@sciforge/image-generation": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@napi-rs/canvas": "^0.1.100",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@sciforge/plugin-visual-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Visual Review domain module as a runtime plugin (pre-bridge form: non-artifact capabilities fully usable; artifact-bound paths fail closed until the host ports bridge from #53 HOST-PORTS lands).",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "build": "node build.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.100"
+  },
+  "devDependencies": {
+    "@sciforge/domain-sdk": "^0.2.21",
+    "zod": "^4.4.3"
+  },
+  "files": [
+    "dist",
+    "sciforge.adapter.json",
+    "cordis.patch.yml",
+    "README.md",
+    "package.json"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/main.js"
+    }
+  },
+  "engines": {
+    "dsh": "0.2.0-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

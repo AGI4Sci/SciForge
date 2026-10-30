@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "git-checkpoints",
+  "actionEvidence": {
+    "git-checkpoints.create": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/git-checkpoints/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/git-checkpoints/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-checkpoint-create-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "git-checkpoints-create-local-fixture"
+      }
+    },
+    "git-checkpoints.list": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/git-checkpoints/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/git-checkpoints/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-checkpoint-list-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "git-checkpoints-list"
+      }
+    },
+    "git-checkpoints.preview": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/git-checkpoints/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/git-checkpoints/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-checkpoint-preview-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "git-checkpoints-preview-local-fixture"
+      }
+    },
+    "git-checkpoints.restore": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/git-checkpoints/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/git-checkpoints/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-checkpoint-restore-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "git-checkpoints-restore-local-fixture"
+      }
+    }
+  }
+}

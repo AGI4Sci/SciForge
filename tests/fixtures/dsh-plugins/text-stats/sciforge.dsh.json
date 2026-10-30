@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-text-stats",
+  "entry": "dist/main.js",
+  "title": "文本统计",
+  "summary": {
+    "zh": "统计文本的字符、中文/拉丁词、行、段落与字节数，并明确说明中英文统计口径。纯本地计算，不联网、不写文件。",
+    "en": "Counts characters, CJK characters, Latin words, lines, paragraphs and UTF-8 bytes, with the counting rule stated explicitly. Local computation only."
+  },
+  "categories": [
+    "text",
+    "utility"
+  ],
+  "hostDependencies": [
+    "@deepseek-ai/dsh-tools"
+  ],
+  "tools": {
+    "text_stats_count": {
+      "id": "text-stats.count",
+      "effect": "compute"
+    },
+    "text_stats_explain": {
+      "id": "text-stats.explain",
+      "effect": "compute"
+    }
+  }
+}

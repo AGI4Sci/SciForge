@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-change-inspector",
+  "entry": "dist/main.js",
+  "title": "变更检查器",
+  "summary": {
+    "zh": "以只读方式打开一次会话的变更快照（open_session）：读取会话工作区的变更记录供检查与审计，不写文件、不改工作区。",
+    "en": "Opens a read-only snapshot of one session's workspace changes for inspection and audit. Reads only; does not write files or modify the workspace."
+  },
+  "categories": [
+    "workspace",
+    "inspection"
+  ],
+  "hostDependencies": [
+    "@deepseek-ai/dsh-tools"
+  ],
+  "tools": {
+    "open_session": {
+      "id": "change-inspector.open-session",
+      "effect": "read"
+    }
+  }
+}

@@ -1,0 +1,87 @@
+import type {
+  AgentRuntimeCompletionReceipt,
+  AgentRuntimeExecutionEffectClass
+} from '../../../shared/agent-runtime-contract'
+
+export type RuntimeToolFunctionDefinition = {
+  type: 'function'
+  /** Stable internal provider namespace. Never exposed as a model tool name. */
+  namespace?: string
+  /** Stable internal provider identity. */
+  providerId?: string
+  /** Canonical package identity for least-privilege broker scoping. */
+  providerPackageName?: string
+  /** Original provider tool name. */
+  providerToolName?: string
+  name: string
+  description: string
+  inputSchema: unknown
+  annotations?: {
+    title?: string
+    readOnlyHint?: boolean
+    destructiveHint?: boolean
+    idempotentHint?: boolean
+    openWorldHint?: boolean
+  }
+}
+
+export type RuntimeToolDefinition = RuntimeToolFunctionDefinition
+
+export type RuntimeToolCallRequest = {
+  requestId: string | number
+  runtimeId?: string
+  threadId?: string
+  turnId?: string
+  callId?: string
+  namespace?: string
+  tool: string
+  arguments: unknown
+  /** Host-only policy inherited by delegated child execution. */
+  delegationContext?: {
+    allowedToolNames?: readonly string[]
+    brokerScope?: Readonly<{ providerFamily: 'managed-mcp'; packageName?: string }>
+  }
+  trustedInvocation?: {
+    requestId: string
+    runtimeId: string
+    threadId: string
+    turnId?: string
+    callId?: string
+    actionId: string
+    invocationId?: string
+    approval: 'none' | 'confirmation' | 'system'
+  }
+}
+
+export type RuntimeToolOutputContentItem =
+  | { type: 'inputText'; text: string }
+  | { type: 'inputImage'; imageUrl: string }
+
+export type RuntimeToolCallResponse = {
+  contentItems: RuntimeToolOutputContentItem[]
+  success: boolean
+  /** Host-private operation identity for durable capability trace facts. */
+  capabilityIdentity?: Readonly<{
+    operationRef: string
+    capabilityId?: string
+  }>
+  structuredContent?: unknown
+  effects?: AgentRuntimeExecutionEffectClass[]
+  completionReceipts?: AgentRuntimeCompletionReceipt[]
+  errorCode?: string
+  failureClass?: string
+  retryable?: boolean
+  recoveryGuidance?: string
+  providerStage?: string
+  resourceIdentity?: string
+  evidenceDelta?: boolean
+  stateChanged?: boolean
+}
+
+export type RuntimeToolReleaseReason =
+  | 'user_stop'
+  | 'service_shutdown'
+  | 'runtime_disconnected'
+  | 'settings_changed'
+  | 'unknown'
+  | (string & {})

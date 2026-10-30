@@ -1,0 +1,1 @@
+{"name":"@sciforge/pr1-incompatible-fixture","version":"0.1.0","private":true,"type":"module","engines":{"dsh":">=99.0.0 <100.0.0"},"exports":{".":"./dist/main.js"},"dsh":{"bundle":{"patch":"./cordis.patch.yml"}}}

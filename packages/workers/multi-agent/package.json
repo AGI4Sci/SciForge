@@ -1,0 +1,60 @@
+{
+  "name": "@sciforge/multi-agent",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Shared SciForge multi-agent child-run contract, store, and supervised runtime.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "filesystem",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "import": "./dist/contract.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js"
+    },
+    "./delegate-task": {
+      "types": "./dist/delegate-task.d.ts",
+      "import": "./dist/delegate-task.js"
+    },
+    "./work-record": {
+      "types": "./dist/work-record.d.ts",
+      "import": "./dist/work-record.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

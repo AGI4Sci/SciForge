@@ -1,0 +1,130 @@
+### Node / Electron
+node_modules/
+out/
+dist/
+
+### Git-tracked executable migration test inputs (not build output)
+!/test-fixtures/migration-plugins/failure-activation/dist/
+/test-fixtures/migration-plugins/failure-activation/dist/*
+!/test-fixtures/migration-plugins/failure-incompatible/dist/
+/test-fixtures/migration-plugins/failure-incompatible/dist/*
+!/test-fixtures/migration-plugins/p1-unitverse/dist/
+/test-fixtures/migration-plugins/p1-unitverse/dist/*
+!/test-fixtures/migration-plugins/p2-better-sidebar/dist/
+/test-fixtures/migration-plugins/p2-better-sidebar/dist/*
+!/test-fixtures/migration-plugins/p3-mcp-bridge/dist/
+/test-fixtures/migration-plugins/p3-mcp-bridge/dist/*
+!/test-fixtures/migration-plugins/p4-agent-teams/dist/
+/test-fixtures/migration-plugins/p4-agent-teams/dist/*
+!/test-fixtures/migration-plugins/p5-ws-scope/dist/
+/test-fixtures/migration-plugins/p5-ws-scope/dist/*
+!/test-fixtures/migration-plugins/failure-activation/dist/main.js
+!/test-fixtures/migration-plugins/failure-incompatible/dist/main.js
+!/test-fixtures/migration-plugins/p1-unitverse/dist/main.js
+!/test-fixtures/migration-plugins/p2-better-sidebar/dist/main.js
+!/test-fixtures/migration-plugins/p2-better-sidebar/dist/renderer.html
+!/test-fixtures/migration-plugins/p2-better-sidebar/dist/renderer.mjs
+!/test-fixtures/migration-plugins/p3-mcp-bridge/dist/main.js
+!/test-fixtures/migration-plugins/p4-agent-teams/dist/main.js
+!/test-fixtures/migration-plugins/p5-ws-scope/dist/main.js
+release/
+packages/workers/workspace-host/artifacts/
+.cache/
+.deepseek/
+.kunsdd/
+.codex-runtime/
+.claude-code-runtime/
+.scimodality-run/
+.sciforge/
+.npm-cache/
+outputs/
+eval-results/
+*.log
+.DS_Store
+__pycache__/
+*.py[cod]
+
+### Local environment
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+### Local release secrets
+scripts/release.local.env
+release.local.env
+*.p12
+*.p8
+*.pem
+*.key
+*.mobileprovision
+
+### AL ###
+#Template for AL projects for Dynamics 365 Business Central
+#launch.json folder
+.vscode/
+#Cache folder
+.alcache/
+#Symbols folder
+.alpackages/
+#Snapshots folder
+.snapshots/
+#Testing Output folder
+.output/
+#Extension App-file
+*.app
+#Rapid Application Development File
+rad.json
+#Translation Base-file
+*.g.xlf
+#License-files
+*.bclicense
+*.flf
+#Test results file
+TestResults.xml
+
+### Internal docs
+docs/R2_RELEASE.md
+
+### Private meeting records
+/meeting_records/
+
+### Group-distributed provider attachments (never publish)
+/internal/opencontent/
+
+### Local acceptance launcher (contains a dev gateway key + local logs — not for upstream)
+/local-run/
+
+### Paper files
+paper/*
+paper_reading/
+
+### Paper build artifacts
+*.synctex.gz
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.out
+paper/*.tex.bak*
+paper/*.pdf.bak*
+paper/*-bak*.pdf
+paper/_review_*.txt
+paper/preview-pg*.png
+paper/tmp/
+paper/figures/*.components/
+paper/figures/*.semantic-layers/
+paper/figures/*.component-base.png
+paper/figures/*.component-segmentation-preview.png
+paper/figures/*.component-segmentation.json
+paper/figures/*.framework-components.json
+
+### Local end-to-end run artifacts
+/artifacts/
+.e2e-runtime/
+temp/
+.tmp/
+
+### Generated DSH plugin test-fixture catalogue (signed with a local test key; rebuild with npm run market:fixtures)
+tests/fixtures/dsh-plugins/market/

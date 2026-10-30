@@ -1,0 +1,1152 @@
+{
+  "scenarios": {
+    "automatic-recording": {
+      "steps": [
+        {
+          "step": "status-after-automatic-start",
+          "output": {
+            "ok": true,
+            "value": {
+              "recordingMode": "automatic",
+              "automaticEnabled": true,
+              "policyRevision": 0,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Research thread-1",
+                "state": "active",
+                "versionCount": 0,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "turn-status-committed",
+          "output": {
+            "ok": true,
+            "value": {
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "turn-baseline-1",
+              "recordingId": "research-recording:baseline-1",
+              "operationId": "research-checkpoint-operation:022dedc8e2c766ca7f7f3cf8d4db07a6b6a20ad0c5226e03922da52662ab47e8",
+              "changeReason": "request turn-baseline-1",
+              "attempts": 1,
+              "createdAt": "2099-08-11T08:00:00.000Z",
+              "updatedAt": "2099-08-11T08:00:00.000Z",
+              "state": "committed",
+              "changeKind": "new",
+              "title": "Research thread-1",
+              "artifactRef": {
+                "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                "versionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                "contentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                "byteLength": 1605,
+                "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                "availability": "available",
+                "retention": "snapshot",
+                "accessPolicy": {
+                  "visibility": "workspace",
+                  "principals": [],
+                  "allowExport": false
+                }
+              },
+              "ordinal": 1,
+              "inputs": [],
+              "outputs": [],
+              "outputArtifacts": [],
+              "reproduction": {
+                "status": "not-run"
+              },
+              "provenance": {
+                "status": "incomplete"
+              },
+              "control": {
+                "status": "untracked"
+              },
+              "untrackedOperationCount": 1,
+              "evidence": {
+                "status": "unavailable"
+              }
+            }
+          }
+        },
+        {
+          "step": "status-after-commit",
+          "output": {
+            "ok": true,
+            "value": {
+              "recordingMode": "automatic",
+              "automaticEnabled": true,
+              "policyRevision": 0,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Research thread-1",
+                "state": "active",
+                "versionCount": 1,
+                "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                "currentVersionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                "currentContentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                "currentOrdinal": 1,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "list",
+          "output": {
+            "ok": true,
+            "value": {
+              "records": [
+                {
+                  "manifest": {
+                    "contractVersion": 1,
+                    "kind": "sciforge.research-checkpoint-manifest.v1",
+                    "recording": {
+                      "recordingId": "research-recording:baseline-1",
+                      "origin": "live",
+                      "runtimeId": "codex",
+                      "threadId": "thread-1",
+                      "workspaceBindingDigest": "97d7d774da0b623265c4a18130ea73c3a8ce978ad3d84abfd4df170686984491"
+                    },
+                    "turn": {
+                      "turnId": "turn-baseline-1",
+                      "targetWatermark": "wm-1",
+                      "sequence": 1,
+                      "occurredAt": "2099-08-11T08:00:01.000Z"
+                    },
+                    "title": "Research thread-1",
+                    "changeReason": "request turn-baseline-1",
+                    "narrative": {
+                      "canonicalText": "result turn-baseline-1",
+                      "contentDigest": "063d86b62ec0467e1da5f659a95a763f9877b415097ca256e7aa4d654c3ad220"
+                    },
+                    "sources": [],
+                    "declaredFiles": [],
+                    "artifactDependencies": [],
+                    "computeRuns": [],
+                    "gitCheckpoints": [],
+                    "untrackedOperations": [
+                      {
+                        "kind": "editor-change",
+                        "itemId": "file-change-turn-baseline-1",
+                        "summary": "File changes"
+                      }
+                    ],
+                    "breakpoints": [
+                      {
+                        "code": "editor-change-untracked",
+                        "blocking": true,
+                        "message": "An editor or file-change operation lacks an exact observed file version.",
+                        "itemId": "file-change-turn-baseline-1"
+                      },
+                      {
+                        "code": "editor-change-untracked",
+                        "blocking": true,
+                        "message": "The declared file has no Host-authenticated write receipt and was not advanced as a formal output Artifact.",
+                        "itemId": "file:reports/result.md",
+                        "detail": {
+                          "callId": "file-change-turn-baseline-1",
+                          "origin": "file-change-declaration",
+                          "path": "reports/result.md"
+                        }
+                      }
+                    ],
+                    "status": {
+                      "execution": "observed-untracked",
+                      "provenance": "incomplete",
+                      "control": "untracked",
+                      "reproduction": "not-run",
+                      "evidence": "pending"
+                    },
+                    "privacy": {
+                      "textSanitization": "credential-redaction-v1",
+                      "sourceUrlPolicy": "http-origin-path-safe-query-v1",
+                      "opaqueSecretSanitization": "unavailable"
+                    }
+                  },
+                  "status": {
+                    "runtimeId": "codex",
+                    "threadId": "thread-1",
+                    "turnId": "turn-baseline-1",
+                    "recordingId": "research-recording:baseline-1",
+                    "operationId": "research-checkpoint-operation:022dedc8e2c766ca7f7f3cf8d4db07a6b6a20ad0c5226e03922da52662ab47e8",
+                    "changeReason": "request turn-baseline-1",
+                    "attempts": 1,
+                    "createdAt": "2099-08-11T08:00:00.000Z",
+                    "updatedAt": "2099-08-11T08:00:00.000Z",
+                    "state": "committed",
+                    "changeKind": "new",
+                    "title": "Research thread-1",
+                    "artifactRef": {
+                      "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                      "versionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                      "contentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                      "byteLength": 1605,
+                      "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                      "availability": "available",
+                      "retention": "snapshot",
+                      "accessPolicy": {
+                        "visibility": "workspace",
+                        "principals": [],
+                        "allowExport": false
+                      }
+                    },
+                    "ordinal": 1,
+                    "inputs": [],
+                    "outputs": [],
+                    "outputArtifacts": [],
+                    "reproduction": {
+                      "status": "not-run"
+                    },
+                    "provenance": {
+                      "status": "incomplete"
+                    },
+                    "control": {
+                      "status": "untracked"
+                    },
+                    "untrackedOperationCount": 1,
+                    "evidence": {
+                      "status": "unavailable"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "step": "read",
+          "output": {
+            "ok": true,
+            "value": {
+              "manifest": {
+                "contractVersion": 1,
+                "kind": "sciforge.research-checkpoint-manifest.v1",
+                "recording": {
+                  "recordingId": "research-recording:baseline-1",
+                  "origin": "live",
+                  "runtimeId": "codex",
+                  "threadId": "thread-1",
+                  "workspaceBindingDigest": "97d7d774da0b623265c4a18130ea73c3a8ce978ad3d84abfd4df170686984491"
+                },
+                "turn": {
+                  "turnId": "turn-baseline-1",
+                  "targetWatermark": "wm-1",
+                  "sequence": 1,
+                  "occurredAt": "2099-08-11T08:00:01.000Z"
+                },
+                "title": "Research thread-1",
+                "changeReason": "request turn-baseline-1",
+                "narrative": {
+                  "canonicalText": "result turn-baseline-1",
+                  "contentDigest": "063d86b62ec0467e1da5f659a95a763f9877b415097ca256e7aa4d654c3ad220"
+                },
+                "sources": [],
+                "declaredFiles": [],
+                "artifactDependencies": [],
+                "computeRuns": [],
+                "gitCheckpoints": [],
+                "untrackedOperations": [
+                  {
+                    "kind": "editor-change",
+                    "itemId": "file-change-turn-baseline-1",
+                    "summary": "File changes"
+                  }
+                ],
+                "breakpoints": [
+                  {
+                    "code": "editor-change-untracked",
+                    "blocking": true,
+                    "message": "An editor or file-change operation lacks an exact observed file version.",
+                    "itemId": "file-change-turn-baseline-1"
+                  },
+                  {
+                    "code": "editor-change-untracked",
+                    "blocking": true,
+                    "message": "The declared file has no Host-authenticated write receipt and was not advanced as a formal output Artifact.",
+                    "itemId": "file:reports/result.md",
+                    "detail": {
+                      "callId": "file-change-turn-baseline-1",
+                      "origin": "file-change-declaration",
+                      "path": "reports/result.md"
+                    }
+                  }
+                ],
+                "status": {
+                  "execution": "observed-untracked",
+                  "provenance": "incomplete",
+                  "control": "untracked",
+                  "reproduction": "not-run",
+                  "evidence": "pending"
+                },
+                "privacy": {
+                  "textSanitization": "credential-redaction-v1",
+                  "sourceUrlPolicy": "http-origin-path-safe-query-v1",
+                  "opaqueSecretSanitization": "unavailable"
+                }
+              },
+              "status": {
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "turnId": "turn-baseline-1",
+                "recordingId": "research-recording:baseline-1",
+                "operationId": "research-checkpoint-operation:022dedc8e2c766ca7f7f3cf8d4db07a6b6a20ad0c5226e03922da52662ab47e8",
+                "changeReason": "request turn-baseline-1",
+                "attempts": 1,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z",
+                "state": "committed",
+                "changeKind": "new",
+                "title": "Research thread-1",
+                "artifactRef": {
+                  "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                  "versionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                  "contentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                  "byteLength": 1605,
+                  "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                  "availability": "available",
+                  "retention": "snapshot",
+                  "accessPolicy": {
+                    "visibility": "workspace",
+                    "principals": [],
+                    "allowExport": false
+                  }
+                },
+                "ordinal": 1,
+                "inputs": [],
+                "outputs": [],
+                "outputArtifacts": [],
+                "reproduction": {
+                  "status": "not-run"
+                },
+                "provenance": {
+                  "status": "incomplete"
+                },
+                "control": {
+                  "status": "untracked"
+                },
+                "untrackedOperationCount": 1,
+                "evidence": {
+                  "status": "unavailable"
+                }
+              }
+            }
+          }
+        },
+        {
+          "step": "stop",
+          "output": {
+            "ok": true,
+            "value": {
+              "policyRevision": 1,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Research thread-1",
+                "state": "stopped",
+                "versionCount": 1,
+                "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                "currentVersionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                "currentContentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                "currentOrdinal": 1,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z",
+                "stoppedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "status-after-stop",
+          "output": {
+            "ok": true,
+            "value": {
+              "recordingMode": "automatic",
+              "automaticEnabled": false,
+              "policyRevision": 1,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Research thread-1",
+                "state": "stopped",
+                "versionCount": 1,
+                "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                "currentVersionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                "currentContentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                "currentOrdinal": 1,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z",
+                "stoppedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        }
+      ],
+      "store": {
+        "schemaVersion": 1,
+        "recordings": [
+          {
+            "recordingId": "research-recording:baseline-1",
+            "origin": "live",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "title": "Research thread-1",
+            "state": "stopped",
+            "versionCount": 1,
+            "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+            "currentVersionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+            "currentContentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+            "currentOrdinal": 1,
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "updatedAt": "2099-08-11T08:00:00.000Z",
+            "stoppedAt": "2099-08-11T08:00:00.000Z",
+            "workspaceRoot": "/workspace/baseline",
+            "startIdempotencyReceipts": [],
+            "startWatermark": "thread-wm-0",
+            "startKnownTurnIds": [],
+            "stopWatermark": "thread-wm-0",
+            "stopKnownTurnIds": [],
+            "fileBindings": []
+          }
+        ],
+        "operations": [
+          {
+            "operationId": "research-checkpoint-operation:022dedc8e2c766ca7f7f3cf8d4db07a6b6a20ad0c5226e03922da52662ab47e8",
+            "workspaceRoot": "/workspace/baseline",
+            "recordingId": "research-recording:baseline-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "turnId": "turn-baseline-1",
+            "issuerEpoch": "test-issuer-epoch",
+            "deliveryAttemptOrdinal": 1,
+            "boundaryLeaseId": "directive-turn-baseline-1",
+            "deliveryAttemptId": "directive-turn-baseline-1",
+            "targetWatermark": "wm-1",
+            "state": "committed",
+            "manifest": {
+              "contractVersion": 1,
+              "kind": "sciforge.research-checkpoint-manifest.v1",
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "workspaceBindingDigest": "97d7d774da0b623265c4a18130ea73c3a8ce978ad3d84abfd4df170686984491"
+              },
+              "turn": {
+                "turnId": "turn-baseline-1",
+                "targetWatermark": "wm-1",
+                "sequence": 1,
+                "occurredAt": "2099-08-11T08:00:01.000Z"
+              },
+              "title": "Checkpoint f9ad3a7e8dfe",
+              "changeReason": "Committed reason sha256:7cf22237e0054881d7e150a25101575e26c09d1f115192eadd57db0653cf184e",
+              "narrative": {
+                "canonicalText": "Committed manifest sha256:50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                "contentDigest": "6584d81d209956a25d72f71ac53bac46b5c7ad94e418adcd59bdfa1f8bada330"
+              },
+              "sources": [],
+              "declaredFiles": [],
+              "artifactDependencies": [],
+              "computeRuns": [],
+              "gitCheckpoints": [],
+              "untrackedOperations": [],
+              "breakpoints": [],
+              "status": {
+                "execution": "observed-untracked",
+                "provenance": "incomplete",
+                "control": "untracked",
+                "reproduction": "not-run",
+                "evidence": "pending"
+              },
+              "privacy": {
+                "textSanitization": "credential-redaction-v1",
+                "sourceUrlPolicy": "http-origin-path-safe-query-v1",
+                "opaqueSecretSanitization": "unavailable"
+              }
+            },
+            "manifestDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+            "manifestStorage": "summary",
+            "filePlans": [],
+            "observedPaths": [],
+            "idempotencyKey": "research-checkpoint:turn-commit:022dedc8e2c766ca7f7f3cf8d4db07a6b6a20ad0c5226e03922da52662ab47e8",
+            "candidateId": "checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+            "expectedCurrentVersionId": null,
+            "preparedAt": "2099-08-11T08:00:00.000Z",
+            "computeRunCandidates": [],
+            "computeCandidatesProcessed": true,
+            "gitProjectionProcessed": true,
+            "frozenCommitDigest": "11fa5f290899cfafd2837d4a1a2d05ac6a87c6bbc0bd3670ee4f52a455d2fe08",
+            "resolutionHistory": [],
+            "attempts": 1,
+            "ref": {
+              "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+              "versionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+              "contentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+              "byteLength": 1605,
+              "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+              "availability": "available",
+              "retention": "snapshot",
+              "accessPolicy": {
+                "visibility": "workspace",
+                "principals": [],
+                "allowExport": false
+              }
+            },
+            "ordinal": 1,
+            "transactionId": "artifact-commit:1",
+            "outputReceipts": [],
+            "committedStatus": {
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "turn-baseline-1",
+              "recordingId": "research-recording:baseline-1",
+              "operationId": "research-checkpoint-operation:022dedc8e2c766ca7f7f3cf8d4db07a6b6a20ad0c5226e03922da52662ab47e8",
+              "changeReason": "request turn-baseline-1",
+              "attempts": 1,
+              "createdAt": "2099-08-11T08:00:00.000Z",
+              "updatedAt": "2099-08-11T08:00:00.000Z",
+              "state": "committed",
+              "changeKind": "new",
+              "title": "Research thread-1",
+              "artifactRef": {
+                "artifactId": "artifact:checkpoint-0e5bf55dc2e0c7923d1c20c7454ffb25",
+                "versionId": "artifact-version:0bb7586f7da7194b81cdc6f9",
+                "contentDigest": "50cbf725248209533134329119446bebea9607fa2c75b015b0e9f00e55a7d72b",
+                "byteLength": 1605,
+                "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                "availability": "available",
+                "retention": "snapshot",
+                "accessPolicy": {
+                  "visibility": "workspace",
+                  "principals": [],
+                  "allowExport": false
+                }
+              },
+              "ordinal": 1,
+              "inputs": [],
+              "outputs": [],
+              "outputArtifacts": [],
+              "reproduction": {
+                "status": "not-run"
+              },
+              "provenance": {
+                "status": "incomplete"
+              },
+              "control": {
+                "status": "untracked"
+              },
+              "untrackedOperationCount": 1,
+              "evidence": {
+                "status": "pending"
+              }
+            },
+            "changeKind": "new",
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "updatedAt": "2099-08-11T08:00:00.000Z"
+          }
+        ],
+        "restoreOperations": [],
+        "workspaceFileBindings": [],
+        "automaticRecordingPolicies": [
+          {
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "automaticEnabled": false,
+            "revision": 1,
+            "updatedAt": "2099-08-11T08:00:00.000Z"
+          }
+        ],
+        "automaticPolicyOperationOrdinal": 1,
+        "automaticPolicyReceipts": [
+          {
+            "idempotencyKey": "baseline-stop-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "expectedPolicyRevision": 0,
+            "policyRevision": 1,
+            "operationOrdinal": 1,
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "action": "stop",
+            "requestedRecordingId": "research-recording:baseline-1",
+            "recordingId": "research-recording:baseline-1"
+          }
+        ],
+        "preTurnOutputBindingSnapshots": [
+          {
+            "issuerEpoch": "test-issuer-epoch",
+            "deliveryAttemptOrdinal": 1,
+            "leaseId": "directive-turn-baseline-1",
+            "deliveryAttemptId": "directive-turn-baseline-1",
+            "clientDirectiveId": "directive-turn-baseline-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "workspaceRoot": "/workspace/baseline",
+            "recordingId": "research-recording:baseline-1",
+            "state": "consumed",
+            "capturedAt": "2099-08-11T08:00:00.000Z",
+            "settledAt": "2099-08-11T08:00:00.000Z",
+            "turnId": "turn-baseline-1",
+            "bindings": []
+          }
+        ]
+      }
+    },
+    "explicit-start-stop": {
+      "steps": [
+        {
+          "step": "start",
+          "output": {
+            "ok": true,
+            "value": {
+              "created": true,
+              "policyRevision": 1,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Baseline recording",
+                "state": "active",
+                "versionCount": 0,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "status-after-start",
+          "output": {
+            "ok": true,
+            "value": {
+              "recordingMode": "automatic",
+              "automaticEnabled": true,
+              "policyRevision": 1,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Baseline recording",
+                "state": "active",
+                "versionCount": 0,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "stop",
+          "output": {
+            "ok": true,
+            "value": {
+              "policyRevision": 2,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Baseline recording",
+                "state": "stopped",
+                "versionCount": 0,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z",
+                "stoppedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "status-after-stop",
+          "output": {
+            "ok": true,
+            "value": {
+              "recordingMode": "automatic",
+              "automaticEnabled": false,
+              "policyRevision": 2,
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "live",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "title": "Baseline recording",
+                "state": "stopped",
+                "versionCount": 0,
+                "createdAt": "2099-08-11T08:00:00.000Z",
+                "updatedAt": "2099-08-11T08:00:00.000Z",
+                "stoppedAt": "2099-08-11T08:00:00.000Z"
+              }
+            }
+          }
+        },
+        {
+          "step": "list-empty",
+          "output": {
+            "ok": true,
+            "value": {
+              "records": []
+            }
+          }
+        }
+      ],
+      "store": {
+        "schemaVersion": 1,
+        "recordings": [
+          {
+            "recordingId": "research-recording:baseline-1",
+            "origin": "live",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "title": "Baseline recording",
+            "state": "stopped",
+            "versionCount": 0,
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "updatedAt": "2099-08-11T08:00:00.000Z",
+            "stoppedAt": "2099-08-11T08:00:00.000Z",
+            "workspaceRoot": "/workspace/baseline",
+            "startIdempotencyReceipts": [],
+            "startWatermark": "thread-wm-0",
+            "startKnownTurnIds": [],
+            "stopWatermark": "thread-wm-0",
+            "stopKnownTurnIds": [],
+            "fileBindings": []
+          }
+        ],
+        "operations": [],
+        "restoreOperations": [],
+        "workspaceFileBindings": [],
+        "automaticRecordingPolicies": [
+          {
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "automaticEnabled": false,
+            "revision": 2,
+            "updatedAt": "2099-08-11T08:00:00.000Z"
+          }
+        ],
+        "automaticPolicyOperationOrdinal": 2,
+        "automaticPolicyReceipts": [
+          {
+            "idempotencyKey": "baseline-stop-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "expectedPolicyRevision": 1,
+            "policyRevision": 2,
+            "operationOrdinal": 2,
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "action": "stop",
+            "recordingId": "research-recording:baseline-1"
+          },
+          {
+            "idempotencyKey": "baseline-start-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "expectedPolicyRevision": 0,
+            "policyRevision": 1,
+            "operationOrdinal": 1,
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "action": "start",
+            "title": "Baseline recording",
+            "created": true,
+            "recordingId": "research-recording:baseline-1"
+          }
+        ],
+        "preTurnOutputBindingSnapshots": []
+      }
+    },
+    "legacy-import": {
+      "steps": [
+        {
+          "step": "legacy-preview",
+          "output": {
+            "ok": true,
+            "value": {
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turns": [
+                {
+                  "turnId": "turn-legacy-a",
+                  "status": "completed",
+                  "completedAt": "2026-08-01T10:00:00.000Z",
+                  "summary": "legacy request a · legacy result a"
+                },
+                {
+                  "turnId": "turn-legacy-b",
+                  "status": "completed",
+                  "completedAt": "2026-08-01T11:00:00.000Z",
+                  "summary": "legacy request b · legacy result b"
+                }
+              ],
+              "selectedTurnIds": [
+                "turn-legacy-a"
+              ],
+              "selectedTranscriptDigest": "5483889bc11483f258c97493fb7f9b6349c3e2f53fe2e764d3a1ef9bc5677b82"
+            }
+          }
+        },
+        {
+          "step": "legacy-import",
+          "output": {
+            "ok": true,
+            "value": {
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "legacy:5483889bc11483f258c97493fb7f9b63",
+              "recordingId": "research-recording:baseline-1",
+              "operationId": "research-checkpoint-operation:ecaff634a4b88f7d80c51d51b0442b2e0a6a774b962e82556092e0f36f7357ee",
+              "changeReason": "Explicitly imported selected historical turns as an incomplete legacy record.",
+              "attempts": 1,
+              "createdAt": "2099-08-11T08:00:00.000Z",
+              "updatedAt": "2099-08-11T08:00:00.000Z",
+              "state": "committed",
+              "changeKind": "new",
+              "title": "Baseline legacy import",
+              "artifactRef": {
+                "artifactId": "artifact:checkpoint-12f0fee30693bcbc283d4ebd81504fb7",
+                "versionId": "artifact-version:8987a16e1736ea6bb43bb5b6",
+                "contentDigest": "4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+                "byteLength": 1594,
+                "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                "availability": "available",
+                "retention": "snapshot",
+                "accessPolicy": {
+                  "visibility": "workspace",
+                  "principals": [],
+                  "allowExport": false
+                }
+              },
+              "ordinal": 1,
+              "inputs": [],
+              "outputs": [],
+              "outputArtifacts": [],
+              "reproduction": {
+                "status": "not-run"
+              },
+              "provenance": {
+                "status": "incomplete"
+              },
+              "control": {
+                "status": "untracked"
+              },
+              "untrackedOperationCount": 1,
+              "evidence": {
+                "status": "unavailable"
+              }
+            }
+          }
+        },
+        {
+          "step": "list",
+          "output": {
+            "ok": true,
+            "value": {
+              "records": [
+                {
+                  "manifest": {
+                    "contractVersion": 1,
+                    "kind": "sciforge.research-checkpoint-manifest.v1",
+                    "recording": {
+                      "recordingId": "research-recording:baseline-1",
+                      "origin": "legacy-import",
+                      "runtimeId": "codex",
+                      "threadId": "thread-1",
+                      "workspaceBindingDigest": "97d7d774da0b623265c4a18130ea73c3a8ce978ad3d84abfd4df170686984491"
+                    },
+                    "turn": {
+                      "turnId": "legacy:5483889bc11483f258c97493fb7f9b63",
+                      "targetWatermark": "5483889bc11483f258c97493fb7f9b6349c3e2f53fe2e764d3a1ef9bc5677b82",
+                      "occurredAt": "2026-08-01T10:00:00.000Z"
+                    },
+                    "title": "Baseline legacy import",
+                    "changeReason": "Explicitly imported selected historical turns as an incomplete legacy record.",
+                    "narrative": {
+                      "canonicalText": "User: legacy request a\n\nAssistant: legacy result a",
+                      "contentDigest": "861c5dd007ee1f5076aacae3af969ac2c9034169eb3281d96a735a2d5ba22e9a"
+                    },
+                    "sources": [],
+                    "declaredFiles": [],
+                    "artifactDependencies": [],
+                    "computeRuns": [],
+                    "gitCheckpoints": [],
+                    "untrackedOperations": [
+                      {
+                        "kind": "unknown",
+                        "summary": "Historical execution boundaries and exact file observations were not captured."
+                      }
+                    ],
+                    "breakpoints": [
+                      {
+                        "code": "legacy-provenance-incomplete",
+                        "blocking": true,
+                        "message": "Legacy import cannot establish original execution, environment, file, or Evidence facts."
+                      }
+                    ],
+                    "status": {
+                      "execution": "observed-untracked",
+                      "provenance": "incomplete",
+                      "control": "untracked",
+                      "reproduction": "not-run",
+                      "evidence": "unavailable"
+                    },
+                    "privacy": {
+                      "textSanitization": "credential-redaction-v1",
+                      "sourceUrlPolicy": "http-origin-path-safe-query-v1",
+                      "opaqueSecretSanitization": "unavailable"
+                    },
+                    "importedTranscriptDigest": "5483889bc11483f258c97493fb7f9b6349c3e2f53fe2e764d3a1ef9bc5677b82",
+                    "importedTurnIds": [
+                      "turn-legacy-a"
+                    ]
+                  },
+                  "status": {
+                    "runtimeId": "codex",
+                    "threadId": "thread-1",
+                    "turnId": "legacy:5483889bc11483f258c97493fb7f9b63",
+                    "recordingId": "research-recording:baseline-1",
+                    "operationId": "research-checkpoint-operation:ecaff634a4b88f7d80c51d51b0442b2e0a6a774b962e82556092e0f36f7357ee",
+                    "changeReason": "Explicitly imported selected historical turns as an incomplete legacy record.",
+                    "attempts": 1,
+                    "createdAt": "2099-08-11T08:00:00.000Z",
+                    "updatedAt": "2099-08-11T08:00:00.000Z",
+                    "state": "committed",
+                    "changeKind": "new",
+                    "title": "Baseline legacy import",
+                    "artifactRef": {
+                      "artifactId": "artifact:checkpoint-12f0fee30693bcbc283d4ebd81504fb7",
+                      "versionId": "artifact-version:8987a16e1736ea6bb43bb5b6",
+                      "contentDigest": "4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+                      "byteLength": 1594,
+                      "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                      "availability": "available",
+                      "retention": "snapshot",
+                      "accessPolicy": {
+                        "visibility": "workspace",
+                        "principals": [],
+                        "allowExport": false
+                      }
+                    },
+                    "ordinal": 1,
+                    "inputs": [],
+                    "outputs": [],
+                    "outputArtifacts": [],
+                    "reproduction": {
+                      "status": "not-run"
+                    },
+                    "provenance": {
+                      "status": "incomplete"
+                    },
+                    "control": {
+                      "status": "untracked"
+                    },
+                    "untrackedOperationCount": 1,
+                    "evidence": {
+                      "status": "unavailable"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "store": {
+        "schemaVersion": 1,
+        "recordings": [
+          {
+            "recordingId": "research-recording:baseline-1",
+            "origin": "legacy-import",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "title": "Baseline legacy import",
+            "state": "stopped",
+            "versionCount": 1,
+            "artifactId": "artifact:checkpoint-12f0fee30693bcbc283d4ebd81504fb7",
+            "currentVersionId": "artifact-version:8987a16e1736ea6bb43bb5b6",
+            "currentContentDigest": "4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+            "currentOrdinal": 1,
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "updatedAt": "2099-08-11T08:00:00.000Z",
+            "stoppedAt": "2099-08-11T08:00:00.000Z",
+            "workspaceRoot": "/workspace/baseline",
+            "startIdempotencyReceipts": [
+              {
+                "idempotencyKey": "baseline-import-1",
+                "title": "Baseline legacy import"
+              }
+            ],
+            "fileBindings": []
+          }
+        ],
+        "operations": [
+          {
+            "operationId": "research-checkpoint-operation:ecaff634a4b88f7d80c51d51b0442b2e0a6a774b962e82556092e0f36f7357ee",
+            "workspaceRoot": "/workspace/baseline",
+            "recordingId": "research-recording:baseline-1",
+            "runtimeId": "codex",
+            "threadId": "thread-1",
+            "turnId": "legacy:5483889bc11483f258c97493fb7f9b63",
+            "targetWatermark": "5483889bc11483f258c97493fb7f9b6349c3e2f53fe2e764d3a1ef9bc5677b82",
+            "state": "committed",
+            "manifest": {
+              "contractVersion": 1,
+              "kind": "sciforge.research-checkpoint-manifest.v1",
+              "recording": {
+                "recordingId": "research-recording:baseline-1",
+                "origin": "legacy-import",
+                "runtimeId": "codex",
+                "threadId": "thread-1",
+                "workspaceBindingDigest": "97d7d774da0b623265c4a18130ea73c3a8ce978ad3d84abfd4df170686984491"
+              },
+              "turn": {
+                "turnId": "legacy:5483889bc11483f258c97493fb7f9b63",
+                "targetWatermark": "5483889bc11483f258c97493fb7f9b6349c3e2f53fe2e764d3a1ef9bc5677b82",
+                "occurredAt": "2026-08-01T10:00:00.000Z"
+              },
+              "title": "Checkpoint 2fd577d4d50e",
+              "changeReason": "Committed reason sha256:4c3069ac6a95d568e32e44c8512e224dceefdd5ebbba011c5fa314ca80d84838",
+              "narrative": {
+                "canonicalText": "Committed manifest sha256:4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+                "contentDigest": "7f03b66127365a70372ee20062ee8119008f515db00ef4e1396f2a0c450bc8e2"
+              },
+              "sources": [],
+              "declaredFiles": [],
+              "artifactDependencies": [],
+              "computeRuns": [],
+              "gitCheckpoints": [],
+              "untrackedOperations": [
+                {
+                  "kind": "ambient-command",
+                  "summary": "Legacy import remains untracked."
+                }
+              ],
+              "breakpoints": [
+                {
+                  "code": "legacy-import-untracked",
+                  "blocking": true,
+                  "message": "Legacy import remains untracked."
+                }
+              ],
+              "status": {
+                "execution": "observed-untracked",
+                "provenance": "incomplete",
+                "control": "untracked",
+                "reproduction": "not-run",
+                "evidence": "unavailable"
+              },
+              "privacy": {
+                "textSanitization": "credential-redaction-v1",
+                "sourceUrlPolicy": "http-origin-path-safe-query-v1",
+                "opaqueSecretSanitization": "unavailable"
+              },
+              "importedTranscriptDigest": "5483889bc11483f258c97493fb7f9b6349c3e2f53fe2e764d3a1ef9bc5677b82",
+              "importedTurnIds": [
+                "turn-legacy-a"
+              ]
+            },
+            "manifestDigest": "4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+            "manifestStorage": "summary",
+            "filePlans": [],
+            "observedPaths": [],
+            "idempotencyKey": "research-checkpoint:legacy-commit:853d9fffbb89133a9c9fce413b03740ebc2789638053d6bc2674dc0b3f189253",
+            "candidateId": "checkpoint-12f0fee30693bcbc283d4ebd81504fb7",
+            "expectedCurrentVersionId": null,
+            "preparedAt": "2099-08-11T08:00:00.000Z",
+            "computeRunCandidates": [],
+            "computeCandidatesProcessed": true,
+            "gitProjectionProcessed": true,
+            "frozenCommitDigest": "09f9e4575a63070bb2645d2ee82539d3bfbb28f08eb1b3f1094f2f358dadc647",
+            "resolutionHistory": [],
+            "attempts": 1,
+            "ref": {
+              "artifactId": "artifact:checkpoint-12f0fee30693bcbc283d4ebd81504fb7",
+              "versionId": "artifact-version:8987a16e1736ea6bb43bb5b6",
+              "contentDigest": "4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+              "byteLength": 1594,
+              "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+              "availability": "available",
+              "retention": "snapshot",
+              "accessPolicy": {
+                "visibility": "workspace",
+                "principals": [],
+                "allowExport": false
+              }
+            },
+            "ordinal": 1,
+            "transactionId": "artifact-commit:1",
+            "outputReceipts": [],
+            "committedStatus": {
+              "runtimeId": "codex",
+              "threadId": "thread-1",
+              "turnId": "legacy:5483889bc11483f258c97493fb7f9b63",
+              "recordingId": "research-recording:baseline-1",
+              "operationId": "research-checkpoint-operation:ecaff634a4b88f7d80c51d51b0442b2e0a6a774b962e82556092e0f36f7357ee",
+              "changeReason": "Explicitly imported selected historical turns as an incomplete legacy record.",
+              "attempts": 1,
+              "createdAt": "2099-08-11T08:00:00.000Z",
+              "updatedAt": "2099-08-11T08:00:00.000Z",
+              "state": "committed",
+              "changeKind": "new",
+              "title": "Baseline legacy import",
+              "artifactRef": {
+                "artifactId": "artifact:checkpoint-12f0fee30693bcbc283d4ebd81504fb7",
+                "versionId": "artifact-version:8987a16e1736ea6bb43bb5b6",
+                "contentDigest": "4d9037afd61aec14b73b5c6740a6066891bc60b17e8f17a4b304acc241a7b9d5",
+                "byteLength": 1594,
+                "mediaType": "application/vnd.sciforge.research-checkpoint+json",
+                "availability": "available",
+                "retention": "snapshot",
+                "accessPolicy": {
+                  "visibility": "workspace",
+                  "principals": [],
+                  "allowExport": false
+                }
+              },
+              "ordinal": 1,
+              "inputs": [],
+              "outputs": [],
+              "outputArtifacts": [],
+              "reproduction": {
+                "status": "not-run"
+              },
+              "provenance": {
+                "status": "incomplete"
+              },
+              "control": {
+                "status": "untracked"
+              },
+              "untrackedOperationCount": 1,
+              "evidence": {
+                "status": "unavailable"
+              }
+            },
+            "changeKind": "new",
+            "createdAt": "2099-08-11T08:00:00.000Z",
+            "updatedAt": "2099-08-11T08:00:00.000Z"
+          }
+        ],
+        "restoreOperations": [],
+        "workspaceFileBindings": [],
+        "automaticRecordingPolicies": [],
+        "automaticPolicyOperationOrdinal": 0,
+        "automaticPolicyReceipts": [],
+        "preTurnOutputBindingSnapshots": []
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+- insert:
+    - id: unit-conversion
+      name: "@sciforge/plugin-unit-conversion"

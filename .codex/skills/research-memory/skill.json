@@ -1,0 +1,21 @@
+{
+  "id": "research-memory",
+  "name": "Research Memory",
+  "description": "Use the Research Memory skill, GitHub conventions, and templates to draft, confirm, and sync research state.",
+  "version": "1.1.0",
+  "entry": "SKILL.md",
+  "triggers": {
+    "commands": ["/research-memory"],
+    "promptPatterns": [
+      "research memory",
+      "artifact",
+      "status\\.html",
+      "github.*(summary|issue|pr|feedback)",
+      "experiment.*(complete|blocker|update)"
+    ],
+    "fileTypes": []
+  },
+  "allowedTools": [],
+  "assets": [],
+  "priority": 0
+}

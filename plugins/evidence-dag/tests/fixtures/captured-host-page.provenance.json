@@ -1,0 +1,6 @@
+{
+  "source": "continued-tests/chain-real-producer-page.json",
+  "sourceSha256": "001f4e0062680b6a556ae15152a3893c579b2e7e0cfeb8a873677e75f480233d",
+  "fixtureSha256": "92d1e0d9805db7da82c15ccc91df4f396b9aa63699ad0a53342ad021c7050eb2",
+  "sanitization": "Retain only visible Host trace fields; remove all principal/executor metadata; redact credential fields/tokens and local absolute paths recursively, including JSON text envelopes. Relative source locators and ordinary credential-policy prose are preserved. No file locators are opened."
+}

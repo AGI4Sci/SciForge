@@ -1,0 +1,59 @@
+{
+  "name": "@sciforge/domain-identity-access",
+  "version": "5.0.2",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Local and cloud identity, Desktop OIDC, Device enrollment, and the canonical SciForge Principal context.",
+  "sciforgeMainNativeAddons": {
+    "contractVersion": 1,
+    "artifacts": [
+      {
+        "platforms": [
+          "darwin"
+        ],
+        "sourceRelativePath": "src/main/private-vault/native/build/Release/identity_private_vault.node",
+        "bundleRelativePath": "native/build/Release/identity_private_vault.node"
+      }
+    ]
+  },
+  "exports": {
+    "./authenticated-cloud-transport": "./src/authenticated-cloud-transport.ts",
+    "./agent-cloud-runtime": "./src/agent-cloud-runtime.ts",
+    "./device-fact-attestation-signing": "./src/device-fact-attestation-signing.ts",
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main/index.ts",
+    "./renderer": "./src/renderer/index.tsx"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run src --no-cache"
+  },
+  "dependencies": {
+    "@sciforge/collaboration-contracts": "8.0.0",
+    "@sciforge/domain-sdk": "^0.2.3",
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-i18next": "^15.7.4",
+    "ws": "^8.21.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.1",
+    "happy-dom": "^20.11.2",
+    "i18next": "^25.4.2",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

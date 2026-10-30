@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- New project-authored plain-text layout; Apache-2.0. No inherited artwork. -->
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+  <text x="80" y="96" font-family="sans-serif" font-size="32" fill="#17212B" data-max-width="1100">{{PAGE_TITLE}}</text>
+  <text x="80" y="140" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{PAGE_SUBTITLE}}</text>
+  <text x="80" y="220" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{VALIDATION_STATEMENT_LINE_1}}</text>
+  <text x="80" y="254" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{VALIDATION_STATEMENT_LINE_2}}</text>
+  <text x="80" y="340" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_1}}</text>
+  <text x="80" y="374" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_1_LINE_1}}</text>
+  <text x="80" y="408" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_1_LINE_2}}</text>
+  <text x="460" y="340" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_2}}</text>
+  <text x="460" y="374" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_2_LINE_1}}</text>
+  <text x="460" y="408" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_2_LINE_2}}</text>
+  <text x="840" y="340" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_3}}</text>
+  <text x="840" y="374" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_3_LINE_1}}</text>
+  <text x="840" y="408" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="330">{{RESULT_3_LINE_2}}</text>
+  <text x="80" y="540" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{NEXT_STEP_LABEL}}</text>
+  <text x="80" y="574" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{NEXT_STEP}}</text>
+  <text x="80" y="650" font-family="sans-serif" font-size="14" fill="#17212B" data-max-width="1100" data-role="footer">{{SOURCE_TRACE}}</text>
+</svg>

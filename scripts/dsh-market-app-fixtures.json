@@ -1,0 +1,26 @@
+{
+  "comment": "Inputs used by scripts/dsh-market-app-verify.py to call each published plugin capability in the running app. Test data, not product logic: the app itself knows nothing about these plugins.",
+  "text-stats.count": {
+    "ok": [
+      { "text": "SciForge 你好 world" },
+      { "text": "第二段\n\nhello 世界 again" }
+    ],
+    "boundary": { "__repeat": { "key": "text", "char": "a", "count": 1000001 } },
+    "boundaryCode": "text_too_long",
+    "expect": {
+      "characters": 17,
+      "cjkCharacters": 2,
+      "latinWords": 2,
+      "words": 4
+    }
+  },
+  "unit-conversion.convert": {
+    "ok": [
+      { "value": 1, "from": "km", "to": "m" },
+      { "value": 100, "from": "C", "to": "F" }
+    ],
+    "boundary": { "value": 1, "from": "m", "to": "kg" },
+    "boundaryCode": "incompatible_dimensions",
+    "expect": { "value": 1000, "from": "km", "to": "m" }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "@sciforge/plugin-project-dag",
+  "version": "1.0.0",
+  "description": "Project derived-view backend using fixed DSH apply(ctx) and committed Evidence references",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./core": "./dist/core.js",
+    "./python-process": "./dist/python-process.js"
+  },
+  "files": [
+    "*.js",
+    "python/*.whl",
+    "dependency-lock.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22",
+    "python": ">=3.10",
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run --config vitest.config.mjs --configLoader runner"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "zod": "^4.4.3",
+    "vitest": "^4.1.7"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

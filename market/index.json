@@ -1,0 +1,80 @@
+{
+  "format": 1,
+  "generatedAt": "2026-10-25T04:01:14.212Z",
+  "dshRuntimeVersion": "0.2.0-rc.2",
+  "plugins": [],
+  "blocked": [
+    {
+      "name": "@sciforge/plugin-biology-room",
+      "plugin": "biology-room",
+      "version": "0.1.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": null,
+      "runtimeGap": "Adapter-provided UI and inputs; activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-change-inspector",
+      "plugin": "change-inspector",
+      "version": "0.1.0",
+      "reason": "capability ids are already provided by bundled domains, so activating it in this application collides: change-inspector.open-session",
+      "detail": null,
+      "runtimeGap": "Investigation tools need a workspace with real changes; activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-evidence-dag",
+      "plugin": "evidence-dag",
+      "version": "1.0.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": "activation failed: Plugin @sciforge/plugin-evidence-dag activation failed: DSH Cordis entrypoint requires a supported Context runtime: Plugin dependencies are not ready (0).",
+      "runtimeGap": "Needs the Evidence Python wheel and the host artifact-version service (G1); activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-git-checkpoints",
+      "plugin": "git-checkpoints",
+      "version": "0.1.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": "activation failed: Plugin @sciforge/plugin-git-checkpoints activation failed: DSH Cordis entrypoint requires a supported Context runtime: [ { \"expected\": \"string\", \"code\": \"invalid_type\", \"path\": [ \"dataDir\" ], \"message\": \"Invalid input: expected string, received undefined\" } ]",
+      "runtimeGap": "Needs host version-control capabilities (G1); activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-life-science-preview",
+      "plugin": "life-science-preview",
+      "version": "0.1.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": null,
+      "runtimeGap": "Adapter-provided preview inputs; activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-project-dag",
+      "plugin": "project-dag",
+      "version": "1.0.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": "activation failed: Plugin @sciforge/plugin-project-dag activation failed: DSH Cordis entrypoint requires a supported Context runtime: Plugin dependencies are not ready (0).",
+      "runtimeGap": "Needs the Project Python runtime and the host Project service (G1); activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-research-checkpoints",
+      "plugin": "research-checkpoints",
+      "version": "0.1.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": "activation failed: Plugin @sciforge/plugin-research-checkpoints activation failed: DSH Cordis entrypoint requires a supported Context runtime: [ { \"expected\": \"string\", \"code\": \"invalid_type\", \"path\": [ \"dataDir\" ], \"message\": \"Invalid input: expected string, received undefined\" } ]",
+      "runtimeGap": "Needs the host artifact-version service (G1); activation only here."
+    },
+    {
+      "name": "@sciforge/plugin-scientific-plotting",
+      "plugin": "scientific-plotting",
+      "version": "0.1.0",
+      "reason": "capability ids are already provided by bundled domains, so activating it in this application collides: scientific-plotting.compare, scientific-plotting.map-data, scientific-plotting.render, scientific-plotting.rerun, scientific-plotting.status",
+      "detail": null,
+      "runtimeGap": "Renders real PNGs; the end-to-end acceptance script invokes it for real."
+    },
+    {
+      "name": "@sciforge/plugin-visual-review",
+      "plugin": "visual-review",
+      "version": "0.1.0",
+      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
+      "detail": null,
+      "runtimeGap": "Adapter-provided review inputs; activation only here."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+SciForge client
+Copyright (c) SciForge contributors
+
+Project-owned code follows the root Apache-2.0 license unless the package
+or file declares another license. Domain/plugin licenses are not uniform;
+consult each package.json and LICENSE. Existing third-party copyright,
+license and NOTICE requirements remain in force.
+
+See THIRD_PARTY_NOTICES.md for dependency, runtime and asset restrictions.
+The project license does not grant additional rights to third-party SDKs,
+models, logos, or services. End-user releases remain subject to dependency
+license review; in particular, tldraw production-use authorization has not
+been confirmed for this delivery.

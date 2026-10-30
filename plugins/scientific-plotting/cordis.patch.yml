@@ -1,0 +1,3 @@
+- insert:
+    - id: scientific-plotting
+      name: "@sciforge/plugin-scientific-plotting"

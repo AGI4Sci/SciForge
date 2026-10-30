@@ -1,0 +1,439 @@
+# == @deepseek-ai/dsh-base
+- id: tool-plugin-manager
+  name: '@deepseek-ai/dsh-plugin-manager/tools'
+  disabled: true
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: plugin-manager
+  name: '@deepseek-ai/dsh-plugin-manager'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: timer
+  name: '@deepseek-ai/cordis-plugin-timer'
+# == @deepseek-ai/dsh-base, patched by @deepseek-ai/dsh-acp-app
+- id: hmr
+  name: '@deepseek-ai/dsh-hmr'
+  disabled: true
+  config:
+    root: []
+# == @deepseek-ai/dsh-base
+- id: llm
+  name: '@deepseek-ai/dsh-llm'
+- id: deepseek-llm-api-extensions
+  name: '@deepseek-ai/dsh-deepseek-llm-api-extensions'
+- id: session
+  name: '@deepseek-ai/dsh-session'
+- id: session-log-deepseek
+  name: '@deepseek-ai/dsh-session-log-deepseek'
+- id: typert
+  name: '@deepseek-ai/dsh-typert-registry'
+- id: typert-loader
+  name: '@deepseek-ai/dsh-typert-loader'
+- id: typert-gateway
+  name: '@deepseek-ai/dsh-api-gateway'
+- id: session-title
+  name: '@deepseek-ai/dsh-session-title'
+  config:
+    fallbackMaxWords: 5
+    fallbackMaxBytes: 40
+    maxTitleBytes: 80
+# == @deepseek-ai/dsh-base, patched by @deepseek-ai/dsh-acp-app
+- id: session-title-llm
+  name: '@deepseek-ai/dsh-session-title-first-prompt-llm'
+  config:
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+- id: agent
+  name: '@deepseek-ai/dsh-agent'
+- id: plugin-package-inventory-deepseek
+  name: '@deepseek-ai/dsh-plugin-package-inventory-deepseek'
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+- id: jobs
+  name: '@deepseek-ai/dsh-jobs-local'
+- id: llm-retry
+  name: '@deepseek-ai/dsh-llm-retry'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: config-editor
+  name: '@deepseek-ai/dsh-config-editor'
+  disabled: true
+- id: settings
+  name: '@deepseek-ai/dsh-settings'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: authorization
+  name: '@deepseek-ai/dsh-authorization'
+- id: deepseek-account
+  name: '@deepseek-ai/dsh-deepseek-account-platform'
+  config:
+    desktopPlatform: !!js >-
+      ctx.get('profileContext')?.name === 'desktop' && ['darwin',
+      'win32'].includes(process.platform) ? process.platform : null
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      sciforge-model-router:
+        api: openai-completions
+        apiKeyEnv: SCIFORGE_DSH_ROUTER_KEY
+        baseURL: !!js process.env.SCIFORGE_DSH_ROUTER_URL
+        models:
+          - id: !!js process.env.SCIFORGE_DSH_ROUTER_MODEL
+# == @deepseek-ai/dsh-base
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js dshHomePath('sessions')
+- id: attachment-local
+  name: '@deepseek-ai/dsh-attachment-local'
+- id: session-query-sqlite
+  name: '@deepseek-ai/dsh-session-query-sqlite'
+  config:
+    path: ':memory:'
+    openAt: never
+- id: session-projection
+  name: '@deepseek-ai/dsh-session-projection'
+- id: storage
+  name: '@deepseek-ai/dsh-storage'
+- id: storage-json
+  name: '@deepseek-ai/dsh-storage-json'
+  config:
+    root: !!js dshHomePath('storages')
+- id: storage-domain
+  name: '@deepseek-ai/dsh-storage-domain'
+  config:
+    backend: json
+- id: session-projection-cache
+  name: '@deepseek-ai/dsh-session-projection-cache'
+  config:
+    writeEveryEvents: 200
+    writeIntervalMs: 5000
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: otel
+  name: '@deepseek-ai/dsh-otel'
+  disabled: true
+- id: session-telemetry-otel
+  name: '@deepseek-ai/dsh-session-telemetry-otel'
+  config:
+    mode: !!js process.env.DSH_TELEMETRY_MODE || 'FEEDBACK_ONLY'
+    shutdownTimeoutMillis: 3000
+    maxRequestBytes: 4000000
+    exporter:
+      url: !!js >-
+        process.env.DSH_TELEMETRY_OTLP_URL ??
+        'https://dsh-otel-collector.deepseeksvc.com/v1/logs'
+      compression: gzip
+      timeoutMillis: 1000
+    processor:
+      scheduledDelayMillis: 10000
+      maxQueueSize: 2048
+      maxExportBatchSize: 2048
+      exportTimeoutMillis: 1500
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+    workspaceRoot: !!js process.cwd()
+- id: bash-sandbox
+  name: '@deepseek-ai/dsh-bash-sandbox'
+  disabled: !!js process.platform === 'win32'
+  config:
+    timeoutMs: 60000
+- id: pwsh-sandbox
+  name: '@deepseek-ai/dsh-pwsh-sandbox'
+  disabled: !!js process.platform !== 'win32'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: approval
+  name: '@deepseek-ai/dsh-user-approval'
+  config:
+    policy: ask
+# == @deepseek-ai/dsh-base
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+- id: shell-env
+  name: '@deepseek-ai/dsh-shell-env'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: true
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: true
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: fs-observation-policy
+  name: '@deepseek-ai/dsh-fs-observation-policy'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+  disabled: true
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: skill
+  name: '@deepseek-ai/dsh-skill'
+  disabled: true
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: skill-badge
+  name: '@deepseek-ai/dsh-skill-badge'
+  disabled: true
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+- id: command-feedback
+  name: '@deepseek-ai/dsh-command-feedback'
+- id: goal
+  name: '@deepseek-ai/dsh-goal'
+- id: goal-round-driver
+  name: '@deepseek-ai/dsh-goal-round-driver'
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: plan-mode
+  name: '@deepseek-ai/dsh-plan-mode'
+  config:
+    section: >
+      You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or
+      the user switches the session mode. Imperative language to implement
+      changes means plan the implementation, not execute it. A user's
+      conversational agreement — including an answer confirming something you
+      asked — approves nothing and does not end plan mode; fold the confirmed
+      decision into the plan and submit it through exit_plan_mode.
+
+
+      Explore first. Use non-mutating reads, searches, static analysis, and
+      checks to ground the plan in the actual repository. Do not edit or write
+      files, change configuration, run formatters or code generation that
+      rewrites tracked files, commit, or otherwise carry out the plan. Prefer
+      existing functions and patterns over new machinery.
+
+
+      The tool catalog stays the same across modes for request-cache stability.
+      These plan-mode rules override any later tool description or guidance that
+      suggests using mutation tools; those tools remain listed only to keep the
+      request shape stable. Do not use todo_write to track this planning phase:
+      it tracks implementation after an approved plan, while the plan itself
+      belongs in exit_plan_mode.
+
+
+      Resolve discoverable facts by inspection. Use ask_user_question only for
+      user-owned choices or material ambiguity that inspection cannot answer. Do
+      not ask the user where code lives or how current behavior works when you
+      can find out.
+
+
+      Make the plan decision-complete: state the goal and success criteria;
+      group implementation changes by subsystem; identify public API, schema,
+      and data-flow changes; cover edge cases, failure modes, tests, acceptance
+      criteria, and explicit assumptions. Keep it concise enough to review but
+      detailed enough that another engineer can implement it without making
+      design decisions.
+
+
+      When ready, call exit_plan_mode with the complete plan markdown, starting
+      with a # title. Make exit_plan_mode the only and final tool call in that
+      assistant response: it presents the plan for approval, and implementation
+      begins only in a later step after approval. Do not paste the final plan as
+      a plain reply or ask "should I proceed?" through prose or
+      ask_user_question. If review rejects it, incorporate the feedback and
+      present again. If the review channel is unavailable or aborted, stay in
+      plan mode and ask the user to switch modes manually; do not proceed with
+      implementation.
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: subagent-spawn-in-process
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+  config:
+    providerName: spawn
+- id: subagent-fork-in-process
+  name: '@deepseek-ai/dsh-subagent-fork-in-process'
+  config:
+    providerName: fork
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-subagent-control
+  name: '@deepseek-ai/dsh-tool-subagent-control'
+  disabled: true
+- id: tool-subagent-list-agents
+  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+  disabled: true
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+  disabled: true
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: fork
+    toolName: subagent_fork
+    backgroundMode: one-shot
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: ptc-runtime
+  name: '@deepseek-ai/dsh-ptc-runtime-node'
+- id: workflow-ptc
+  name: '@deepseek-ai/dsh-workflow-ptc'
+  config:
+    provider: spawn
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-workflow
+  name: '@deepseek-ai/dsh-tool-workflow'
+  disabled: true
+- id: timeout-policy
+  name: '@deepseek-ai/dsh-tool-call-timeout-policy'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: spill-local
+  name: '@deepseek-ai/dsh-spill-local'
+- id: spill-policy
+  name: '@deepseek-ai/dsh-spill-policy'
+  config:
+    maxInlineTokens: 12500
+- id: session-checkpoint-policy
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+- id: tool-result-pruner
+  name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024
+- id: image-offload
+  name: '@deepseek-ai/dsh-compaction-image-offload'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+  disabled: true
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: tool-ralph
+  name: '@deepseek-ai/dsh-tool-ralph'
+  disabled: true
+  config:
+    subagentProvider: spawn
+    maxRounds: 64
+- id: repeat-tool-reminder
+  name: '@deepseek-ai/dsh-repeat-tool-reminder'
+  config:
+    thresholds:
+      - 3
+      - 5
+      - 8
+    argumentsPreviewChars: 500
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: deepseek-official
+    fetchProvider: http
+- id: web-search-deepseek
+  name: '@deepseek-ai/dsh-web-search-deepseek'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+- id: web-fetch-http
+  name: '@deepseek-ai/dsh-web-fetch-http'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    searchTimeoutMs: 60000
+  disabled: true
+- id: mcp-resources
+  name: '@deepseek-ai/dsh-mcp-resources'
+  disabled: true
+# == @deepseek-ai/dsh-base
+- id: tools
+  name: '@deepseek-ai/dsh-tools'
+# == @deepseek-ai/dsh-base, patched by @deepseek-ai/dsh-acp-app
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+  config:
+    personaSuffix: Your working directory is {{cwd}}.
+    personaPrefix: You are a coding agent powered by the {{model}} model.
+# == @deepseek-ai/dsh-base
+- id: agent-loop
+  name: '@deepseek-ai/dsh-agent-loop'
+  config:
+    agents: []
+- id: fs-sandbox
+  name: '@deepseek-ai/dsh-fs-sandbox'
+# == @deepseek-ai/dsh-base, patched by <host-safety-patch>
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek-api-key'
+  disabled: true
+- id: llm-deepseek-account
+  name: '@deepseek-ai/dsh-llm-deepseek-account'
+  disabled: true
+# == @deepseek-ai/dsh-acp-app
+- id: acp-app-startup
+  name: '@deepseek-ai/dsh-acp-app'
+# == @deepseek-ai/dsh-acp-app, patched by <host-safety-patch>
+- id: acp
+  name: '@deepseek-ai/dsh-acp'
+  inject:
+    - acpAppStartup
+  config:
+    provider: sciforge-model-router
+    model: !!js process.env.SCIFORGE_DSH_ROUTER_MODEL

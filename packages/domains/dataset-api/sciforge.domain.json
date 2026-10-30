@@ -1,0 +1,54 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-dataset-api",
+  "module": {
+    "id": "sciforge.dataset-api",
+    "displayName": "Dataset API",
+    "version": "1.0.2",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 100
+  },
+  "contributionContracts": {
+    "dataset-api.capability-eval": {
+      "actionSource": "dataset-api.capability-registry",
+      "contractVersion": 1,
+      "kind": "capability-evaluation"
+    },
+    "dataset-api.create-loop-resource-executor": {
+      "location": "create-loop.resource-executor",
+      "providerId": "dataset-api"
+    },
+    "dataset-api.create-loop-resources": {
+      "location": "create-loop.resource-palette",
+      "resourceKind": "dataset-api-source"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        { "kind": "main.capability-factory", "id": "dataset-api.capabilities" },
+        { "kind": "main.capability-eval", "id": "dataset-api.capability-eval" },
+        {
+          "kind": "main.workflow-execution-receipt-provider",
+          "id": "dataset-api.synthetic-generation-receipts"
+        },
+        { "kind": "main.extension", "id": "dataset-api.create-loop-resource-executor" }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        { "kind": "renderer.chat-result-panel", "id": "dataset-api.timeline-results" },
+        { "kind": "renderer.extension", "id": "dataset-api.create-loop-resources" },
+        { "kind": "renderer.i18n-resource", "id": "dataset-api.translations" }
+      ]
+    }
+  ]
+}

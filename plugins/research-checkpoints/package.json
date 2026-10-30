@@ -1,0 +1,30 @@
+{
+  "name": "@sciforge/plugin-research-checkpoints",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Research Checkpoints as a DSH backend plugin: durable chat research checkpoints over capability-invoker and turn-boundary ports.",
+  "scripts": {
+    "build": "node ./build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "npm run build",
+    "test": "node --import tsx --test \"tests/**/*.test.ts\""
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/main.js"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

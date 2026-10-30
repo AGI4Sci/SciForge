@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "workspace-preview",
+  "namespace": "life-science-preview",
+  "hostApiRange": "^1.0.0",
+  "permissions": [],
+  "reloadPolicy": "live",
+  "previewSlots": [
+    { "slotId": "molecular", "artifactKinds": [], "metadata": { "displayName": "Molecular Structure Viewer" } },
+    { "slotId": "sequence-genomics", "artifactKinds": [], "metadata": { "displayName": "Sequence and Genomics Viewer" } },
+    { "slotId": "biology-index-transport", "artifactKinds": [], "metadata": { "displayName": "Biology Index Transport" } },
+    { "slotId": "omics-matrix", "artifactKinds": [], "metadata": { "displayName": "Omics Matrix Viewer" } },
+    { "slotId": "bioimaging", "artifactKinds": ["tile", "thumbnail"], "metadata": { "displayName": "Bioimaging Viewer" } },
+    { "slotId": "proteomics-spectra", "artifactKinds": [], "metadata": { "displayName": "Proteomics and Spectra Viewer" } }
+  ]
+}

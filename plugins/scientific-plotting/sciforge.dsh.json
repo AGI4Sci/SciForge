@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-scientific-plotting",
+  "entry": "dist/main.js",
+  "title": "Scientific Plotting",
+  "summary": {
+    "zh": "受治理的科研绘图：状态、数据映射、出图、重跑与比对，基于共享的 scientific-plotting 引擎。",
+    "en": "Governed scientific plotting: status, data mapping, render, rerun and compare over the shared scientific-plotting engine."
+  },
+  "categories": ["plotting", "rendering"],
+  "hostDependencies": ["@deepseek-ai/dsh-tools", "@napi-rs/canvas"],
+  "tools": {
+    "status": { "id": "scientific-plotting.status", "effect": "read" },
+    "map_data": { "id": "scientific-plotting.map-data", "effect": "compute" },
+    "render": { "id": "scientific-plotting.render", "effect": "workspace-write" },
+    "rerun": { "id": "scientific-plotting.rerun", "effect": "workspace-write" },
+    "compare": { "id": "scientific-plotting.compare", "effect": "read" }
+  }
+}

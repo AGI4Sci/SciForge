@@ -1,0 +1,464 @@
+import { randomUUID } from 'node:crypto'
+import type {
+  AgentRuntimeCapabilities,
+  AgentRuntimeThread
+} from '../../../shared/agent-runtime-contract'
+import {
+  createAgentRuntimeCapabilityMatrix,
+  createDefaultAgentRuntimeCapabilities,
+  projectAgentRuntimeThreadSummary
+} from '../../../shared/agent-runtime-contract'
+import type { AgentRuntimeAdapter } from '../agent-runtime/adapter'
+import { boundAgentRuntimeEventForDelivery } from '../agent-runtime/jsonl-thread-page'
+import type {
+  ClaudeCodeRuntimeFailure,
+  ClaudeCodeRuntimeService
+} from './claude-code-service'
+import {
+  normalizeAgentCapabilitySettings,
+  type AgentSubagentSettingsV1,
+  type AppSettingsV1
+} from '../../../shared/app-settings'
+
+export function createClaudeCodeAgentRuntimeAdapter(
+  service: ClaudeCodeRuntimeService
+): AgentRuntimeAdapter {
+  const start = async (
+    context: Parameters<AgentRuntimeAdapter['startTurn']>[0],
+    input: Parameters<AgentRuntimeAdapter['startTurn']>[1],
+    requested?: Readonly<{ turnId: string; userMessageItemId: string }>
+  ) => {
+    const result = await service.startTurn({
+      threadId: input.threadId,
+      text: input.text,
+      displayText: input.displayText,
+      workspace: input.workspace,
+      reasoningEffort: input.reasoningEffort,
+      permissionLevel: input.permissionLevel,
+      ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+      fileReferences: input.fileReferences,
+      ...(input.allowedTools ? { allowedTools: input.allowedTools } : {}),
+      ...(requested ? {
+        requestedTurnId: requested.turnId,
+        requestedUserMessageItemId: requested.userMessageItemId
+      } : {}),
+      ownedVisualToolsAvailable:
+        context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
+      nativeVisualProofChainPending:
+        context.turnGovernanceSnapshot?.nativeVisualProofChainPending === true
+    })
+    if (!result.ok) throw claudeFailure(result)
+    if (requested && (
+      result.turnId !== requested.turnId ||
+      result.userMessageItemId !== requested.userMessageItemId
+    )) {
+      throw new Error('Claude Code returned a different identity than its prepared turn.')
+    }
+    const handle = {
+      threadId: result.threadId,
+      turnId: result.turnId,
+      userMessageItemId: result.userMessageItemId
+    }
+    await context.onTurnAccepted?.(handle)
+    return handle
+  }
+  return {
+    id: 'claude',
+    transport: 'cli_process',
+    probe: async () => ({
+      runtimeId: 'claude',
+      available: false,
+      executablePath: null,
+      source: null,
+      version: null,
+      protocol: null,
+      failure: { code: 'runtime_probe_unsupported' }
+    }),
+    subagents: {
+      spawn: (_context, input) => service.spawnSubagent(input),
+      resume: (_context, input) => service.resumeSubagent(input),
+      inspect: (_context, input) => service.inspectSubagent(input),
+      message: (_context, input) => service.messageSubagent(input),
+      cancel: (_context, input) => service.cancelSubagent(input),
+      delete: (_context, input) => service.deleteSubagent(input)
+    },
+
+    async connect() {
+      const result = await service.connect()
+      if (!result.ok) throw claudeFailure(result)
+    },
+
+    async capabilities(context) {
+      return claudeCapabilities(
+        normalizeAgentCapabilitySettings(context.settings.agentCapabilities).subagents
+      )
+    },
+
+    async listThreads(_context, input): Promise<AgentRuntimeThread[]> {
+      const result = await service.listThreads({
+        limit: input.limit,
+        search: input.search,
+        threadId: input.threadId,
+        includeArchived: input.includeArchived,
+        archivedOnly: input.archivedOnly
+      })
+      if (!result.ok) throw claudeFailure(result)
+      return result.threads.map(projectAgentRuntimeThreadSummary)
+    },
+
+    async startThread(_context, input): Promise<AgentRuntimeThread> {
+      const result = await service.startThread({
+        threadId: input.threadId,
+        workspace: input.workspace,
+        workspaceDisplayName: input.workspaceDisplayName,
+        title: input.title,
+        relation: input.relation,
+        threadSource: input.threadSource,
+        sidebarVisibility: input.sidebarVisibility
+      })
+      if (!result.ok) throw claudeFailure(result)
+      return projectAgentRuntimeThreadSummary(result.thread)
+    },
+
+    async readThreadStatus(_context, input) {
+      const result = await service.readThreadStatus(input.threadId)
+      if (!result.ok) throw claudeFailure(result)
+      return result.status
+    },
+
+    async readThreadPage(_context, input) {
+      const result = await service.readThreadPage(input.threadId, input)
+      if (!result.ok) throw claudeFailure(result)
+      return result.page
+    },
+
+    async readToolArtifact(_context, input) {
+      const result = await service.readToolArtifact(input.threadId, input.ref, input.size)
+      if (!result.ok) throw claudeFailure(result)
+      return result.artifact
+    },
+
+    startTurn: (context, input) => start(context, input),
+
+    async prepareTurnCapture(context, input) {
+      const requested = {
+        turnId: `claude-turn-${randomUUID()}`,
+        userMessageItemId: `claude-user-${randomUUID()}`
+      }
+      return {
+        handle: { threadId: input.threadId, ...requested },
+        dispatch: () => start({ ...context, onTurnAccepted: undefined }, input, requested)
+      }
+    },
+
+    async interruptTurn(_context, input) {
+      const result = await service.interruptTurn(input.threadId, input.turnId)
+      if (!result.ok) throw claudeFailure(result)
+    },
+
+    async steerTurn(_context, input) {
+      const result = await service.steerTurn({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        text: input.text
+      })
+      if (!result.ok) throw claudeFailure(result)
+    },
+
+    async renameThread(_context, input) {
+      const result = await service.renameThread(input.threadId, input.title)
+      if (!result.ok) throw claudeFailure(result)
+    },
+
+    async deleteThread(_context, input) {
+      const result = await service.deleteThread(input.threadId)
+      if (!result.ok) throw claudeFailure(result)
+    },
+
+    async *subscribeEvents(_context, input) {
+      for await (const event of service.subscribeEvents(input.threadId, input.sinceSeq ?? 0, input.signal)) {
+        yield boundedClaudeEvent(event)
+      }
+    },
+
+    async publishSyntheticEvent(_context, event) {
+      return boundedClaudeEvent(await service.publishSyntheticEvent(event))
+    },
+
+    async updateTurnGovernanceSnapshot(_context, input) {
+      service.updateTurnGovernanceSnapshot(input)
+    },
+
+    async usage(_context, input) {
+      return service.usage(input)
+    },
+
+    async auxiliary(_context, input) {
+      switch (input.operation) {
+        case 'getRuntimeInfo': {
+          return claudeRuntimeInfo(
+            await service.runtimeInfo(),
+            normalizeAgentCapabilitySettings(_context.settings.agentCapabilities).subagents
+          )
+        }
+        case 'getToolDiagnostics': {
+          return {
+            providers: [],
+            mcpServers: [],
+            webProviders: [],
+            attachments: { count: 0 },
+            skills: {
+              enabled: false,
+              roots: [],
+              skills: []
+            }
+          }
+        }
+        case 'listSkills':
+          return []
+        case 'listMemories':
+          return []
+        case 'updateMemory':
+        case 'deleteMemory':
+          throw new Error('Claude Code runtime does not support memory operations.')
+        case 'listThreadChildren': {
+          const payload = recordValue(input.payload)
+          const threadId = stringValue(payload.threadId)
+          if (!threadId) throw new Error('listThreadChildren requires payload.threadId.')
+          return service.listThreadChildren({
+            threadId,
+            parentTurnId: stringValue(payload.turnId) || stringValue(payload.parentTurnId) || undefined,
+            activeOnly: payload.activeOnly === true,
+            cursor: stringValue(payload.cursor) || undefined,
+            limit: numberValue(payload.limit)
+          })
+        }
+        case 'readChildTranscript': {
+          const payload = recordValue(input.payload)
+          const parentThreadId = stringValue(payload.parentThreadId) || stringValue(payload.threadId)
+          const childId = stringValue(payload.childId)
+          if (!parentThreadId) throw new Error('readChildTranscript requires payload.parentThreadId.')
+          if (!childId) throw new Error('readChildTranscript requires payload.childId.')
+          return service.readChildTranscript({
+            parentThreadId,
+            parentTurnId: stringValue(payload.parentTurnId) || stringValue(payload.turnId) || undefined,
+            childId,
+            transcriptRef: payload.transcriptRef,
+            cursor: stringValue(payload.cursor) || undefined,
+            limit: numberValue(payload.limit)
+          })
+        }
+        case 'archiveThread': {
+          const payload = recordValue(input.payload)
+          const threadId = stringValue(payload.threadId)
+          if (!threadId) throw new Error('archiveThread requires payload.threadId.')
+          const result = await service.archiveThread(threadId, payload.archived === true)
+          if (!result.ok) throw claudeFailure(result)
+          return undefined
+        }
+        default:
+          throw new Error(`Claude Code AgentRuntimeAdapter does not support ${input.operation}.`)
+      }
+    }
+  }
+}
+
+function boundedClaudeEvent(event: import('../../../shared/agent-runtime-contract').AgentRuntimeEvent) {
+  return boundAgentRuntimeEventForDelivery(event, { runtimeId: 'claude' })
+}
+
+function claudeRuntimeInfo(
+  info: Record<string, unknown>,
+  subagents: AgentSubagentSettingsV1 = normalizeAgentCapabilitySettings(undefined).subagents
+): Record<string, unknown> {
+  const caps = claudeCapabilities(subagents)
+  return {
+    host: 'claude-code',
+    port: 0,
+    dataDir: '',
+    startedAt: new Date().toISOString(),
+    ...info,
+    capabilities: {
+      contractVersion: 1,
+      model: {
+        id: caps.model.id ?? 'claude',
+        inputModalities: caps.model.inputModalities,
+        outputModalities: caps.model.outputModalities,
+        supportsToolCalling: caps.model.supportsToolCalling,
+        contextWindowTokens: caps.model.contextWindowTokens,
+        messageParts: ['text']
+      },
+      cli: {
+        serve: coreCapability({ available: true }),
+        run: coreCapability({ available: true }),
+        chat: coreCapability({ available: true }),
+        exec: coreCapability({ available: true })
+      },
+      mcp: {
+        ...coreCapability(caps.tools.mcp),
+        configuredServers: 0,
+        connectedServers: 0,
+        toolCount: caps.tools.mcp.toolCount ?? 0,
+        computerUse: {
+          enabled: false,
+          available: false
+        },
+        search: {
+          enabled: false,
+          mode: 'direct',
+          active: false,
+          indexedToolCount: 0,
+          advertisedToolCount: 0
+        }
+      },
+      web: {
+        ...coreCapability(caps.tools.web),
+        fetch: coreCapability(caps.tools.web.fetch),
+        search: coreCapability(caps.tools.web.search)
+      },
+      skills: {
+        ...coreCapability(caps.tools.skills),
+        configuredRoots: 0,
+        discoveredSkills: 0
+      },
+      subagents: {
+        ...coreCapability(caps.tools.subagents),
+        maxParallel: caps.tools.subagents.maxParallel ?? 0
+      },
+      attachments: {
+        ...coreCapability(caps.storage.attachments),
+        maxImageBytes: 0,
+        maxImageDimension: 0,
+        allowedMimeTypes: []
+      },
+      memory: {
+        ...coreCapability(caps.storage.memory),
+        scopes: [],
+        maxInjectedRecords: 0
+      }
+    }
+  }
+}
+
+function claudeCapabilities(
+  subagents: AgentSubagentSettingsV1 = normalizeAgentCapabilitySettings(undefined).subagents
+): AgentRuntimeCapabilities {
+  const unavailable = { available: false, reason: 'unsupported' }
+  const caps = createDefaultAgentRuntimeCapabilities({
+    runtimeId: 'claude',
+    transport: 'cli_process'
+  })
+  return {
+    ...caps,
+    matrix: createAgentRuntimeCapabilityMatrix({
+      nativeHistory: true,
+      nativeCompact: false,
+      nativeResume: true,
+      steer: false,
+      fork: false,
+      handoffImport: false,
+      usage: false,
+      eventReplay: true,
+      reasons: {
+        nativeCompact: 'Claude Code SDK owns automatic compaction; manual compact control and compact event projection are not exposed through this adapter.',
+        steer: 'Claude Code does not support safe mid-turn steering through this adapter.',
+        fork: 'Claude Code fork is not exposed through this adapter.',
+        handoffImport: 'Handoff import is provided by AgentRuntimeHost when a context ledger is configured.',
+        usage: 'Claude Code usage aggregation is not exposed through this adapter.'
+      }
+    }),
+    events: {
+      live: true,
+      replayable: true,
+      sequenced: true,
+      delivery: 'ipc'
+    },
+    threadMaterialization: 'after_first_user_message',
+    latency: {
+      phaseEvents: true,
+      firstTokenMetric: true,
+      turnDurationMetric: true
+    },
+    reasoning: {
+      available: true,
+      streaming: true,
+      visibility: 'summary',
+      source: 'model'
+    },
+    model: {
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportsToolCalling: true
+    },
+    tools: {
+      toolCalling: true,
+      commandExecution: { available: true },
+      fileChange: { available: true },
+      mcp: { available: false, reason: 'Claude Code MCP diagnostics are not exposed through this service yet.' },
+      web: { available: false, reason: 'Claude Code web capabilities are not exposed through this service yet.' },
+      research: { available: false, reason: 'Claude Code research search is not exposed through this service yet.' },
+      computerUse: { available: false, reason: 'Computer Use is exposed through the managed capability broker.' },
+      skills: { available: false, reason: 'Claude Code skills are not exposed through this service yet.' },
+      subagents: subagents.enabled
+        ? {
+            available: true,
+            maxParallel: subagents.maxParallel
+          }
+        : {
+            available: false,
+            reason: 'Subagents are disabled by shared agentCapabilities settings.',
+            maxParallel: subagents.maxParallel
+          },
+      diagnostics: { available: false, reason: 'Claude Code tool diagnostics are not exposed through this service yet.' }
+    },
+    controls: {
+      interrupt: true,
+      steer: false,
+      approval: 'unsupported',
+      userInput: 'unsupported',
+      compact: 'unsupported',
+      fork: false,
+      review: false,
+      goals: false,
+      todos: false,
+      resumeSession: false
+    },
+    storage: {
+      guiOwnedThreads: true,
+      backendThreadIdStable: false,
+      usage: false,
+      attachments: unavailable,
+      memory: unavailable
+    }
+  }
+}
+
+function claudeFailure(result: ClaudeCodeRuntimeFailure): Error {
+  const error = new Error(result.message)
+  ;(error as Error & { code?: string; recoverable?: boolean }).code = result.code
+  ;(error as Error & { code?: string; recoverable?: boolean }).recoverable = result.recoverable
+  return error
+}
+
+function coreCapability(state: { available?: boolean; reason?: string; degraded?: boolean } | undefined): Record<string, unknown> {
+  const available = state?.available === true
+  return {
+    status: available ? 'available' : 'unavailable',
+    enabled: available,
+    available,
+    ...(state?.reason ? { reason: state.reason } : {}),
+    ...(state?.degraded ? { degraded: state.degraded } : {})
+  }
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : undefined
+}

@@ -1,0 +1,209 @@
+.write-rich-host {
+  --write-rich-max-width: 860px;
+  color: var(--ds-text);
+  background: transparent;
+}
+
+.write-rich-editor {
+  width: min(100%, var(--write-rich-max-width));
+  min-height: 100%;
+  margin: 0 auto;
+  padding: clamp(28px, 4vw, 56px) clamp(24px, 5vw, 72px) 72px;
+  outline: none;
+  font-family: Georgia, Charter, 'Iowan Old Style', 'Noto Serif SC', serif;
+  font-size: 16px;
+  line-height: 1.78;
+  color: color-mix(in srgb, var(--ds-text) 94%, var(--ds-text-muted));
+}
+
+.write-rich-editor:focus {
+  outline: none;
+}
+
+.write-rich-editor > :first-child {
+  margin-top: 0;
+}
+
+.write-rich-editor > :last-child {
+  margin-bottom: 0;
+}
+
+.write-rich-editor p,
+.write-rich-editor ul,
+.write-rich-editor ol,
+.write-rich-editor blockquote,
+.write-rich-editor pre,
+.write-rich-editor table {
+  margin: 0 0 1rem;
+}
+
+.write-rich-editor h1,
+.write-rich-editor h2,
+.write-rich-editor h3,
+.write-rich-editor h4,
+.write-rich-editor h5,
+.write-rich-editor h6 {
+  margin: 1.6em 0 0.6em;
+  color: var(--ds-text);
+  font-family: 'SF Pro Display', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.24;
+}
+
+.write-rich-editor h1 {
+  margin-top: 0;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid var(--ds-border-muted);
+  font-size: 2.25rem;
+  line-height: 1.12;
+}
+
+.write-rich-editor h2 {
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--ds-border-muted);
+  font-size: 1.55rem;
+}
+
+.write-rich-editor h3 {
+  font-size: 1.2rem;
+}
+
+.write-rich-editor h4,
+.write-rich-editor h5,
+.write-rich-editor h6 {
+  font-size: 1rem;
+}
+
+.write-rich-editor ul,
+.write-rich-editor ol {
+  padding-left: 1.45rem;
+}
+
+.write-rich-editor li {
+  padding-left: 0.15rem;
+}
+
+.write-rich-editor li + li {
+  margin-top: 0.28rem;
+}
+
+.write-rich-editor li > p {
+  margin: 0.2rem 0;
+}
+
+.write-rich-editor li > ul,
+.write-rich-editor li > ol {
+  margin-top: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.write-rich-editor ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.write-rich-editor ul[data-type='taskList'] li {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+}
+
+.write-rich-editor ul[data-type='taskList'] label {
+  display: inline-flex;
+  min-height: 1.75em;
+  align-items: center;
+}
+
+.write-rich-editor ul[data-type='taskList'] input {
+  margin: 0;
+  accent-color: var(--ds-accent);
+}
+
+.write-rich-editor blockquote {
+  margin: 1.25rem 0;
+  border-left: 3px solid color-mix(in srgb, var(--ds-accent) 42%, var(--ds-border));
+  background: color-mix(in srgb, var(--ds-surface-subtle) 64%, transparent);
+  padding: 0.75rem 1rem;
+  color: var(--ds-text-muted);
+}
+
+.write-rich-editor code {
+  border-radius: 5px;
+  padding: 0.12em 0.34em;
+  background: color-mix(in srgb, var(--ds-text) 7%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.88em;
+}
+
+.write-rich-editor pre {
+  overflow-x: auto;
+  border: 1px solid var(--ds-border-muted);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ds-text) 5%, transparent);
+  padding: 0.95rem 1rem;
+}
+
+.write-rich-editor pre code {
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 0.9rem;
+}
+
+.write-rich-editor table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.write-rich-editor th,
+.write-rich-editor td {
+  border: 1px solid var(--ds-border-muted);
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.write-rich-editor th {
+  background: color-mix(in srgb, var(--ds-text) 5%, transparent);
+  color: var(--ds-text);
+  font-weight: 650;
+}
+
+.write-rich-editor a {
+  color: var(--ds-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.write-rich-editor img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.write-rich-editor .ProseMirror-selectednode {
+  outline: 2px solid color-mix(in srgb, var(--ds-accent) 64%, transparent);
+  outline-offset: 2px;
+}
+
+.write-rich-ghost-text {
+  color: color-mix(in srgb, var(--ds-text-faint) 82%, transparent);
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.write-rich-inline-edit-original {
+  color: color-mix(in srgb, var(--ds-text-muted) 78%, transparent);
+  text-decoration-line: line-through;
+  text-decoration-color: color-mix(in srgb, #dc2626 62%, var(--ds-text-faint));
+  text-decoration-thickness: 1.5px;
+}
+
+.write-rich-inline-edit-replacement {
+  margin-left: 0.42em;
+  color: color-mix(in srgb, var(--ds-accent) 78%, var(--ds-text-muted));
+}

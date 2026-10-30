@@ -1,0 +1,2 @@
+# Project DAG reuses the installed Evidence DAG engine.
+sciforge-evidence-dag>=1.0.0,<2.0.0

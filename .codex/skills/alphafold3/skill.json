@@ -1,0 +1,31 @@
+{
+  "id": "alphafold3",
+  "name": "AlphaFold3",
+  "description": "Submit protein structure predictions to the AlphaFold3 C550 inference cluster. Supports auto-input generation from simple sequences via --sequence, full submit→poll→download automation, and mmCIF output retrieval.",
+  "version": "1.2.0",
+  "entry": "SKILL.md",
+  "triggers": {
+    "commands": [
+      "/alphafold3",
+      "/af3"
+    ],
+    "promptPatterns": [
+      "alphafold3",
+      "alpha\\s*fold\\s*3",
+      "\\bAF3\\b",
+      "protein.*structure.*predict",
+      "protein.*fold",
+      "structure.*prediction"
+    ],
+    "fileTypes": [
+      ".json",
+      ".cif",
+      ".pdb"
+    ]
+  },
+  "allowedTools": [],
+  "assets": [
+    "scripts/alphafold3_submit.sh"
+  ],
+  "priority": 10
+}

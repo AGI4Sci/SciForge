@@ -1,0 +1,3 @@
+- insert:
+    - id: change-inspector
+      name: "@sciforge/plugin-change-inspector"

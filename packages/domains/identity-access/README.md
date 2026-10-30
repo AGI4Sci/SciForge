@@ -1,0 +1,59 @@
+# Identity and Access
+
+Package-owned V1 local account selection for SciForge. Local Accounts provide
+stable attribution with `local-selection` assurance; they are not security
+authentication and do not isolate installation-local data.
+
+The package is the single contributor of the generic `main.principal-provider`
+contract. It publishes `sciforge.identity-access` with `local-selection` by
+default. A selected account is promoted to `sciforge-cloud` with
+`cloud-authenticated` only while the current OIDC user matches its cloud link
+and the current login session has freshly confirmed an active cloud Device.
+Logout or Device revocation advances `identityVersion` and immediately falls
+back to local selection.
+
+Each immutable local account UUID is the opaque local Principal subject;
+display-name and first-run preference edits do not change the authorization
+`identityVersion`.
+
+The main process publishes three owner-scoped, token-free internal services.
+The authenticated User Cloud transport is available only to its manifest
+allowlist. Its `2.0.0` contract accepts only the closed Collaboration
+`RestRequest`/`RestResponse` protocol, rejects credential-shaped portable
+resource identities, and excludes Agent credential lifecycle envelopes. The
+`sciforge.agent-cloud-runtime@4.0.0` owns bounded Device Agent ensure, rotation,
+revocation, command, pull, and WSS operations for Collaboration. Bootstrap is
+strictly ordered as current OIDC User and freshly revalidated ACTIVE Device. No renderer or consuming domain supplies an
+Agent name, node type, capability, bootstrap key, or idempotency key. Identity
+derives the Device-bound display name through Cloud and the exact token-free Runtime/model-access tags
+from the Host readiness observation and sends those facts to Cloud. Missing or
+unexecutable Runtime configuration yields empty capability observations. Agent registration,
+Inbox and authenticated Cloud commands remain available; execution checks Runtime readiness separately. The
+service performs bootstrap decryption and bearer injection without returning
+Agent authority. A local fence or
+revocation advances the exact Agent authority epoch synchronously, aborts
+in-flight HTTP, closes in-flight WSS, and rechecks the epoch before accepting a
+response. OIDC ownership changes, logout, Device revoke, and unconfirmed Device
+refresh invalidate in-flight Agent authority and stop Collaboration delivery;
+same-User token refresh preserves the existing binding. Only a newly committed
+replacement authority can reopen a locally fenced Agent. At startup Identity
+reuses a matching encrypted local authority or performs the bounded rotation
+itself. Cloud remains the authority enforcing at most one active, Device-named
+Agent for each Device.
+The Device fact-attestation signer is available only to
+`sciforge.collaboration`, accepts the single
+`project-content-provisioning-attestation` fact envelope, revalidates the exact
+OIDC User and ACTIVE Device before every signature, and returns public
+verification metadata only. No renderer capability, arbitrary-byte signing
+surface, Token, Agent authority, or Device private key crosses any service
+contract.
+
+OIDC refresh material, the Device signing key, and per-Agent authority remain
+behind one Identity private-vault interface. On macOS the vault uses the
+in-process Node-API Keychain adapter with `WhenUnlockedThisDeviceOnly` and
+non-synchronizable accessibility, preserving the existing Device identity. On
+Windows and Linux it uses the public package-scoped Host secret store; Electron
+`safeStorage` provides DPAPI on Windows and requires an approved libsecret or
+KWallet backend on Linux. Vault keys bind the installation and typed secret
+purpose. Missing or insecure platform storage fails closed; there is no
+environment, plaintext file, subprocess, IPC, renderer, or alternate fallback.

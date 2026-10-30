@@ -1,0 +1,34 @@
+{
+  "name": "@sciforge/gui-owl-computer-use",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "private": false,
+  "description": "Target-scoped CDP Computer Use session and control service.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "runtime": "python",
+    "skillFacing": false,
+    "sideEffects": "target-scoped-browser, process, network",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false,
+    "entry": {
+      "http": "python -m cua.cli --http"
+    }
+  },
+  "files": [
+    "cua",
+    "driver",
+    "tests",
+    "requirements.txt",
+    ".env.example",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "setup": "python -m pip install -r requirements.txt",
+    "start": "python -m cua.cli --http",
+    "start:http": "python -m cua.cli --http",
+    "test": "python -m pytest -q tests"
+  }
+}

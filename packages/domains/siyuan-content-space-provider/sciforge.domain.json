@@ -1,0 +1,83 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-siyuan-content-space-provider",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.siyuan-content-space-provider",
+    "displayName": "SiYuan Content Space",
+    "version": "0.1.0",
+    "hostApi": {
+      "minimum": "1.9.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 280
+  },
+  "contributionContracts": {
+    "siyuan-content-space.provider-factory": {
+      "location": "main.content-space-provider-factory",
+      "contractVersion": "1.0.0",
+      "providerKind": "siyuan"
+    },
+    "siyuan-content-space.provider-instance": {
+      "location": "main.provider-instance-directory-entry",
+      "contractVersion": "1.0.0",
+      "providerInstanceRef": "sciforge-siyuan",
+      "providerKind": "siyuan",
+      "displayName": "SiYuan"
+    },
+    "siyuan-content-space.main-area": {
+      "location": "workbench.main-area",
+      "contractVersion": "1.0.0",
+      "label": "思源笔记",
+      "preferredHostSidebar": "expanded"
+    },
+    "siyuan-content-space.editor": {
+      "location": "main.capability-factory"
+    },
+    "siyuan-content-space.runtime": {}
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "id": "siyuan-content-space.provider-factory",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 280
+        },
+        {
+          "id": "siyuan-content-space.provider-instance",
+          "kind": "main.extension",
+          "version": "1.0.0",
+          "priority": 280
+        },
+        {
+          "id": "siyuan-content-space.editor",
+          "kind": "main.capability-factory"
+        },
+        {
+          "id": "siyuan-content-space.runtime",
+          "kind": "main.runtime-lifecycle",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "id": "siyuan-content-space.main-area",
+          "kind": "renderer.extension",
+          "priority": 280
+        }
+      ]
+    }
+  ]
+}

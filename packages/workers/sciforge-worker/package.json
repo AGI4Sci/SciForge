@@ -1,0 +1,43 @@
+{
+  "name": "@sciforge/sciforge-worker",
+  "version": "0.1.10",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Minimal SSH-launched SciForge worker contract.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "filesystem, process",
+    "publicContract": true,
+    "runtimeAdapter": false,
+    "mcpServer": false
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "0.2.24",
+    "zod": "^4.4.3",
+    "@sciforge/workspace-host": "0.1.25",
+    "@sciforge/codex-runtime": "0.1.25"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  },
+  "bin": {
+    "sciforge-worker": "./src/cli.ts"
+  }
+}

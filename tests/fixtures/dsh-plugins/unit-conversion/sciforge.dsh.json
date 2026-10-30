@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-unit-conversion",
+  "entry": "dist/main.js",
+  "title": "科学单位换算",
+  "summary": {
+    "zh": "常用科研单位的确定性换算：长度、质量、时间、体积、能量、压力与温度（含仿射换算）。拒绝跨维度换算与未知单位，纯本地计算。",
+    "en": "Deterministic conversion for common research units: length, mass, time, volume, energy, pressure and temperature (affine included). Refuses cross-dimension and unknown units. Local computation only."
+  },
+  "categories": [
+    "science",
+    "utility"
+  ],
+  "hostDependencies": [
+    "@deepseek-ai/dsh-tools"
+  ],
+  "tools": {
+    "unit_conversion_convert": {
+      "id": "unit-conversion.convert",
+      "effect": "compute"
+    },
+    "unit_conversion_list": {
+      "id": "unit-conversion.list-units",
+      "effect": "compute"
+    }
+  }
+}

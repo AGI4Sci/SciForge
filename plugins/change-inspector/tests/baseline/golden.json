@@ -1,0 +1,275 @@
+{
+  "scenarios": {
+    "corpus": [
+      {
+        "value": {
+          "sessionId": "thread-plain-diff",
+          "resourceId": "session-changes:a487147f81ecafa71c0a9846cc5960a915898c9a4f15ad089c9916732b351abe",
+          "snapshot": {
+            "sessionId": "thread-plain-diff",
+            "revision": "wm-7",
+            "changes": [
+              {
+                "id": "art-1",
+                "status": "success",
+                "filePath": "src/a.ts",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new",
+                "occurredAt": "2026-07-28T02:00:00.000Z"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-json-keys",
+          "resourceId": "session-changes:d2a385e565840ac0586691fe35cc084a536d0b964b35f40f56015c90daade01f",
+          "snapshot": {
+            "sessionId": "thread-json-keys",
+            "revision": "wm-keys",
+            "changes": [
+              {
+                "id": "k-diff",
+                "status": "success",
+                "filePath": "p1.ts",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "k-patch",
+                "status": "success",
+                "filePath": "p2.ts",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              },
+              {
+                "id": "k-ud",
+                "status": "success",
+                "filePath": "p3.ts",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "k-uD",
+                "status": "success",
+                "filePath": "p4.ts",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-nested-changes",
+          "resourceId": "session-changes:86a3e7afa9a2fbdd640f55b77c62dbca7896ed4c0682eaae479a8dec4d9c97b9",
+          "snapshot": {
+            "sessionId": "thread-nested-changes",
+            "revision": "wm-nested",
+            "changes": [
+              {
+                "id": "nest-1",
+                "status": "success",
+                "filePath": "n1.ts",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "nest-1:1",
+                "status": "success",
+                "filePath": "n2.ts",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              },
+              {
+                "id": "nest-1:2",
+                "status": "success",
+                "filePath": "fallback.ts",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-ignored",
+          "resourceId": "session-changes:a182f11e787fbf07c3f63a0ae0deeeb2f04a766a2c2a0de72d409af894d4851b",
+          "snapshot": {
+            "sessionId": "thread-ignored",
+            "revision": "wm-ignored",
+            "changes": [],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-status-dates",
+          "resourceId": "session-changes:1bd669b3a87081c3ee56004da779596d57a4c7e28f0e6f6fa6586c35f30d8105",
+          "snapshot": {
+            "sessionId": "thread-status-dates",
+            "revision": "wm-status",
+            "changes": [
+              {
+                "id": "st-run",
+                "status": "running",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new",
+                "occurredAt": "2026-07-28T02:00:00.000Z"
+              },
+              {
+                "id": "st-err",
+                "status": "error",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              },
+              {
+                "id": "st-ok",
+                "status": "success",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "st-weird",
+                "status": "success",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              },
+              {
+                "id": "st-none",
+                "status": "success",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-id-fallback",
+          "resourceId": "session-changes:26fc2901e8684782f1f69a1a7eb263484fb52ac56211a9cebeaf9c8d955dea34",
+          "snapshot": {
+            "sessionId": "thread-id-fallback",
+            "revision": "wm-ids",
+            "changes": [
+              {
+                "id": "file-change-0",
+                "status": "success",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "multi",
+                "status": "success",
+                "filePath": "m1.ts",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "multi:1",
+                "status": "success",
+                "filePath": "m2.ts",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-turns",
+          "resourceId": "session-changes:b54e8ff89b0ea12eb6f0e931f2e4ec674fdc998548633bc31224c7dbb59cb9c4",
+          "snapshot": {
+            "sessionId": "thread-turns",
+            "revision": "wm-turns",
+            "changes": [
+              {
+                "id": "t1-a",
+                "status": "success",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              },
+              {
+                "id": "t2-a",
+                "status": "success",
+                "patch": "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-x\n+y"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-long-watermark",
+          "resourceId": "session-changes:1e7bfcbde60c4901c1358601fd447c70472230b52ea0255e086f25ffe376de45",
+          "snapshot": {
+            "sessionId": "thread-long-watermark",
+            "revision": "changes-27ab2570",
+            "changes": [
+              {
+                "id": "lw-1",
+                "status": "success",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-empty-watermark",
+          "resourceId": "session-changes:2c764661e100be264605a5cfb04fd368fef3dd215d726b7228a4c017c8d7bdba",
+          "snapshot": {
+            "sessionId": "thread-empty-watermark",
+            "revision": "changes-50c5d1f",
+            "changes": [],
+            "truncated": false
+          }
+        }
+      },
+      {
+        "value": {
+          "sessionId": "thread-no-workspace",
+          "resourceId": "session-changes:60e719cf688140f31b45a1c931b3295200fa0cc2430992a3d08c723e2588210a",
+          "snapshot": {
+            "sessionId": "thread-no-workspace",
+            "revision": "wm-no-ws",
+            "changes": [
+              {
+                "id": "nw-1",
+                "status": "success",
+                "patch": "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new"
+              }
+            ],
+            "truncated": false
+          }
+        }
+      }
+    ],
+    "rejections": [
+      {
+        "threw": "The requested session belongs to another workspace."
+      },
+      {
+        "threw": "The requested session belongs to another workspace."
+      },
+      {
+        "threw": "Change Inspector requires an active workspace."
+      },
+      {
+        "threw": "Unknown session: missing-thread"
+      },
+      {
+        "threw": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"sessionId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+      },
+      {
+        "threw": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"sessionId\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+      },
+      {
+        "threw": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+      },
+      {
+        "threw": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"sessionId\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+      },
+      {
+        "threw": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_big\",\n    \"maximum\": 256,\n    \"inclusive\": true,\n    \"path\": [\n      \"sessionId\"\n    ],\n    \"message\": \"Too big: expected string to have <=256 characters\"\n  }\n]"
+      }
+    ]
+  }
+}

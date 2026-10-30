@@ -1,0 +1,5 @@
+{
+  "name": "sciforge-native-browser-integration",
+  "private": true,
+  "main": "../native-browser.cjs"
+}

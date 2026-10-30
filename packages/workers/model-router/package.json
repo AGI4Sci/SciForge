@@ -1,0 +1,48 @@
+{
+  "name": "@sciforge/model-router",
+  "version": "0.1.5",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge provider-compatible multimodal model router.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "network, filesystem",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false
+  },
+  "bin": {
+    "sciforge-model-router": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./full-trace": "./src/full-trace-recorder.ts",
+    "./manifest": "./src/manifest.ts",
+    "./server": "./src/router.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "pretest": "npm --workspace @sciforge/full-trace run build",
+    "pretypecheck": "npm --workspace @sciforge/full-trace run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@sciforge/full-trace": "0.1.0",
+    "jpeg-js": "^0.4.4",
+    "pngjs": "^6.0.0",
+    "sharp": "^0.35.4"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5",
+    "tsx": "^4.19.2"
+  }
+}

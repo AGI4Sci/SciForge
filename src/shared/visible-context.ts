@@ -1,0 +1,430 @@
+import { z } from 'zod'
+import {
+  capabilityResourceBindingSchema,
+  type CapabilityResourceBinding
+} from './capability-broker'
+
+export const VISIBLE_CONTEXT_SCHEMA_VERSION = 3
+export const SURFACE_RESOURCE_KIND = 'surface'
+export const VISIBLE_CONTEXT_MAX_COMPONENTS = 64
+export const VISIBLE_CONTEXT_MAX_RESOURCES = 64
+export const VISIBLE_CONTEXT_MAX_VISUAL_TARGETS = 64
+export const VISIBLE_CONTEXT_DEFAULT_STALE_AFTER_MS = 5_000
+
+const VISIBLE_CONTEXT_MAX_OBJECT_KEYS = 64
+const VISIBLE_CONTEXT_MAX_ARRAY_ITEMS = 64
+const VISIBLE_CONTEXT_MAX_STRING_CHARS = 4096
+const VISIBLE_CONTEXT_MAX_JSON_DEPTH = 6
+
+const maxPathSchema = z.string().trim().min(1).max(4096)
+const timestampSchema = z.string().datetime({ offset: true })
+const requestIdSchema = z.string().trim().min(1).max(256).regex(/^[A-Za-z0-9._-]+$/)
+const optionalStringSchema = (max: number): z.ZodOptional<z.ZodString> =>
+  z.string().trim().max(max).optional()
+
+export const visibleContextBoundsSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  width: z.number().finite().positive(),
+  height: z.number().finite().positive()
+}).strict()
+
+export type VisibleContextBounds = z.infer<typeof visibleContextBoundsSchema>
+
+export const visualContextTargetSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  kind: z.enum(['component', 'document-page', 'region', 'window']),
+  contentType: optionalStringSchema(128),
+  bounds: visibleContextBoundsSchema.optional(),
+  page: z.number().int().positive().optional(),
+  active: z.boolean().optional(),
+  redact: z.boolean().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional()
+}).strict().superRefine((target, context) => {
+  if (target.kind !== 'window' && !target.bounds) {
+    context.addIssue({
+      code: 'custom',
+      path: ['bounds'],
+      message: 'Element visual targets require CSS viewport bounds.'
+    })
+  }
+  if (target.kind === 'document-page' && target.page === undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['page'],
+      message: 'Document-page visual targets require a page number.'
+    })
+  }
+  if (target.redact && !target.bounds) {
+    context.addIssue({
+      code: 'custom',
+      path: ['bounds'],
+      message: 'Redaction targets require CSS viewport bounds.'
+    })
+  }
+})
+
+export type VisualContextTarget = z.infer<typeof visualContextTargetSchema>
+
+export const visibleContextTargetRefRequestSchema = z.object({
+  componentId: z.string().trim().min(1).max(256),
+  targetId: z.string().trim().min(1).max(256)
+}).strict()
+
+export const visibleContextTargetRefResultSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    targetRef: z.string().trim().min(1).max(512)
+  }).strict(),
+  z.object({ ok: z.literal(false) }).strict()
+])
+
+export type VisibleContextTargetRefRequest = z.infer<
+  typeof visibleContextTargetRefRequestSchema
+>
+export type VisibleContextTargetRefResult = z.infer<
+  typeof visibleContextTargetRefResultSchema
+>
+
+export const visibleContextCapabilityLocatorSchema = z.object({
+  resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/)
+}).strict()
+
+export type VisibleContextCapabilityLocator = z.infer<typeof visibleContextCapabilityLocatorSchema>
+
+type VisibleContextResourceBase = {
+  kind: string
+  role?: string
+  title?: string
+  accessHint?: string
+  resourceUri?: string
+  workspaceRoot?: string
+  path?: string
+  relativePath?: string
+  name?: string
+  mimeType?: string
+  fileKind?: string
+  size?: number
+  mtimeMs?: number
+  annotationCount?: number
+  threadCount?: number
+  openThreadCount?: number
+  selectedThreadId?: string | null
+  updatedAt?: string
+  capability?: CapabilityResourceBinding | VisibleContextCapabilityLocator
+  metadata?: Record<string, unknown>
+}
+
+export type VisibleContextVisualSnapshotResource = VisibleContextResourceBase & {
+  kind: 'visualSnapshot'
+  role: 'window' | 'target'
+  path: string
+  mimeType: 'image/png'
+  capturedAt: string
+  width: number
+  height: number
+  scaleFactor: number
+  windowId: string
+  revision: number
+  componentId?: string
+  targetId?: string
+  target?: VisualContextTarget
+}
+
+export type VisibleContextResource = VisibleContextResourceBase | VisibleContextVisualSnapshotResource
+
+export type VisibleContextFreshness = {
+  stale: boolean
+  ageMs: number
+  staleAfterMs: number
+}
+
+export type VisibleContextComponentSnapshot = {
+  id: string
+  region: string
+  component: string
+  title?: string
+  visible: boolean
+  priority?: number
+  updatedAt: string
+  summary: string
+  resources?: VisibleContextResource[]
+  visualTargets?: VisualContextTarget[]
+  state?: Record<string, unknown>
+}
+
+export type VisibleContextSnapshot = {
+  schemaVersion: typeof VISIBLE_CONTEXT_SCHEMA_VERSION
+  windowId: string
+  revision: number
+  publishedAt: string
+  freshness: VisibleContextFreshness
+  activeThreadId?: string | null
+  workspaceRoot?: string
+  route?: string
+  components: VisibleContextComponentSnapshot[]
+}
+
+export type VisibleContextPublishInput = Omit<VisibleContextSnapshot, 'windowId'>
+
+/**
+ * A turn is bound to the session whose workbench surface is on screen: the
+ * renderer publishes that session as `activeThreadId`. A turn started inside
+ * that surface therefore owns the visible session even when the turn runs in a
+ * side or child conversation. Blank declarations are absent declarations —
+ * resolving an empty owner to the empty string would silently drop the binding
+ * for the whole turn, so the turn's own thread is the canonical fallback.
+ */
+export function resolveVisibleContextOwnerThreadId(
+  ownerThreadId: string | null | undefined,
+  threadId: string
+): string {
+  return ownerThreadId?.trim() || threadId.trim()
+}
+
+export const VISIBLE_CONTEXT_BINDING_FAILURE_REASONS = [
+  'owner_thread_unavailable',
+  'window_unpublished',
+  'thread_mismatch',
+  'binding_error'
+] as const
+
+export type VisibleContextBindingFailureReason =
+  (typeof VISIBLE_CONTEXT_BINDING_FAILURE_REASONS)[number]
+
+export function describeVisibleContextBindingFailure(
+  reason: VisibleContextBindingFailureReason
+): string {
+  switch (reason) {
+    case 'owner_thread_unavailable':
+      return 'No session was resolved for this turn, so no visible state could be bound.'
+    case 'window_unpublished':
+      return 'The window that submitted this turn never published a visible state snapshot.'
+    case 'thread_mismatch':
+      return 'The visible state published by this window belongs to a different session than this turn.'
+    case 'binding_error':
+      return 'Capturing the visible state failed while the turn was being submitted.'
+  }
+}
+
+export function sanitizeVisibleContextPublishInput(
+  snapshot: VisibleContextPublishInput
+): VisibleContextPublishInput {
+  return {
+    ...snapshot,
+    activeThreadId: snapshot.activeThreadId ?? null,
+    components: sanitizeVisibleContextComponents(snapshot.components)
+  }
+}
+
+export function sanitizeVisibleContextSnapshot(
+  snapshot: VisibleContextSnapshot
+): VisibleContextSnapshot {
+  return {
+    ...snapshot,
+    activeThreadId: snapshot.activeThreadId ?? null,
+    components: sanitizeVisibleContextComponents(snapshot.components)
+  }
+}
+
+function sanitizeVisibleContextComponents(
+  components: readonly VisibleContextComponentSnapshot[]
+): VisibleContextComponentSnapshot[] {
+  return components
+    .filter((component) => component.visible)
+    .map((component) => ({
+      ...component,
+      resources: component.resources?.map((resource) => ({
+        ...resource,
+        metadata: sanitizeVisibleContextJsonObject(resource.metadata)
+      })),
+      visualTargets: component.visualTargets?.map((target) => ({
+        ...target,
+        metadata: sanitizeVisibleContextJsonObject(target.metadata)
+      })),
+      state: sanitizeVisibleContextJsonObject(component.state)
+    }))
+}
+
+function sanitizeVisibleContextJsonObject(
+  value: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  const sanitized = sanitizeVisibleContextJsonValue(value, 0)
+  return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)
+    ? sanitized as Record<string, unknown>
+    : undefined
+}
+
+function sanitizeVisibleContextJsonValue(value: unknown, depth: number): unknown {
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string') return value.slice(0, VISIBLE_CONTEXT_MAX_STRING_CHARS)
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'boolean') return value
+  if (depth >= VISIBLE_CONTEXT_MAX_JSON_DEPTH) return '[truncated]'
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, VISIBLE_CONTEXT_MAX_ARRAY_ITEMS)
+      .map((item) => sanitizeVisibleContextJsonValue(item, depth + 1))
+  }
+  if (typeof value === 'object') {
+    const output: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value).slice(0, VISIBLE_CONTEXT_MAX_OBJECT_KEYS)) {
+      output[key.slice(0, 256)] = sanitizeVisibleContextJsonValue(entry, depth + 1)
+    }
+    return output
+  }
+  return undefined
+}
+
+const visibleContextResourceBaseSchema = z.object({
+  kind: z.string().trim().min(1).max(128),
+  role: optionalStringSchema(128),
+  title: optionalStringSchema(256),
+  accessHint: optionalStringSchema(128),
+  resourceUri: optionalStringSchema(1024),
+  workspaceRoot: maxPathSchema.optional(),
+  path: maxPathSchema.optional(),
+  relativePath: maxPathSchema.optional(),
+  name: optionalStringSchema(512),
+  mimeType: optionalStringSchema(128),
+  fileKind: optionalStringSchema(128),
+  size: z.number().finite().nonnegative().optional(),
+  mtimeMs: z.number().finite().nonnegative().optional(),
+  annotationCount: z.number().int().nonnegative().optional(),
+  threadCount: z.number().int().nonnegative().optional(),
+  openThreadCount: z.number().int().nonnegative().optional(),
+  selectedThreadId: z.string().trim().max(256).nullable().optional(),
+  updatedAt: optionalStringSchema(128),
+  capability: z.union([
+    capabilityResourceBindingSchema,
+    visibleContextCapabilityLocatorSchema
+  ]).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional()
+}).strict()
+
+export const visibleContextVisualSnapshotResourceSchema = visibleContextResourceBaseSchema.extend({
+  kind: z.literal('visualSnapshot'),
+  role: z.enum(['window', 'target']),
+  path: maxPathSchema.refine(
+    (value) => value.startsWith('/') || value.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(value),
+    {
+    message: 'Visual snapshot paths must be absolute.'
+    }
+  ),
+  mimeType: z.literal('image/png'),
+  capturedAt: timestampSchema,
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  scaleFactor: z.number().finite().positive(),
+  windowId: z.string().trim().min(1).max(256),
+  revision: z.number().int().nonnegative(),
+  componentId: optionalStringSchema(256),
+  targetId: optionalStringSchema(256),
+  target: visualContextTargetSchema.optional()
+}).strict()
+
+const visibleContextNonVisualResourceSchema = visibleContextResourceBaseSchema.refine(
+  (resource) => resource.kind !== 'visualSnapshot',
+  { message: 'visualSnapshot resources must use the visual snapshot resource contract.' }
+)
+
+export const visibleContextResourceSchema = z.union([
+  visibleContextVisualSnapshotResourceSchema,
+  visibleContextNonVisualResourceSchema
+])
+
+export const visibleContextFreshnessSchema = z.object({
+  stale: z.boolean(),
+  ageMs: z.number().int().nonnegative(),
+  staleAfterMs: z.number().int().positive().max(300_000)
+}).strict()
+
+export const visibleContextComponentSnapshotSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  region: z.string().trim().min(1).max(128),
+  component: z.string().trim().min(1).max(128),
+  title: optionalStringSchema(256),
+  visible: z.boolean(),
+  priority: z.number().int().min(-1000).max(1000).optional(),
+  updatedAt: timestampSchema,
+  summary: z.string().trim().max(2000),
+  resources: z.array(visibleContextResourceSchema).max(VISIBLE_CONTEXT_MAX_RESOURCES).optional(),
+  visualTargets: z.array(visualContextTargetSchema).max(VISIBLE_CONTEXT_MAX_VISUAL_TARGETS).optional(),
+  state: z.record(z.string(), z.unknown()).optional()
+}).strict()
+
+export const visibleContextSnapshotSchema = z.object({
+  schemaVersion: z.literal(VISIBLE_CONTEXT_SCHEMA_VERSION),
+  windowId: z.string().trim().min(1).max(256),
+  revision: z.number().int().nonnegative(),
+  publishedAt: timestampSchema,
+  freshness: visibleContextFreshnessSchema,
+  activeThreadId: z.string().trim().max(256).nullable().optional(),
+  workspaceRoot: maxPathSchema.optional(),
+  route: z.string().trim().max(128).optional(),
+  components: z.array(visibleContextComponentSnapshotSchema).max(VISIBLE_CONTEXT_MAX_COMPONENTS)
+}).strict()
+
+export const visibleContextPublishInputSchema = visibleContextSnapshotSchema.omit({
+  windowId: true
+})
+
+export const visibleContextCaptureResultSchema = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    requestId: requestIdSchema,
+    resource: visibleContextVisualSnapshotResourceSchema
+  }).strict(),
+  z.object({
+    ok: z.literal(false),
+    requestId: requestIdSchema,
+    error: z.object({
+      code: z.string().trim().min(1).max(128),
+      message: z.string().trim().min(1).max(1000),
+      failureClass: z.string().trim().min(1).max(128),
+      retryable: z.boolean(),
+      recovery: z.object({
+        action: z.string().trim().min(1).max(128),
+        instruction: z.string().trim().min(1).max(1000)
+      }).strict(),
+      providerStage: z.string().trim().min(1).max(128)
+    }).strict()
+  }).strict()
+])
+
+export type VisibleContextCaptureResult = z.infer<typeof visibleContextCaptureResultSchema>
+
+export const visibleContextCapturePreviewRequestSchema = z.object({
+  path: maxPathSchema
+}).strict()
+
+export type VisibleContextCapturePreviewRequest = z.infer<typeof visibleContextCapturePreviewRequestSchema>
+
+export type VisibleContextCapturePreviewResult =
+  | {
+      ok: true
+      path: string
+      dataUrl: string
+      mimeType: 'image/png'
+      size: number
+    }
+  | { ok: false; message: string }
+
+
+export function emptyVisibleContextSnapshot(
+  publishedAt = new Date(0).toISOString(),
+  windowId = 'unavailable'
+): VisibleContextSnapshot {
+  return {
+    schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
+    windowId,
+    revision: 0,
+    publishedAt,
+    freshness: {
+      stale: true,
+      ageMs: Math.max(0, Date.now() - Date.parse(publishedAt)),
+      staleAfterMs: VISIBLE_CONTEXT_DEFAULT_STALE_AFTER_MS
+    },
+    components: []
+  }
+}

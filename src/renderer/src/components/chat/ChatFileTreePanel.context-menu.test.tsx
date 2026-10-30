@@ -1,0 +1,224 @@
+// @vitest-environment happy-dom
+
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import enCommon from '../../locales/en/common.json'
+import zhCommon from '../../locales/zh/common.json'
+
+const listWorkspaceReferences = vi.hoisted(() => vi.fn())
+const resolveWorkspaceFile = vi.hoisted(() => vi.fn())
+const writeClipboardText = vi.hoisted(() => vi.fn())
+
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...await importOriginal<typeof import('react-i18next')>(),
+  useTranslation: () => ({ t: (key: string) => key })
+}))
+
+vi.mock('../../agent/registry', () => ({
+  getProvider: () => ({ listWorkspaceReferences })
+}))
+
+import { ChatFileTreePanel } from './ChatFileTreePanel'
+
+const workspaceReference = {
+  workspaceRoot: '/workspace/project',
+  relativePath: 'papers/example.pdf',
+  name: 'example.pdf',
+  kind: 'pdf' as const,
+  mimeType: 'application/pdf'
+}
+
+describe('ChatFileTreePanel file context menu', () => {
+  let root: Root | null = null
+  let container: HTMLDivElement | null = null
+
+  beforeEach(() => {
+    listWorkspaceReferences.mockReset()
+    listWorkspaceReferences.mockResolvedValue({
+      ok: true,
+      references: [workspaceReference]
+    })
+    resolveWorkspaceFile.mockReset()
+    resolveWorkspaceFile.mockResolvedValue({
+      ok: true,
+      path: '/workspace/project/papers/example.pdf',
+      kind: 'file'
+    })
+    writeClipboardText.mockReset()
+    Object.defineProperty(window, 'sciforge', {
+      configurable: true,
+      value: { resolveWorkspaceFile }
+    })
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: writeClipboardText }
+    })
+    container = document.createElement('div')
+    document.body.append(container)
+  })
+
+  afterEach(async () => {
+    if (root) {
+      await act(async () => root?.unmount())
+    }
+    container?.remove()
+    root = null
+    container = null
+  })
+
+  it('routes explicit new-pane and ordinary file previews through separate callbacks', async () => {
+    const onPreviewFile = vi.fn()
+    const onPreviewFileInNewPane = vi.fn()
+    root = createRoot(container as HTMLDivElement)
+
+    await act(async () => {
+      root?.render(createElement(ChatFileTreePanel, {
+        workspaceRoot: '/workspace/project',
+        onPreviewFile,
+        onPreviewFileInNewPane,
+        onAddReference: vi.fn(),
+        onCollapse: vi.fn()
+      }))
+    })
+
+    const row = container?.querySelector<HTMLElement>('[data-file-tree-path="papers/example.pdf"]')
+    expect(row).not.toBeNull()
+
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20
+      }))
+    })
+
+    const newPaneAction = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []
+    ).find((button) => button.textContent?.includes('fileTreePreviewInNewRightSidebar'))
+    expect(newPaneAction?.tagName).toBe('BUTTON')
+
+    await act(async () => newPaneAction?.click())
+    expect(onPreviewFileInNewPane).toHaveBeenCalledWith(workspaceReference)
+    expect(onPreviewFile).not.toHaveBeenCalled()
+
+    const ordinaryPreviewButton = row?.querySelector<HTMLButtonElement>('button')
+    await act(async () => ordinaryPreviewButton?.click())
+    expect(onPreviewFile).toHaveBeenCalledWith(workspaceReference)
+    expect(onPreviewFileInNewPane).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the new-pane action when the optional host callback is unavailable', async () => {
+    root = createRoot(container as HTMLDivElement)
+
+    await act(async () => {
+      root?.render(createElement(ChatFileTreePanel, {
+        workspaceRoot: '/workspace/project',
+        onPreviewFile: vi.fn(),
+        onAddReference: vi.fn(),
+        onCollapse: vi.fn()
+      }))
+    })
+
+    const row = container?.querySelector<HTMLElement>('[data-file-tree-path="papers/example.pdf"]')
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20
+      }))
+    })
+
+    expect(container?.textContent).not.toContain('fileTreePreviewInNewRightSidebar')
+  })
+
+  it('resolves and copies the absolute path for a workspace entry', async () => {
+    root = createRoot(container as HTMLDivElement)
+
+    await act(async () => {
+      root?.render(createElement(ChatFileTreePanel, {
+        workspaceRoot: '/workspace/project',
+        onPreviewFile: vi.fn(),
+        onAddReference: vi.fn(),
+        onCollapse: vi.fn()
+      }))
+    })
+
+    const row = container?.querySelector<HTMLElement>('[data-file-tree-path="papers/example.pdf"]')
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20
+      }))
+    })
+
+    const copyPathAction = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []
+    ).find((button) => button.textContent?.includes('filePreviewCopyPath'))
+
+    await act(async () => copyPathAction?.click())
+
+    expect(resolveWorkspaceFile).toHaveBeenCalledWith({
+      path: 'papers/example.pdf',
+      workspaceRoot: '/workspace/project'
+    })
+    expect(writeClipboardText).toHaveBeenCalledWith('/workspace/project/papers/example.pdf')
+  })
+
+  it('adds directory and ordinary-file references with their workspace metadata intact', async () => {
+    const directoryReference = {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'AI Scientist/论文目录',
+      name: '论文目录',
+      kind: 'directory' as const
+    }
+    const textReference = {
+      workspaceRoot: '/workspace/project',
+      relativePath: 'notes/研究摘要.md',
+      name: '研究摘要.md',
+      kind: 'text' as const,
+      mimeType: 'text/markdown'
+    }
+    listWorkspaceReferences.mockResolvedValue({
+      ok: true,
+      references: [directoryReference, textReference]
+    })
+    const onAddReference = vi.fn()
+    root = createRoot(container as HTMLDivElement)
+
+    await act(async () => {
+      root?.render(createElement(ChatFileTreePanel, {
+        workspaceRoot: '/workspace/project',
+        onPreviewFile: vi.fn(),
+        onAddReference,
+        onCollapse: vi.fn()
+      }))
+    })
+
+    const addButtons = Array.from(
+      container?.querySelectorAll<HTMLButtonElement>('button[aria-label="workspaceReferenceAdd"]') ?? []
+    )
+    expect(addButtons).toHaveLength(2)
+    await act(async () => {
+      addButtons.forEach((button) => button.click())
+    })
+
+    expect(onAddReference).toHaveBeenNthCalledWith(1, {
+      ...directoryReference,
+      path: directoryReference.relativePath
+    })
+    expect(onAddReference).toHaveBeenNthCalledWith(2, {
+      ...textReference,
+      path: textReference.relativePath
+    })
+  })
+
+  it('provides matching English and Chinese action labels', () => {
+    expect(enCommon.fileTreePreviewInNewRightSidebar).toBe('Open in new right sidebar')
+    expect(zhCommon.fileTreePreviewInNewRightSidebar).toBe('在新右侧栏中打开')
+  })
+})

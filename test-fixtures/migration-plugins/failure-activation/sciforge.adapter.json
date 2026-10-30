@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "kind": "capability",
+  "namespace": "activation-failure",
+  "hostApiRange": "^1.0.0",
+  "permissions": [],
+  "reloadPolicy": "live"
+}

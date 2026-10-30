@@ -1,0 +1,229 @@
+import assert from 'node:assert/strict'
+import { describe, it } from 'node:test'
+import { z } from 'zod'
+
+import {
+  domainMainAgentExecutionRequestSchema,
+  domainMainAgentExecutionResultSchema,
+  domainMainAgentExecutionSessionRequestSchema,
+  domainMainAgentExecutionSessionSchema,
+  domainMainAgentRuntimeReadinessSchema,
+  type DomainMainAgentExecutionHost
+} from './agent-execution.js'
+
+describe('agent execution host contract', () => {
+  it('can prepare a stable Session before a retryable directive reaches Runtime dispatch', async () => {
+    const host: DomainMainAgentExecutionHost = {
+      prepareSession: async () => ({ runtimeId: 'codex', threadId: 'thread-worker-stable' }),
+      run: async () => ({
+        runtimeId: 'codex', threadId: 'thread-worker-stable', turnId: 'turn-worker-stable',
+        state: 'completed', text: 'done'
+      })
+    }
+
+    assert.deepEqual(await host.prepareSession!({
+      workspaceRoot: '/workspace/execution', title: 'Review Worker result',
+      interaction: 'reviewable', mode: 'agent'
+    }), { runtimeId: 'codex', threadId: 'thread-worker-stable' })
+    assert.deepEqual(domainMainAgentExecutionSessionRequestSchema.parse({
+      runtimeId: 'codex', workspaceRoot: '/workspace/execution', title: 'Review Worker result'
+    }), {
+      runtimeId: 'codex', workspaceRoot: '/workspace/execution',
+      title: 'Review Worker result',
+      interaction: 'background', mode: 'agent'
+    })
+    assert.deepEqual(domainMainAgentExecutionSessionSchema.parse({
+      runtimeId: 'codex', threadId: 'thread-worker-stable'
+    }), { runtimeId: 'codex', threadId: 'thread-worker-stable' })
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
+      workspaceRoot: '/workspace/execution', clientDirectiveId: 'caller-smuggled-dispatch'
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
+      workspaceRoot: '/workspace/execution', providerCredential: 'must-not-cross-host-contract'
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({
+      title: 'x'.repeat(201)
+    }), z.ZodError)
+    for (const separator of ['\r', '\n', '\u0085', '\u2028', '\u2029']) {
+      for (const title of [
+        `${separator}Worker task`,
+        `Worker task${separator}control text`,
+        `Worker task${separator}`
+      ]) {
+        assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse({ title }), z.ZodError)
+      }
+    }
+  })
+
+  it('accepts bounded process-neutral execution options and cancellation', async () => {
+    const controller = new AbortController()
+    const host: DomainMainAgentExecutionHost = {
+      runtimeReadiness: async () => ({
+        state: 'ready',
+        runtimeId: 'codex',
+        capabilityTags: ['agent-runtime.codex', 'model-access.api']
+      }),
+      run: async (request) => ({
+        runtimeId: request.runtimeId ?? 'codex',
+        threadId: request.threadId ?? 'thread-1',
+        turnId: 'turn-1',
+        state: 'completed',
+        text: `${request.runtimeId}:${request.mode ?? 'agent'}`,
+      })
+    }
+
+    const request = domainMainAgentExecutionRequestSchema.parse({
+      runtimeId: 'codex',
+      prompt: 'Implement the reviewed workflow.',
+      workspaceRoot: '/workspace/project',
+      model: 'frontier',
+      reasoningEffort: 'high',
+      allowedTools: ['sciforge_discover', 'sciforge_invoke'],
+      outputSchema: {
+        type: 'object',
+        properties: { result: { type: 'string' } },
+        required: ['result'],
+        additionalProperties: false
+      },
+      interaction: 'reviewable',
+      mode: 'agent',
+      signal: controller.signal
+    })
+
+    assert.deepEqual(await host.run(request), {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      state: 'completed',
+      text: 'codex:agent',
+    })
+    assert.deepEqual(await host.runtimeReadiness?.(), {
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex', 'model-access.api']
+    })
+  })
+
+  it('keeps runtime readiness structured, bounded, and credential-free', () => {
+    assert.deepEqual(domainMainAgentRuntimeReadinessSchema.parse({
+      state: 'ready',
+      runtimeId: 'claude',
+      capabilityTags: ['agent-runtime.claude', 'model-access.coding-plan']
+    }), {
+      state: 'ready',
+      runtimeId: 'claude',
+      capabilityTags: ['agent-runtime.claude', 'model-access.coding-plan']
+    })
+    assert.throws(() => domainMainAgentRuntimeReadinessSchema.parse({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex'],
+      authorization: 'Bearer private'
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentRuntimeReadinessSchema.parse({
+      state: 'ready',
+      runtimeId: 'codex',
+      capabilityTags: ['agent-runtime.codex', 'agent-runtime.codex']
+    }), z.ZodError)
+  })
+
+  it('defaults execution mode, permits an unbound new thread, and rejects host-private fields', () => {
+    assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Continue.'
+    }), {
+      prompt: 'Continue.',
+      interaction: 'background',
+      mode: 'agent'
+    })
+
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      runtimeId: 'codex',
+      prompt: 'Continue.',
+      privateThreadStore: {}
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Return a scalar.',
+      outputSchema: 'string'
+    }), z.ZodError)
+  })
+
+  it('continues only an explicit runtime/thread pair with a stable directive identity', () => {
+    assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-existing',
+      clientDirectiveId: 'projection:receipt-1',
+      prompt: 'Continue the same logical session.',
+      metadata: { origin: 'remote', sender: 'user-1' },
+      workspaceRoot: '/workspace/project'
+    }), {
+      runtimeId: 'codex',
+      threadId: 'thread-existing',
+      clientDirectiveId: 'projection:receipt-1',
+      prompt: 'Continue the same logical session.',
+      metadata: { origin: 'remote', sender: 'user-1' },
+      workspaceRoot: '/workspace/project',
+      interaction: 'background',
+      mode: 'agent'
+    })
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      threadId: 'thread-without-runtime',
+      prompt: 'Ambiguous continuation.'
+    }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      runtimeId: 'codex',
+      clientDirectiveId: 'contains spaces',
+      prompt: 'Invalid identity.'
+    }), z.ZodError)
+  })
+
+  it('keeps the result envelope minimal and strict', () => {
+    assert.deepEqual(domainMainAgentExecutionResultSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      state: 'completed',
+      text: 'Done.',
+    }), {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      state: 'completed',
+      text: 'Done.',
+    })
+    assert.throws(() => domainMainAgentExecutionResultSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      state: 'completed',
+      text: 'Done.',
+      providerResponse: {}
+    }), z.ZodError)
+    assert.deepEqual(domainMainAgentExecutionResultSchema.parse({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-2',
+      state: 'failed',
+      text: '',
+      failure: {
+        code: 'model_capacity',
+        message: 'Selected model is at capacity.',
+        retryable: true
+      }
+    }).failure, {
+      code: 'model_capacity',
+      message: 'Selected model is at capacity.',
+      retryable: true
+    })
+  })
+
+  it('accepts an explicit empty tool policy and rejects duplicate names', () => {
+    assert.deepEqual(domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Work without tools.',
+      allowedTools: []
+    }).allowedTools, [])
+    assert.throws(() => domainMainAgentExecutionRequestSchema.parse({
+      prompt: 'Work.',
+      allowedTools: ['sciforge_invoke', 'sciforge_invoke']
+    }), z.ZodError)
+  })
+})

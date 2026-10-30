@@ -1,0 +1,44 @@
+{
+  "name": "@sciforge/search",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Shared SciForge research search MCP server.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": false,
+    "mcpServer": true
+  },
+  "bin": {
+    "sciforge-research-search": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./contract": "./src/contract.ts",
+    "./mcp-server": "./src/mcp-server.ts",
+    "./research-service": "./src/research-service.ts",
+    "./service": "./src/service.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

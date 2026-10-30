@@ -1,0 +1,102 @@
+{
+  "id": "sciforge_research",
+  "name": "SciForge Research",
+  "kind": "ppt-master-static-svg-ui-kit",
+  "version": 2,
+  "intent": "Restrained academic presentation style for evidence-driven SciForge research decks.",
+  "productionPath": "ppt-master compatible static SVG layouts",
+  "satori": {
+    "status": "candidate-only",
+    "note": "May be evaluated for controlled component rendering, but does not bypass ppt-master Step 4 or sequential SVG generation."
+  },
+  "colors": {
+    "background": "#F7F5F0",
+    "surface": "#FFFFFF",
+    "ink": "#17212B",
+    "muted": "#5E6B73",
+    "primary": "#0C6B64",
+    "blue": "#285A8E",
+    "coral": "#D65A3A",
+    "amber": "#E0A72E",
+    "green": "#7AA36F",
+    "border": "#D7D9D2"
+  },
+  "typography": {
+    "fontFamily": "Microsoft YaHei, Arial, sans-serif",
+    "body": 20,
+    "title": 34,
+    "coverTitle": 64
+  },
+  "layoutContract": {
+    "canvas": {
+      "width": 1280,
+      "height": 720,
+      "viewBox": "0 0 1280 720"
+    },
+    "safeArea": {
+      "left": 64,
+      "top": 56,
+      "right": 1216,
+      "bottom": 650
+    },
+    "footer": {
+      "top": 628,
+      "bottom": 676,
+      "fontSize": 14,
+      "usage": "Only provenance, source trace, or short deck status text."
+    },
+    "textSlots": {
+      "pageTitle": {
+        "maxWidth": 780,
+        "fontSize": 34,
+        "maxLines": 1
+      },
+      "subtitle": {
+        "maxWidth": 880,
+        "fontSize": 18,
+        "maxLines": 2
+      },
+      "bodyBlock": {
+        "maxWidth": 500,
+        "fontSize": 18,
+        "maxLines": 4
+      },
+      "calloutBody": {
+        "maxWidth": 280,
+        "fontSize": 15,
+        "maxLines": 2
+      }
+    },
+    "figureSlots": {
+      "mainFigure": {
+        "x": 88,
+        "y": 190,
+        "width": 704,
+        "height": 340,
+        "captionMaxWidth": 640
+      }
+    },
+    "calloutSlots": {
+      "rightRail": {
+        "x": 856,
+        "y": 180,
+        "width": 328,
+        "maxTextWidth": 280,
+        "leaderLines": "Anchor callouts to a meaningful point or region in the figure."
+      }
+    },
+    "rules": [
+      "Use explicit multi-line text blocks; do not let long evidence or path text live in one raw text element.",
+      "Keep body content above y=628; reserve the footer band for traceability text.",
+      "Figure pages are figure-first: the figure should be the largest semantic object on the page.",
+      "Evidence callouts should name the observation, confidence, and provenance without reinterpreting raw scientific data."
+    ]
+  },
+  "layouts": [
+    "layouts/01_cover.svg",
+    "layouts/02_research_question.svg",
+    "layouts/03_method_pipeline.svg",
+    "layouts/04_figure_evidence_callout.svg",
+    "layouts/05_results_validation.svg"
+  ]
+}

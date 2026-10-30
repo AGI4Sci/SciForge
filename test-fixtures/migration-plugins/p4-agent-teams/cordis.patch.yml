@@ -1,0 +1,10 @@
+[
+  {
+    "insert": [
+      {
+        "id": "sciforge.agent-teams-fixture",
+        "name": "./dist/main.js"
+      }
+    ]
+  }
+]

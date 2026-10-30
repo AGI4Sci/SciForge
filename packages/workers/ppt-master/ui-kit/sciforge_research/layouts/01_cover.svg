@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <!-- New project-authored plain-text layout; Apache-2.0. No inherited artwork. -->
+  <rect x="0" y="0" width="1280" height="720" fill="#FFFFFF"/>
+  <text x="80" y="96" font-family="sans-serif" font-size="32" fill="#17212B" data-max-width="1100">{{TITLE_LINE_1}}</text>
+  <text x="80" y="140" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{TITLE_LINE_2}}</text>
+  <text x="80" y="210" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{PROJECT_LABEL}}</text>
+  <text x="80" y="244" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{SUBTITLE_LINE_1}}</text>
+  <text x="80" y="278" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{SUBTITLE_LINE_2}}</text>
+  <text x="80" y="312" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{AUDIENCE}}</text>
+  <text x="80" y="346" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{DATE_OR_CONTEXT}}</text>
+  <text x="80" y="380" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{BOUNDARY_NOTE}}</text>
+  <text x="80" y="414" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{VISUAL_TITLE}}</text>
+  <text x="80" y="448" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{ASSET_TAG}}</text>
+  <text x="80" y="482" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{EVIDENCE_TAG}}</text>
+  <text x="80" y="516" font-family="sans-serif" font-size="18" fill="#17212B" data-max-width="1100">{{VISUAL_CAPTION}}</text>
+  <text x="80" y="650" font-family="sans-serif" font-size="14" fill="#17212B" data-max-width="1100" data-role="footer">{{TRACEABILITY_NOTE}}</text>
+</svg>

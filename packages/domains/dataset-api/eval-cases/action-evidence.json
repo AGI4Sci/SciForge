@@ -1,0 +1,627 @@
+{
+  "schemaVersion": "sciforge.capability-eval.action-evidence.v1",
+  "owner": "dataset-api",
+  "actionEvidence": {
+    "dataset-api.catalog": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-provider-catalog-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-catalog-local-fixture"
+      }
+    },
+    "dataset-api.confirm-plan": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-approval-no-side-effect-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-confirm-plan-denied"
+      }
+    },
+    "dataset-api.deduplicate": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-deduplicate-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-processing-local-fixture"
+      }
+    },
+    "dataset-api.execute-plan": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/plan-executor.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-plan-execution-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-execute-plan-local-fixture"
+      }
+    },
+    "dataset-api.filter": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-filter-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-filter-validate-local-fixture"
+      }
+    },
+    "dataset-api.graph-organize": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-graph-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-graph-organize-local-fixture"
+      }
+    },
+    "dataset-api.id-map": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-mapping-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-id-map-local-fixture"
+      }
+    },
+    "dataset-api.id-map-provider": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-provider-mapping-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-id-map-provider-local-fixture"
+      }
+    },
+    "dataset-api.join": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-join-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-join-local-fixture"
+      }
+    },
+    "dataset-api.list": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-source-registry-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-list-local-fixture"
+      }
+    },
+    "dataset-api.list-object-stores": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/object-store.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-object-store-registry-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-list-object-stores-local-fixture"
+      }
+    },
+    "dataset-api.list-objects": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/object-store.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-object-list-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-list-objects-local-fixture"
+      }
+    },
+    "dataset-api.materialize": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-generated-artifact-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-materialize-local-fixture"
+      }
+    },
+    "dataset-api.metadata": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-metadata-artifact-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-metadata-local-fixture"
+      }
+    },
+    "dataset-api.object-metadata": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/object-store.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-object-metadata-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-object-metadata-local-fixture"
+      }
+    },
+    "dataset-api.object-raw-data": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/object-store.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-object-artifact-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-object-raw-data-local-fixture"
+      }
+    },
+    "dataset-api.prepare-plan": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-plan-and-pipeline-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-prepare-plan-local-fixture"
+      }
+    },
+    "dataset-api.profile": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-profile-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-profile-local-fixture"
+      }
+    },
+    "dataset-api.publish": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-publication-manifest-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-publish-local-fixture"
+      }
+    },
+    "dataset-api.raw-data": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-raw-data-artifact-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-raw-data-local-fixture"
+      }
+    },
+    "dataset-api.register-provider": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/service.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-provider-registration-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-register-provider-local-fixture"
+      }
+    },
+    "dataset-api.resume-plan": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/plan-executor.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-plan-resume-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-resume-plan-local-fixture"
+      }
+    },
+    "dataset-api.select-columns": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-column-selection-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-processing-local-fixture"
+      }
+    },
+    "dataset-api.structure-profile": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-structure-profile-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-structure-profile-local-fixture"
+      }
+    },
+    "dataset-api.structure-validate": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-structure-validation-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-structure-validate-local-fixture"
+      }
+    },
+    "dataset-api.transform": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-transform-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-processing-local-fixture"
+      }
+    },
+    "dataset-api.validate": {
+      "unitEvidence": [
+        {
+          "path": "packages/domains/dataset-api/src/processing.test.ts",
+          "scope": "domain-owned contract or service test; not live Agent evidence"
+        }
+      ],
+      "fixture": {
+        "paths": [
+          "packages/domains/dataset-api/src/capability-eval.ts"
+        ],
+        "status": "available-in-package"
+      },
+      "oracle": {
+        "kind": "package-owned-independent-validation-lineage-readback",
+        "independentFromAgent": true,
+        "status": "available-package-oracle"
+      },
+      "live": {
+        "status": "ready",
+        "caseId": "dataset-api-filter-validate-local-fixture"
+      }
+    }
+  }
+}

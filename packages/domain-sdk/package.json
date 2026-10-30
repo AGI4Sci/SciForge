@@ -1,0 +1,75 @@
+{
+  "name": "@sciforge/domain-sdk",
+  "version": "0.2.24",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Pure contracts for compile-time and sandboxed runtime SciForge domain packages.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./attachment-policy": "./src/attachment-policy.ts",
+    "./agent-routing": "./src/agent-routing.ts",
+    "./agent-execution": "./src/agent-execution.ts",
+    "./capability-eval": "./src/capability-eval.ts",
+    "./canonical-json": {
+      "types": "./src/canonical-json.d.ts",
+      "import": "./src/canonical-json.js"
+    },
+    "./contract": "./src/contract.ts",
+    "./controlled-process": "./src/controlled-process.ts",
+    "./external-navigation": "./src/external-navigation.ts",
+    "./file-transfer": "./src/file-transfer.ts",
+    "./file-transfer-portability": {
+      "types": "./src/file-transfer-portability.d.ts",
+      "import": "./src/file-transfer-portability.js"
+    },
+    "./host": "./src/host.ts",
+    "./host-ports": "./src/host-ports.ts",
+    "./headless": "./src/headless.ts",
+    "./main": "./src/main.ts",
+    "./package-storage": "./src/package-storage.ts",
+    "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
+    "./node/runtime-mcp-launcher": "./src/node/runtime-mcp-launcher.ts",
+    "./node/workspace-paths": "./src/node/workspace-paths.ts",
+    "./node/windows-private-storage": "./src/node/windows-private-storage.mjs",
+    "./power": "./src/power.ts",
+    "./portable-resource-references": "./src/portable-resource-references.ts",
+    "./principal": "./src/principal.ts",
+    "./remote-approval": "./src/remote-approval.ts",
+    "./provider-composition": "./src/provider-composition.ts",
+    "./reproducibility": "./src/reproducibility.ts",
+    "./research-audit": "./src/research-audit.ts",
+    "./renderer": "./src/renderer.ts",
+    "./renderer-contributions": "./src/renderer-contributions.ts",
+    "./safe-svg": "./src/safe-svg.ts",
+    "./unicode": "./src/unicode.ts",
+    "./visual-source": "./src/visual-source.ts",
+    "./version-control": "./src/version-control.ts",
+    "./visual-capture": "./src/visual-capture.ts",
+    "./workspace-host": "./src/workspace-host.ts",
+    "./workspace-server": "./src/workspace-server.ts",
+    "./workspace-preview": "./src/workspace-preview.ts",
+    "./workflow-template": "./src/workflow-template.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "rehype-parse": "^9.0.1",
+    "rehype-sanitize": "^6.0.0",
+    "rehype-stringify": "^10.0.1",
+    "unified": "^11.0.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

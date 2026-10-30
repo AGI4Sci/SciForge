@@ -1,0 +1,23 @@
+{
+  "sourceCommit": "87a0014a73be16197b40b4b3d072b3abd2cb82f1",
+  "upstreamRepository": "https://github.com/deepseek-ai/deepseek-harness",
+  "upstreamCommit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+  "upstreamVersion": "0.2.0-rc.2",
+  "upstreamLicense": "MIT",
+  "licenseSha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+  "transformation": "Replace local absolute patch-file paths only in YAML provenance comments with <host-safety-patch>; preserve YAML data and canonical config digest. Never evaluate !!js tags.",
+  "files": [
+    {
+      "file": "default-acp.yml",
+      "sourcePath": "packages/workers/dsh-runtime/docs/release-review/default-acp.yml",
+      "sourceSha256": "49b83ba40c699279a6a73e5298bc75ea2632352496e8b4a651503beecf6bed02",
+      "sha256": "49b83ba40c699279a6a73e5298bc75ea2632352496e8b4a651503beecf6bed02"
+    },
+    {
+      "file": "safe-acp.yml",
+      "sourcePath": "packages/workers/dsh-runtime/docs/release-review/safe-acp.yml",
+      "sourceSha256": "f2ef3d88aa65dab2bbefe9ffe29c0b28b9343706fcf2a86107652b4cea553552",
+      "sha256": "468c7f4b0d8d092f9b6a30c9d959b4422963b64a820df93318b7d1bc102a0e41"
+    }
+  ]
+}

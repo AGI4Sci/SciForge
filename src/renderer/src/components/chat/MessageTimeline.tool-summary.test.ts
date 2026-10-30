@@ -1,0 +1,1116 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { ChatBlock, NormalizedThread, RuntimeDisclosureMetadata, ToolBlock } from '../../agent/types'
+import { useChatStore } from '../../store/chat-store'
+import { MessageTimeline, summarizeToolBlock } from './MessageTimeline'
+import {
+  MessageBubble,
+  approvalDetailEntries,
+  shouldRequestToolArtifact,
+  toolArtifactRequestKey,
+  toolOutputStatus
+} from './message-timeline-bubbles'
+import {
+  resolveMarkdownImageReference,
+  AssistantMarkdownImage,
+  MarkdownImageArtifactProvider,
+  timelineVisualReviewArtifactsFromToolBlock,
+  timelineImagesFromToolBlock,
+  timelineImagesFromToolBlocks,
+  timelineVisualSnapshotsFromToolBlock
+} from './message-timeline-media'
+import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
+
+const labels: Record<string, string> = {
+  toolActionCommand: 'Ran command',
+  toolBuiltinRead: 'Read',
+  toolBuiltinWrite: 'Write',
+  toolBuiltinEdit: 'Edit',
+  toolBuiltinGrep: 'Search',
+  toolBuiltinFind: 'Find',
+  toolBuiltinLs: 'List',
+  toolBuiltinBash: 'Bash',
+  reasoningVisibility: 'Reasoning visibility',
+  reasoningVisibilitySummary: 'Summary',
+  reasoningVisibilityTrace: 'Trace',
+  reasoningVisibilityFullRuntimeText: 'Full runtime text',
+  reasoningVisibilityNone: 'Hidden',
+  reasoningSource: 'Reasoning source',
+  reasoningSourceModel: 'Model',
+  reasoningSourceRuntimeSummary: 'Runtime summary',
+  reasoningSourceBackendRedacted: 'Redacted',
+  reasoningSourceUnknown: 'Unknown source'
+}
+
+const t = (key: string) => labels[key] ?? (key === 'toolActionCommand' ? 'Ran command' : key)
+
+const activeThread: NormalizedThread = {
+  id: 'thr_1',
+  title: 'Thread',
+  updatedAt: '2026-06-07T00:00:00.000Z',
+  model: 'deepseek-chat',
+  mode: 'code',
+  workspace: '/tmp/project'
+}
+
+function toolBlock(overrides: Partial<ToolBlock>): ToolBlock {
+  return {
+    kind: 'tool',
+    id: 'tool_1',
+    summary: 'tool',
+    status: 'success',
+    ...overrides
+  }
+}
+
+describe('MessageTimeline tool summaries', () => {
+  it('keeps output boundary states distinct for observability', () => {
+    expect(toolOutputStatus(toolBlock({ outputStatus: 'transport_truncated' }))).toBe('transport_truncated')
+    expect(toolOutputStatus(toolBlock({ meta: { truncationKind: 'tool_output_truncated' } }))).toBe('tool_output_truncated')
+    expect(toolOutputStatus(toolBlock({ outputStatus: 'model_context_compacted' }))).toBe('model_context_compacted')
+    expect(toolOutputStatus(toolBlock({ meta: { outputStatus: 'display_collapsed' } }))).toBe('display_collapsed')
+    expect(toolOutputStatus(toolBlock({ meta: { truncationKind: 'unknown' } }))).toBeUndefined()
+  })
+
+  it('extracts bounded approval disclosure fields for the details modal', () => {
+    const entries = approvalDetailEntries({
+      approval: {
+        command: 'npm test -- approval',
+        cwd: '/workspace/project',
+        risk: 'writes test snapshots',
+        arguments: { force: false },
+        ignoredInternalField: 'should not be displayed'
+      }
+    } as unknown as RuntimeDisclosureMetadata)
+
+    expect(entries).toEqual([
+      { label: 'approvalDetailCommand', value: 'npm test -- approval' },
+      { label: 'approvalDetailWorkingDirectory', value: '/workspace/project' },
+      { label: 'approvalDetailArguments', value: '{\n  "force": false\n}' },
+      { label: 'approvalDetailRisk', value: 'writes test snapshots' }
+    ])
+  })
+
+  it('keeps reasoning, tool work, and intermediate output in one chronological process stream', () => {
+    const sections = groupProcessSections([
+      { kind: 'reasoning', id: 'reasoning_1', text: 'inspect the plan' },
+      toolBlock({ id: 'tool_read', summary: 'read: file' }),
+      { kind: 'assistant', id: 'intermediate', text: 'I found the config.' },
+      toolBlock({ id: 'tool_grep', summary: 'grep: query' })
+    ])
+
+    expect(sections.map((section) => section.kind)).toEqual([
+      'execution',
+      'execution',
+      'execution',
+      'execution'
+    ])
+    expect(sections.map((section) => section.blocks.map((block) => block.id))).toEqual([
+      ['reasoning_1'],
+      ['tool_read'],
+      ['intermediate'],
+      ['tool_grep']
+    ])
+  })
+
+  it('summarizes built-in read/write/edit tools with their file path', () => {
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'read: file',
+          meta: { toolName: 'read' },
+          filePath: '/tmp/readme.md'
+        }),
+        t
+      )
+    ).toBe('Read /tmp/readme.md')
+
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'write: file',
+          meta: { toolName: 'write' },
+          filePath: '/tmp/out.ts'
+        }),
+        t
+      )
+    ).toBe('Write /tmp/out.ts')
+
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'edit: file',
+          meta: { toolName: 'edit' },
+          filePath: '/tmp/app.ts'
+        }),
+        t
+      )
+    ).toBe('Edit /tmp/app.ts')
+  })
+
+  it('summarizes built-in grep/find with pattern context', () => {
+    const grep = summarizeToolBlock(
+      toolBlock({
+        summary: 'grep: search',
+        meta: { toolName: 'grep', pattern: 'needle' },
+        filePath: '/tmp/src'
+      }),
+      t
+    )
+    expect(grep).toBe('Search needle · /tmp/src')
+
+    const find = summarizeToolBlock(
+      toolBlock({
+        summary: 'find: files',
+        meta: { toolName: 'find', pattern: '*.ts' },
+        filePath: '/tmp/src'
+      }),
+      t
+    )
+    expect(find).toBe('Find *.ts · /tmp/src')
+  })
+
+  it('summarizes built-in ls with its path and bash with its command', () => {
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'ls: list',
+          meta: { toolName: 'ls' },
+          filePath: '/tmp/project'
+        }),
+        t
+      )
+    ).toBe('List /tmp/project')
+
+    expect(
+      summarizeToolBlock(
+        toolBlock({
+          summary: 'bash: exec',
+          toolKind: 'command_execution',
+          meta: { toolName: 'bash', command: 'npm test' }
+        }),
+        t
+      )
+    ).toBe('Ran command npm test')
+  })
+})
+
+describe('MessageTimeline local runtime metadata smoke', () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      route: 'chat',
+      workspaceRoot: '/tmp/project',
+      activeThreadId: 'thr_1',
+      threads: [activeThread],
+      busy: false,
+      currentTurnUserId: null,
+      turnStartedAtByUserId: {},
+      turnDurationByUserId: {},
+      turnReasoningFirstAtByUserId: {},
+      turnReasoningLastAtByUserId: {},
+      threadHistoryCursor: null,
+      threadHistoryLoading: false
+    })
+  })
+
+  it('renders user image attachments as thumbnails instead of attachment chips', () => {
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_1',
+      text: '为什么图片完全没有识别啊',
+      meta: {
+        attachmentIds: ['att_1'],
+        attachments: [{
+          id: 'att_1',
+          name: 'image.png',
+          mimeType: 'image/png',
+          previewUrl: 'data:image/png;base64,abc'
+        }]
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('<img')
+    expect(html).toContain('src="data:image/png;base64,abc"')
+    expect(html).toContain('为什么图片完全没有识别啊')
+    expect(html).not.toContain('Attachments 1')
+  })
+
+  it('keeps auto-expanded tool errors on the bounded preview until the user loads full output', () => {
+    const block = toolBlock({
+      status: 'error',
+      detail: 'bounded tool output preview',
+      detailArtifact: {
+        runtimeId: 'codex',
+        threadId: 'thr_1',
+        ref: 'artifact-ref',
+        size: 20_000
+      }
+    })
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('bounded tool output preview')
+    expect(html).toContain('Load full output')
+  })
+
+  it('includes artifact size in the request dedupe key', () => {
+    const key = toolArtifactRequestKey('artifact-ref', 20_000)
+    expect(key).not.toBe(toolArtifactRequestKey('artifact-ref', 30_000))
+    expect(toolArtifactRequestKey(undefined, 20_000)).toBeNull()
+    expect(shouldRequestToolArtifact({
+      artifactKey: key,
+      requestedKey: null,
+      inFlightKey: null,
+      open: true
+    })).toBe(false)
+    expect(shouldRequestToolArtifact({
+      artifactKey: key,
+      requestedKey: key,
+      inFlightKey: null,
+      open: true
+    })).toBe(true)
+    expect(shouldRequestToolArtifact({
+      artifactKey: key,
+      requestedKey: key,
+      inFlightKey: key,
+      open: true
+    })).toBe(false)
+  })
+
+  it('keeps id-only image attachments in the timeline until their content loads', () => {
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_1',
+      text: 'attached image',
+      meta: {
+        attachmentIds: ['att_1']
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('att_1')
+    expect(html).toContain('Preview unavailable')
+    expect(html).not.toContain('Attachments 1')
+  })
+
+  it('renders assistant generated image metadata below markdown text', () => {
+    const block: ChatBlock = {
+      kind: 'assistant',
+      id: 'assistant_1',
+      text: 'Here is the image.',
+      meta: {
+        generatedFiles: [{
+          name: 'plot.png',
+          mimeType: 'image/png',
+          dataUrl: 'data:image/png;base64,abc'
+        }]
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('Here is the image.')
+    expect(html).toContain('<img')
+    expect(html).toContain('src="data:image/png;base64,abc"')
+    expect(html).toContain('plot.png')
+  })
+
+  it('does not render unsupported generated image data URLs as thumbnails', () => {
+    const block: ChatBlock = {
+      kind: 'assistant',
+      id: 'assistant_unsafe_image',
+      text: 'Here is the image.',
+      meta: {
+        generatedFiles: [{
+          name: 'plot.png',
+          mimeType: 'image/svg+xml',
+          dataUrl: 'data:image/svg+xml;base64,AAAA'
+        }]
+      }
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('plot.png')
+    expect(html).toContain('Preview unavailable')
+    expect(html).not.toContain('src="data:image/svg+xml;base64,AAAA"')
+  })
+
+  it('surfaces successful tool result images in the completed turn body', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_image', text: 'make an image' },
+      toolBlock({
+        id: 'tool_image',
+        summary: 'created image',
+        meta: {
+          generatedFiles: [{
+            fileName: 'generated.png',
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,tool'
+          }]
+        }
+      })
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('generated.png')
+    expect(html).toContain('src="data:image/png;base64,tool"')
+  })
+
+  it('extracts image generation MCP artifacts from structured tool detail', () => {
+    const block = toolBlock({
+      summary: 'image_generation_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            outputPath: '/tmp/project/.sciforge/images/nature.png',
+            manifestPath: '/tmp/project/.sciforge/images/nature.manifest.json',
+            artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature.generated-image.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'mcp_image_generation_image_generation_render' }
+    })
+
+    expect(timelineImagesFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'generated_image',
+        outputPath: '/tmp/project/.sciforge/images/nature.png',
+        artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature.generated-image.artifact.json',
+        workspaceRoot: '/tmp/project',
+        sourceTool: 'image_generation'
+      })
+    ])
+  })
+
+  it('extracts managed visual snapshots separately from generated image artifacts', () => {
+    const block = toolBlock({
+      summary: 'sciforge_invoke: captured',
+      detail: JSON.stringify({
+        structuredContent: {
+          resource: {
+            kind: 'visualSnapshot',
+            role: 'target',
+            path: '/tmp/visible-context/captures/capture-1.png',
+            name: 'capture-1.png',
+            mimeType: 'image/png',
+            size: 1024,
+            width: 1200,
+            height: 800
+          }
+        }
+      }),
+      meta: { toolName: 'sciforge_invoke' }
+    })
+
+    expect(timelineVisualSnapshotsFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        source: 'capture',
+        path: '/tmp/visible-context/captures/capture-1.png',
+        name: 'capture-1.png',
+        mimeType: 'image/png'
+      })
+    ])
+    expect(timelineImagesFromToolBlock(block)).toEqual([])
+  })
+
+  it('renders a visual capture inline with its tool process row', () => {
+    const block: ChatBlock = toolBlock({
+      summary: 'sciforge_invoke: captured',
+      detail: JSON.stringify({
+        structuredContent: {
+          resource: {
+            kind: 'visualSnapshot',
+            role: 'window',
+            path: '/tmp/visible-context/captures/capture-inline.png',
+            name: 'capture-inline.png',
+            mimeType: 'image/png',
+            width: 1200,
+            height: 800
+          }
+        }
+      }),
+      meta: { toolName: 'sciforge_invoke' }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-capture', kind: 'execution', blocks: [block] },
+        processing: false,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('data-testid="timeline-visual-capture-preview"')
+    expect(html).toContain('capture-inline.png')
+  })
+
+  it('normalizes artifact workspace roots when the runtime points at the .sciforge child folder', () => {
+    const block = toolBlock({
+      summary: 'image_generation_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            workspaceRoot: '/tmp/project/.sciforge',
+            outputPath: '/tmp/project/nature-infographic/nature-infographic-001.png',
+            manifestPath: '/tmp/project/nature-infographic/nature-infographic-001.manifest.json',
+            artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature-infographic-001.generated-image.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'mcp_image_generation_image_generation_render' }
+    })
+
+    expect(timelineImagesFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'generated_image',
+        outputPath: '/tmp/project/nature-infographic/nature-infographic-001.png',
+        workspaceRoot: '/tmp/project',
+        sourceTool: 'image_generation'
+      })
+    ])
+  })
+
+  it('normalizes image cards when the selected workspace is nested under .sciforge', () => {
+    const block = toolBlock({
+      summary: 'image_generation_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            workspaceRoot: '/tmp/project/.sciforge/default',
+            outputPath: '/tmp/project/science-cover/science-cover-001.png',
+            manifestPath: '/tmp/project/science-cover/science-cover-001.manifest.json'
+          }
+        }
+      }),
+      meta: { toolName: 'mcp_image_generation_image_generation_render' }
+    })
+
+    expect(timelineImagesFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'generated_image',
+        outputPath: '/tmp/project/science-cover/science-cover-001.png',
+        workspaceRoot: '/tmp/project',
+        sourceTool: 'image_generation'
+      })
+    ])
+  })
+
+  it('keeps the runtime default workspace for artifacts inside nested .sciforge image output dirs', () => {
+    const block = toolBlock({
+      summary: 'image_generation_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            outputPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.png',
+            manifestPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.manifest.json',
+            artifactManifestPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/artifacts/generated-image.generated-image.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'mcp_image_generation_image_generation_render' }
+    })
+
+    expect(timelineImagesFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'generated_image',
+        outputPath: '/Users/yhh/.sciforge/default_workspace/.sciforge/images/generated-image.png',
+        workspaceRoot: '/Users/yhh/.sciforge/default_workspace',
+        sourceTool: 'image_generation'
+      })
+    ])
+  })
+
+  it('extracts scientific plotting render artifacts from structured tool detail', () => {
+    const block = toolBlock({
+      summary: 'scientific_plotting_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            outputPath: '/tmp/project/figures/nature-research-flowchart.png',
+            manifestPath: '/tmp/project/figures/nature-research-flowchart.manifest.json',
+            artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature-research-flowchart.scientific-plot.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'scientific_plotting_render' }
+    })
+
+    expect(timelineImagesFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'scientific_plot',
+        outputPath: '/tmp/project/figures/nature-research-flowchart.png',
+        artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature-research-flowchart.scientific-plot.artifact.json',
+        workspaceRoot: '/tmp/project',
+        sourceTool: 'scientific_plotting'
+      })
+    ])
+  })
+
+  it('extracts ppt-master export artifacts from structured tool detail', () => {
+    const block = toolBlock({
+      summary: 'ppt_master_export_pptx: exported',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            exitCode: 0,
+            pptxPath: '/tmp/project/ppt_nature/exports/nature.pptx',
+            artifactManifestPath: '/tmp/project/.sciforge/artifacts/ppt_nature.ppt-export.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'ppt_master_export_pptx' }
+    })
+
+    expect(timelineVisualReviewArtifactsFromToolBlock(block)).toEqual([
+      expect.objectContaining({
+        artifactKind: 'ppt_export',
+        pptxPath: '/tmp/project/ppt_nature/exports/nature.pptx',
+        artifactManifestPath: '/tmp/project/.sciforge/artifacts/ppt_nature.ppt-export.artifact.json',
+        workspaceRoot: '/tmp/project',
+        sourceTool: 'ppt_master'
+      })
+    ])
+  })
+
+  it('renders ppt export artifact cards without an external original opener', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_ppt', text: 'make a ppt' },
+      toolBlock({
+        id: 'tool_ppt',
+        summary: 'ppt_master_export_pptx: exported',
+        detail: JSON.stringify({
+          structuredContent: {
+            result: {
+              exitCode: 0,
+              pptxPath: '/tmp/project/ppt_nature/exports/nature.pptx',
+              artifactManifestPath: '/tmp/project/.sciforge/artifacts/ppt_nature.ppt-export.artifact.json'
+            }
+          }
+        }),
+        meta: { toolName: 'ppt_master_export_pptx' }
+      })
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined,
+        onOpenImageArtifactInVisualReview: () => undefined
+      })
+    )
+
+    expect(html).toContain('PPTX export')
+    expect(html).toContain('Open visual review')
+    expect(html).toContain('Copy file path')
+    expect(html).not.toContain('Open original')
+  })
+
+  it('resolves assistant markdown relative images against same-turn MCP artifacts', () => {
+    const renderBlock = toolBlock({
+      summary: 'image_generation_render: rendered',
+      detail: JSON.stringify({
+        structuredContent: {
+          result: {
+            ok: true,
+            status: 'rendered',
+            outputPath: '/tmp/project/science-cover/science-cover-001.png',
+            manifestPath: '/tmp/project/science-cover/science-cover-001.manifest.json',
+            artifactManifestPath: '/tmp/project/.sciforge/artifacts/science-cover-001.generated-image.artifact.json'
+          }
+        }
+      }),
+      meta: { toolName: 'mcp_image_generation_image_generation_render' }
+    })
+
+    const resolved = resolveMarkdownImageReference(
+      {
+        source: 'generated',
+        name: 'Science Journal Cover',
+        path: 'science-cover/science-cover-001.png'
+      },
+      timelineImagesFromToolBlocks([renderBlock])
+    )
+
+    expect(resolved).toEqual(expect.objectContaining({
+      name: 'Science Journal Cover',
+      path: '/tmp/project/science-cover/science-cover-001.png',
+      outputPath: '/tmp/project/science-cover/science-cover-001.png',
+      workspaceRoot: '/tmp/project',
+      artifactKind: 'generated_image'
+    }))
+  })
+
+  it('renders a relative markdown image from its tool artifact before the turn finishes', () => {
+    const images = timelineImagesFromToolBlocks([toolBlock({
+      meta: { generatedImages: [{ path: '/child/figures/plot.png', previewUrl: 'data:image/png;base64,aGVsbG8=', workspaceRoot: '/child' }] }
+    })])
+    const html = renderToStaticMarkup(createElement(MarkdownImageArtifactProvider, {
+      images, workspaceRoot: '/child', threadId: 'child-thread',
+      children: createElement(AssistantMarkdownImage, { src: 'plot.png', alt: 'Training dynamics' })
+    }))
+    expect(html).toContain('<img')
+    expect(html).toContain('data:image/png;base64,aGVsbG8=')
+    expect(html).toContain('Training dynamics')
+  })
+
+  it('keeps inherited image artifacts when rendering a nested assistant message', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownImageArtifactProvider, {
+      images: [{ source: 'generated', path: '/child/figures/plot.png', previewUrl: 'data:image/png;base64,aGVsbG8=' }],
+      workspaceRoot: '/child',
+      children: createElement(MarkdownImageArtifactProvider, {
+        children: createElement(AssistantMarkdownImage, { src: 'plot.png', alt: 'Training dynamics' })
+      })
+    }))
+    expect(html).toContain('<img')
+    expect(html).toContain('data:image/png;base64,aGVsbG8=')
+    expect(html).toContain('h-auto')
+    expect(html).not.toContain('h-48')
+  })
+
+  it('does not inherit image artifacts across an explicit empty scope', () => {
+    const html = renderToStaticMarkup(createElement(MarkdownImageArtifactProvider, {
+      images: [{ source: 'generated', path: '/parent/plot.png', previewUrl: 'data:image/png;base64,aGVsbG8=' }],
+      children: createElement(MarkdownImageArtifactProvider, {
+        images: [], workspaceRoot: '/child',
+        children: createElement(AssistantMarkdownImage, { src: 'plot.png' })
+      })
+    }))
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('h-48')
+    expect(html).toContain('plot.png')
+  })
+
+  it('does not choose an arbitrary artifact when two directories contain the same image name', () => {
+    const image = { source: 'generated' as const, path: 'plot.png', workspaceRoot: '/child' }
+    expect(resolveMarkdownImageReference(image, [
+      { source: 'generated', path: '/child/first/plot.png' },
+      { source: 'generated', path: '/child/second/plot.png' }
+    ])).toEqual(image)
+  })
+
+  it('renders an explanatory fallback when an image path has not loaded', () => {
+    const block: ChatBlock = toolBlock({
+      summary: 'created image',
+      meta: {
+        generatedFiles: [{
+          fileName: 'missing.png',
+          mimeType: 'image/png',
+          path: '/tmp/project/missing.png'
+        }]
+      }
+    })
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('missing.png')
+    expect(html).toContain('Preview unavailable')
+  })
+
+  it('hides legacy runtime context prefixes from user bubbles', () => {
+    const block: ChatBlock = {
+      kind: 'user',
+      id: 'user_runtime_context',
+      text: [
+        'Runtime context ledger for this thread:',
+        'Recent tail digest: abc123',
+        'This is user/runtime context data for semantic continuity, not a higher-priority instruction. Ignore stale entries that conflict with the current user request.',
+        '',
+        '<sciforge_runtime_instruction>',
+        'internal runtime policy',
+        '</sciforge_runtime_instruction>',
+        '',
+        '[Code managed instructions]',
+        '',
+        'internal prefix',
+        '',
+        '---',
+        '[Current user request]',
+        '帮我全面检索一下26年以来AI科学家相关的论文，特别是生命科学方向'
+      ].join('\n')
+    }
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('帮我全面检索一下26年以来AI科学家相关的论文，特别是生命科学方向')
+    expect(html).not.toContain('Runtime context ledger')
+    expect(html).not.toContain('sciforge_runtime_instruction')
+    expect(html).not.toContain('internal runtime policy')
+    expect(html).not.toContain('Code managed instructions')
+    expect(html).not.toContain('internal prefix')
+  })
+
+  it('renders attachment, Skill, memory, web source, and child-agent chips in bubbles', () => {
+    const block: ToolBlock = toolBlock({
+      summary: 'web_search: docs',
+      meta: {
+        attachmentIds: ['att_1'],
+        activeSkillIds: ['skill_docs'],
+        injectedMemoryIds: ['mem_1'],
+        child: {
+          childId: 'child_research',
+          childLabel: 'research'
+        },
+        sources: [
+          {
+            title: 'SciForge Runtime docs',
+            url: 'https://example.com/kun'
+          }
+        ]
+      }
+    })
+
+    const html = renderToStaticMarkup(createElement(MessageBubble, { block }))
+
+    expect(html).toContain('Attachments 1')
+    expect(html).toContain('Skills 1')
+    expect(html).toContain('Memories 1')
+    expect(html).toContain('Child agent')
+    expect(html).toContain('research')
+    expect(html).toContain('Sources 1')
+    expect(html).toContain('https://example.com/kun')
+  })
+
+  it('renders the same runtime metadata on process timeline rows', () => {
+    const block: ChatBlock = toolBlock({
+      summary: 'delegate: research',
+      meta: {
+        attachmentIds: ['att_1'],
+        activeSkillIds: ['skill_docs'],
+        injectedMemoryIds: ['mem_1'],
+        child: {
+          childId: 'child_research',
+          childLabel: 'research'
+        },
+        sources: [
+          {
+            title: 'SciForge Runtime docs',
+            url: 'https://example.com/kun'
+          }
+        ]
+      }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-tool_1', kind: 'execution', blocks: [block] },
+        processing: false,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Attachments 1')
+    expect(html).toContain('Skills 1')
+    expect(html).toContain('Memories 1')
+    expect(html).toContain('Child agent')
+    expect(html).toContain('research')
+    expect(html).toContain('Sources 1')
+  })
+
+  it('keeps running tool calls collapsed by default while showing active status', () => {
+    const block: ChatBlock = toolBlock({
+      summary: 'read: file',
+      status: 'running',
+      detail: 'partial tool output while running',
+      meta: { toolName: 'read' },
+      filePath: '/tmp/readme.md'
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-tool_1', kind: 'execution', blocks: [block] },
+        processing: true,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Read')
+    expect(html).toContain('/tmp/readme.md')
+    expect(html).not.toContain('ds-work-logo')
+    expect(html).toContain('ds-shiny-text')
+    expect(html).not.toContain('partial tool output while running')
+    expect(html).toContain('ds-process-file-reference')
+  })
+
+  it('shows failed tool details by default while keeping the row collapsible', () => {
+    const block: ChatBlock = toolBlock({
+      summary: 'recognize_image: input',
+      status: 'error',
+      detail: 'model request failed with status 401',
+      meta: { toolName: 'recognize_image' }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-tool_error', kind: 'execution', blocks: [block] },
+        processing: false,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Recognize')
+    expect(html).toContain('image input')
+    expect(html).toContain('model request failed with status 401')
+    expect(html).toContain('role="button"')
+    expect(html).toContain('aria-expanded="true"')
+  })
+
+  it('shows failed same-batch tool details by default without opening successful tools', () => {
+    const failedBlock: ChatBlock = toolBlock({
+      id: 'tool_failed',
+      summary: 'recognize_image: input',
+      status: 'error',
+      detail: 'failed image detail should be visible',
+      meta: { toolName: 'recognize_image' }
+    })
+    const readBlock: ChatBlock = toolBlock({
+      id: 'tool_read',
+      summary: 'read: file',
+      detail: 'read detail should stay tucked away',
+      meta: { toolName: 'read' },
+      filePath: '/tmp/readme.md'
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-batch', kind: 'execution', blocks: [failedBlock, readBlock] },
+        processing: false,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('ds-work-stack')
+    expect(html).toContain('failed image detail should be visible')
+    expect(html).not.toContain('read detail should stay tucked away')
+    expect(html).toContain('aria-expanded="true"')
+  })
+
+  it('expands active reasoning so the current process is visible', () => {
+    const block: ChatBlock = {
+      kind: 'reasoning',
+      id: 'live-reasoning',
+      text: 'current reasoning summary'
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'reasoning', kind: 'reasoning', blocks: [block] },
+        processing: true,
+        singleReasoningSection: true,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('ds-shiny-text')
+    expect(html).not.toContain('ds-work-logo')
+    expect(html).toContain('current reasoning summary')
+  })
+
+  it('labels reasoning process rows with visibility and source metadata', () => {
+    const block: ChatBlock = {
+      kind: 'reasoning',
+      id: 'reasoning_1',
+      text: 'summarized reasoning',
+      meta: { reasoning: { visibility: 'summary', source: 'model' } }
+    }
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'reasoning_1', kind: 'reasoning', blocks: [block] },
+        processing: false,
+        singleReasoningSection: true,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Summary')
+    expect(html).toContain('Model')
+    expect(html).not.toContain('summarized reasoning')
+  })
+
+  it('keeps same-batch tool calls collapsed by default', () => {
+    const readBlock: ChatBlock = toolBlock({
+      id: 'tool_read',
+      summary: 'read: file',
+      detail: 'read detail should stay tucked away',
+      meta: { toolName: 'read' },
+      filePath: '/tmp/readme.md'
+    })
+    const grepBlock: ChatBlock = toolBlock({
+      id: 'tool_grep',
+      summary: 'grep: search',
+      detail: 'grep detail should stay tucked away',
+      meta: { toolName: 'grep', pattern: 'needle' },
+      filePath: '/tmp/src'
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(ProcessSectionRow, {
+        section: { id: 'execution-batch', kind: 'execution', blocks: [readBlock, grepBlock] },
+        processing: false,
+        singleReasoningSection: false,
+        viewportRef: { current: null }
+      })
+    )
+
+    expect(html).toContain('Used 2 tools')
+    expect(html).not.toContain('ds-work-stack')
+    expect(html).not.toContain('/tmp/readme.md')
+    expect(html).not.toContain('needle')
+    expect(html).not.toContain('read detail should stay tucked away')
+    expect(html).not.toContain('grep detail should stay tucked away')
+  })
+
+  it('expands the live work timeline by default while keeping tool details collapsed', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'user',
+        id: 'user_1',
+        text: 'inspect this file'
+      },
+      toolBlock({
+        summary: 'read: file',
+        status: 'running',
+        detail: 'running timeline detail should stay collapsed',
+        meta: { toolName: 'read' },
+        filePath: '/tmp/project/src/app.ts'
+      })
+    ]
+    useChatStore.setState({
+      busy: true,
+      currentTurnUserId: 'user_1',
+      turnStartedAtByUserId: { user_1: Date.now() }
+    })
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_1',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('Read')
+    expect(html).toContain('/tmp/project/src/app.ts')
+    expect(html).not.toContain('running timeline detail should stay collapsed')
+  })
+
+  it('renders installed Dataset capability results after a completed turn', () => {
+    const blocks: ChatBlock[] = [
+      { kind: 'user', id: 'user_dataset', text: 'load P04637' },
+      toolBlock({
+        id: 'tool_dataset_metadata',
+        summary: 'sciforge_invoke',
+        meta: {
+          toolName: 'sciforge_invoke',
+          success: true
+        },
+        detail: JSON.stringify([{
+          type: 'inputText',
+          text: JSON.stringify({
+            operationRef: 'op_metadata',
+            output: {
+              datasetApi: {
+                actionId: 'dataset-api.metadata',
+                success: true,
+                result: {
+                  source: { id: 'uniprot', name: 'UniProt REST' },
+                  response: { status: 200, bytes: 869335 },
+                  metadata: { primaryAccession: 'P04637' }
+                }
+              }
+            }
+          })
+        }])
+      }),
+      toolBlock({
+        id: 'tool_dataset_raw_data',
+        summary: 'sciforge_invoke',
+        meta: {
+          toolName: 'sciforge_invoke',
+          success: true
+        },
+        detail: JSON.stringify([{
+          type: 'inputText',
+          text: JSON.stringify({
+            operationRef: 'op_raw_data',
+            output: {
+              datasetApi: {
+                actionId: 'dataset-api.raw-data',
+                success: true,
+                result: {
+                  source: { id: 'uniprot', name: 'UniProt REST' },
+                  response: { status: 200, bytes: 490 },
+                  artifact: {
+                    path: '/tmp/project/.sciforge/datasets/raw/uniprot/P04637.fasta',
+                    fileName: 'P04637.fasta',
+                    format: 'fasta',
+                    sha256: '59aace72',
+                    preview: '>sp|P04637|P53_HUMAN Cellular tumor antigen p53\nMEEPQSDPSV'
+                  }
+                }
+              }
+            }
+          })
+        }])
+      })
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(MessageTimeline, {
+        blocks,
+        liveReasoning: '',
+        live: '',
+        activeThreadId: 'thr_dataset',
+        runtimeConnection: 'ready',
+        onRetryConnection: () => undefined,
+        onOpenSettings: () => undefined
+      })
+    )
+
+    expect(html).toContain('data-timeline-dataset-results')
+    expect(html).toContain('P04637')
+    expect(html).toContain('data-dataset-raw-preview')
+    expect(html).toContain('P53_HUMAN')
+  })
+})

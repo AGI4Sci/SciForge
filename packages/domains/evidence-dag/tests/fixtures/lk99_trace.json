@@ -1,0 +1,46 @@
+{
+  "thread_id": "thread-lk99",
+  "note": "Hand-authored but realistic AgentRuntime-style timeline (message/tool_call/tool_result, each with a stable step id). Grounded in the real, publicly-checkable 2023 LK-99 episode so the extraction audit is meaningful. NOT a captured production trace — swap in a real one for the Gate-1A audit of record.",
+  "trace": [
+    {"id": "step-1", "type": "message", "role": "user",
+     "content": "Is LK-99 actually a room-temperature ambient-pressure superconductor? Investigate."},
+
+    {"id": "step-2", "type": "message", "role": "assistant",
+     "content": "I'll look up the original claim and then the replication attempts, and weigh them."},
+
+    {"id": "step-3", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "LK-99 room temperature superconductor original preprint"}},
+    {"id": "step-4", "type": "tool_result", "tool_name": "web_search",
+     "content": "Top hit: Lee, Kim et al., 'The First Room-Temperature Ambient-Pressure Superconductor' (arXiv:2307.12008, Jul 2023). Claims a modified lead-apatite (LK-99) shows superconductivity below 400 K at ambient pressure, citing a sharp resistivity drop and partial levitation."},
+
+    {"id": "step-5", "type": "message", "role": "assistant",
+     "content": "The original preprint (arXiv:2307.12008) claims LK-99 is a room-temperature ambient-pressure superconductor, based on a resistivity drop and partial magnetic levitation."},
+
+    {"id": "step-6", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "LK-99 replication attempts August 2023 results"}},
+    {"id": "step-7", "type": "tool_result", "tool_name": "web_search",
+     "content": "Multiple groups failed to replicate superconductivity. A Peking University / Beihang team (arXiv:2308.05143) found no Meissner effect. A Lawrence Berkeley National Lab DFT study (Griffin, arXiv:2307.16892) showed flat bands are theoretically possible but does not establish superconductivity."},
+
+    {"id": "step-8", "type": "tool_call", "tool_name": "read_url",
+     "arguments": {"url": "https://arxiv.org/abs/2308.07919"}},
+    {"id": "step-9", "type": "tool_result", "tool_name": "read_url",
+     "content": "Sinha et al. and others report that the sharp resistivity drop near 380 K in LK-99 coincides with the first-order phase transition of a Cu2S (copper sulfide) impurity, which alone explains the apparent drop without superconductivity."},
+
+    {"id": "step-10", "type": "message", "role": "assistant",
+     "content": "Replication failures (arXiv:2308.05143) report no Meissner effect, directly contradicting the original superconductivity claim."},
+
+    {"id": "step-11", "type": "message", "role": "assistant",
+     "content": "The Cu2S impurity phase transition near 380 K accounts for the resistivity drop that the original preprint (arXiv:2307.12008) interpreted as superconductivity."},
+
+    {"id": "step-12", "type": "tool_call", "tool_name": "web_search",
+     "arguments": {"q": "LK-99 partial levitation diamagnetism explanation"}},
+    {"id": "step-13", "type": "tool_result", "tool_name": "web_search",
+     "content": "The partial 'levitation' is attributed to ferromagnetism/diamagnetism of the sample rather than the Meissner effect; samples balanced on an edge rather than floating freely."},
+
+    {"id": "step-14", "type": "message", "role": "assistant",
+     "content": "The partial levitation in arXiv:2307.12008 is better explained by ordinary diamagnetism, not the Meissner effect, weakening the superconductivity interpretation."},
+
+    {"id": "step-15", "type": "message", "role": "assistant",
+     "content": "Therefore the weight of evidence indicates LK-99 is most likely NOT a room-temperature superconductor; the observed signatures are explained by a Cu2S impurity and ordinary magnetism."}
+  ]
+}

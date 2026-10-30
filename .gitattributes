@@ -1,0 +1,6 @@
+*.pdf.bak binary
+
+# Markdown uses trailing spaces for hard line breaks.
+*.md whitespace=-blank-at-eol
+# Captured command output retains the producer's exact whitespace and hashes.
+*.log -whitespace
