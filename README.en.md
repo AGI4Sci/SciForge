@@ -135,12 +135,11 @@ Download a macOS, Windows, or Linux installer from [GitHub Releases](https://git
 
 Requirements: Node.js 22.12+, platform-native build tools, and a supported, user-configured runtime/provider for model execution.
 
-The existing `AGI4Sci/SciForge-client` repository is private; the future public source destination has not been created. Set `SCIFORGE_CLIENT_REPOSITORY_URL` to a maintainer-approved URL you can access, and replace it when that destination exists. Do not publish the old repository history instead. Installation/build hooks can download artifacts and build native modules; the commands below are setup instructions, not acceptance results.
+Clone this repository and install dependencies. Installation/build hooks can download artifacts and build native modules; the commands below are setup instructions, not acceptance results.
 
 ```bash
-: "${SCIFORGE_CLIENT_REPOSITORY_URL:?Set an authorized client repository URL}"
-git clone "$SCIFORGE_CLIENT_REPOSITORY_URL" SciForge-client
-cd SciForge-client
+git clone https://github.com/AGI4Sci/SciForge.git
+cd SciForge
 npm ci
 npm run dev
 ```
@@ -153,11 +152,11 @@ npm run test
 npm run build
 ```
 
-For local installation, see **[INSTALL.md](./INSTALL.md)**. Additional user documentation is maintained at the [documentation site](https://hanhuiyang5-web.github.io/sciforge-docs-v2/); documentation does not override this repository’s client/cloud boundary.
+For local installation, see **[INSTALL.md](./INSTALL.md)**. Additional user documentation is maintained at the [documentation site](https://agi4sci.github.io/sciforge-docs-v2/); documentation does not override this repository’s client/cloud boundary.
 
 ### Mobile and cloud collaboration
 
-This is the SciForge-client repository, currently private and being prepared for future open-source delivery. It contains the desktop client, the [shared contracts](./packages/collaboration-contracts/), and the [collaboration domain](./packages/domains/collaboration/). The collaboration server, PostgreSQL migrations, Zulip server adapter, and deployment materials are delivered separately in the closed-source SciForge-cloud repository; they are not included here. Remote SSH is not part of this client candidate.
+This is the public SciForge client source repository. It contains the desktop client, the [shared contracts](./packages/collaboration-contracts/), and the [collaboration domain](./packages/domains/collaboration/). The collaboration server, PostgreSQL migrations, Zulip server adapter, and deployment materials are delivered separately in the closed-source SciForge-cloud repository; they are not included here. Remote SSH is not part of the open-source client.
 
 Local client development does not require the original private monorepo, cloud repository access, or production credentials. See [INSTALL.md](./INSTALL.md). Cloud collaboration additionally requires an authorized test service and accounts supplied by its operator. Leaving cloud settings empty does not establish cloud acceptance, but avoids a dependency on a private deployment for local setup.
 
