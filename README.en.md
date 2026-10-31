@@ -118,7 +118,7 @@ The client source and shared contracts live in this repository. The collaboratio
 
 We welcome issues, showcases, scientific workers, Skills, runtime adapters, documentation, and UI improvements. Before submitting a PR, run the typecheck, tests, and build steps appropriate to your changes; see the [Contribution Guide](./docs/CONTRIBUTING.md) for collaboration conventions.
 
-The root license is [Apache-2.0](./LICENSE); individual domains and plugins retain their own MIT or Apache-2.0 declarations and license files. See [NOTICE](./NOTICE) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) — a few component authorizations are still being confirmed, and that file is authoritative.
+The root license is [Apache-2.0](./LICENSE); individual domains and plugins retain their own MIT or Apache-2.0 declarations and license files. See [NOTICE](./NOTICE) and [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) — a few component authorizations are still being confirmed, and that file is authoritative. The unused tldraw dependency has been removed, so no tldraw code ships with the source or the installers.
 
 <a href="https://github.com/AGI4Sci/SciForge/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=AGI4Sci/SciForge" alt="SciForge contributors">

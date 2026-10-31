@@ -62,10 +62,11 @@ New minimal geometric runtime icons and plain-text SVG layouts are expressly
 approved project-authored replacements, not clearance of the old artwork.
 
 The former blanket tldraw source-publication hold is superseded by the owner's
-source-only decision. Mere dependency declarations and first-party integration
-source do not distribute tldraw code. Its own code/artifact redistribution and
-production use still require the applicable license conditions. No feature or
-license-key enforcement is removed. This notice is not a claim that an installer,
+source-only decision. tldraw was later found unused at runtime, and its
+declaration has been removed from `package.json` and the lockfile, so neither the
+source tree nor an installer built from it contains tldraw code. If it is ever
+reintroduced, its own code/artifact redistribution and production use require the
+applicable license conditions. This notice is not a claim that an installer,
 website deployment or production service is approved, and does not itself publish
 this candidate or authorize an agent to push it.
 
@@ -74,13 +75,18 @@ could download:
 
 | Delivery | Included surface to audit | Required evidence / conditional obligations |
 | --- | --- | --- |
-| Pure client source | Reviewed tracked source, tests/fixtures, documentation, media, package declarations and lockfiles; not installed dependencies or generated runtime artifacts | Preserve root and package licenses, NOTICE and copied-material provenance. Confirm contributor/material rights and privacy. Bind dependency declarations to reproducible artifacts without pretending those artifacts are shipped. tldraw code/artifact distribution and production use remain separately conditional; a dependency declaration is not a blanket first-party source hold. No final Electron installer notices are required merely to publish a manifest that excludes Electron binaries. |
-| Website | Published HTML/JS/CSS, fonts, images, data and any distributed site server/container, selected from the site's own build and dependency graph | Audit `docs/research-agent-needs-site/package-lock.json` separately. Browser-delivered dependencies require applicable notices/attribution/source availability. A build-only native library is not automatically shipped to website visitors; inspect output. A server/container distribution that includes it adds binary obligations. Publicly deployed tldraw functionality requires applicable production rights if actually included. |
+| Pure client source | Reviewed tracked source, tests/fixtures, documentation, media, package declarations and lockfiles; not installed dependencies or generated runtime artifacts | Preserve root and package licenses, NOTICE and copied-material provenance. Confirm contributor/material rights and privacy. Bind dependency declarations to reproducible artifacts without pretending those artifacts are shipped. tldraw has been removed from the dependency graph; if reintroduced, its code/artifact distribution and production use remain separately conditional. No final Electron installer notices are required merely to publish a manifest that excludes Electron binaries. |
+| Website | Published HTML/JS/CSS, fonts, images, data and any distributed site server/container, selected from the site's own build and dependency graph | Audit `docs/research-agent-needs-site/package-lock.json` separately. Browser-delivered dependencies require applicable notices/attribution/source availability. A build-only native library is not automatically shipped to website visitors; inspect output. A server/container distribution that includes it adds binary obligations. tldraw is no longer a dependency; any reintroduced tldraw functionality on the site would require applicable production rights. |
 | Desktop installer / runtime bundle | Actual platform-selected Electron/Chromium/Node/V8, SDK/CLI, native libraries, fonts, workers and generated Workspace Host artifacts | Inspect each final artifact, include exact license/notice texts, and satisfy applicable LGPL/MPL source and replacement/relinking requirements. Confirm SDK/product terms and signing/platform acceptance separately. Source approval is not binary-release approval. |
 
-### tldraw
+### tldraw (removed)
 
-The root lock resolves `tldraw` to `4.5.12`; npm records source revision
+`tldraw` was declared as a dependency but never imported at runtime; its
+declaration and lockfile entries were removed on 2026-10-31, so no tldraw code
+is distributed with the source or with an installer. The licensing facts below
+apply only if it is reintroduced.
+
+The root lock resolved `tldraw` to `4.5.12`; npm records source revision
 `1e5bcd97cd09d2c58a60c4edbcc5fb64c67e375a`. Its archive LICENSE is a link to
 upstream main, not the full pinned license. The
 [exact-revision license](https://github.com/tldraw/tldraw/blob/1e5bcd97cd09d2c58a60c4edbcc5fb64c67e375a/LICENSE.md)
@@ -212,7 +218,6 @@ additional dependencies and must be audited separately.
 | `remark-rehype` | `^11.1.2` | `11.1.2` | `MIT` |
 | `shiki` | `^3.23.0` | `3.23.0` | `MIT` |
 | `streamdown` | `^2.5.0` | `2.5.0` | `Apache-2.0` |
-| `tldraw` | `^4.2.0` | `4.5.12` | `SEE LICENSE IN LICENSE.md` |
 | `unified` | `^11.0.5` | `11.0.5` | `MIT` |
 | `unist-util-visit` | `^5.0.0` | `5.0.0` | `MIT` |
 | `ws` | `^8.21.1` | `8.21.1` | `MIT` |
@@ -225,8 +230,9 @@ unchanged: OR permits an applicable option; AND requires all indicated terms.
 `jszip` is used under its MIT option. The client/site graphs also contain LGPL,
 MPL-2.0 and CC-BY-4.0 material; do not collapse them into MIT/Apache.
 
-Current `SEE LICENSE IN ...` entries are Anthropic and tldraw-family packages,
-not the previously claimed Tiptap/ProseMirror set. Read the exact package's
+Current `SEE LICENSE IN ...` entries are Anthropic packages, not the previously
+claimed Tiptap/ProseMirror set; the tldraw-family entries were removed together
+with the dependency. Read the exact package's
 README/LICENSE and pinned upstream text where it is only a link. Missing fields
 and the recovered MIT texts are discussed above; this index is not a complete
 third-party notice bundle.
@@ -327,14 +333,14 @@ Current model capability notes:
 - Freeze a clean source manifest without private history, installed dependencies or generated runtime bundles; verify bytes/modes and actual exclusions.
 - Preserve root/package licenses, NOTICE and copied-source/test/fixture provenance. A prior “reference only” declaration is not an independent source-origin audit or proof for a future package.
 - Owner confirmation covers first-party contributions and the newly authored minimal replacement assets only. Keep all excluded unconfirmed media out; preserve separately applicable third-party licenses and fixture provenance.
-- Keep the tldraw feature and declarations. Review applicable rights before distributing its code/artifacts or using it in production; do not infer a blanket first-party source prohibition from declarations alone.
+- Keep tldraw out of the dependency graph. It was unused at runtime and removed on 2026-10-31; re-add it only with rights covering redistribution and production use.
 - Reconcile dependency identity and license-evidence gaps technically; distinguish declared dependencies from third-party files actually included. Do not mark unperformed build/runtime checks as passed.
 
 ### Website publication
 
 - Inventory actual generated HTML/JS/CSS, media, fonts and any site server/container; use the website lock rather than desktop dependency versions.
 - Include notices/attribution and applicable MPL source availability for browser-distributed code. Inspect whether native build dependencies are absent from static output or included in a distributed server/container.
-- Review externally loaded content, embedded identities, third-party marks and any public tldraw functionality before deployment.
+- Review externally loaded content, embedded identities, third-party marks and any third-party canvas functionality before deployment.
 
 ### Installer / runtime distribution (only when included)
 

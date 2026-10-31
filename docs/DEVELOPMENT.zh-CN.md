@@ -99,7 +99,7 @@ CI 通过不等于公开授权、签名/公证验收或法律放行。本地准�
 不要附带运行上传、promote 或 release 命令。
 
 纯源码公开、网站部署和安装包分发分别建立 manifest 并履行实际包含内容的义务，见
-[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。tldraw 保留功能但适用授权尚未确认，
-且源码/素材权利证据仍待补齐，公开发布继续阻断。制品或许可证的技术缺口须技术修复，
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。tldraw 依赖已移除（代码中无运行时引用），
+不再随源码或安装包分发；其余源码/素材权利证据仍待补齐。制品或许可证的技术缺口须技术修复，
 不能用负责人签字代替。记录客户端精确 commit、协议版本、交付 manifest 和验证结果；
 云端兼容性另行验收。

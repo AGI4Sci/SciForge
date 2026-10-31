@@ -116,8 +116,9 @@ of local setup.
 
 Source-only publication, website deployment and installer distribution have
 separate manifests and obligations; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
-Public release remains blocked while the retained tldraw feature lacks confirmed
-applicable rights and source/media rights evidence remains pending. Technical
-artifact/license gaps require technical fixes, not owner sign-off in their place.
+The unused tldraw dependency has been removed, so no tldraw code ships with the
+source or the installers; remaining source/media rights evidence is still
+pending. Technical artifact/license gaps require technical fixes, not owner
+sign-off in their place.
 Record the exact client commit, contract version, delivery manifest and validation
 results; cloud compatibility is a separate acceptance result.
