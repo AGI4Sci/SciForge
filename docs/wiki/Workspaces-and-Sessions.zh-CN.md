@@ -77,5 +77,4 @@ _用工作区确定 AI 可以处理的项目，用会话保存每一段连续任
 
 - [科研工作流](./Scientific-Workflows.zh-CN.md)
 - [研究档案与证据](./Intervention-and-Data.zh-CN.md)
-- [远程工作区](./Remote-Workspaces.zh-CN.md)
 - [Cloud 协同](./Cloud-Collaboration.zh-CN.md)

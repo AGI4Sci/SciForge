@@ -130,7 +130,6 @@ SciForge 是一个面向科学研究的本地 AI 工作台。Codex 或 Claude Co
 - [研究档案与证据](./Intervention-and-Data.zh-CN.md)
 - [插件、Skills 与 MCP](./Extensions-Skills-and-MCP.zh-CN.md)
 - [自动化](./Automation-and-Scheduled-Tasks.zh-CN.md)
-- [远程工作区](./Remote-Workspaces.zh-CN.md)
 - [Cloud 协同](./Cloud-Collaboration.zh-CN.md)
 
 如果希望进一步了解工作区、会话、文件引用和变更查看，请阅读 [附录 A 工作区与会话](./Workspaces-and-Sessions.zh-CN.md)。

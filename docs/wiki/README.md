@@ -12,8 +12,7 @@ _本目录保存随 SciForge 仓库版本化的中文使用手册。_
 4. [研究档案与证据](./Intervention-and-Data.zh-CN.md)
 5. [插件、Skills 与 MCP](./Extensions-Skills-and-MCP.zh-CN.md)
 6. [自动化](./Automation-and-Scheduled-Tasks.zh-CN.md)
-7. [远程工作区](./Remote-Workspaces.zh-CN.md)
-8. [Cloud 协同](./Cloud-Collaboration.zh-CN.md)
+7. [Cloud 协同](./Cloud-Collaboration.zh-CN.md)
 
 ## Wiki 入口
 

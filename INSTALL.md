@@ -26,4 +26,4 @@ npm test
 npm run build
 ```
 
-详细功能说明见 https://hanhuiyang5-web.github.io/sciforge-docs-v2/ 。本轮未进行 Linux 实机验收，也未发布安装包。
+详细功能说明见 https://agi4sci.github.io/sciforge-docs-v2/ 。本轮未进行 Linux 实机验收，也未发布安装包。

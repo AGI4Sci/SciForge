@@ -132,12 +132,9 @@ SciForge 默认本地优先；模型、远程执行和科学专家服务由用�
 
 本仓库是 SciForge 客户端源码；云端服务保持闭源，不包含 remote-ssh、服务端、Zulip 服务端适配及部署运维材料。
 
-既有 `AGI4Sci/SciForge-client` 目前为 private，未来公开目的地尚未创建。先将 `SCIFORGE_CLIENT_REPOSITORY_URL` 设为维护者提供且你有权访问的地址；公开目的地就绪后再替换。不要直接公开旧仓历史。
-
 ```bash
-: "${SCIFORGE_CLIENT_REPOSITORY_URL:?Set an authorized client repository URL}"
-git clone "$SCIFORGE_CLIENT_REPOSITORY_URL" SciForge-client
-cd SciForge-client
+git clone https://github.com/AGI4Sci/SciForge.git
+cd SciForge
 npm ci
 npm run dev
 ```
@@ -147,7 +144,7 @@ npm run dev
 ## 文档
 
 - [安装与最小使用](./INSTALL.md)
-- [详细功能手册（寒辉维护）](https://hanhuiyang5-web.github.io/sciforge-docs-v2/)
+- [详细功能手册（文档站）](https://agi4sci.github.io/sciforge-docs-v2/)
 - [贡献指南](./CONTRIBUTING.md)
 - [安全策略](./SECURITY.md)
 
