@@ -1,9 +1,3 @@
-
-
-> 素材说明 / Asset note: 未确认权属的文档素材不随本源码候选分发；操作文字保留。Unconfirmed documentation media are omitted. See [asset status](docs/ASSET-PUBLICATION-STATUS.md).
-
-
-
 # SciForge · 科研 Agent 的人类控制面与证据层
 
 <p align="center">
@@ -11,30 +5,39 @@
 </p>
 
 <p align="center">
-  让成熟 Agent runtime 在后台执行，让研究者在关键节点判断、纠偏和验收；同时把论文、数据、工具调用、证据、决策与产物沉淀为可追踪的研究记录。
+  让成熟 Agent runtime 在后台执行，研究者在关键节点判断、纠偏和验收；<br>
+  论文、数据、工具调用、证据、决策与产物，都沉淀为可追踪的研究记录。
 </p>
 
 <p align="center">
   <a href="./README.en.md">English</a> ·
-  <a href="https://sciforge.ai">官网</a> ·
-  <a href="https://github.com/AGI4Sci/SciForge/releases">下载</a> ·
-  <span>论文（PDF 不包含在本源码候选中）</span> ·
+  <a href="https://agi4sci.github.io/sciforge-docs-v2/">使用文档站</a> ·
   <a href="./docs/wiki/README.md">使用 Wiki</a> ·
   <a href="https://agi4sci.github.io/SciForge/submit/">提交科研需求</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/AGI4Sci/SciForge/releases"><img src="https://img.shields.io/github/v/release/AGI4Sci/SciForge?label=release" alt="GitHub release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/AGI4Sci/SciForge" alt="License"></a>
 </p>
 
 > **遇到真实科研痛点？** 请通过[科研 Agent 需求采集网页](https://agi4sci.github.io/SciForge/submit/)说明需求、人类必须参与的环节和验收标准。提交内容将在 GitHub 确认后保存为公开 Issue。
 
-> Demo imagery is omitted from this source-only candidate; product features are retained.
+## SciForge 是什么
+
+SciForge 是一个**用户友好的科研 Agent 桌面客户端**：打开本地项目目录、选择执行 runtime，就能让 Agent 在清晰的权限边界里读文献、跑分析、出图表，每一步都留下来供你审阅。它**不重新发明、也不替代** Codex、Claude Code 等成熟 runtime，并**兼容 DeepSeek Harness（DSH）插件生态**——runtime 负责通用 Agent 执行，SciForge 负责科学对象、研究上下文、人类审阅界面和证据治理。
+
+在此之上，SciForge 针对科研场景针对性增强了四类能力：
+
+| 增强方向 | 你得到什么 |
+| --- | --- |
+| **云端笔记** | 接入你自备的思源笔记服务作为整页编辑器；任务结束后自动归档可追溯的 Markdown 总结。 |
+| **团队协同** | 围绕 Project 分配任务、逐版评审、返修与采纳；支持从手机继续个人会话。 |
+| **科研证据链审计** | Evidence DAG、Project DAG、产物版本、研究检查点与科研档案，让每个结论都能回到数据、方法与图表。 |
+| **科学多模态理解与交互** | 蛋白序列与结构、小分子、组学矩阵、光谱、影像的专用预览与 translator，把可审计的文本证据交给 Agent 推理。 |
+
+此外还内置：**22 个领域扩展**（受控绘图、可视化审改、锚定批注、变更检查、终端、浏览器预览、内容空间等）、**定时任务与 Create Loop** 多步流程编排，以及**本地优先的权限与审批治理**（只读沙箱、逐条审批、外部写入确认）。
 
 ## 一眼看懂 SciForge
-
-未来 Agent 会自动完成越来越多研究工作，但它做的事仍需符合人的目标、约束和判断。SciForge 保留一层会随模型能力增强而不断变薄、却长期必要的 GUI：人负责提出目标、检查证据、干预关键步骤和批准结果，机器负责搜索、解析、执行、分析与生成。
 
 | SciForge 提供什么 | 你得到什么 |
 | --- | --- |
@@ -43,12 +46,10 @@
 | **科学场景增强层** | 为通用 Agent 增加科学多模态路由、文献检索、Evidence / Project DAG、受控绘图、写作、汇报和可复跑工作流。 |
 | **长期研究工作区** | 让跨会话、跨角色、跨工具的研究过程可继续、可复盘、可交接。 |
 
-SciForge **不重新发明、也不替代** Codex、Claude Code 等成熟 runtime。它与这些 runtime 是合作关系：runtime 负责通用 Agent 执行，SciForge 提供科学对象、研究上下文、人类审阅界面和证据治理。**Codex 是默认 runtime，Claude Code 可在 Settings 中显式选择。**
-
 ```text
 研究目标与材料
       ↓
-Codex / Claude Code 执行
+Codex / Claude Code / DSH 执行
       ↓
 科学检索 · 多模态翻译 · 分析 · 绘图 · 写作 · 工作流
       ↓
@@ -57,36 +58,7 @@ SciForge 归集证据与产物 ──→ 人类审阅、干预、批准
 可追踪、可复现、可继续的研究状态
 ```
 
-## 工作台实景（prototype showcase）
-
-下表保留工作台能力说明。对应会话截图与论文 PDF 未包含在本源码候选中，不提供失效链接，也不从私有材料恢复。
-
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <em>插图未包含在本源码候选中。</em><br>
-      <strong>会话级 Evidence DAG</strong><br>
-      从对话回到 claim、来源、支持/矛盾关系与节点 provenance。
-    </td>
-    <td width="50%" align="center">
-      <em>插图未包含在本源码候选中。</em><br>
-      <strong>项目级 Project DAG</strong><br>
-      聚合多次会话中的证据、结论、审查状态与项目决策。
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" align="center">
-      <em>插图未包含在本源码候选中。</em><br>
-      <strong>PDF 审阅到修订</strong><br>
-      把页内批注、Agent 修改、编译验证和未解决问题放在同一界面。
-    </td>
-    <td width="50%" align="center">
-      <em>插图未包含在本源码候选中。</em><br>
-      <strong>结构选区驱动的科学对话</strong><br>
-      将结构查看器中的 residue 选择连同文件哈希和定位信息送入对话。
-    </td>
-  </tr>
-</table>
+**Runtime**：Codex 是默认 runtime；Claude Code 与 DeepSeek Harness（DSH）可在「设置 → AI 助手」中显式选择。DSH 经 ACP 适配接入，模型与推理档位由 ACP 会话生效，其原生 shell 工具默认关闭、逐条批准。任一 runtime 失败都会显式报错，不会静默切换到另一个。
 
 ## 公开 Showcase
 
@@ -115,22 +87,9 @@ SciForge 归集证据与产物 ──→ 人类审阅、干预、批准
 
 </details>
 
-## 能做什么
-
-- **阅读与综述**：检索 arXiv、bioRxiv、Europe PMC 和 Semantic Scholar；解析 PDF；做页内批注、选区问答和研究写作。
-- **理解科学对象**：将蛋白序列、蛋白结构、小分子和单细胞表达交给专用 translator，再把可审计文本证据交给主 Agent 推理。
-- **复现与实验**：让 Agent 在真实 workspace 中读写文件、运行命令、连接 SSH / HPC 或科学工具，并保留运行与变更记录。
-- **证据与决策**：用 Evidence DAG 审查单次会话，用 Project DAG 维护跨会话目标、证据、review 与 release 状态。
-- **科研表达**：从数据和论文参考图生成受控图表，在 Canvas 审改，再进入论文、报告和 PPTX 产出。
-- **自动化与协作**：把重复步骤做成 Workflow 或 Schedule，通过桌面、手机与团队入口监督长期任务。
-
-SciForge 默认本地优先；模型、远程执行和科学专家服务由用户或机构显式配置。Evidence / Project DAG 中的节点是可审阅的**证据候选**，不是自动生成的真理；科学结论仍需领域专家判断，Showcase 中的计算结果也不等同于实验验证。
-
 > **如何阅读 Showcase：** 这些是论文中记录的 prototype demonstrations 和公开审计材料，不是已完成的临床/实验验证或全面 benchmark。论文还记录了明确的边界：蛋白设计案例存在 provenance mismatch，MCFST 复现的运行计数与选择规则仍需修订，分子优化的预注册主指标未达标且处于 docking 噪声范围内。请把它们当作可复查的研究轨迹，而不是自动生成的科学结论。
 
 ## 快速开始
-
-本仓库是 SciForge 客户端源码；云端服务保持闭源，不包含 remote-ssh、服务端、Zulip 服务端适配及部署运维材料。
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git
@@ -139,22 +98,29 @@ npm ci
 npm run dev
 ```
 
-环境与完整步骤见 [INSTALL.md](./INSTALL.md)。无需配置私有云服务即可启动本地客户端；模型执行需要用户自行配置受支持的 runtime/provider。可选云端连接需由服务管理方提供地址和账号，仓库不提供默认生产地址。
+要求 Node.js 22.12+ 与平台原生构建工具；模型执行需要自行配置受支持的 runtime/provider。环境与完整步骤见 [INSTALL.md](./INSTALL.md)。
+
+本轮尚未发布安装包，建议从源码运行；Releases 中的早期安装包与当前源码存在差异。无需配置私有云服务即可启动本地客户端；可选云端连接需由服务管理方提供地址和账号，仓库不提供默认生产地址。
 
 ## 文档
 
-- [安装与最小使用](./INSTALL.md)
-- [详细功能手册（文档站）](https://agi4sci.github.io/sciforge-docs-v2/)
-- [贡献指南](./CONTRIBUTING.md)
-- [安全策略](./SECURITY.md)
+| 入口 | 内容 |
+| --- | --- |
+| [使用文档站](https://agi4sci.github.io/sciforge-docs-v2/) | 五分钟快速开始、端到端案例、22 个内置扩展的功能手册、视频导览 |
+| [安装与最小使用](./INSTALL.md) | 本地客户端环境、步骤与验证 |
+| [使用 Wiki](./docs/wiki/README.md) | 随仓版本化的中文使用手册 |
+| [开发指南](./docs/DEVELOPMENT.md) | 本地开发、测试与构建 |
+| [贡献指南](./CONTRIBUTING.md) · [安全策略](./SECURITY.md) | 协作约定与漏洞报告 |
 
-客户端源码和共享协议在本仓维护；云端源码、数据库迁移和部署材料不随本仓公开。尚未发布本轮安装包，源码构建不代表 macOS/Windows/Linux 安装包均已验收。
+## 仓库边界
+
+客户端源码和共享协议在本仓维护；云端源码、数据库迁移、Zulip 服务端适配和部署材料在闭源的 SciForge-cloud 仓，不随本仓公开；remote-ssh 不在开源范围内。
 
 ## 贡献与许可证
 
 欢迎提交 Issue、Showcase、科学 worker、Skill、runtime adapter、文档和 UI 改进。提交 PR 前请运行与改动范围相符的 typecheck、test 和 build；协作约定见[贡献指南](./docs/CONTRIBUTING.zh-CN.md)。
 
-客户端主体使用 [Apache License 2.0](./LICENSE)。内置域与插件分别采用 MIT 或 Apache-2.0，以各包 package.json 和 LICENSE 为准。第三方依赖、参考项目与资产来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，其中区分纯源码、网站和安装包义务。tldraw 保功能但适用授权未确认，源码与素材权利证据仍待负责人提供，公开发布继续阻断；文档修复不构成法律放行。
+客户端主体使用 [Apache License 2.0](./LICENSE)。内置域与插件分别采用 MIT 或 Apache-2.0，以各包 package.json 和 LICENSE 为准。第三方依赖、参考项目与资产来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，个别组件授权仍在确认中，以该文件为准。
 
 <a href="https://github.com/AGI4Sci/SciForge/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=AGI4Sci/SciForge" alt="SciForge contributors">
