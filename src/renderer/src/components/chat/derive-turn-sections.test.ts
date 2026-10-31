@@ -129,7 +129,7 @@ describe('deriveTurnSections', () => {
         summary: 'web_fetch: issue',
         status: 'success',
         toolKind: 'tool_call',
-        detail: 'https://github.com/XingYu-Zhong/SciForge/issues/96'
+        detail: 'https://github.com/AGI4Sci/SciForge/issues/96'
       },
       { kind: 'assistant', id: 'next', text: 'The issue link above should still be visible.' }
     ])

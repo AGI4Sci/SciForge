@@ -5,7 +5,7 @@ import { feedbackGatewayConfigFromEnv } from './config.js'
 function environment(): NodeJS.ProcessEnv {
   return {
     SCIFORGE_FEEDBACK_GITHUB_TOKEN: 'github-token',
-    SCIFORGE_FEEDBACK_ALLOWED_REPOSITORIES: 'XingYu-Zhong/SciForge',
+    SCIFORGE_FEEDBACK_ALLOWED_REPOSITORIES: 'AGI4Sci/SciForge',
     SCIFORGE_FEEDBACK_S3_BUCKET: 'feedback-assets',
     SCIFORGE_FEEDBACK_ASSET_PUBLIC_BASE_URL: 'https://assets.sciforge.test/'
   }
@@ -16,7 +16,7 @@ describe('feedbackGatewayConfigFromEnv', () => {
     expect(feedbackGatewayConfigFromEnv(environment())).toMatchObject({
       host: '127.0.0.1',
       port: 8787,
-      allowedRepositories: ['XingYu-Zhong/SciForge'],
+      allowedRepositories: ['AGI4Sci/SciForge'],
       githubRecoveryPages: 3,
       s3: {
         bucket: 'feedback-assets',

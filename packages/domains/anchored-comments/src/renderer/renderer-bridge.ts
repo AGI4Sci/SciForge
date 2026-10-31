@@ -344,7 +344,7 @@ function feedbackPacket(
       thread.feedback.idempotencyKey ??
       `sciforge-feedback-${thread.id}`.slice(0, 256),
     threadId: thread.id,
-    repository: { owner: 'XingYu-Zhong', name: 'SciForge' },
+    repository: { owner: 'AGI4Sci', name: 'SciForge' },
     title: `[UI Feedback] ${titleTarget}`.slice(0, 256),
     body,
     disclosure,

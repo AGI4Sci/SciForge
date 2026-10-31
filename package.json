@@ -362,10 +362,10 @@
   "homepage": "https://sciforge.ai",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/XingYu-Zhong/SciForge.git"
+    "url": "git+https://github.com/AGI4Sci/SciForge.git"
   },
   "keywords": [],
   "bugs": {
-    "url": "https://github.com/XingYu-Zhong/SciForge/issues"
+    "url": "https://github.com/AGI4Sci/SciForge/issues"
   }
 }
