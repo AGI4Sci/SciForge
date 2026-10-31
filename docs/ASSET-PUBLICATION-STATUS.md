@@ -24,8 +24,8 @@ images. The replacements are reproducible from
 only Python's standard library and no external artwork or font files.
 
 源码贡献者/单位授权已经项目负责人确认。第三方依赖仍适用其自己的条款；仅保留依赖
-声明不等于分发依赖代码、archive 或构建产物。tldraw 代码/制品分发及生产使用条件仍保留，
-不以其依赖声明阻断本次自有源码。node_modules、依赖 archive、生成的运行时/构建产物不随
+声明不等于分发依赖代码、archive 或构建产物。tldraw 依赖已移除，源码与安装包不再包含其
+代码；如未来重新引入，其分发与生产使用条件重新适用。node_modules、依赖 archive、生成的运行时/构建产物不随
 源码分发；现有安全测试 fixture（包括名为 dist 的源码输入）保留。
 
 These resources are placeholders/templates, not captured UI, scientific results,

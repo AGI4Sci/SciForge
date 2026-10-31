@@ -120,7 +120,7 @@ npm run dev
 
 欢迎提交 Issue、Showcase、科学 worker、Skill、runtime adapter、文档和 UI 改进。提交 PR 前请运行与改动范围相符的 typecheck、test 和 build；协作约定见[贡献指南](./docs/CONTRIBUTING.zh-CN.md)。
 
-客户端主体使用 [Apache License 2.0](./LICENSE)。内置域与插件分别采用 MIT 或 Apache-2.0，以各包 package.json 和 LICENSE 为准。第三方依赖、参考项目与资产来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，个别组件授权仍在确认中，以该文件为准。
+客户端主体使用 [Apache License 2.0](./LICENSE)。内置域与插件分别采用 MIT 或 Apache-2.0，以各包 package.json 和 LICENSE 为准。第三方依赖、参考项目与资产来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，其中区分纯源码、网站和安装包义务；个别组件授权仍在确认中，以该文件为准。tldraw 依赖已移除（代码中无运行时引用），不再随源码或安装包分发。
 
 <a href="https://github.com/AGI4Sci/SciForge/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=AGI4Sci/SciForge" alt="SciForge contributors">
