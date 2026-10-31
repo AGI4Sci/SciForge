@@ -99,7 +99,7 @@ function main() {
 
   const out = ['## 更新摘要', '']
   if (sinceTag) {
-    out.push(`自 [\`${sinceTag}\`](https://github.com/XingYu-Zhong/SciForge/compare/${sinceTag}...HEAD) 以来的变更：`, '')
+    out.push(`自 [\`${sinceTag}\`](https://github.com/AGI4Sci/SciForge/compare/${sinceTag}...HEAD) 以来的变更：`, '')
   }
 
   let wroteSection = false

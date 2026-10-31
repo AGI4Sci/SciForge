@@ -616,7 +616,7 @@ async function promoteRelease({ flags, dryRun, artifactReceipts }, dependencies 
       tag,
       releaseDate,
       generatedAt: new Date().toISOString(),
-      githubReleaseUrl: `https://github.com/XingYu-Zhong/SciForge/releases/tag/${tag}`,
+      githubReleaseUrl: `https://github.com/AGI4Sci/SciForge/releases/tag/${tag}`,
       updateBaseUrl: joinUrl(config.publicBaseUrl, target.basePath, 'latest') + '/',
       updateMetadata: Object.fromEntries(
         platformManifests.map((manifest) => [

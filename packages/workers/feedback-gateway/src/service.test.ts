@@ -10,7 +10,7 @@ function packet() {
     schemaVersion: 1 as const,
     idempotencyKey: 'feedback:thread-1234567890',
     threadId: 'thread-1',
-    repository: { owner: 'XingYu-Zhong', name: 'SciForge' },
+    repository: { owner: 'AGI4Sci', name: 'SciForge' },
     title: 'Export button is unresponsive',
     body: 'The selected export button does not respond.',
     disclosure: {
@@ -41,7 +41,7 @@ describe('FeedbackGatewayService', () => {
     const assets = { publish: vi.fn(async () => ({ url: 'https://assets.sciforge.test/evidence.png' })) }
     const github = { createIssue: vi.fn(async () => ({
       issueNumber: 42,
-      issueUrl: 'https://github.com/XingYu-Zhong/SciForge/issues/42',
+      issueUrl: 'https://github.com/AGI4Sci/SciForge/issues/42',
       author: 'sciforge-bot'
     })) }
     const service = new FeedbackGatewayService({

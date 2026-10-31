@@ -9,22 +9,17 @@ and shared collaboration contracts. Cloud server code, database migrations,
 Zulip server adapters, deployment operations and remote-ssh are not included.
 Do not restore private monorepo material to make a client checkout work.
 
-The existing `AGI4Sci/SciForge-client` repository is private. The future public
-source destination has not been created; no public clone URL is promised here.
-Use an authorized checkout, or replace the URL variable below with the destination
-approved by the maintainer once available. Do not make the existing repository
-and its old history public as a substitute for a reviewed clean source export.
+The public source repository is https://github.com/AGI4Sci/SciForge ; clone it
+directly. The private development monorepo and its old history are not part of
+the public entry and are not republished here.
 
 ```bash
-# Set SCIFORGE_CLIENT_REPOSITORY_URL to an approved URL you can access first.
-: "${SCIFORGE_CLIENT_REPOSITORY_URL:?Set an authorized client repository URL}"
-git clone "$SCIFORGE_CLIENT_REPOSITORY_URL" SciForge-client
-cd SciForge-client
+git clone https://github.com/AGI4Sci/SciForge.git
+cd SciForge
 ```
 
 The current client integration branch is `main`. Start a short-lived branch from
-it, submit a PR to `main`, and merge only after review and required checks. If a
-future destination selects another default branch, follow that repository's rules.
+it, submit a PR to `main`, and merge only after review and required checks. Other repositories keep their own branch rules.
 
 ```bash
 git checkout main

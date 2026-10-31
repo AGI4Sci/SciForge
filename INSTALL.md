@@ -4,12 +4,11 @@
 
 需要 Node.js 22.12+、npm 和当前操作系统的原生编译工具。Electron、node-pty 等依赖包含下载或原生构建步骤，禁用安装脚本不能作为完整安装。
 
-既有 `AGI4Sci/SciForge-client` 目前为 private，未来公开目的地尚未创建。先将 `SCIFORGE_CLIENT_REPOSITORY_URL` 设为维护者提供且你有权访问的地址；目的地就绪后再替换，不直接公开旧仓历史。以下为安装指引，不代表本候选已通过安装或运行验收。
+公开源码仓是 https://github.com/AGI4Sci/SciForge ，直接克隆即可，不需要任何私有地址。以下为安装指引，不代表本候选已通过安装或运行验收。
 
 ```bash
-: "${SCIFORGE_CLIENT_REPOSITORY_URL:?Set an authorized client repository URL}"
-git clone "$SCIFORGE_CLIENT_REPOSITORY_URL" SciForge-client
-cd SciForge-client
+git clone https://github.com/AGI4Sci/SciForge.git
+cd SciForge
 npm ci
 npm run dev
 ```

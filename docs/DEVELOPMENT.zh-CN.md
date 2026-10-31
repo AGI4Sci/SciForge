@@ -7,19 +7,16 @@
 本源码候选包含桌面客户端、本地 worker、域/插件和共享协作协议；不包含云端服务、
 数据库迁移、Zulip 服务端适配、部署运维与 remote-ssh。不要为启动客户端恢复私有单仓材料。
 
-既有 `AGI4Sci/SciForge-client` 仓库目前是 private；未来公开源码目的地尚未创建，
-这里不承诺可公开克隆的 URL。使用获授权的 checkout，或在目的地就绪后将下列变量替换为
-维护者批准且你有权访问的地址。不能用直接公开旧仓及其历史来替代审定的干净源码导出。
+公开源码仓是 https://github.com/AGI4Sci/SciForge ，直接克隆即可；私有开发单仓及其旧历史
+不属于公开入口，也不会在这里重新发布。
 
 ```bash
-# 先将 SCIFORGE_CLIENT_REPOSITORY_URL 设为获授权的客户端仓库地址。
-: "${SCIFORGE_CLIENT_REPOSITORY_URL:?Set an authorized client repository URL}"
-git clone "$SCIFORGE_CLIENT_REPOSITORY_URL" SciForge-client
-cd SciForge-client
+git clone https://github.com/AGI4Sci/SciForge.git
+cd SciForge
 ```
 
 当前客户端集成分支为 `main`。从它建立短期分支，PR 回到 `main`，评审和必需检查通过后
-再合并。如果未来公开目的地选择其他默认分支，应以该仓库规则为准。
+再合并。其他仓库以其自身分支规则为准。
 
 ```bash
 git checkout main
