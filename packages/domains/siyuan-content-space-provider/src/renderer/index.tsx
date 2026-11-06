@@ -11,7 +11,10 @@ import { domainPackageDefinition } from '../definition.js'
 import {
   siyuanEditorContract,
   siyuanEditorPresentContract,
-  type SiYuanEditorViewport
+  siyuanServiceConfigureContract,
+  siyuanServiceStatusContract,
+  type SiYuanEditorViewport,
+  type SiYuanServiceStatus
 } from '../editor-contract.js'
 import { SiYuanEditorPage, type SiYuanEditorConfiguration } from './editor-page.js'
 
@@ -28,6 +31,14 @@ export function createDomainRendererEntry(
   const present = async (
     input: Readonly<{ url: string | null; viewport: SiYuanEditorViewport }>
   ): Promise<unknown> => host.capabilityInvoker.invoke(siyuanEditorPresentContract, input)
+  // The token only ever travels into the main process; the page receives a
+  // status document that says whether one is stored, never the value itself.
+  const service = {
+    status: (): Promise<SiYuanServiceStatus> =>
+      host.capabilityInvoker.invoke(siyuanServiceStatusContract, {}),
+    configure: (token: string | null): Promise<SiYuanServiceStatus> =>
+      host.capabilityInvoker.invoke(siyuanServiceConfigureContract, { token })
+  }
   const declaration = domainPackageDefinition.entrypoints
     .find((entry) => entry.process === 'renderer')!.contributions[0]
   return defineTrustedRendererDomainPackageEntry({
@@ -36,7 +47,7 @@ export function createDomainRendererEntry(
       ...declaration,
       contract: domainPackageDefinition.contributionContracts[declaration.id],
       value: {
-        render: (context) => <SiYuanEditorPage context={context} open={open} present={present} />
+        render: (context) => <SiYuanEditorPage context={context} open={open} present={present} service={service} />
       }
     }]
   })

@@ -296,7 +296,7 @@ test('public release guard accepts canonical empty internal composition', async 
     loadTrackedPrivatePayloadPaths: () => [],
     projectRoot: '/trusted/repository'
   })
-  assert.equal(discoveredRoot, '/trusted/repository')
+  assert.equal(discoveredRoot, resolve('/trusted/repository'))
   assert.deepEqual(result, {
     internalRuntimeCount: 0,
     publicReleaseForbiddenDeploymentConfigurationCount: 0,
@@ -562,7 +562,7 @@ test('after-pack verifies the same generic deployment composition in packaged re
   }, composition)
 
   assert.deepEqual(verified, {
-    resourcesRoot: '/packaged/application/resources',
+    resourcesRoot: join('/packaged/application', 'resources'),
     composition
   })
 })

@@ -143,15 +143,5 @@ describe('worker package metadata', () => {
     }
   })
 
-  it('keeps Paper Radar core owned by the worker package', () => {
-    const metadata = readWorkerPackageJson('paper-radar')
 
-    expect(metadata.name).toBe('@sciforge/paper-radar')
-    expect(metadata.sciforge?.publicContract).toBe(true)
-    expect(metadata.sciforge?.mcpServer).toBe(false)
-    expect(metadata.exports).not.toHaveProperty('./mcp-server')
-    expect(metadata).not.toHaveProperty('bin')
-    expect(metadata.scripts).not.toHaveProperty('start')
-    expect(metadata.sciforge?.distribution).toBeUndefined()
-  })
 })

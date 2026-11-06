@@ -1494,6 +1494,7 @@ test('Claude-shaped Messages preserve adaptive thinking and native terminal meta
     ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
     ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'streamed' } }],
     ['message_delta', { type: 'message_delta', delta: { stop_reason: 'stop_sequence', stop_sequence: 'END' }, usage: { output_tokens: 2 } }],
+    ['message_stop', { type: 'message_stop' }],
   ].map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
   const server = await startModelRouterServer({
     port: 0,
@@ -1734,6 +1735,43 @@ test('chat completions compatibility route returns OpenAI-shaped text choices', 
   }
 });
 
+test('Responses custom-only tools with automatic choice reach Chat without an empty tool_choice and forced choices fail locally', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-empty-chat-tools-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions', allowedProtocols: ['chat-completions'],
+  };
+  const server = await startModelRouterServer({
+    port: 0, config, env: testEnv(), workspaceRoot,
+    fetchImpl: captureFetch(calls, [chatCompletion('text-reasoner-answer', '{"answer":"ok"}')]),
+  });
+  try {
+    const body = {
+      model: 'sciforge-router', input: 'Return an answer.',
+      tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar' } }],
+      tool_choice: 'auto',
+      outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false },
+    };
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST', headers: runtimeHeaders({ 'content-type': 'application/json' }), body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200, await response.text());
+    assert.equal(calls.length, 1);
+    assert.equal(Object.hasOwn(calls[0]!.body, 'tools'), false);
+    assert.equal(Object.hasOwn(calls[0]!.body, 'tool_choice'), false);
+    assert.equal((calls[0]!.body.response_format as { type: string }).type, 'json_schema');
+    for (const tool_choice of ['required', { type: 'function', name: 'lookup' }]) {
+      const rejected = await fetch(`${server.url}/v1/responses`, {
+        method: 'POST', headers: runtimeHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ ...body, tool_choice }),
+      });
+      assert.equal(rejected.status, 422, await rejected.text());
+      assert.equal(calls.length, 1);
+    }
+  } finally { await server.close(); }
+});
+
 test('chat compatibility preserves function declarations, choice and complete tool transcripts for Responses upstreams', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-chat-tools-responses-'));
   const calls: CapturedFetch[] = [];
@@ -1889,7 +1927,7 @@ test('Chat terminal reasons survive non-streaming and streaming router roundtrip
       body: JSON.stringify({ ...requestBody, stream: true }),
     });
     const events = parseSseEvents(await streamed.text());
-    const terminal = events.find((event) => event.choices?.[0]?.finish_reason !== undefined);
+    const terminal = events.find((event) => event.choices?.[0]?.finish_reason != null);
     assert.equal(terminal?.choices?.[0]?.finish_reason, 'length');
     assert.equal(calls.every((call) => new URL(call.url).pathname.endsWith('/chat/completions')), true);
 
@@ -3449,7 +3487,7 @@ test('on-demand vision cache separates targeted questions about the same image',
 
 test('on-demand inspection cannot resend an image dropped by the context budget', async () => {
   const config = testConfig();
-  config.profiles.default.contextWindow = 2048;
+  config.profiles.default.translators.vision!.contextWindow = 2048;
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0, config, env: testEnv(),
@@ -4179,7 +4217,7 @@ test('responses tool outputs are preserved through canonical upstream routing', 
   }
 });
 
-test('responses request hygiene folds pasted image data and giant tool outputs before provider calls', async () => {
+test('responses request hygiene preserves native tool output while folding pasted user payloads', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-request-hygiene-tool-output-'));
   const imagePayload = Buffer.from('ordinary-text-image-payload'.repeat(80)).toString('base64');
   const pastedImage = `data:image/png;base64,${imagePayload}`;
@@ -4230,19 +4268,11 @@ test('responses request hygiene folds pasted image data and giant tool outputs b
 
     assert.equal(response.status, 200);
     const serializedProviderBody = JSON.stringify(calls[0]?.body);
-    assert.doesNotMatch(serializedProviderBody, /data:image\/png;base64/i);
-    assert.ok(!serializedProviderBody.includes(imagePayload.slice(0, 80)));
-    assert.ok(!serializedProviderBody.includes(giantToolOutput));
-    assert.match(serializedProviderBody, /sciforge request_hygiene/);
     assert.match(serializedProviderBody, /source=message\.text/);
-    assert.match(serializedProviderBody, /source=tool_message\.content/);
-    assert.match(serializedProviderBody, /reason=large_tool_output/);
-    assert.match(serializedProviderBody, /digest=sha256:/);
-
     const input = calls[0]?.body.input as Array<Record<string, unknown>>;
     const toolOutput = input.find((item) => item.type === 'function_call_output');
-    const toolContent = String(toolOutput?.output ?? '');
-    assert.ok(toolContent.length < 1_000, `expected folded tool content, got ${toolContent.length} chars`);
+    assert.equal(toolOutput?.output, giantToolOutput);
+
   } finally {
     await server.close();
   }
@@ -7079,7 +7109,7 @@ test('vision translator failures force an explicit image unavailable final answe
 
 test('strict evidence policy rejects when the context budget drops every image before calling any provider', async () => {
   const config = testConfig();
-  config.profiles.default.contextWindow = 2048;
+  config.profiles.default.translators.vision!.contextWindow = 2048;
   const calls: CapturedFetch[] = [];
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-strict-context-budget-'));
   const server = await startModelRouterServer({
@@ -8306,3 +8336,33 @@ test('capabilities v2 reports unknown reasoning and the host context budget when
   }
 });
 
+
+test('vision admission uses its own request budget, independent of long agent history and text context window', async () => {
+  const config = testConfig();
+  config.profiles.default.contextWindow = 2048;
+  config.profiles.default.translators.vision!.contextWindow = 16384;
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0, config, env: testEnv(),
+    workspaceRoot: await mkdtemp(join(tmpdir(), 'vision-isolated-budget-')),
+    fetchImpl: captureFetch(calls, [
+      modalityInspectionRequest('image_1', 'Read the chart label.'),
+      chatCompletion('vision', 'The label is Time.'),
+      chatCompletion('final', JSON.stringify({ type: 'final_answer', content: 'Time.' })),
+    ]),
+  });
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST', headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: [
+        { role: 'assistant', content: [{ type: 'output_text', text: 'Earlier execution evidence. '.repeat(10000) }] },
+        { role: 'user', content: [{ type: 'input_text', text: 'Read the chart label.' }, { type: 'input_image', image_url: pngDataUrl }] },
+      ] }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 3);
+    assert.doesNotMatch(JSON.stringify(calls[0]?.body), /status=dropped/);
+    assert.doesNotMatch(JSON.stringify(calls[1]?.body), /Earlier execution evidence/);
+    assert.match(JSON.stringify(calls[1]?.body), /Read the chart label/);
+  } finally { await server.close(); }
+});

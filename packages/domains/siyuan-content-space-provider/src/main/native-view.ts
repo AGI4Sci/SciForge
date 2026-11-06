@@ -2,6 +2,8 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 import type { BrowserWindow, WebContentsView } from 'electron'
+import type { CurrentUserProfile } from '@sciforge/domain-identity-access/current-user-profile'
+import { attachCommentIdentityBridge, isEditorOrigin } from './comment-identity-bridge.js'
 
 /**
  * The package owns the embedded editor as a native child view instead of an
@@ -61,6 +63,8 @@ export type SiYuanNativeView = Readonly<{
 export function createSiYuanNativeView(options: Readonly<{
   savePath?: (fileName: string) => string
   onDownload?: (filePath: string) => void
+  preloadPath?: string
+  readIdentity?: () => CurrentUserProfile
 }> = {}): SiYuanNativeView {
   let entry: EditorEntry | undefined
   const savePath = options.savePath ??
@@ -99,6 +103,7 @@ export function createSiYuanNativeView(options: Readonly<{
     const view = new runtime.WebContentsView({
       webPreferences: {
         session: editorSession,
+        ...(options.preloadPath ? { preload: options.preloadPath } : {}),
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
@@ -124,9 +129,16 @@ export function createSiYuanNativeView(options: Readonly<{
     }
     editorSession.on('will-download', onWillDownload)
 
-    // Keep the embedded editor inside its own surface.
+    const detachIdentity = attachCommentIdentityBridge(view.webContents,
+      () => entry?.loadedUrl ?? '', options.readIdentity ?? (() => ({ state: 'unavailable' })))
+    // Remote navigation must never carry the identity bridge to another origin.
+    const willNavigate = (event: Electron.Event, url: string): void => {
+      if (!isEditorOrigin(url, entry?.loadedUrl ?? '')) event.preventDefault()
+    }
+    view.webContents.on('will-navigate', willNavigate)
+    view.webContents.on('will-redirect', willNavigate)
     view.webContents.setWindowOpenHandler(({ url }) => {
-      void view.webContents.loadURL(url)
+      if (isEditorOrigin(url, entry?.loadedUrl ?? '')) void view.webContents.loadURL(url)
       return { action: 'deny' }
     })
 
@@ -143,6 +155,9 @@ export function createSiYuanNativeView(options: Readonly<{
       view,
       loadedUrl: '',
       detachHostListeners: () => {
+        detachIdentity()
+        view.webContents.removeListener('will-navigate', willNavigate)
+        view.webContents.removeListener('will-redirect', willNavigate)
         editorSession.removeListener('will-download', onWillDownload)
         host.removeListener('destroyed', destroyed)
         window.removeListener('closed', destroyed)

@@ -231,7 +231,7 @@ test('runtime persists a provider thread reference while the child is still runn
     turnId: 'claude-child-turn'
   })
   release()
-  assert.equal((await runtime.waitForChild('thread-1', started.id, { timeoutMs: 1_000 }))?.record.status, 'completed')
+  assert.equal((await runtime.waitForChildren('thread-1', started.id, { timeoutMs: 1_000 }))?.records[0]?.status, 'completed')
 })
 
 test('runtime preserves an explicit empty child tool allow-list', async () => {
@@ -577,7 +577,7 @@ test('runtime recovery never aborts a child active in the current process', asyn
   assert.equal((await store.get('thread-1', started.id))?.status, 'running')
 
   release.resolve({ summary: 'done' })
-  assert.equal((await runtime.waitForChild('thread-1', started.id, { timeoutMs: 1_000 }))?.record.status, 'completed')
+  assert.equal((await runtime.waitForChildren('thread-1', started.id, { timeoutMs: 1_000 }))?.records[0]?.status, 'completed')
 })
 
 test('runtime records executor failure and parent abort as canonical error codes', async () => {
@@ -665,15 +665,15 @@ test('startChild returns a stable handle and observation timeout never fails a r
   assert.equal(started.id, 'child-long-running')
   assert.equal(started.status, 'running')
 
-  const observed = await runtime.waitForChild('thread-1', started.id, { timeoutMs: 5 })
+  const observed = await runtime.waitForChildren('thread-1', started.id, { timeoutMs: 5 })
   assert.equal(observed?.timedOut, true)
-  assert.equal(observed?.record.status, 'running')
-  assert.equal(observed?.record.error, undefined)
+  assert.equal(observed?.records[0]?.status, 'running')
+  assert.equal(observed?.records[0]?.error, undefined)
 
   result.resolve({ summary: 'All papers complete.' })
-  const completed = await runtime.waitForChild('thread-1', started.id, { timeoutMs: 50 })
+  const completed = await runtime.waitForChildren('thread-1', started.id, { timeoutMs: 50 })
   assert.equal(completed?.timedOut, false)
-  assert.equal(completed?.record.status, 'completed')
+  assert.equal(completed?.records[0]?.status, 'completed')
 })
 
 test('runtime inspects, messages, and explicitly cancels a running child through one lifecycle control', async () => {
@@ -783,10 +783,10 @@ test('runtime resumes an interrupted child with the same identity and provider t
   assert.equal(resumed.status, 'running')
   assert.equal(resumed.attempt, 2)
 
-  const completed = await runtime.waitForChild('thread-1', started.id, { timeoutMs: 50 })
-  assert.equal(completed?.record.status, 'completed')
-  assert.equal(completed?.record.threadRef?.turnId, 'turn-2')
-  assert.equal(completed?.record.summary, 'Resumed work completed.')
+  const completed = await runtime.waitForChildren('thread-1', started.id, { timeoutMs: 50 })
+  assert.equal(completed?.records[0]?.status, 'completed')
+  assert.equal(completed?.records[0]?.threadRef?.turnId, 'turn-2')
+  assert.equal(completed?.records[0]?.summary, 'Resumed work completed.')
 })
 
 test('runtime rejects a duplicate resume while the first continuation is being persisted', async () => {
@@ -823,7 +823,7 @@ test('runtime rejects a duplicate resume while the first continuation is being p
     release.resolve()
   }
   await first
-  assert.equal((await runtime.waitForChild('parent', 'interrupted', { timeoutMs: 1000 }))?.record.status, 'completed')
+  assert.equal((await runtime.waitForChildren('parent', 'interrupted', { timeoutMs: 1000 }))?.records[0]?.status, 'completed')
   assert.equal(executions, 1)
   runtime.dispose()
 })
@@ -869,16 +869,16 @@ test('runtime continues provider-completed children in the same conversation for
       prompt: 'Finish the report and verify the file.'
     })
     assert.equal(resumed.status, 'running')
-    const finished = await runtime.waitForChild('parent', `provider-completed-${providerRuntime}`, { timeoutMs: 1_000 })
-    assert.equal(finished?.record.status, 'completed')
-    assert.equal(finished?.record.attempt, 2)
-    assert.equal(finished?.record.summary, 'Report written and verified.')
+    const finished = await runtime.waitForChildren('parent', `provider-completed-${providerRuntime}`, { timeoutMs: 1_000 })
+    assert.equal(finished?.records[0]?.status, 'completed')
+    assert.equal(finished?.records[0]?.attempt, 2)
+    assert.equal(finished?.records[0]?.summary, 'Report written and verified.')
     assert.deepEqual(resumeInput, {
       runtime: providerRuntime,
       threadId: `provider-thread-${providerRuntime}`,
       turnId: 'old-turn'
     })
-    assert.deepEqual(finished?.record.transcript.map((entry) => entry.id), [
+    assert.deepEqual(finished?.records[0]?.transcript.map((entry) => entry.id), [
       'original-prompt',
       'original-tool',
       'original-answer',
@@ -1188,7 +1188,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<v
   }
 }
 
-test('supervisor detects a missing runtime, confirms cleanup, and resumes saved progress without resolving the parent wait early', async () => {
+test('supervisor detects a missing runtime, confirms cleanup, and resumes saved progress while allowing the parent to observe recovery phases', async () => {
   const store = new InMemoryMultiAgentStore()
   let executions = 0
   let terminated = false
@@ -1217,10 +1217,13 @@ test('supervisor detects a missing runtime, confirms cleanup, and resumes saved 
     }
   })
   const started = await runtime.startChild({ parentThreadId: 'p', parentTurnId: 't', prompt: 'Deliver report' })
-  const waited = await runtime.waitForChild('p', started.id, { timeoutMs: 1000 })
-  assert.equal(waited?.record.status, 'completed')
-  assert.equal(waited?.record.recoveryAttempts, 1)
-  assert.equal(waited?.record.id, started.id)
+  let waited = await runtime.waitForChildren('p', started.id, { timeoutMs: 1000 })
+  while (waited?.records[0]?.status === 'running') {
+    waited = await runtime.waitForChildren('p', started.id, { timeoutMs: 1000, afterCursor: waited.cursor })
+  }
+  assert.equal(waited?.records[0]?.status, 'completed')
+  assert.equal(waited?.records[0]?.recoveryAttempts, 1)
+  assert.equal(waited?.records[0]?.id, started.id)
   assert.deepEqual(terminal, ['completed'])
   assert.equal((await runtime.diagnostics()).active, 0)
   runtime.dispose()
@@ -1268,8 +1271,8 @@ test('automatic recovery stops after three attempts and manual resume does not r
   assert.equal(record.status, 'failed')
   assert.equal((await store.get('p', record.id))?.recoveryAttempts, 3)
   await runtime.resumeChild({ parentThreadId: 'p', parentTurnId: 't2', childId: record.id })
-  const waited = await runtime.waitForChild('p', record.id, { timeoutMs: 1000 })
-  assert.equal(waited?.record.status, 'failed')
+  const waited = await runtime.waitForChildren('p', record.id, { timeoutMs: 1000 })
+  assert.equal(waited?.records[0]?.status, 'failed')
   assert.equal(calls, 5)
   runtime.dispose()
 })
@@ -1297,11 +1300,11 @@ for (const state of ['active', 'waiting', 'unknown'] as const) {
       }
     })
     const started = await runtime.startChild({ parentThreadId: 'p', parentTurnId: 't', prompt: 'Long computation' })
-    const waited = await runtime.waitForChild('p', started.id, { timeoutMs: 1000 })
-    assert.equal(waited?.record.status, 'completed')
+    const waited = await runtime.waitForChildren('p', started.id, { timeoutMs: 1000 })
+    assert.equal(waited?.records[0]?.status, 'completed')
     assert.equal(probes, 3)
     assert.equal(kills, 0)
-    assert.equal(waited?.record.recoveryAttempts, 0)
+    assert.equal(waited?.records[0]?.recoveryAttempts, 0)
     runtime.dispose()
   })
 }
@@ -1340,9 +1343,9 @@ test('a failed cleanup quarantines the child instead of starting a second writer
     }
   })
   const started = await runtime.startChild({ parentThreadId: 'p', parentTurnId: 't', prompt: 'Write output' })
-  const waited = await runtime.waitForChild('p', started.id, { timeoutMs: 1000 })
-  assert.equal(waited?.record.status, 'failed')
-  assert.equal(waited?.record.error?.retryable, false)
+  const waited = await runtime.waitForChildren('p', started.id, { timeoutMs: 1000 })
+  assert.equal(waited?.records[0]?.status, 'failed')
+  assert.equal(waited?.records[0]?.error?.retryable, false)
   assert.equal(calls, 1)
   await assert.rejects(runtime.resumeChild({ parentThreadId: 'p', parentTurnId: 't', childId: started.id }), /cleanup is unconfirmed/)
   runtime.dispose()
@@ -1393,5 +1396,85 @@ test('a saved thread reference does not make a slow resume startup look dead', a
   assert.equal(record.status, 'completed')
   assert.equal(inspections, 0)
   assert.equal(calls, 2)
+  runtime.dispose()
+})
+
+test('waits for any child, keeps a scoped cursor, and does not wake on unchanged heartbeats', async () => {
+  const releases = new Map<string, () => void>()
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    executor: async (input) => {
+      await new Promise<void>((resolve) => { releases.set(input.childId, resolve) })
+      return { summary: `Finished ${input.childId}` }
+    }
+  })
+  const a = await runtime.startChild({ parentThreadId: 'parent', parentTurnId: 'turn', prompt: 'A' })
+  const b = await runtime.startChild({ parentThreadId: 'parent', parentTurnId: 'turn', prompt: 'B' })
+  const first = await runtime.waitForChildren('parent', [a.id, b.id], { timeoutMs: 0 })
+  assert.equal(first?.records.length, 2)
+  const pending = runtime.waitForChildren('parent', [a.id, b.id], { timeoutMs: 900000, afterCursor: first!.cursor })
+  releases.get(b.id)!()
+  const result = await pending
+  assert.deepEqual(result?.changedIds, [b.id])
+  assert.equal(result?.records.find((record) => record.id === b.id)?.status, 'completed')
+  assert.equal(result?.effectiveTimeoutMs, 60000)
+  const unchanged = await runtime.waitForChildren('parent', [a.id, b.id], { timeoutMs: 5, afterCursor: result!.cursor })
+  assert.equal(unchanged?.timedOut, true)
+  assert.deepEqual(unchanged?.changedIds, [])
+  await assert.rejects(runtime.waitForChildren('other-parent', [a.id], { afterCursor: result!.cursor }), /cursor/)
+  releases.get(a.id)!()
+  await runtime.waitForChildren('parent', [a.id], { timeoutMs: 1000 })
+  runtime.dispose()
+})
+
+
+test('group waits stay bounded during final publication and return another settled child', async () => {
+  let finishPublication!: () => void
+  let enteredPublication!: () => void
+  const entered = new Promise<void>((resolve) => { enteredPublication = resolve })
+  const publication = new Promise<void>((resolve) => { finishPublication = resolve })
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    executor: async () => ({ summary: 'Done' }),
+    events: { onChildTerminal: async (record) => {
+      if (record.prompt === 'A') { enteredPublication(); await publication }
+    } }
+  })
+  const a = await runtime.startChild({ parentThreadId: 'p', parentTurnId: 't', prompt: 'A' })
+  await entered
+  const waiting = await runtime.waitForChildren('p', a.id, { timeoutMs: 5 })
+  assert.equal(waiting?.timedOut, true)
+  assert.equal(waiting?.records[0]?.status, 'running')
+  const b = await runtime.startChild({ parentThreadId: 'p', parentTurnId: 't', prompt: 'B' })
+  const settled = await runtime.waitForChildren('p', [a.id, b.id], { timeoutMs: 1000 })
+  assert.deepEqual(settled?.changedIds, [b.id])
+  assert.equal(settled?.records.find((record) => record.id === b.id)?.status, 'completed')
+  finishPublication()
+  await runtime.waitForChildren('p', a.id, { timeoutMs: 1000 })
+  runtime.dispose()
+})
+
+test('cursor observations ignore heartbeat content churn but wake on phase changes', async () => {
+  let report!: (progress: { phase: string; message?: string }) => Promise<void>
+  let finish!: () => void
+  const runtime = new MultiAgentRuntime({
+    store: new InMemoryMultiAgentStore(),
+    executor: async (input) => {
+      report = input.reportProgress
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { summary: 'Done' }
+    }
+  })
+  const child = await runtime.startChild({ parentThreadId: 'p', parentTurnId: 't', prompt: 'Work' })
+  await report({ phase: 'working', message: 'first heartbeat' })
+  const first = await runtime.waitForChildren('p', child.id, { timeoutMs: 0 })
+  const unchanged = runtime.waitForChildren('p', child.id, { timeoutMs: 5, afterCursor: first!.cursor })
+  await report({ phase: 'working', message: 'more tokens, same phase' })
+  assert.deepEqual((await unchanged)?.changedIds, [])
+  const changed = runtime.waitForChildren('p', child.id, { timeoutMs: 1000, afterCursor: first!.cursor })
+  await report({ phase: 'validating' })
+  assert.deepEqual((await changed)?.changedIds, [child.id])
+  finish()
+  await runtime.waitForChildren('p', child.id, { timeoutMs: 1000 })
   runtime.dispose()
 })

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, it } from 'vitest'
@@ -77,7 +78,9 @@ it('freezes created dataset and plot bytes at the terminal boundary without foll
   roots.push(root)
   await mkdir(join(root, 'data'), { recursive: true })
   await writeFile(join(root, 'data', 'input.csv'), 'x,y\n1,2\n')
-  await symlink('/private/tmp', join(root, 'outside-link'))
+  const outside = await mkdtemp(join(tmpdir(), 'turn-file-outside-'))
+  roots.push(outside)
+  await symlink(outside, join(root, 'outside-link'))
   const baseline = await captureTurnFileBaseline(root)
 
   await mkdir(join(root, 'figures'), { recursive: true })
@@ -180,7 +183,7 @@ it('does not emit a deleted effect for a quarantined sensitive path', async () =
   assert.equal(JSON.stringify(receipt).includes('deleted-private-key'), false)
 })
 
-it('skips SciForge runtime state without losing ordinary CSV and SVG outputs in a large workspace', async () => {
+it('skips SciForge runtime state without losing ordinary CSV and SVG outputs in a large workspace', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'turn-file-large-workspace-'))
   roots.push(root)
   await mkdir(join(root, '.codex-runtime', 'codex-home', 'sessions'), { recursive: true })

@@ -13,12 +13,13 @@
  * repository; no production key is read.
  *
  * Usage:
- *   node scripts/packaged-market-security.mjs --app <app> --keyring <test keyring>
+ *   node scripts/packaged-market-security.mjs --app <app> --keyring <test keyring> [--index <local generated index>]
  */
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { resolveMarketWorkDir } from './market-work-dir.mjs'
 
 const flag = (name) => {
@@ -35,9 +36,10 @@ const workDir = join(resolveMarketWorkDir(), 'security-acceptance')
 await rm(workDir, { recursive: true, force: true })
 await mkdir(workDir, { recursive: true })
 
-const appIndexPath = join(appPath, 'Contents/Resources/market/index.json')
+const appIndexPath = flag('index') ? resolve(flag('index')) : join(appPath, 'Contents/Resources/market/index.json')
 const shippedIndex = JSON.parse(await readFile(appIndexPath, 'utf8'))
-const shippedArtifacts = join(appPath, 'Contents/Resources/market/artifacts')
+const shippedArtifacts = join(dirname(appIndexPath), 'artifacts')
+if (!shippedIndex.plugins?.length) throw new Error('Security acceptance needs a non-empty catalogue; generate the neutral self-test and pass --index <path>.')
 
 // A catalogue with the same entries but a deliberately corrupted artifact.
 const tampered = join(workDir, 'tampered')
@@ -64,7 +66,49 @@ const record = (step, detail) => {
 }
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 
-async function runCase(label, { index, withKeyring }) {
+// Market IPC forwards ordinary Error messages (custom ExtensionStoreError codes
+// do not survive Electron IPC). Match the production messages from
+// dsh-plugin-market.ts / dsh-plugin-signature.ts after removing only IPC wrappers.
+const PHASE_SECURITY = String.raw`(async () => {
+  const market = window.sciforge.market
+  const expected = %%EXPECTED%%
+  const packageName = %%PACKAGE_NAME%%
+  const readEntry = async () => {
+    const view = await market.list()
+    if (view?.error || !Array.isArray(view?.plugins)) throw new Error('market listing failed: ' + JSON.stringify(view))
+    const entry = view.plugins.find((p) => p.name === packageName)
+    if (!entry || !entry.tools?.length || !Array.isArray(entry.capabilities) || entry.capabilities.length !== entry.tools.length || entry.tools.some((tool) => !entry.capabilities.some((c) => c.id === tool.id))) throw new Error('expected catalogue entry/capabilities missing: ' + packageName)
+    return entry
+  }
+  const requireClean = (entry) => {
+    if (entry.installed !== false || entry.enabled !== false || entry.capabilities.some((c) => c.registered !== false)) throw new Error('installation or capability residue: ' + JSON.stringify(entry))
+  }
+  const plugin = await readEntry()
+  requireClean(plugin)
+  let failure
+  try {
+    await market.install({ packageName: plugin.name, approvalSnapshot: plugin.approvalSnapshot, approvedPorts: plugin.ports, approvedToolNames: plugin.tools.map((t) => t.name) })
+  } catch (error) { failure = error }
+  // Re-read even on unexpected failures: a rejection alone says nothing about
+  // partial installation or live capability registrations.
+  const after = await readEntry()
+  if (failure) {
+    requireClean(after)
+    const message = String(failure?.message ?? failure)
+      .replace(/^Error invoking remote method 'market:install': (?:Error|ExtensionStoreError): /, '')
+      .replace(/^(?:Error|ExtensionStoreError): /, '')
+    const matches = expected.reason === 'digest_mismatch'
+      ? message === expected.message
+      : expected.reason === 'unknown_signing_key' && /^DSH plugin signature uses unknown publisher key [a-z0-9][a-z0-9._-]*\.$/.test(message)
+    if (!matches) throw new Error('unexpected installation rejection: ' + message)
+    return JSON.stringify({ refused: true, where: 'install', reason: expected.reason, message, plugin: plugin.name, installed: after.installed, enabled: after.enabled, registered: after.capabilities.filter((c) => c.registered).map((c) => c.id) })
+  }
+  if (expected.reason !== 'healthy') throw new Error('hostile artifact installation succeeded')
+  if (after.installed !== true || after.enabled !== true || after.capabilities.some((c) => c.registered !== true)) throw new Error('healthy installation did not become active: ' + JSON.stringify(after))
+  return JSON.stringify({ refused: false, plugin: plugin.name, installed: after.installed, enabled: after.enabled, registered: after.capabilities.map((c) => c.id) })
+})()`
+
+async function runCase(label, { index, withKeyring, expected }) {
   const profile = join(workDir, `profile-${label}`)
   await rm(profile, { recursive: true, force: true })
   await mkdir(join(profile, 'extensions'), { recursive: true })
@@ -75,7 +119,7 @@ async function runCase(label, { index, withKeyring }) {
     `--remote-debugging-port=${port}`
   ], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, SCIFORGE_MARKET_INDEX: index }
+    env: { ...process.env, SCIFORGE_MARKET_INDEX: index, SCIFORGE_DSH_PUBLISHER_KEYS_FILE: join(profile, 'extensions', 'dsh-publisher-keys.json') }
   })
   child.stdout.on('data', () => undefined)
   child.stderr.on('data', () => undefined)
@@ -94,21 +138,9 @@ async function runCase(label, { index, withKeyring }) {
     if (!ready) throw new Error('no window over the DevTools protocol')
     await sleep(2500)
 
-    const outcome = await evaluate(port, `(async () => {
-      const market = window.sciforge.market
-      const view = await market.list().catch((error) => ({ error: String(error) }))
-      if (view.error) return JSON.stringify({ refused: true, where: 'listing', message: view.error })
-      const plugin = view.plugins[0]
-      if (!plugin) return JSON.stringify({ refused: true, where: 'listing', message: 'no installable plugin' })
-      try {
-        await market.install({ packageName: plugin.name, approvedToolNames: plugin.tools.map((t) => t.name) })
-      } catch (error) {
-        return JSON.stringify({ refused: true, where: 'install', message: String(error).slice(0, 300), plugin: plugin.name })
-      }
-      const after = await market.list()
-      const entry = after.plugins.find((p) => p.name === plugin.name)
-      return JSON.stringify({ refused: false, plugin: plugin.name, installed: entry?.installed === true })
-    })()`)
+    const outcome = await evaluate(port, PHASE_SECURITY
+      .replace('%%EXPECTED%%', JSON.stringify(expected))
+      .replace('%%PACKAGE_NAME%%', JSON.stringify(shippedIndex.plugins[0].name)))
     return JSON.parse(outcome)
   } finally {
     child.kill('SIGTERM')
@@ -154,7 +186,7 @@ async function evaluate(devtoolsPort, expression) {
 
 try {
   // 1. bytes changed after the index recorded the digest → digest check must stop it.
-  const tamperedOutcome = await runCase('tampered', { index: join(tampered, 'index.json'), withKeyring: true })
+  const tamperedOutcome = await runCase('tampered', { index: join(tampered, 'index.json'), withKeyring: true, expected: { reason: 'digest_mismatch', message: `The downloaded artifact digest ${createHash('sha256').update(mutated).digest('hex')} does not match the published digest ${shippedIndex.plugins[0].artifact.sha256}.` } })
   if (!tamperedOutcome.refused || tamperedOutcome.installed) {
     throw new Error(`a tampered artifact was not refused cleanly: ${JSON.stringify(tamperedOutcome)}`)
   }
@@ -162,17 +194,17 @@ try {
 
   // 2. intact artifact, but the host trusts no publisher at all → signature check
   //    must stop it (fail closed, nothing installed).
-  const unknownKeyOutcome = await runCase('unknown-key', { index: appIndexPath, withKeyring: false })
+  const unknownKeyOutcome = await runCase('unknown-key', { index: appIndexPath, withKeyring: false, expected: { reason: 'unknown_signing_key' } })
   if (!unknownKeyOutcome.refused || unknownKeyOutcome.installed) {
     throw new Error(`an untrusted publisher was not refused cleanly: ${JSON.stringify(unknownKeyOutcome)}`)
   }
   record('宿主不信任任何发布者时被拒绝', unknownKeyOutcome)
 
-  // 3. control: same entry point, shipped catalogue, test keyring → installs, so the
+  // 3. control: same entry point, configured catalogue, test keyring → installs, so the
   //    two refusals above are about the hostile input and not a broken path.
-  const healthyOutcome = await runCase('healthy', { index: appIndexPath, withKeyring: true })
+  const healthyOutcome = await runCase('healthy', { index: appIndexPath, withKeyring: true, expected: { reason: 'healthy' } })
   if (healthyOutcome.refused || !healthyOutcome.installed) {
-    throw new Error(`the shipped catalogue could not be installed: ${JSON.stringify(healthyOutcome)}`)
+    throw new Error(`the configured catalogue could not be installed: ${JSON.stringify(healthyOutcome)}`)
   }
   record('同一入口对未篡改制品正常工作', healthyOutcome)
 

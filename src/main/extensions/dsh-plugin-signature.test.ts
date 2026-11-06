@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { createPrivateKey, generateKeyPairSync, sign as signEd25519 } from 'node:crypto'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { canonicalJson } from './canonical-json'
 import { ExtensionStoreError } from './errors'
 import {
@@ -57,13 +57,15 @@ function sign(key: TestKey, overrides: Partial<{ keyId: string; publisherId: str
 
 describe('resolveDshPublisherKeyringPath', () => {
   it('prefers the explicit override', () => {
-    expect(resolveDshPublisherKeyringPath('/profile', { [DSH_PUBLISHER_KEYRING_ENV]: '/elsewhere/keys.json' }))
-      .toBe('/elsewhere/keys.json')
+    const override = join(tmpdir(), 'elsewhere', 'keys.json')
+    expect(resolveDshPublisherKeyringPath(join(tmpdir(), 'profile'), { [DSH_PUBLISHER_KEYRING_ENV]: override }))
+      .toBe(resolve(override))
   })
 
   it('falls back to the profile default', () => {
-    expect(resolveDshPublisherKeyringPath('/profile', {}))
-      .toBe('/profile/extensions/dsh-publisher-keys.json')
+    const profile = join(tmpdir(), 'profile')
+    expect(resolveDshPublisherKeyringPath(profile, {}))
+      .toBe(join(profile, 'extensions', 'dsh-publisher-keys.json'))
   })
 })
 

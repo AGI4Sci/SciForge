@@ -1,7 +1,8 @@
+import { OwnerAuditIndex } from './audit-index.js'
 import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { EvidenceFileStorage } from './secure-storage.js'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   compareEvidenceDagWatermarks,
   evidenceDagCommittedSnapshotSchema,
@@ -156,9 +157,28 @@ type EvidenceDagChainOptions = Readonly<{
   sealIdempotency?: Readonly<Record<string, string>>
 }>
 
+// Freeze only owner-held copies at ingress; suffix readers never receive mutable state.
+function immutable<T>(value: T): T {
+  const pending: unknown[] = [value]
+  while (pending.length) {
+    const item = pending.pop()
+    if (!item || typeof item !== 'object' || Object.isFrozen(item)) continue
+    const prototype = Object.getPrototypeOf(item)
+    if (!Array.isArray(item) && prototype !== Object.prototype && prototype !== null) throw new Error('Evidence immutable records require JSON objects and arrays.')
+    Object.freeze(item)
+    for (const child of Object.values(item)) pending.push(child)
+  }
+  return value
+}
+
 /** The single append-only owner of one Evidence thread. */
 export class EvidenceDeltaChain {
+  private revisionValue = 0
+  get auditRevision(): number { return this.revisionValue }
+  get auditFreshness(): EvidenceDagCompactSummary['freshness'] | undefined { return this.provisionalState?.summary.freshness }
+  get workspaceRoot(): string | undefined { return this.scopeIdentity?.workspaceRoot }
   private readonly records: EvidenceDagDelta[] = []
+  private readonly closureJournal: EvidenceDagSealedClosure[] = []
   private readonly closuresByDigest = new Map<string, EvidenceDagSealedClosure>()
   private readonly sidechains: EvidenceDagSidechainRecordV1[] = []
   private readonly sealIdempotency = new Map<string, string>()
@@ -200,7 +220,7 @@ export class EvidenceDeltaChain {
     for (const closure of options.closures ?? []) {
       const parsed = evidenceDagSealedClosureSchema.parse(closure)
       if (parsed.threadId !== threadId) throw new Error('Evidence closure scope does not match its chain thread.')
-      this.closuresByDigest.set(parsed.closureDigest, structuredClone(parsed))
+      this.addClosure(parsed)
     }
     for (const record of records) this.appendExisting(record)
     for (const closure of this.closuresByDigest.values()) this.validateClosure(closure)
@@ -283,6 +303,7 @@ export class EvidenceDeltaChain {
     // Snapshot replacement and closure binding are one in-memory transaction;
     // the store persists both together after this method returns.
     this.committedSnapshot = structuredClone(parsed)
+    this.revisionValue++
     this.committedSnapshotClosureDigest = closureDigest
     this.committedSnapshotClosures.set(closureDigest, parsed.digest)
   }
@@ -367,6 +388,21 @@ export class EvidenceDeltaChain {
     return this.records.find((record) => record.deltaDigest === digestValue)?.committedWatermark ?? null
   }
 
+  private addClosure(value: EvidenceDagSealedClosure): void {
+    const copy = immutable(structuredClone(value))
+    if (!this.closuresByDigest.has(copy.closureDigest)) this.closureJournal.push(copy)
+    this.closuresByDigest.set(copy.closureDigest, copy)
+  }
+
+  /** Bounded immutable append suffix. A replacement/reload is a new chain identity. */
+  auditSuffix(offsets: { deltas: number; closures: number; records: number }, limit: number) {
+    const count = Math.max(0, Math.min(2048, Math.floor(limit)))
+    const deltas = this.records.slice(offsets.deltas, offsets.deltas + count)
+    const closures = this.closureJournal.slice(offsets.closures, offsets.closures + Math.max(0, count - deltas.length))
+    const records = this.sidechains.slice(offsets.records, offsets.records + Math.max(0, count - deltas.length - closures.length))
+    return { deltas, closures, records, totals: { deltas: this.records.length, closures: this.closureJournal.length, records: this.sidechains.length } }
+  }
+
   list(): readonly EvidenceDagDelta[] {
     return this.records.map((record) => structuredClone(record))
   }
@@ -413,6 +449,7 @@ export class EvidenceDeltaChain {
     })
     this.validateLegacyRoot(root)
     this.legacyRoot = root
+    this.revisionValue++
     return structuredClone(root)
   }
 
@@ -454,7 +491,8 @@ export class EvidenceDeltaChain {
       throw new Error('Evidence committed watermark regressed behind its predecessor.')
     }
     const delta = this.materialize({ ...input, committedWatermark }, predecessorDigest, this.records.length + 1)
-    this.records.push(delta)
+    this.records.push(immutable(structuredClone(delta)))
+    this.revisionValue++
     return { delta: structuredClone(delta), idempotent: false }
   }
 
@@ -533,7 +571,8 @@ export class EvidenceDeltaChain {
       throw new EvidenceDagSealError('invalid_sidechain', 'Evidence sidechain record ID is already committed.')
     }
     const record = this.materializeSidechain(input, this.sidechains.length + 1)
-    this.sidechains.push(record)
+    this.sidechains.push(immutable(structuredClone(record)))
+    this.revisionValue++
     return { record: structuredClone(record), idempotent: false }
   }
 
@@ -605,11 +644,12 @@ export class EvidenceDeltaChain {
       updatedAt: now
     })
     this.provisionalState = view
+    this.revisionValue++
     return structuredClone(view)
   }
 
   seal(policyInput: EvidenceDagClosurePolicyV1, idempotencyKey?: string): EvidenceDagSealedClosure {
-    const policy = canonicalizeClosurePolicy(evidenceDagClosurePolicyV1Schema.parse(policyInput))
+    let policy = canonicalizeClosurePolicy(evidenceDagClosurePolicyV1Schema.parse(policyInput))
     const priorDigest = idempotencyKey ? this.sealIdempotency.get(idempotencyKey) : undefined
     if (priorDigest) {
       const existing = this.closuresByDigest.get(priorDigest)
@@ -619,6 +659,7 @@ export class EvidenceDeltaChain {
           `Evidence seal idempotency key ${idempotencyKey} points to a missing closure.`
         )
       }
+      if (policy.semanticGapPolicy === undefined && existing.policy.semanticGapPolicy !== undefined) policy = { ...policy, semanticGapPolicy: existing.policy.semanticGapPolicy }
       if (canonicalJson(existing.policy) !== canonicalJson(policy)) {
         throw new EvidenceDagSealError(
           'invalid_sidechain',
@@ -631,6 +672,7 @@ export class EvidenceDeltaChain {
       // the current head.
       return structuredClone(existing)
     }
+    policy = { ...policy, semanticGapPolicy: policy.semanticGapPolicy ?? 'explicit-v2' }
     const head = this.head
     if (policy.expectedHeadDigest !== head.headDigest) {
       throw new EvidenceDagSealError('stale_head', `Evidence seal expected head ${policy.expectedHeadDigest} but authoritative head is ${head.headDigest ?? 'empty'}.`)
@@ -648,7 +690,8 @@ export class EvidenceDeltaChain {
       sealedAt: new Date().toISOString(),
       ...(this.legacyRoot ? { legacyRootStatus: this.legacyRoot.status } : {})
     })
-    this.closuresByDigest.set(closure.closureDigest, structuredClone(closure))
+    this.addClosure(closure)
+    this.revisionValue++
     if (idempotencyKey) this.sealIdempotency.set(idempotencyKey, closureDigest)
     return closure
   }
@@ -767,7 +810,8 @@ export class EvidenceDeltaChain {
     const priorWatermark = this.head.committedWatermark
     const comparison = priorWatermark ? compareEvidenceDagWatermarks(parsed.committedWatermark, priorWatermark) : undefined
     if (comparison !== undefined && comparison < 0) throw new Error('Evidence delta chain contains a regressed committed watermark.')
-    this.records.push(structuredClone(parsed))
+    this.records.push(immutable(structuredClone(parsed)))
+    this.revisionValue++
   }
 
   private appendSidechainExisting(record: EvidenceDagSidechainRecordV1): void {
@@ -787,7 +831,8 @@ export class EvidenceDeltaChain {
     if (parsed.recordDigest !== digest(content)) {
       throw new EvidenceDagSealError('invalid_sidechain', 'Evidence sidechain digest does not match its immutable content.')
     }
-    this.sidechains.push(structuredClone(parsed))
+    this.sidechains.push(immutable(structuredClone(parsed)))
+    this.revisionValue++
   }
 
   private materialize(
@@ -848,7 +893,9 @@ export class EvidenceDeltaChain {
       this.scopeIdentity = { runtimeId: scope.runtimeId, workspaceRoot: scope.workspaceRoot }
       return
     }
-    if (this.scopeIdentity.runtimeId !== scope.runtimeId || this.scopeIdentity.workspaceRoot !== scope.workspaceRoot) {
+    // Compare path identity without changing the original scope bytes: each
+    // committed delta's digest must remain valid across provider normalization.
+    if (this.scopeIdentity.runtimeId !== scope.runtimeId || resolve(this.scopeIdentity.workspaceRoot) !== resolve(scope.workspaceRoot)) {
       throw new Error('Evidence delta scope identity drifted across runtime or workspace.')
     }
   }
@@ -945,6 +992,7 @@ type EvidenceDeltaStoreFile = Readonly<{
 /** Durable boundary for all Evidence deltas and their owner-derived views. */
 export class EvidenceDagDeltaStore {
   private readonly chains = new Map<string, EvidenceDeltaChain>()
+  private readonly auditIndex = new OwnerAuditIndex()
   private loaded = false
   private mutationQueue: Promise<void> = Promise.resolve()
   private writeQueue: Promise<void> = Promise.resolve()
@@ -1147,14 +1195,11 @@ export class EvidenceDagDeltaStore {
     return this.readView(threadId, chain)
   }
 
-  /**
-   * Read-only cross-thread views for the bounded audit scan. Like `chain()`,
-   * every entry is an immutable read view; this path never mutates a chain
-   * and never persists.
-   */
-  async auditChains(): Promise<readonly EvidenceDeltaChain[]> {
+  /** Query the canonical owner without copying all chain histories into read views. */
+  async queryAudit(subject: import('../contract.js').EvidenceDagAuditQuerySubject, workspaceRoot?: string) {
     await this.load()
-    return [...this.chains.entries()].map(([threadId, chain]) => this.readView(threadId, chain))
+    await this.mutationQueue
+    return this.auditIndex.query(this.chains, subject, workspaceRoot)
   }
 
   private readView(threadId: string, chain: EvidenceDeltaChain): EvidenceDeltaChain {
@@ -1348,7 +1393,7 @@ function traverseClosure(records: readonly EvidenceDagDelta[], policy: EvidenceD
       if (knownFamilies.has(item.edge.family) || unknownEdgesSeen.has(edgeKey) || !touches(item.record, reachedIds)) continue
       unknownEdgesSeen.add(edgeKey)
       handlePolicy(policy.unknownEdgeHandling, gaps, 'unsupported_edge_family', 'unknown_edge')
-      for (const semanticGap of semanticGapsFor(item.record.payload)) addGap(gaps, semanticGap)
+      for (const semanticGap of semanticGapsFor(item.record.payload, policy.semanticGapPolicy)) addGap(gaps, semanticGap)
     }
   }
   checkUnknownEdges()
@@ -1423,7 +1468,7 @@ function traverseClosure(records: readonly EvidenceDagDelta[], policy: EvidenceD
       ...record.sourceRefs, ...record.artifactRefs, ...record.runRefs
     ]))
     for (const record of records) {
-      const semanticGaps = semanticGapsFor(record.payload)
+      const semanticGaps = semanticGapsFor(record.payload, policy.semanticGapPolicy)
       if (deltaDigests.has(record.deltaDigest)) {
         for (const semanticGap of semanticGaps) addGap(gaps, semanticGap)
         continue
@@ -1646,8 +1691,7 @@ function countRiskMarkers(value: unknown): number {
   return own + Object.values(value).reduce<number>((count, item) => count + countRiskMarkers(item), 0)
 }
 
-function semanticGapsFor(value: unknown): EvidenceDagSealedClosure['gapCodes'] {
-  const text = canonicalJson(value).toLowerCase()
+function semanticGapsFor(value: unknown, semantics?: 'keyword-v1' | 'explicit-v2'): EvidenceDagSealedClosure['gapCodes'] {
   const gaps: EvidenceDagSealedClosure['gapCodes'][number][] = []
   const declared = collectStringArray(value, 'gapCodes')
   const known = new Set<EvidenceDagSealedClosure['gapCodes'][number]>([
@@ -1666,11 +1710,14 @@ function semanticGapsFor(value: unknown): EvidenceDagSealedClosure['gapCodes'] {
     const normalized = code as EvidenceDagSealedClosure['gapCodes'][number]
     if (known.has(normalized)) gaps.push(normalized)
   }
-  if (text.includes('contradict')) gaps.push('contradiction_unresolved')
-  if (text.includes('negative')) gaps.push('negative_result_missing')
-  if (text.includes('fail') && text.includes('replicat')) gaps.push('failed_replication_missing')
-  if (text.includes('shared') && text.includes('ances')) gaps.push('shared_ancestry_unknown')
-  if (text.includes('access') && text.includes('breakpoint')) gaps.push('access_restricted')
+  if (semantics !== 'explicit-v2') {
+    const text = canonicalJson(value).toLowerCase()
+    if (text.includes('contradict')) gaps.push('contradiction_unresolved')
+    if (text.includes('negative')) gaps.push('negative_result_missing')
+    if (text.includes('fail') && text.includes('replicat')) gaps.push('failed_replication_missing')
+    if (text.includes('shared') && text.includes('ances')) gaps.push('shared_ancestry_unknown')
+    if (text.includes('access') && text.includes('breakpoint')) gaps.push('access_restricted')
+  }
   // `independent` is a valid result, so do not infer an unknown gap from a
   // substring match. Only explicit unknown/unassessed assessment metadata is
   // a closure gap; contradictory metadata is rejected on append.

@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/plugin-change-inspector",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Change Inspector as a DSH backend plugin: session change snapshots over an agent-threads port.",
@@ -11,7 +11,8 @@
     "test": "node --import tsx --test \"tests/**/*.test.ts\""
   },
   "dependencies": {
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@sciforge/domain-sdk": "^0.2.35"
   },
   "exports": {
     ".": {

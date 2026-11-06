@@ -626,6 +626,17 @@ export class VisibleContextService {
     }
   }
 
+  /** Host-only current registry data; never sent to plugin processes. */
+  async currentRegisteredTargetSnapshot(targetRef: string): Promise<VisibleContextSnapshot | null> {
+    const ref = targetRef.trim()
+    if (!ref) return null
+    const current = [...this.snapshots.values()].find(snapshot => this.findRegisteredTarget(snapshot, ref))
+    if (!current) return null
+    const refreshed = await this.refreshLayoutOnDemand(current)
+    if (!this.findRegisteredTarget(refreshed, ref)) return null
+    return structuredClone(refreshed)
+  }
+
   async registeredTargetRef(
     windowId: string,
     input: VisibleContextTargetRefRequest

@@ -183,7 +183,110 @@ function createFileState(overrides: Partial<WorkspacePreviewFileState> = {}): Wo
   }
 }
 
+function deferredPreviewResult<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
+}
+
+function createAsyncPreviewFixture(overrides: Partial<WorkspacePreviewBridgeAdapter>) {
+  const registry = createRendererWorkspacePreviewRegistry()
+  const descriptor = requireDescriptor(registry, 'protein.pdb')
+  const bridge = createMockBridge({
+    open: vi.fn<WorkspacePreviewBridgeAdapter['open']>(async input => ({
+      ok: true,
+      session: createSession(descriptor, {
+        id: input.path === 'protein-2.pdb' ? 'session-2' : 'session-1', path: input.path
+      }),
+      manifest: descriptor.manifest, route: 'matched',
+      file: createFileState({ path: input.path, relativePath: input.path })
+    })),
+    ...overrides
+  })
+  return { descriptor, bridge, host: createWorkspacePreviewHost({ registry, bridge }) }
+}
+
+function selectionEditReceipt(session: WorkspacePreviewSession, ids: string[]) {
+  return {
+    ok: true as const, session: { ...session, selection: createDomainSelection(ids) },
+    operationKind: 'workspace.setSelection' as const, appliedAt: '2026-11-06T00:00:00.000Z',
+    audit: { pluginId: session.pluginId, path: session.path,
+      operationKind: 'workspace.setSelection' as const, effect: 'session-update' as const }
+  }
+}
+
 describe('WorkspacePreviewHost', () => {
+  it('does not resurrect another document after an old selection write completes', async () => {
+    const pending = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>>()
+    const { host } = createAsyncPreviewFixture({ applyEdit: () => pending.promise })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const original = host.getState().session!
+    const saving = host.setSelection(createDomainSelection(['A']))
+    await host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
+    const current = host.getState()
+    pending.resolve(selectionEditReceipt(original, ['A']))
+    await expect(saving).resolves.toMatchObject({ ok: true })
+    expect(host.getState()).toEqual(current)
+  })
+
+  it('does not publish an old write failure into the replacement preview', async () => {
+    const pending = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>>()
+    const { host } = createAsyncPreviewFixture({ applyEdit: () => pending.promise })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const saving = host.setSelection(createDomainSelection(['A']))
+    await host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
+    pending.reject(new Error('Old write failed'))
+    await expect(saving).resolves.toMatchObject({ ok: false })
+    expect(host.getState().session?.id).toBe('session-2')
+    expect(host.getState().error).toBeNull()
+  })
+
+  it('rejects an old edit receipt after the same session id is reopened', async () => {
+    const pending = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>>()
+    const { host } = createAsyncPreviewFixture({ applyEdit: () => pending.promise })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const original = host.getState().session!
+    const saving = host.setSelection(createDomainSelection(['A']))
+    await host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    pending.resolve(selectionEditReceipt(original, ['A']))
+    await saving
+    expect(host.getState().session?.selection).toBeUndefined()
+  })
+
+  it('keeps the latest selection receipt when two same-session responses arrive backwards', async () => {
+    const first = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>>()
+    const second = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>>()
+    const applyEdit = vi.fn<WorkspacePreviewBridgeAdapter['applyEdit']>()
+      .mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    const { host } = createAsyncPreviewFixture({ applyEdit })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const session = host.getState().session!
+    const a = host.setSelection(createDomainSelection(['A']))
+    const ab = host.setSelection(createDomainSelection(['A', 'B']))
+    second.resolve(selectionEditReceipt(session, ['A', 'B'])); await ab
+    first.resolve(selectionEditReceipt(session, ['A'])); await a
+    expect(host.getState().session?.selection).toEqual(createDomainSelection(['A', 'B']))
+  })
+
+  it('does not overwrite a newer observation with a late same-session observation', async () => {
+    const first = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['observe']>>>()
+    const second = deferredPreviewResult<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['observe']>>>()
+    const observe = vi.fn<WorkspacePreviewBridgeAdapter['observe']>()
+      .mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
+    const { descriptor, host } = createAsyncPreviewFixture({ observe })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    const observation = (title: string): WorkspaceObservation => ({
+      schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION, file: { path: 'protein.pdb', workspaceRoot: '/tmp/work' },
+      view: { pluginId: descriptor.manifest.id, modality: descriptor.manifest.modality, mode: 'preview', title }, actions: []
+    })
+    const old = host.observe(); const latest = host.observe()
+    second.resolve({ ok: true, observation: observation('latest') }); await latest
+    first.resolve({ ok: true, observation: observation('old') }); await old
+    expect(host.getState().observation?.view.title).toBe('latest')
+  })
+
   it('lists descriptors and resolves renderer, domain, and fallback plugins', () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const host = createWorkspacePreviewHost({ registry, bridge: createMockBridge() })

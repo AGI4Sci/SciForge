@@ -26,7 +26,7 @@ import {
 import { CapabilityBroker } from './broker'
 import {
   CapabilityRegistry,
-  defineCapability,
+  defineCapability as defineUnregisteredCapability,
   type CapabilityHandlerContext
 } from './registry'
 
@@ -89,6 +89,26 @@ describe('CapabilityAgentToolSurface', () => {
 
     expect(capabilityEvent.operationRef).toMatch(/^op_/u)
     expect(providerEvent).not.toHaveProperty('operationRef')
+  })
+
+  it('detects unchanged fresh observations within a turn and resets on state or turn changes', async () => {
+    const resourceRef = `res_${'r'.repeat(24)}`
+    const resource = capabilityResourceHandleSchema.parse({ token: `cap_${'r'.repeat(24)}`, expiresAt: '2099-01-01T00:00:00.000Z', semanticRevision: '1' })
+    let state = { text: 'first' }
+    let sequence = 0
+    const broker = { ...brokerStub(),
+      bindResourceRef: vi.fn(async () => resource),
+      observe: vi.fn(async () => ({ ...observation(resource, resourceRef, 'workspace-preview', state, []), observedAt: String(++sequence) }))
+    }
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    const read = (turnId = 'turn') => surface.call({ name: 'sciforge_observe', arguments: { resourceRef }, context: { ...context, turnId } })
+    expect((await read()).value).not.toHaveProperty('progress')
+    expect((await read()).value).toMatchObject({ progress: { status: 'unchanged', consecutiveObservations: 2 } })
+    expect((await read()).value).toMatchObject({ progress: { consecutiveObservations: 3 } })
+    state = { text: 'changed outside the agent' }
+    expect((await read()).value).not.toHaveProperty('progress')
+    expect((await read('new-turn')).value).not.toHaveProperty('progress')
+    expect(broker.observe).toHaveBeenCalledTimes(5)
   })
 
   it('fails closed when the Host cannot match a tool request to its captured Principal lease', async () => {
@@ -763,10 +783,7 @@ describe('CapabilityAgentToolSurface', () => {
     const documentHandle = handle('document-revision', 'b')
     const open = descriptor('surface.current', 'Open current surface', 'global', 'read')
     const inspect = descriptor('surface.describe', 'Describe surface', 'resource', 'read')
-    const mutate = {
-      ...descriptor('document.update', 'Update document', 'resource', 'workspace-write'),
-      approval: 'confirmation' as const
-    }
+    const mutate = descriptor('document.update', 'Update document', 'resource', 'workspace-write', 'confirmation')
     const surfaceObservation = observation(
       surfaceHandle,
       'res_surface_abcdefghijklmnopqrstuvwxyz',
@@ -872,7 +889,7 @@ describe('CapabilityAgentToolSurface', () => {
       expectedRevision: documentHandle.semanticRevision,
       invocationId: approvedInvocationId,
       input: { title: 'Updated' }
-    }), { context: mutationContext, signal: expect.any(AbortSignal) })
+    }), { context: mutationContext, signal: expect.any(AbortSignal), expectedDescriptor: mutate })
     expect(JSON.stringify({ opened, observed })).not.toMatch(
       /cap_|semanticRevision|expiresAt|actionId|invocationId|expectedRevision|snapshotToken|componentId/u
     )
@@ -1578,6 +1595,31 @@ describe('CapabilityAgentToolSurface', () => {
     expect(dispatch).toHaveBeenCalledOnce()
   })
 
+  it('reports outcome_unknown when registration changes while projecting a committed mutation result', async () => {
+    const operation = globalMutationDescriptor('document.registration-barrier', 'Registration barrier')
+    const owner = fixtureRegistries.find(registry => registry.get(operation.id)?.descriptor === operation)!
+    const outputHandle = handle('1', 'j')
+    const invoke = vi.fn(async (): Promise<CapabilityInvocationResult> => ({
+      actionId: operation.id, output: outputHandle, changed: true, replayed: false,
+      completedAt: '2026-07-16T11:00:00.000Z'
+    }))
+    const surface = createCapabilityAgentToolSurface({ broker: { ...brokerStub(),
+      discover: vi.fn(async () => [operation]), invoke,
+      describeResourceHandle: vi.fn(async () => {
+        await Promise.resolve()
+        owner.unregister(operation.id)
+        return { resourceRef: `res_${'j'.repeat(26)}` }
+      })
+    }, resolveCaller: () => caller })
+    const invocationContext = { ...context, turnId: 'result-drift', callId: 'result-drift' }
+    const discovered = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.discover, arguments: {}, context: invocationContext })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+    await expect(surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: {} }, context: invocationContext
+    })).rejects.toMatchObject({ code: 'outcome_unknown', retryable: false })
+    expect(invoke).toHaveBeenCalledOnce()
+  })
+
   it('reports outcome_unknown when Principal changes while sanitizing a committed mutation result', async () => {
     const operation = globalMutationDescriptor('document.sanitize-barrier', 'Sanitize barrier')
     const outputHandle = handle('1', 's')
@@ -2027,6 +2069,41 @@ describe('CapabilityAgentToolSurface', () => {
     expect(renewed.value).toMatchObject({ resourceRef: transferred.resourceRef, state: { title: 'Paper' } })
   })
 
+  it.each(['disabled', 'same-version replacement', 'same-object re-registration', 'owned hot update'])('rejects pending confirmation after %s', async (transition) => {
+    const oldHandler = vi.fn(async () => ({ output: { ok: true } }))
+    const newHandler = vi.fn(async () => ({ output: { ok: true } }))
+    const definition = defineCapability({
+      id: 'test.pending.delete', version: '1', title: 'Delete', description: 'Deletes a workspace item.',
+      audiences: ['agent'], scope: 'workspace', effect: 'workspace-write', approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({}).strict(), outputSchema: z.object({ ok: z.boolean() }).strict(), handler: oldHandler
+    })
+    const registry = new CapabilityRegistry([definition])
+    const broker = new CapabilityBroker(registry)
+    let approve!: (decision: 'allowed') => void
+    let pending!: () => void
+    const requested = new Promise<void>(resolve => { pending = resolve })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller,
+      requestApproval: () => { pending(); return new Promise(resolve => { approve = resolve }) }
+    })
+    const discovered = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.discover, arguments: {}, context })
+    const ref = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+    const invocationContext = { ...context, turnId: 'pending-turn', callId: 'pending-call' }
+    const result = surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.invoke, arguments: { operationRef: ref, input: {} }, context: invocationContext })
+    const rejection = expect(result).rejects.toMatchObject({ code: 'stale_capability_definition' })
+    await requested
+    const previous = registry.require(definition.descriptor.id)
+    if (transition === 'owned hot update') registry.replaceOwned([previous], [{ ...definition, handler: newHandler }])
+    else {
+      registry.unregister(definition.descriptor.id)
+      if (transition !== 'disabled') registry.register(transition === 'same-object re-registration' ? previous : { ...definition, handler: newHandler })
+    }
+    approve('allowed')
+    await rejection
+    expect(oldHandler).not.toHaveBeenCalled()
+    expect(newHandler).not.toHaveBeenCalled()
+  })
+
   it('waits for human confirmation and grants only the approved action invocation', async () => {
     const handler = vi.fn(async () => ({ output: { ok: true } }))
     const publish = defineCapability({
@@ -2426,7 +2503,8 @@ function descriptor(
   id: string,
   title: string,
   scope: CapabilityDescriptor['scope'],
-  effect: CapabilityDescriptor['effect']
+  effect: CapabilityDescriptor['effect'],
+  approval: CapabilityDescriptor['approval'] = 'none'
 ): CapabilityDescriptor {
   return defineCapability({
     id,
@@ -2437,7 +2515,7 @@ function descriptor(
     scope,
     ...(scope === 'resource' ? { resourceKinds: ['surface', 'workspace-preview'] } : {}),
     effect,
-    approval: 'none',
+    approval,
     concurrency: effect === 'read'
       ? { revision: 'none', idempotency: 'none' }
       : { revision: 'optimistic', idempotency: 'required' },
@@ -2499,4 +2577,13 @@ function readCapability(id: string) {
     outputSchema: z.object({ ok: z.boolean() }).strict(),
     handler: async () => ({ output: { ok: true } })
   })
+}
+
+// Stub transports use the same frozen registration contract as real discovery.
+const fixtureRegistries: CapabilityRegistry[] = []
+function defineCapability(...args: Parameters<typeof defineUnregisteredCapability>): ReturnType<typeof defineUnregisteredCapability> {
+  const definition = defineUnregisteredCapability(...args)
+  const registry = new CapabilityRegistry([definition])
+  fixtureRegistries.push(registry)
+  return registry.require(definition.descriptor.id)
 }

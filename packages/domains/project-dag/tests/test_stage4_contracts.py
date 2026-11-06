@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from workspace_fixture import workspace
 
 from project_dag.contracts import DECISION_POLICY_V1
 from project_dag.judge import StubJudge
@@ -10,20 +11,25 @@ from project_dag.service import Engine
 
 
 class Stage4ContractTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.root = directory.name
+        self.addCleanup(directory.cleanup)
+
     def make_engine(self):
         directory = tempfile.TemporaryDirectory()
         engine = Engine(os.path.join(directory.name, "project.db"), directory.name,
                         judge=StubJudge({}))
-        self.addCleanup(engine.store.close)
         self.addCleanup(directory.cleanup)
+        self.addCleanup(engine.store.close)
         return engine
 
     def test_scope_draft_is_not_applied_until_explicit_apply(self):
         engine = self.make_engine()
-        workspace = "/workspace/one-project"
-        project = "path:" + workspace
+        root = workspace(self.root, "one-project")
+        project = "path:" + root
         draft = engine.save_scope_draft({
-            "workspaceRoot": workspace,
+            "workspaceRoot": root,
             "currentSessionId": "session-current",
             "actorId": "researcher",
         })
@@ -37,19 +43,19 @@ class Stage4ContractTests(unittest.TestCase):
 
     def test_project_key_requires_matching_absolute_workspace_roots(self):
         self.assertEqual(
-            Engine.project_key(workspace_root="/workspace/lab",
-                               project_root="/workspace/lab"),
-            "path:/workspace/lab",
+            Engine.project_key(workspace_root=workspace(self.root, "lab"),
+                               project_root=workspace(self.root, "lab")),
+            ("path:" + workspace(self.root, "lab")),
         )
         with self.assertRaisesRegex(ValueError, "same workspace"):
-            Engine.project_key(workspace_root="/workspace/one",
-                               project_root="/workspace/two")
+            Engine.project_key(workspace_root=workspace(self.root, "one"),
+                               project_root=workspace(self.root, "two"))
         with self.assertRaisesRegex(ValueError, "absolute"):
             Engine.project_key(workspace_root="relative/workspace")
 
     def test_policy_rules_are_versioned_and_specialized_fails_closed(self):
         engine = self.make_engine()
-        project = "path:/workspace/policy"
+        project = ("path:" + workspace(self.root, "policy"))
         policy = engine.workflow.policy(project)
         self.assertEqual(policy["decisionRules"]["public_external"]["quorum"], 1)
         self.assertEqual(policy["decisionRules"]["specialized_high_impact"]["trustedRoleSource"], None)
@@ -67,7 +73,7 @@ class Stage4ContractTests(unittest.TestCase):
         engine = self.make_engine()
         with self.assertRaisesRegex(ValueError, "accountable human"):
             engine.workflow.record_decision(
-                project_key="path:/workspace/agent", action="endorse", decided_by="agent",
+                project_key=("path:" + workspace(self.root, "agent")), action="endorse", decided_by="agent",
                 actor_id="agent-1", autonomy_mode="autonomous",
                 rationale="Internal draft only.", alternatives=[],
                 evidence_digest="project:" + "b" * 64, confidence=1.0,

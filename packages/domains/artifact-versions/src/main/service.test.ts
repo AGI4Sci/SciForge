@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import {
   ARTIFACT_VERSIONS_SYSTEM_CAPABILITY_GRANTS,
+  type ArtifactVersionListV2,
   type ArtifactVersionCommitInputV1,
   type ArtifactVersionCommitInputV2,
   type ArtifactVersionCommitReceiptV1
@@ -2147,4 +2148,40 @@ test('retains an unverifiable remote legacy version as a remote reference', asyn
   } finally {
     await cleanup(f)
   }
+})
+
+
+test('owner metadata query finds old versions and cursor binds caller, scope and query with a stable watermark', async () => {
+  const f = await fixture('metadata-history')
+  try {
+    let artifactId = '', versionId = ''
+    const refs: string[] = []
+    for (let i = 0; i < 6; i++) {
+      const committed = valueOf(await f.service.commit(f.workspace, { idempotencyKey: `history-search-${i}`, candidates: [{ candidateId: 'one', intent: 'save', expectedCurrentVersionId: null, kind: 'research-output', label: 'History', ...(artifactId ? { artifactId, expectedCurrentVersionId: versionId } : {}), content: snapshot(`bytes-${i}`), metadata: { title: i === 0 ? 'older unique marker' : 'recent', shared: 'page-marker' } }] }))
+      artifactId = committed.versions[0]!.ref.artifactId; versionId = committed.versions[0]!.ref.versionId; refs.push(versionId)
+    }
+    const old = valueOf(await f.service.list(f.workspace, { metadataQuery: 'older unique marker', currentOnly: false }))
+    assert.deepEqual(old.items.map(item => item.ref.versionId), [refs[0]])
+    assert.equal(old.items[0]!.isCurrent, false)
+    assert.equal(valueOf(await f.service.list(f.workspace, { metadataQuery: 'bytes-0' })).items.length, 0, 'file contents are not searched')
+    const first = valueOf(await f.service.list(f.workspace, { metadataQuery: 'page-marker', limit: 2 }))
+    assert.ok(first.nextCursor)
+    valueOf(await f.service.commit(f.workspace, { idempotencyKey: 'history-search-later', candidates: [{ candidateId: 'one', intent: 'save', kind: 'research-output', artifactId, expectedCurrentVersionId: versionId, content: snapshot('new'), metadata: { shared: 'page-marker' } }] }))
+    const found = first.items.map(item => item.ref.versionId)
+    let cursor: string | undefined = first.nextCursor
+    while (cursor) { const page: ArtifactVersionListV2 = valueOf(await f.service.list(f.workspace, { metadataQuery: 'page-marker', limit: 2, cursor })); found.push(...page.items.map(item => item.ref.versionId)); cursor = page.nextCursor }
+    assert.deepEqual(found, [...refs].reverse()); assert.equal(new Set(found).size, 6)
+    for (const [workspace, input, access] of [
+      [f.workspace, { cursor: first.nextCursor, metadataQuery: 'different' }, SYSTEM_ACCESS],
+      [f.workspace, { cursor: first.nextCursor, metadataQuery: 'page-marker' }, { audience: 'ui', callerId: 'someone-else' }],
+      [join(f.root, 'other-workspace'), { cursor: first.nextCursor, metadataQuery: 'page-marker' }, SYSTEM_ACCESS]
+    ] as const) {
+      await mkdir(workspace, { recursive: true })
+      const rejected = await f.service.list(workspace, input, access)
+      assert.equal(rejected.ok, false); if (!rejected.ok) assert.equal(rejected.issue.code, 'invalid-input')
+    }
+    const restricted = valueOf(await f.service.commit(f.workspace, { idempotencyKey: 'history-search-denied', candidates: [{ candidateId: 'secret', intent: 'save', expectedCurrentVersionId: null, kind: 'research-output', content: snapshot('secret'), accessPolicy: { visibility: 'restricted', principals: ['owner'], allowExport: false }, metadata: { title: 'older unique marker' } }] }))
+    const accessible = valueOf(await f.service.list(f.workspace, { metadataQuery: 'older unique marker' }, { audience: 'ui', callerId: 'outsider' }))
+    assert.equal(accessible.items.some(item => item.ref.versionId === restricted.versions[0]!.ref.versionId), false)
+  } finally { await cleanup(f) }
 })

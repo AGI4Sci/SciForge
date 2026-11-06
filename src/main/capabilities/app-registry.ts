@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { copyWorkspaceMutationReceipt } from '../services/workspace-mutation-receipt'
 import {
   CONTROLLED_PROCESS_CREATE_ACTION_ID,
   CONTROLLED_PROCESS_DISPOSE_ACTION_ID,
@@ -552,7 +553,10 @@ const workspacePreviewBrokerEditOperationSchema: z.ZodType<WorkspacePreviewEditO
 const workspacePreviewApplyEditInputSchema = z.object({
   operation: workspacePreviewBrokerEditOperationSchema
 }).strict()
-const workspacePreviewExportInputSchema = z.object({ target: workspacePreviewExportTargetSchema }).strict()
+const workspacePreviewExportInputSchema = z.union([
+  z.object({ target: workspacePreviewExportTargetSchema }).strict(),
+  z.object({ targets: z.array(workspacePreviewExportTargetSchema).min(1).max(16) }).strict()
+])
 const workspacePreviewInvokeActionInputSchema = z.object({ action: workspacePreviewPluginActionInputSchema }).strict()
 const capabilityOutputSchema = capabilityJsonValueSchema
 
@@ -861,7 +865,7 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       id: APP_CAPABILITY_IDS.workspacePreviewReadRange,
       version: '1.1.0',
       title: 'Read Workspace Preview source range',
-      description: 'Reads the current preview source. For text use range: {start: {line: 1, column: 1}, maxCharacters: 12000}; returns plain UTF-8 text and one-based UTF-16 start/end coordinates matching text.replaceRange, plus nextStart when truncated. Read around an annotation anchor, then apply the authorized edit through Apply Workspace Preview edit using the observed revision. Do not reconstruct source from tool history. For binary assets use range: {offset, length} to receive Base64 bytes.',
+      description: 'Reads the current preview source. Document providers return extracted text with page anchors. Use range: {frameIndex: 3} to read one page, or {query: "exact text"} to locate evidence; query can be scoped to a frame. PDF text keeps source extraction order and may need reading-order review for multi-column layouts. For text use range: {start: {line: 1, column: 1}, maxCharacters: 4000}; returns plain UTF-8 text and one-based UTF-16 start/end coordinates matching text.replaceRange, plus a version-bound nextCursor when truncated; continue with range: {cursor: nextCursor}. A changed source invalidates the cursor. Read around an annotation anchor, then apply the authorized edit through Apply Workspace Preview edit using the observed revision. Do not reconstruct source from tool history. For binary assets use range: {offset, length} to receive Base64 bytes.',
       audiences: ['ui', 'agent', 'system'],
       scope: 'resource',
       resourceKinds: [WORKSPACE_PREVIEW_RESOURCE_KIND],
@@ -935,11 +939,11 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
         const sessionId = resourceSessionId(context.resource)
         const result = await dependencies.workspacePreviewHost.applyEdit(sessionId, input.operation)
         if (!result.ok) return { output: capabilityJsonValueSchema.parse(result), changed: false }
-        return {
+        return copyWorkspaceMutationReceipt(result, {
           output: capabilityJsonValueSchema.parse(result),
           changed: true,
           semanticRevision: workspacePreviewRevision(result.session)
-        }
+        })
       }
     }),
     defineCapability({
@@ -1135,7 +1139,7 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       id: APP_CAPABILITY_IDS.workspacePreviewExport,
       version: '1.0.0',
       title: 'Export Workspace Preview',
-      description: 'Exports the current preview through the canonical provider.',
+      description: 'Exports the current preview through the canonical provider. Use {targets: [...]} for up to 16 independent exports; results preserve request order and report each success or failure. A batch is not atomic. To crop or resize any visual source, use target: {kind: \'workspace-file\', format: \'png\', path, render: {frameIndex, region: {x,y,width,height}, maxDimension}}. Region coordinates are normalized to the full source frame; frameIndex is one-based. Raster sources are not upscaled. Output preserves source colors and transparency and never overwrites an existing file. For visual extraction, export the original color pixels; grayscale or binary masks may locate crop bounds but must not become the exported image.',
       audiences: ['ui', 'agent'],
       scope: 'resource',
       resourceKinds: [WORKSPACE_PREVIEW_RESOURCE_KIND],
@@ -1147,7 +1151,9 @@ function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
       outputSchema: capabilityOutputSchema,
       handler: async (input, context) => ({
         output: capabilityJsonValueSchema.parse(
-          await dependencies.workspacePreviewHost.exportPreview(resourceSessionId(context.resource), input.target)
+          'targets' in input
+            ? { results: await Promise.all(input.targets.map(target => dependencies.workspacePreviewHost.exportPreview(resourceSessionId(context.resource), target))) }
+            : await dependencies.workspacePreviewHost.exportPreview(resourceSessionId(context.resource), input.target)
         ),
         changed: false
       })

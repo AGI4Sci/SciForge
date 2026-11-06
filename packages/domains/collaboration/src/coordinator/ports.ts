@@ -1149,6 +1149,8 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     answerHumanNeeded: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorHumanAnswerInputSchema.parse(rawInput)
+      const answeringIdentity = options.transport.status()
+      const answeringUserId = answeringIdentity.state === 'ready' ? answeringIdentity.userId : undefined
       const response = await executeUserCloud(options.transport, {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         requestId: requestId(),
@@ -1163,7 +1165,9 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         throw new Error(`HumanAnswer returned ${response.type}.`)
       }
       const answer = humanAnswerSchema.parse(response.entity)
-      if (answer.projectId !== input.projectId || answer.humanRequestId !== input.humanRequestId) {
+      if (answer.projectId !== input.projectId || answer.humanRequestId !== input.humanRequestId ||
+          answer.requestRevision !== input.requestRevision || answer.answer !== input.answer ||
+          answer.decision !== (input.decision ?? null) || !answeringUserId || answer.answeredByUserId !== answeringUserId) {
         throw new Error('HumanAnswer did not return the exact Project request answer.')
       }
       return options.workspace.readWorkspace({ projectId: input.projectId })

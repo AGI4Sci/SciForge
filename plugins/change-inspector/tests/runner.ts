@@ -1,43 +1,31 @@
 import { openSession } from '../src/core/operations.js'
 import { ChangeInspectorService } from '../src/core/service.js'
-import type {
-  ChangeInspectorAgentThreadsPort,
-  ChangeInspectorSessionDetail
-} from '../src/ports/agent-threads.js'
-import { WORKSPACE, type ScenarioStep } from './cases.js'
+import type { ChangeInspectorAgentThreadsPort, ChangeInspectorSessionDetail } from '../src/ports/agent-threads.js'
+import type { ScenarioStep } from './cases.js'
+import { createConfigAgentThreads } from './fixtures/config-agent-threads.js'
 
-/** Corpus-driven fake port shared by the plugin and static scenario runners. */
+/** Recorded corpus only; does not substitute for Host authorization acceptance. */
 export function fakeAgentThreads(
-  sessions: Record<string, ChangeInspectorSessionDetail>
+  sessions: Record<string, ChangeInspectorSessionDetail>,
+  currentSessionId = Object.keys(sessions)[0]
 ): ChangeInspectorAgentThreadsPort {
-  return Object.freeze({
-    read: async ({ threadId }) => {
-      const detail = sessions[threadId]
-      if (!detail) throw new Error(`Unknown session: ${threadId}`)
-      return detail
-    }
-  })
+  const recorded = Object.fromEntries(Object.entries(sessions).map(([id, detail]) => [id, {
+    sessionId: detail.sessionId, runtimeId: detail.runtimeId, workspaceRoot: detail.workspaceRoot, watermark: detail.watermark,
+    artifacts: [...detail.artifacts],
+    ...(detail.turns ? { turns: detail.turns.map(turn => ({ id: turn.id, artifacts: [...turn.artifacts] })) } : {})
+  }]))
+  return createConfigAgentThreads({ sessions: recorded, ...(currentSessionId ? { currentSessionId } : {}) })
 }
 
-/**
- * Runs one scenario against the plugin operation and records either the
- * output value or the thrown error message per step. Used by the parity test
- * (against the static handler) and by the golden baseline.
- */
 export async function runPluginScenario(
   steps: readonly ScenarioStep[],
-  options: Readonly<{
-    sessions: Record<string, ChangeInspectorSessionDetail>
-  }>
+  options: Readonly<{ sessions: Record<string, ChangeInspectorSessionDetail> }>
 ): Promise<readonly unknown[]> {
-  const service = new ChangeInspectorService({
-    agentThreads: fakeAgentThreads(options.sessions)
-  })
+  const service = new ChangeInspectorService({ agentThreads: fakeAgentThreads(options.sessions) })
   const results: unknown[] = []
   for (const step of steps) {
-    const caller = step.caller ?? WORKSPACE
     try {
-      const result = await openSession(service, step.input, caller)
+      const result = await openSession(service, step.input)
       results.push({ value: result.output })
     } catch (error) {
       results.push({ threw: error instanceof Error ? error.message : String(error) })

@@ -124,7 +124,7 @@ describe('Identity native private-vault fresh build', () => {
     )) as Readonly<{ sciforgeMainNativeAddons?: unknown }>
 
     expect(rootPackage.scripts.build).toBe(
-      'npm run build:agent-support && npm run build:domain-native-addons && electron-vite build'
+      'npm run build:agent-support && npm run build:domain-native-addons && node ./scripts/run-build-with-heap.mjs ./node_modules/electron-vite/bin/electron-vite.js build'
     )
     expect(rootPackage.scripts['build:domain-native-addons']).toBe(
       'node ./packages/domains/identity-access/src/main/private-vault/native/build-addon.mjs --skip-unsupported'

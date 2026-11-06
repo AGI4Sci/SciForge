@@ -1,5 +1,7 @@
+import { assertCapabilityDefinitionCurrent } from './registry'
 import { createHash, createHmac, createSecretKey, randomBytes, type KeyObject } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { copyWorkspaceMutationReceipt } from '../services/workspace-mutation-receipt'
 import { z } from 'zod'
 import { canonicalizeJson } from '@sciforge/domain-sdk/canonical-json'
 import { freezeInvocationSnapshot, isLosslessJsonValue } from './invocation-snapshot'
@@ -36,6 +38,7 @@ import {
   capabilityResourceHandleSchema,
   type CapabilityAuditRecord,
   type CapabilityAudience,
+  type CapabilityDescriptor,
   type CapabilityCallerContext,
   type CapabilityCallerContextInput,
   type CapabilityDiscoveryQuery,
@@ -75,6 +78,7 @@ const MAX_HANDLE_TTL_MS = 24 * 60 * 60_000
 const DEFAULT_MAX_AUDIT_RECORDS = 2_000
 const DEFAULT_MAX_EVENTS = 2_000
 const DEFAULT_MAX_IDEMPOTENCY_ENTRIES = 2_000
+const DEFAULT_MAX_IDEMPOTENCY_RESULT_BYTES = 64 * 1024 * 1024
 const SENSITIVE_INPUT_FINGERPRINT_KEY_BYTES = 32
 const SENSITIVE_INPUT_FINGERPRINT_DOMAIN = 'sciforge.capability-broker.sensitive-input.v1\u0000'
 const MAX_RESOURCE_RETIREMENT_ATTEMPTS = 3
@@ -112,6 +116,7 @@ export type CapabilityBrokerOptions = {
   maxAuditRecords?: number
   maxEvents?: number
   maxIdempotencyEntries?: number
+  maxIdempotencyResultBytes?: number
   reportCleanupError?: (error: unknown) => void
   reportHandlerError?: (error: Readonly<{
     actionId: string
@@ -178,10 +183,12 @@ type RetiredResourceState = Pick<
 >
 
 type IdempotencyEntry = {
+  definition: CapabilityDefinition
   fingerprint: string
   promise: Promise<CapabilityInvocationResult>
   settled: boolean
   retainUntilRestart: boolean
+  resultBytes: number
   resultPrincipalLease?: string
   postDispatchMutation?: boolean
 }
@@ -192,6 +199,8 @@ type EventSubscription = {
 }
 
 export type ActiveCapabilityInvocation = Readonly<{
+  originalContext?: Readonly<Record<string, unknown>>
+  signal?: AbortSignal
   caller: CapabilityCallerContext
   actionId: string
   invocationId?: string
@@ -296,6 +305,7 @@ export type HostApprovedCapabilityBatch = Readonly<{
 }>
 
 type CapabilityInvokeAsOptions = Readonly<{
+  expectedDescriptor?: CapabilityDescriptor
   signal?: AbortSignal
   ordinarySession?: DomainMainOrdinarySessionIdentity
   humanSessionSource?: HumanSessionConfirmationSource
@@ -521,6 +531,8 @@ export class CapabilityBroker {
   readonly #maxAuditRecords: number
   readonly #maxEvents: number
   readonly #maxIdempotencyEntries: number
+  readonly #maxIdempotencyResultBytes: number
+  #idempotencyResultBytes = 0
   readonly #reportCleanupError: (error: unknown) => void
   readonly #reportHandlerError: NonNullable<CapabilityBrokerOptions['reportHandlerError']>
   readonly #sensitiveInputFingerprintKey = createSensitiveInputFingerprintKey()
@@ -545,6 +557,7 @@ export class CapabilityBroker {
     this.#maxAuditRecords = Math.max(1, options.maxAuditRecords ?? DEFAULT_MAX_AUDIT_RECORDS)
     this.#maxEvents = Math.max(1, options.maxEvents ?? DEFAULT_MAX_EVENTS)
     this.#maxIdempotencyEntries = Math.max(1, options.maxIdempotencyEntries ?? DEFAULT_MAX_IDEMPOTENCY_ENTRIES)
+    this.#maxIdempotencyResultBytes = Math.max(1, options.maxIdempotencyResultBytes ?? DEFAULT_MAX_IDEMPOTENCY_RESULT_BYTES)
     this.#reportCleanupError = options.reportCleanupError ?? (() => undefined)
     this.#reportHandlerError = options.reportHandlerError ?? (() => undefined)
   }
@@ -902,6 +915,8 @@ export class CapabilityBroker {
         state: observed.data.state,
         operations
       })
+      // Validation clones JSON; Host-internal discovery must retain exact registration leases.
+      result.operations = operations
     } catch (error) {
       // A handle minted for a result that cannot be delivered must not remain
       // live until TTL merely because the observation failed afterwards.
@@ -925,7 +940,7 @@ export class CapabilityBroker {
   async invoke(
     rawCaller: CapabilityCallerContextInput,
     rawRequest: CapabilityInvocationRequest,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; expectedDescriptor?: CapabilityDescriptor } = {}
   ): Promise<CapabilityInvocationResult> {
     if (
       typeof rawCaller === 'object' &&
@@ -939,7 +954,8 @@ export class CapabilityBroker {
     }
     const caller = this.#parseCaller(rawCaller)
     return this.#invokeAs(caller, rawRequest, {
-      ...(options.signal ? { signal: options.signal } : {})
+      ...(options.signal ? { signal: options.signal } : {}),
+      expectedDescriptor: options.expectedDescriptor
     })
   }
 
@@ -948,7 +964,7 @@ export class CapabilityBroker {
     rawCaller: CapabilityCallerContextInput,
     rawRequest: CapabilityInvocationRequest,
     rawOrdinarySession: DomainMainOrdinarySessionIdentity,
-    options: { signal?: AbortSignal; context?: Readonly<Record<string, unknown>> } = {}
+    options: { signal?: AbortSignal; context?: Readonly<Record<string, unknown>>; expectedDescriptor?: CapabilityDescriptor } = {}
   ): Promise<CapabilityInvocationResult> {
     const caller = this.#parseCaller(rawCaller)
     if (caller.audience !== 'agent') {
@@ -986,7 +1002,8 @@ export class CapabilityBroker {
     return this.#invokeAs(caller, rawRequest, {
       ...(options.signal ? { signal: options.signal } : {}),
       ...(originalContext !== undefined ? { originalContext } : {}),
-      ordinarySession
+      ordinarySession,
+      expectedDescriptor: options.expectedDescriptor
     })
   }
 
@@ -1023,7 +1040,7 @@ export class CapabilityBroker {
     const invocationId = `human-session:${canonicalDigest({ runtimeId: parsed.runtimeId, threadId: parsed.threadId, messageId: parsed.messageId })}`
     const result = await this.#invokeAs(Object.freeze({ ...caller,
       approvals: [{ actionId: request.actionId, invocationId, mode: 'confirmation' as const }]
-    }), { actionId: request.actionId, input, invocationId }, { ...options, humanSessionSource })
+    }), { actionId: request.actionId, input, invocationId }, { ...options, humanSessionSource, expectedDescriptor: definition.descriptor })
     source.assertSessionCurrent()
     this.#assertCurrentPrincipal(caller)
     return result
@@ -1305,6 +1322,7 @@ export class CapabilityBroker {
           )
         }
 
+        assertCapabilityDefinitionCurrent(definition.descriptor)
         const resourceSelector = operationState.plan.resource
         let resource: CapabilityResourceHandle | undefined
         let inputLineage: HostApprovedBatchResourceLineage | undefined
@@ -1429,6 +1447,10 @@ export class CapabilityBroker {
       if (!definition) {
         throw new CapabilityBrokerError('unknown_capability', `Capability ${request.actionId} is not registered.`)
       }
+      if (options.expectedDescriptor && definition.descriptor !== options.expectedDescriptor) {
+        throw new CapabilityBrokerError('stale_capability_definition', 'The confirmed capability registration changed before invocation.')
+      }
+      assertCapabilityDefinitionCurrent(definition.descriptor)
       this.#authorizeAudience(caller, definition)
       if (caller.audience === 'system' && definition.descriptor.delegatedBatchGrant) {
         const proof = options.approvedBatchOperation
@@ -1489,7 +1511,7 @@ export class CapabilityBroker {
       const beforeRevision = resource?.semanticRevision
       const callerLease = callerPrincipalLease(caller)
       const principalScopedIdempotency = definition.descriptor.principalTransition !== 'host-authority'
-      const fingerprint = stableJson({
+      const fingerprint = createHash('sha256').update(stableJson({
         actionId: request.actionId,
         capabilityGrants: [...(caller.capabilityGrants ?? [])].sort(),
         principalSnapshotDigest: caller.principalSnapshotDigest ?? null,
@@ -1508,7 +1530,7 @@ export class CapabilityBroker {
         resourceRef: resource?.resourceRef ?? null,
         expectedRevision: request.expectedRevision ?? null,
         input: idempotencyInput(definition, request.input, this.#sensitiveInputFingerprintKey)
-      })
+      })).digest('hex')
       const idempotencyKey = request.invocationId
         ? `${caller.audience}\u0000${caller.callerId}\u0000${principalScopedIdempotency ? workspaceInvocationScope(caller) : 'global'}\u0000${principalScopedIdempotency ? callerLease : 'host-principal-transition'}\u0000${request.actionId}\u0000${request.invocationId}`
         : undefined
@@ -1516,6 +1538,7 @@ export class CapabilityBroker {
       if (idempotencyKey) {
         const existing = this.#idempotency.get(idempotencyKey)
         if (existing) {
+          if (existing.definition !== definition) throw new CapabilityBrokerError('stale_capability_definition', 'A previous invocation belongs to a retired capability registration.')
           if (existing.fingerprint !== fingerprint) {
             throw new CapabilityBrokerError(
               'idempotency_conflict',
@@ -1566,6 +1589,7 @@ export class CapabilityBroker {
                 : 'The current Principal changed before capability result delivery.'
             )
           }
+          assertCapabilityDefinitionCurrent(definition.descriptor)
           return replayed
         }
       }
@@ -1623,6 +1647,7 @@ export class CapabilityBroker {
           }
         },
         assertDelivery: (result) => {
+          assertCapabilityDefinitionCurrent(activeDefinition.descriptor)
           if (this.#currentPrincipalLease() !== acceptedResultPrincipalLease) {
             const outcomeUnknown = postDispatchMutation || result.changed
             throw new CapabilityBrokerError(
@@ -1641,19 +1666,24 @@ export class CapabilityBroker {
       })
       if (idempotencyKey) {
         const entry: IdempotencyEntry = {
+          definition: activeDefinition,
           fingerprint,
           promise: execution,
           settled: false,
+          resultBytes: 0,
           retainUntilRestart: activeDefinition.descriptor.principalTransition === 'host-authority'
         }
         this.#idempotency.set(idempotencyKey, entry)
         void execution.then(
-          () => {
+          (result) => {
             entry.settled = true
             if (activeDefinition.descriptor.principalTransition === 'host-authority') {
               entry.resultPrincipalLease = acceptedResultPrincipalLease
             }
             entry.postDispatchMutation = postDispatchMutation
+            entry.resultBytes = Buffer.byteLength(JSON.stringify(result), 'utf8')
+            this.#idempotencyResultBytes += entry.resultBytes
+            this.#trimIdempotencyResults()
           },
           () => { entry.settled = true }
         )
@@ -1662,6 +1692,8 @@ export class CapabilityBroker {
     } catch (error) {
       const brokerError = error instanceof CapabilityBrokerError
         ? error
+        : error && typeof error === 'object' && 'code' in error && error.code === 'stale_capability_definition'
+          ? new CapabilityBrokerError('stale_capability_definition', 'The capability registration changed before invocation completed.', { cause: error })
         : new CapabilityBrokerError('invocation_failed', 'Capability invocation failed.', {
             category: 'failed',
             cause: error
@@ -1989,6 +2021,8 @@ export class CapabilityBroker {
         ...(signal ? { signal } : {}),
         invocation: Object.freeze({
           caller,
+          originalContext: options.originalContext,
+          signal,
           actionId: request.actionId,
           ...(request.invocationId ? { invocationId: request.invocationId } : {}),
           effect: definition.descriptor.effect,
@@ -2018,8 +2052,10 @@ export class CapabilityBroker {
               'Capability invocation was cancelled before handler dispatch.'
             )
           }
+          assertCapabilityDefinitionCurrent(definition.descriptor)
           assertPrincipalCurrent()
           options.humanSessionSource?.assertSessionCurrent()
+          assertCapabilityDefinitionCurrent(definition.descriptor)
           return await definition.handler(options.parsedInput, {
             caller,
             ...(request.invocationId ? { invocationId: request.invocationId } : {}),
@@ -2038,6 +2074,9 @@ export class CapabilityBroker {
           activeState.active = false
         }
       })
+      try { assertCapabilityDefinitionCurrent(definition.descriptor) } catch (cause) {
+        throw new CapabilityBrokerError(isMutation(definition) ? 'outcome_unknown' : 'stale_capability_definition', 'The capability registration changed after dispatch.', { cause })
+      }
       const postHandlerPrincipalLease = this.#currentPrincipalLease()
       let acceptedPrincipalLease = callerPrincipalLease(caller)
       if (postHandlerPrincipalLease !== acceptedPrincipalLease) {
@@ -2065,6 +2104,9 @@ export class CapabilityBroker {
       options.captureAcceptedPrincipalLease?.(acceptedPrincipalLease)
     } catch (error) {
       if (error instanceof CapabilityBrokerError) throw error
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'stale_capability_definition') {
+        throw new CapabilityBrokerError('stale_capability_definition', 'The capability registration changed before handler dispatch.', { cause: error })
+      }
       if (process.env.SCIFORGE_DIAGNOSTIC_HANDLER_CAUSE === '1') {
         const redact = (value: string) => value.replace(/(?:Bearer\\s+|sk-)[A-Za-z0-9._-]+/g, '[REDACTED]')
         const cause = error instanceof Error ? { name: error.name, message: redact(error.message), stack: redact(error.stack ?? '') } : { name: typeof error, message: redact(String(error)) }
@@ -2217,7 +2259,7 @@ export class CapabilityBroker {
         afterRevision
       }))
     }
-    return result
+    return copyWorkspaceMutationReceipt(rawResult, result)
   }
 
   #hostResourceCaller(rawCaller: CapabilityCallerContextInput): CapabilityCallerContext {
@@ -3020,11 +3062,25 @@ export class CapabilityBroker {
     }
   }
 
+  // The entry count alone cannot bound retained image/document results. Apply
+  // the same settled-entry eviction policy on completion, when size is known.
+  // Pending work and principal transition receipts must remain replayable.
+  #trimIdempotencyResults(): void {
+    if (this.#idempotencyResultBytes <= this.#maxIdempotencyResultBytes) return
+    for (const [key, entry] of this.#idempotency) {
+      if (!entry.settled || entry.retainUntilRestart) continue
+      this.#idempotency.delete(key)
+      this.#idempotencyResultBytes -= entry.resultBytes
+      if (this.#idempotencyResultBytes <= this.#maxIdempotencyResultBytes) return
+    }
+  }
+
   #reserveIdempotencyCapacity(): void {
     if (this.#idempotency.size < this.#maxIdempotencyEntries) return
     for (const [key, entry] of this.#idempotency) {
       if (!entry.settled || entry.retainUntilRestart) continue
       this.#idempotency.delete(key)
+      this.#idempotencyResultBytes -= entry.resultBytes
       if (this.#idempotency.size < this.#maxIdempotencyEntries) return
     }
     throw new CapabilityBrokerError(

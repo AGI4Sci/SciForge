@@ -55,6 +55,46 @@ function serviceOptions(
 }
 
 describe('processRegisteredTargetCapture', () => {
+  it.each([
+    { name: 'horizontal fractional boundary', scale: 1, rect: { x: 10.5, y: 4, width: 1, height: 2 } },
+    { name: 'vertical fractional boundary', scale: 1, rect: { x: 4, y: 10.5, width: 2, height: 1 } },
+    { name: 'fractional scale', scale: 1.5, rect: { x: 7, y: 5, width: 1, height: 1 } },
+    { name: 'double scale fractional coordinates', scale: 2, rect: { x: 5.25, y: 4.25, width: 0.5, height: 0.5 } },
+    { name: 'negative clipped boundary', scale: 1, rect: { x: -0.5, y: -0.5, width: 2, height: 2 } },
+    { name: 'right and bottom clipped boundary', scale: 1, rect: { x: 18.5, y: 18.5, width: 3, height: 3 } },
+    { name: 'fully outside boundary', scale: 1, rect: { x: 21.5, y: 21.5, width: 1, height: 1 } },
+    { name: 'integer regression', scale: 1, rect: { x: 10, y: 4, width: 2, height: 2 } }
+  ])('covers every intersecting pixel: $name', async ({ scale, rect }) => {
+    const source = createCanvas(20, 20)
+    const sourceContext = source.getContext('2d')
+    sourceContext.fillStyle = '#ffffff'
+    sourceContext.fillRect(0, 0, 20, 20)
+    const result = await processRegisteredTargetCapture(
+      { png: source.encodeSync('png'), width: 20, height: 20, scaleFactor: scale },
+      undefined, [rect], 'none'
+    )
+    const image = await loadImage(Buffer.from(result.png))
+    const output = createCanvas(20, 20)
+    const outputContext = output.getContext('2d')
+    outputContext.drawImage(image, 0, 0)
+    const data = outputContext.getImageData(0, 0, 20, 20).data
+    let maskedPixels = 0
+    for (let y = 0; y < 20; y++) {
+      for (let x = 0; x < 20; x++) {
+        // A pixel must be fully opaque whenever its area intersects the
+        // scaled sensitive rectangle, including a fractional trailing edge.
+        const masked = x < (rect.x + rect.width) * scale && x + 1 > rect.x * scale &&
+          y < (rect.y + rect.height) * scale && y + 1 > rect.y * scale
+        const offset = (y * 20 + x) * 4
+        expect([...data.slice(offset, offset + 4)], `pixel ${x},${y}`).toEqual(
+          masked ? [17, 24, 39, 255] : [255, 255, 255, 255]
+        )
+        if (masked) maskedPixels++
+      }
+    }
+    expect(result.redacted).toBe(maskedPixels > 0)
+  })
+
   it('redacts sensitive pixels before cropping and then draws a Host callout', async () => {
     const result = await processRegisteredTargetCapture(
       {

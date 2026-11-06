@@ -21,6 +21,8 @@ DSH Context 需要 Host 扩展服务 `evidenceDagPorts`（不是官方内建服�
 
 `sidecar.snapshotProducts` 已调用：`{threadId,snapshotDigest,workspaceRoot,datacite}` -> canonical 五种产品与精确 source refs 的投影；Python 重验持久 digest/访问范围，JS canonical exporter 重验字节摘要与 source ref 并执行单一真实 Artifact Versions 原子 commit。它仍需要未交付的批准执行器桥接。
 
+当前显式 producer inbox 投递已组合 public canonical consumer；无需新增线程 API，也不新增自动 timer。真实 Session/owner/工具参数合同见 [PRODUCER-DELIVERY.md](PRODUCER-DELIVERY.md)。当前 builtin Evidence 已 active，optional 路径不作为本次应用验收 owner。
+
 ## 仍缺的原生自动路径接口
 
 当前 adapter 不承诺自动捕获 Agent/Scientific Plotting 事件。原生 `consume(DomainArtifactEvent)` 与科学 provenance consumer 依赖 Host 持久事件源及 enablement 通知；需要公共平台提供连接绑定的 JSON 订阅/取消订阅/重放 watermark（事件带真实 runtime/thread/workspace、稳定 event identity），停用要等待投递在途处理静默。不能用轮询 synthetic fixture 或另一工作线私有 hooks 冒充这一交付。尚未新增这些不存在的 API 到运行请求枚举。

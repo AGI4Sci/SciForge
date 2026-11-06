@@ -104,13 +104,12 @@ describe('GUI MCP runtime registry', () => {
     const settings = createSettings()
     const servers = buildManagedGuiMcpServers({
       settings,
-      scientificSkillsMcp: { launch },
-      scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
       pptMasterMcp: { launch }
     })
 
-    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master']) {
+    expect(servers.map(({ id }) => id)).toEqual(['image_generation', 'ppt_master'])
+    for (const id of ['image_generation', 'ppt_master']) {
       expect(servers.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
@@ -121,11 +120,17 @@ describe('GUI MCP runtime registry', () => {
         'visual_generate'
       ])
     )
-    const scientificPlottingTools = servers.find((server) => server.id === 'scientific_plotting')?.enabledTools
-    expect(scientificPlottingTools).not.toContain('visual_generate')
-    expect(scientificPlottingTools).not.toContain('scientific_plotting_render')
-    expect(scientificPlottingTools).not.toContain('scientific_plotting_rerun')
-    expect(scientificPlottingTools).toContain('scientific_plotting_composite')
+    const hostTools = servers.flatMap(({ enabledTools }) => enabledTools ?? [])
+    for (const tool of [
+      'scientific_skills_status',
+      'scientific_skills_search',
+      'scientific_skills_read',
+      'scientific_skills_plan',
+      'scientific_plotting_style_profiles',
+      'scientific_plotting_composite',
+      'scientific_plotting_prepare_reference',
+      'scientific_plotting_review_packet'
+    ]) expect(hostTools).not.toContain(tool)
   })
 
   it('returns no managed servers without launch input', () => {

@@ -7,6 +7,8 @@ import os
 import tempfile
 import threading
 import unittest
+from urllib.parse import quote
+from workspace_fixture import workspace
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -160,7 +162,7 @@ class GovernanceReadPortTests(unittest.TestCase):
             return error.code, json.loads(error.read())
 
     def test_decisions_page_newest_first_with_stable_cursor_walk(self) -> None:
-        project = "path:/workspace/decisions"
+        project = ("path:" + workspace(self.root, "decisions"))
         _insert_snapshot(self.actors.api, project)
         for index in range(5):
             _insert_decision(
@@ -170,7 +172,7 @@ class GovernanceReadPortTests(unittest.TestCase):
                 supersedes_id=f"decision:{index - 1}" if index else None)
 
         first = self._request(
-            f"/decisions?workspaceRoot=/workspace/decisions&limit=2")
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decisions'))}&limit=2")
         self.assertTrue(first["ok"])
         self.assertEqual(
             [r["decisionId"] for r in first["data"]["records"]],
@@ -188,7 +190,7 @@ class GovernanceReadPortTests(unittest.TestCase):
         self.assertNotIn("created_at", newest)
 
         second = self._request(
-            f"/decisions?workspaceRoot=/workspace/decisions&limit=2"
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decisions'))}&limit=2"
             f"&cursor={first['data']['nextCursor']}")
         self.assertEqual(
             [r["decisionId"] for r in second["data"]["records"]],
@@ -196,7 +198,7 @@ class GovernanceReadPortTests(unittest.TestCase):
         self.assertEqual(second["data"]["nextCursor"], "decision:1")
 
         third = self._request(
-            f"/decisions?workspaceRoot=/workspace/decisions&limit=2"
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decisions'))}&limit=2"
             f"&cursor={second['data']['nextCursor']}")
         self.assertEqual([r["decisionId"] for r in third["data"]["records"]],
                          ["decision:0"])
@@ -204,7 +206,7 @@ class GovernanceReadPortTests(unittest.TestCase):
         self.assertNotIn("supersedesDecisionId", third["data"]["records"][0])
 
     def test_decision_target_and_supersession_fields_are_optional(self) -> None:
-        project = "path:/workspace/decision-shape"
+        project = ("path:" + workspace(self.root, "decision-shape"))
         _insert_snapshot(self.actors.api, project)
         _insert_decision(self.actors.api, project, "decision:plain",
                          "2026-10-26T00:00:00Z")
@@ -212,47 +214,47 @@ class GovernanceReadPortTests(unittest.TestCase):
                          "2026-10-26T00:00:01Z", target="manuscript",
                          supersedes_id="decision:plain")
         page = self._request(
-            "/decisions?workspaceRoot=/workspace/decision-shape&limit=1")
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decision-shape'))}&limit=1")
         self.assertEqual(page["data"]["records"][0]["decisionId"], "decision:rich")
         self.assertEqual(page["data"]["records"][0]["target"], "manuscript")
         self.assertEqual(page["data"]["records"][0]["supersedesDecisionId"],
                          "decision:plain")
         tail = self._request(
-            "/decisions?workspaceRoot=/workspace/decision-shape&limit=1"
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decision-shape'))}&limit=1"
             f"&cursor={page['data']['nextCursor']}")
         plain = tail["data"]["records"][0]
         self.assertNotIn("target", plain)
         self.assertNotIn("supersedesDecisionId", plain)
 
     def test_limit_is_capped_at_five_hundred(self) -> None:
-        project = "path:/workspace/decision-cap"
+        project = ("path:" + workspace(self.root, "decision-cap"))
         _insert_snapshot(self.actors.api, project)
         for index in range(505):
             _insert_decision(self.actors.api, project, f"decision:{index:04d}",
                              f"2026-10-26T00:{index // 60:02d}:{index % 60:02d}Z")
         page = self._request(
-            "/decisions?workspaceRoot=/workspace/decision-cap&limit=1000")
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decision-cap'))}&limit=1000")
         self.assertEqual(len(page["data"]["records"]), 500)
         self.assertIsNotNone(page["data"]["nextCursor"])
 
     def test_unknown_cursor_is_a_bad_request(self) -> None:
-        project = "path:/workspace/decision-cursor"
+        project = ("path:" + workspace(self.root, "decision-cursor"))
         _insert_snapshot(self.actors.api, project)
         status, body = self._request_raw(
-            "/decisions?workspaceRoot=/workspace/decision-cursor"
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'decision-cursor'))}"
             "&cursor=decision:missing")
         self.assertEqual(status, 400)
         self.assertEqual(body["error"]["code"], "BAD_REQUEST")
 
     def test_empty_project_returns_one_empty_page(self) -> None:
-        project = "path:/workspace/empty-ports"
+        project = ("path:" + workspace(self.root, "empty-ports"))
         _insert_snapshot(self.actors.api, project)
         for route in ("decisions", "approvals", "releases"):
-            page = self._request(f"/{route}?workspaceRoot=/workspace/empty-ports")
+            page = self._request(f"/{route}?workspaceRoot={quote(workspace(self.root, 'empty-ports'))}")
             self.assertEqual(page["data"], {"records": [], "nextCursor": None})
 
     def test_approvals_expose_canonical_status(self) -> None:
-        project = "path:/workspace/approvals"
+        project = ("path:" + workspace(self.root, "approvals"))
         snapshot_digest = _insert_snapshot(self.actors.api, project)
         _insert_decision(self.actors.api, project, "decision:base",
                          "2026-10-26T00:00:00Z")
@@ -265,7 +267,7 @@ class GovernanceReadPortTests(unittest.TestCase):
                          revokes_approval_id="approval:one")
 
         page = self._request(
-            "/approvals?workspaceRoot=/workspace/approvals&limit=1")
+            f"/approvals?workspaceRoot={quote(workspace(self.root, 'approvals'))}&limit=1")
         self.assertEqual(page["data"]["records"][0]["approvalId"], "approval:two")
         self.assertEqual(page["data"]["records"][0]["status"], "effective")
         self.assertEqual(page["data"]["records"][0]["decisionRef"], "decision:base")
@@ -274,7 +276,7 @@ class GovernanceReadPortTests(unittest.TestCase):
         self.assertNotIn("project_key", page["data"]["records"][0])
 
         tail = self._request(
-            "/approvals?workspaceRoot=/workspace/approvals&limit=1"
+            f"/approvals?workspaceRoot={quote(workspace(self.root, 'approvals'))}&limit=1"
             f"&cursor={page['data']['nextCursor']}")
         revoked = tail["data"]["records"][0]
         self.assertEqual(revoked["approvalId"], "approval:one")
@@ -283,11 +285,11 @@ class GovernanceReadPortTests(unittest.TestCase):
         self.assertIsNone(tail["data"]["nextCursor"])
 
     def test_releases_normalize_output_artifact_refs(self) -> None:
-        project = "path:/workspace/releases"
+        project = ("path:" + workspace(self.root, "releases"))
         snapshot_digest = _insert_snapshot(self.actors.api, project)
         _insert_release(self.actors.api, project, "release:one",
                         snapshot_digest, "2026-10-26T00:00:01Z")
-        page = self._request("/releases?workspaceRoot=/workspace/releases")
+        page = self._request(f"/releases?workspaceRoot={quote(workspace(self.root, 'releases'))}")
         record = page["data"]["records"][0]
         self.assertEqual(record["releaseId"], "release:one")
         self.assertEqual(record["projectSnapshot"], snapshot_digest)
@@ -306,12 +308,12 @@ class GovernanceReadPortTests(unittest.TestCase):
         self.assertNotIn("project_key", record)
 
     def test_restricted_project_pages_fail_closed(self) -> None:
-        project = "path:/workspace/restricted-ports"
+        project = ("path:" + workspace(self.root, "restricted-ports"))
         _insert_snapshot(self.actors.api, project, restricted=True)
         _insert_decision(self.actors.api, project, "decision:secret",
                          "2026-10-26T00:00:00Z")
         page = self._request(
-            "/decisions?workspaceRoot=/workspace/restricted-ports")
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'restricted-ports'))}")
         record = page["data"]["records"][0]
         self.assertEqual(set(record), {"idHash", "exists", "accessLevel"})
         self.assertEqual(record["accessLevel"], "restricted")
@@ -320,7 +322,7 @@ class GovernanceReadPortTests(unittest.TestCase):
     def test_routes_require_bearer_token(self) -> None:
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.server.server_port}"
-            "/decisions?workspaceRoot=/workspace/approvals")
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'approvals'))}")
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
                 status = response.status
@@ -396,8 +398,8 @@ class GovernanceReadPortIsolationTests(unittest.TestCase):
         return digest.hexdigest()
 
     def test_two_project_isolation_pages_never_leak_across_workspaces(self) -> None:
-        project_a = "path:/workspace/iso-a"
-        project_b = "path:/workspace/iso-b"
+        project_a = ("path:" + workspace(self.root, "iso-a"))
+        project_b = ("path:" + workspace(self.root, "iso-b"))
         _insert_snapshot(self.actors.api, project_a)
         _insert_snapshot(self.actors.api, project_b)
         for index in range(3):
@@ -406,34 +408,34 @@ class GovernanceReadPortIsolationTests(unittest.TestCase):
             _insert_decision(self.actors.api, project_b, f"decision:b-{index}",
                              f"2026-10-26T00:00:0{index}Z")
 
-        for workspace, expected in (
-                ("/workspace/iso-a", [f"decision:a-{i}" for i in (2, 1, 0)]),
-                ("/workspace/iso-b", [f"decision:b-{i}" for i in (2, 1, 0)])):
+        for workspace_path, expected in (
+                (workspace(self.root, "iso-a"), [f"decision:a-{i}" for i in (2, 1, 0)]),
+                (workspace(self.root, "iso-b"), [f"decision:b-{i}" for i in (2, 1, 0)])):
             page = self._request(
-                f"/decisions?workspaceRoot={workspace}&limit=10")
+                f"/decisions?workspaceRoot={quote(workspace_path)}&limit=10")
             self.assertEqual(
                 [r["decisionId"] for r in page["data"]["records"]], expected)
             self.assertIsNone(page["data"]["nextCursor"])
             serialized = json.dumps(page["data"])
-            foreign = "iso-b" if workspace.endswith("iso-a") else "iso-a"
+            foreign = "iso-b" if workspace_path.endswith("iso-a") else "iso-a"
             self.assertNotIn(f"decision:{foreign[-1]}-", serialized)
 
     def test_well_formed_other_project_cursor_is_a_bad_request(self) -> None:
-        project_a = "path:/workspace/cursor-a"
-        project_b = "path:/workspace/cursor-b"
+        project_a = ("path:" + workspace(self.root, "cursor-a"))
+        project_b = ("path:" + workspace(self.root, "cursor-b"))
         _insert_snapshot(self.actors.api, project_a)
         _insert_snapshot(self.actors.api, project_b)
         _insert_decision(self.actors.api, project_b, "decision:b-owned",
                          "2026-10-26T00:00:00Z")
         status, body = self._request_raw(
-            "/decisions?workspaceRoot=/workspace/cursor-a"
+            f"/decisions?workspaceRoot={quote(workspace(self.root, 'cursor-a'))}"
             "&cursor=decision:b-owned")
         self.assertEqual(status, 400)
         self.assertEqual(body["error"]["code"], "BAD_REQUEST")
         self.assertIn("cursor", body["error"]["message"])
 
     def test_read_ports_leave_the_database_file_bytes_unchanged(self) -> None:
-        project = "path:/workspace/zero-write"
+        project = ("path:" + workspace(self.root, "zero-write"))
         _insert_snapshot(self.actors.api, project)
         for index in range(3):
             _insert_decision(self.actors.api, project, f"decision:{index}",
@@ -449,7 +451,7 @@ class GovernanceReadPortIsolationTests(unittest.TestCase):
         before = self._db_fingerprint(self.db_path)
         for route in ("decisions", "approvals", "releases"):
             response = self._request(
-                f"/{route}?workspaceRoot=/workspace/zero-write&limit=10")
+                f"/{route}?workspaceRoot={quote(workspace(self.root, 'zero-write'))}&limit=10")
             self.assertTrue(response["ok"])
         after = self._db_fingerprint(self.db_path)
         self.assertEqual(before, after)

@@ -100,6 +100,50 @@ describe('reasoningDeclarationFromCatalogPayload', () => {
 })
 
 describe('UpstreamCatalogObserver', () => {
+  it('resolves environment references in memory before fetching and preserves settings', async () => {
+    const current = settingsWith({ apiKey: '${ENV:SCIFORGE_PROVIDER_TASK_KEY}' })
+    const snapshot = JSON.stringify(current)
+    const env = { SCIFORGE_PROVIDER_TASK_KEY: 'catalog-runtime-test-secret' }
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
+      catalogResponse({ data: [{ id: 'up-model', supported_reasoning_levels: ['high'] }] })
+    )
+    const observer = new UpstreamCatalogObserver({ loadSettings: () => current, env, fetchImpl: fetchImpl as typeof fetch })
+    expect((await observer.observe(QUERY))?.kind).toBe('declared')
+    expect((fetchImpl.mock.calls[0][1]?.headers as Record<string, string>).Authorization).toBe('Bearer catalog-runtime-test-secret')
+    expect(JSON.stringify(current)).toBe(snapshot)
+    expect(JSON.stringify(current)).not.toContain(env.SCIFORGE_PROVIDER_TASK_KEY)
+    env.SCIFORGE_PROVIDER_TASK_KEY = 'rotated-runtime-test-secret'
+    await observer.observe(QUERY)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect((fetchImpl.mock.calls[1][1]?.headers as Record<string, string>).Authorization).toBe('Bearer rotated-runtime-test-secret')
+  })
+
+  it('never fetches with a missing, malformed or disallowed credential reference', async () => {
+    const fetchImpl = vi.fn()
+    for (const apiKey of ['${ENV:SCIFORGE_PROVIDER_MISSING_KEY}', '${ENV:OPENAI_API_KEY}', '${ENV:SCIFORGE_PROVIDER_KEY}suffix']) {
+      const observer = new UpstreamCatalogObserver({ loadSettings: () => settingsWith({ apiKey }), env: {}, fetchImpl })
+      expect(await observer.observe(QUERY)).toBeNull()
+    }
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('redacts resolved credentials if an upstream transport error echoes them', async () => {
+    let now = 1000
+    const secret = 'echoed-runtime-test-secret'
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(catalogResponse({ data: [{ id: 'up-model', supported_reasoning_levels: ['high'] }] }))
+      .mockRejectedValueOnce(new Error(`request Authorization Bearer ${secret} failed`))
+    const observer = new UpstreamCatalogObserver({
+      loadSettings: () => settingsWith({ apiKey: '${ENV:SCIFORGE_PROVIDER_TASK_KEY}' }),
+      env: { SCIFORGE_PROVIDER_TASK_KEY: secret }, fetchImpl, now: () => now, ttlMs: 1
+    })
+    await observer.observe(QUERY)
+    now += 2
+    const stale = await observer.observe(QUERY)
+    expect(stale?.refreshError).toContain('[redacted]')
+    expect(JSON.stringify(stale)).not.toContain(secret)
+  })
+
   it('fetches the upstream /models URL once, caches the observation, and force bypasses the TTL', async () => {
     let now = 1_000
     const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>

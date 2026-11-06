@@ -641,7 +641,7 @@ describe('ClaudeCodeRuntimeService', () => {
     expect(rollback).not.toHaveBeenCalled()
   })
 
-  it('denies non-native visual bypasses before Claude dispatch while the Host snapshot is pending', async () => {
+  it('keeps independent Claude tools available while completion receipts remain pending', async () => {
     let releaseQuery: (() => void) | undefined
     const messages = new Promise<SDKMessage[]>((resolve) => {
       releaseQuery = () => resolve([
@@ -679,19 +679,8 @@ describe('ClaudeCodeRuntimeService', () => {
       tool_use_id: `tool-${toolName}`
     } as never, `tool-${toolName}`, { signal })
 
-    await expect(invoke('Bash', { command: 'echo hello' })).resolves.toMatchObject({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
-      }
-    })
-    await expect(invoke('view_image', { path: '/tmp/workspace/page.png' })).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining('sciforge_look')
-      }
-    })
+    await expect(invoke('Bash', { command: 'echo hello' })).resolves.toEqual({})
+    await expect(invoke('view_image', { path: '/tmp/workspace/page.png' })).resolves.toEqual({})
     await expect(invoke('Read', { file_path: '/tmp/workspace/notes.md' })).resolves.toEqual({})
     await expect(invoke('sciforge_look', { task: 'Locate the figure.' })).resolves.toEqual({})
     await expect(invoke(
@@ -776,11 +765,7 @@ describe('ClaudeCodeRuntimeService', () => {
         nativeVisualProofChainPending: true
       }
     })
-    await expect(invokeBash()).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny'
-      }
-    })
+    await expect(invokeBash()).resolves.toEqual({})
     await expect(hook({
       hook_event_name: 'PreToolUse',
       tool_name: 'write_stdin',
@@ -791,14 +776,7 @@ describe('ClaudeCodeRuntimeService', () => {
       tool_use_id: 'write-stdin-refresh'
     } as never, 'write-stdin-refresh', {
       signal: new AbortController().signal
-    })).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining(
-          'native_visual_proof_chain_required'
-        )
-      }
-    })
+    })).resolves.toEqual({})
     service.updateTurnGovernanceSnapshot({
       runtimeId: 'claude',
       threadId: thread.thread.id,

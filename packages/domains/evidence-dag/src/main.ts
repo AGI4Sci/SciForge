@@ -1,3 +1,4 @@
+import { evidenceDagRerunSpecInputSchema, evidenceDagRerunCompareInputSchema, evidenceDagRerunSpecOutputSchema, evidenceDagRerunCompareOutputSchema } from './contract.js'
 import type {
   DomainArtifactConsumer,
   DomainArtifactEvent,
@@ -47,7 +48,10 @@ import {
 } from './main/runtime.js'
 import { EVIDENCE_DAG_WRITE_EXPORT_ACTION } from './main/gate.js'
 import { EVIDENCE_DAG_CAPABILITY_EVAL_CONTRIBUTION as EVIDENCE_DAG_CAPABILITY_EVAL_VALUE } from './capability-eval.js'
+import { researchRecordContracts } from './research-record-contract.js'
 
+export { EvidenceDagRuntime } from './main/runtime.js'
+export { ResearchRecordRuntime } from './main/research-record.js'
 export { evidenceTraceFromThread } from './main/artifacts.js'
 export {
   EvidenceDagSealError,
@@ -138,7 +142,7 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
   host: EvidenceDagMainHost
 ): TrustedDomainProcessEntryInput<EvidenceDagMainContribution<CapabilityDefinition>> {
   const createRuntime = host.createEvidenceDagRuntime ?? ((options) =>
-    new EvidenceDagRuntime(options))
+    new EvidenceDagRuntime({ ...options, sanitizeText: host.textSanitizer?.sanitizeText }))
   let owned: OwnedEvidenceDagRuntime | null = null
   let activation: PendingEvidenceDagActivation | null = null
   const requireRuntime = (): EvidenceDagRuntimePort => {
@@ -278,6 +282,23 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
       allowedDirectTransports: Object.freeze([]) as readonly []
     }),
     createDefinitions: () => [
+      ...Object.entries(researchRecordContracts).map(([name, contract]) => define({
+        id: contract.actionId,
+        title: `Research record ${name}`,
+        description: 'Native research organization and scoped source context over canonical session records.',
+        audiences: ['ui', 'system'], scope: 'workspace', effect: contract.effect, approval: 'none',
+        concurrency: { revision: 'none', idempotency: name === 'edit' ? 'required' : 'none' },
+        inputSchema: contract.inputSchema, outputSchema: contract.outputSchema,
+        handler: async (input, context) => {
+          const scoped = { ...input, workspaceRoot: evidenceWorkspaceFromCaller(context) }
+          const records = options.getRuntime().records
+          const output = name === 'view' ? await records.view(scoped) : name === 'edit' ? await records.edit(scoped)
+            : name === 'review' ? await records.review(scoped) : await records.audit(scoped)
+          // Workspace operations own their durable receipts. `changed` is only
+          // for revising a Host-issued resource handle, which these do not use.
+          return { output }
+        }
+      })),
       define({
         id: EVIDENCE_DAG_CAPABILITY_IDS.view,
         title: 'View Evidence DAG',
@@ -438,7 +459,19 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
             workspaceRoot: evidenceWorkspaceFromCaller(context)
           })
         })
-      })
+      }),
+      define({ id: EVIDENCE_DAG_CAPABILITY_IDS.rerunSpec, title: 'Read exact conclusion rerun spec',
+        description: 'Read the existing Evidence owner rerun specification without executing it.',
+        audiences: ['ui'],
+        scope: 'workspace', effect: 'read', approval: 'none', concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: evidenceDagRerunSpecInputSchema, outputSchema: evidenceDagRerunSpecOutputSchema,
+        handler: async (input, context) => ({ output: await options.getRuntime().rerunSpec({ ...input, workspaceRoot: evidenceWorkspaceFromCaller(context) }) }) }),
+      define({ id: EVIDENCE_DAG_CAPABILITY_IDS.rerunCompare, title: 'Compare exact conclusion reruns',
+        description: 'Compare pinned baseline and candidate through the existing Evidence owner.',
+        audiences: ['ui'],
+        scope: 'workspace', effect: 'read', approval: 'none', concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: evidenceDagRerunCompareInputSchema, outputSchema: evidenceDagRerunCompareOutputSchema,
+        handler: async (input, context) => ({ output: await options.getRuntime().rerunCompare({ ...input, workspaceRoot: evidenceWorkspaceFromCaller(context) }) }) })
     ]
   })
 }

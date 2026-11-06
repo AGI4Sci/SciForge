@@ -50,9 +50,6 @@ const BUILTIN_PACKAGE_DEFINITIONS = {
   runtimeInspector: {
     dir: 'packages/workers/runtime-inspector'
   },
-  scientificPlotting: {
-    dir: 'packages/workers/scientific-plotting'
-  },
   bgcDiscovery: {
     dir: 'packages/workers/bgc-discovery'
   },
@@ -347,7 +344,6 @@ const WORKSPACE_PACKAGE_IDS = [
   'writeAssist',
   'sciModalityRouter',
   'runtimeInspector',
-  'scientificPlotting',
   'bgcDiscovery',
   'imageGeneration',
   'multiAgent',
@@ -364,7 +360,6 @@ const BUNDLED_PACKAGE_IDS = [
   'workspaceIntel',
   'writeAssist',
   'runtimeInspector',
-  'scientificPlotting',
   'bgcDiscovery',
   'imageGeneration',
   'multiAgent',
@@ -546,24 +541,6 @@ const RUNTIME_ENTRIES = [
     ]
   },
   {
-    id: 'scientific-plotting',
-    label: 'Scientific Plotting',
-    packageIds: ['scientificPlotting'],
-    requiredPathsExport: 'SCIENTIFIC_PLOTTING_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('scientificPlotting', [
-      'package.json',
-      'src/scientific-plotting-mcp-server.ts',
-      'src/scientific-skills-mcp-server.ts',
-      'src/scientific-plotting-engine.ts',
-      'src/scientific-skills-index.ts',
-      'src/contract.ts'
-    ]),
-    executableNodeEntryPaths: [
-      'out/main/scientific-skills-mcp-node-entry.js',
-      'out/main/scientific-plotting-mcp-node-entry.js'
-    ]
-  },
-  {
     id: 'bgc-discovery',
     label: 'BGC Discovery',
     packageIds: ['bgcDiscovery'],
@@ -671,7 +648,7 @@ function createBundledFileSets() {
 }
 
 function createAsarUnpackGlobs() {
-  return [
+  return [...new Set([
     ...BUILT_RUNTIME_UNPACK_GLOBS,
     // electron-builder applies asarUnpack matching to a FileSet's source path
     // before honoring its `to` remap. Include both sides so remapped packages
@@ -679,7 +656,7 @@ function createAsarUnpackGlobs() {
     // physically emitted under app.asar.unpacked.
     ...bundledPackageDirs.map((packageDirectory) => `**/${packageDirectory}/**/*`),
     ...bundledPackageTargets.map((packageDirectory) => `**/${packageDirectory}/**/*`)
-  ]
+  ])]
 }
 
 module.exports = {

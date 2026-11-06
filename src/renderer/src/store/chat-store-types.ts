@@ -27,6 +27,14 @@ import type { AgentPermissionLevel } from '@shared/app-settings-permissions'
 import type { AgentRuntimeWorkState } from '@shared/agent-runtime-contract'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
+import type { DomainWorkbenchSideChatMode, DomainWorkbenchSideConversationContext } from '@sciforge/domain-sdk/host'
+
+export type SideChatMode = DomainWorkbenchSideChatMode
+
+export type ChatStreamRef = {
+  current: AbortController | null
+  pendingTurnStarts?: Map<string, { threadId: string; cancelRequested: boolean; discard?: boolean }>
+}
 
 export type QueuedUserMessage = {
   /** Renderer projection only; durable recovery belongs to Host. */
@@ -162,6 +170,9 @@ export type SideConversation = {
   runtimeId?: AgentRuntimeId
   workspaceLocator?: WorkspaceLocator
   parentThreadId: string
+  workspaceRoot?: string
+  chatMode?: SideChatMode
+  context?: DomainWorkbenchSideConversationContext
   source?: 'side' | 'child_agent' | 'pdf_annotation' | 'sdd_assistant'
   title: string
   createdAt: string
@@ -183,6 +194,7 @@ export type SideConversation = {
 }
 
 export type SideMessageOverrides = {
+  chatMode?: SideChatMode
   mode?: string
   attachmentIds?: string[]
   fileReferences?: AgentRuntimeFileReference[]
@@ -337,7 +349,10 @@ export type ChatState = {
   setThreadSearch: (query: string) => void
   setShowArchivedThreads: (show: boolean) => void
   createThread: (options?: { workspaceRoot?: string; forceNew?: boolean }) => Promise<void>
-  selectThread: (id: string) => Promise<void>
+  /** Transient viewing guards; queues stay intact until explicit selection/send. */
+  readOnlyThreadIds: Record<string, true>
+  conversationSourceNavigation: import('../lib/conversation-source-navigation').ConversationSourceNavigation | null
+  selectThread: (id: string, options?: { readOnly?: boolean }) => Promise<void>
   loadEarlierThreadHistory: () => Promise<void>
   focusAgentThread: (target: FocusAgentThreadInput) => boolean
   focusAgentBack: () => boolean
@@ -384,6 +399,11 @@ export type ChatState = {
   spawnSideConversation: (
     seedText?: string,
     options?: {
+      parentThreadId?: string
+      runtimeId?: AgentRuntimeId
+      workspaceRoot?: string
+      chatMode?: SideChatMode
+      context?: DomainWorkbenchSideConversationContext
       source?: SideConversation['source']
       title?: string
       openPanel?: boolean
@@ -417,6 +437,7 @@ export type ChatState = {
   interruptSide: (sideId: string) => Promise<void>
   setSideInput: (sideId: string, text: string) => void
   setSideModel: (sideId: string, model: string) => void
+  setSideChatMode: (sideId: string, mode: SideChatMode) => void
   setSideReasoningEffort: (sideId: string, effort: string) => void
   selectSideConversation: (sideId: string) => void
   setSidePanelOpen: (open: boolean) => void

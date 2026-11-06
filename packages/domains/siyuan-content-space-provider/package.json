@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-siyuan-content-space-provider",
-  "version": "0.1.0",
+  "version": "0.3.1",
   "license": "Apache-2.0",
   "type": "module",
   "description": "SiYuan server-mode Content Space provider with an embedded native editor.",
@@ -22,15 +22,20 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --config vitest.config.ts",
     "smoke": "node --env-file-if-exists=../../../.env.siyuan --import tsx scripts/smoke.ts",
-    "editor:smoke": "node --env-file-if-exists=../../../.env.siyuan scripts/editor-smoke.mjs"
+    "editor:smoke": "node --env-file-if-exists=../../../.env.siyuan scripts/editor-smoke.mjs",
+    "comment-identity:smoke": "node scripts/comment-identity-smoke.mjs"
   },
   "dependencies": {
     "@sciforge/domain-content-space": "5.0.4",
-    "@sciforge/domain-sdk": "^0.2.13",
+    "@sciforge/domain-sdk": "^0.2.32",
     "zod": "^4.4.3",
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "@sciforge/domain-identity-access": "5.1.1"
   },
   "devDependencies": {
+    "happy-dom": "^20.11.2",
+    "react-dom": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.20.5",
     "typescript": "^5.8.2",

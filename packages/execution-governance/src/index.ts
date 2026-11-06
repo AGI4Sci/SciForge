@@ -54,7 +54,6 @@ export type ExecutionGovernorOptions = {
 export type ExecutionGovernorContext = {
   workspace?: string
   ownedVisualToolsAvailable?: boolean
-  nativeVisualProofChainPending?: boolean
 }
 
 export type ExecutionReceipt = {
@@ -224,7 +223,6 @@ export type ExecutionGovernorDecision = {
     | 'fatal_error'
     | 'redundant_read'
     | 'owned_visual_policy_denied'
-    | 'native_visual_proof_chain_required'
   reason?: string
   guidance?: string
   attempt: NormalizedExecutionAttempt
@@ -354,19 +352,6 @@ export class ExecutionGovernorCore {
       rawArguments: input.arguments,
       sequence
     })
-    if (
-      context.nativeVisualProofChainPending === true &&
-      isNativeVisualProofBypass(input, attempt)
-    ) {
-      return {
-        action: 'deny',
-        code: 'native_visual_proof_chain_required',
-        reason: 'The native visual proof chain is still incomplete, so non-native visual inspection and command execution cannot substitute for it.',
-        guidance: nativeVisualProofGuidance(),
-        attempt
-      }
-    }
-
     if (
       attempt.family === 'command_execution:os-gui-automation' &&
       context.ownedVisualToolsAvailable === true
@@ -971,7 +956,7 @@ function isOsGuiAutomationCommand(command: string): boolean {
     /\b(?:gnome-screenshot|scrot|spectacle|xfce4-screenshooter)\b/u,
     /\b(?:xdotool|wmctrl)\b/u,
     /\bosascript\b[\s\S]{0,800}\b(?:system events|window|process|frontmost|activate|tell application)\b/u,
-    /\bpython(?:3(?:\.\d+)?)?\b[\s\S]{0,1600}\b(?:import\s+(?:quartz|appkit|mss)|from\s+(?:pil|quartz|appkit|mss)\s+import|cgwindow(?:list|image)|imagegrab\.grab|pyautogui\.screenshot)\b/u,
+    /\bpython(?:3(?:\.\d+)?)?\b[\s\S]{0,1600}\b(?:import\s+(?:quartz|appkit|mss)|from\s+(?:quartz|appkit|mss)\s+import|from\s+pil\s+import\s+[^;\n]{0,200}\bimagegrab\b|(?:from\s+pil\.imagegrab\s+import|import\s+pil\.imagegrab)|cgwindow(?:list|image)|imagegrab\.grab|pyautogui\.screenshot)\b/u,
     /\b(?:swift|ruby)\b[\s\S]{0,1600}\b(?:cgwindowlist|cgwindowimage|system events)\b/u,
     /\bpowershell(?:\.exe)?\b[\s\S]{0,1000}\b(?:copyfromscreen|uiautomation|user32|findwindow|getwindowrect)\b/u
   ].some((pattern) => pattern.test(value))
@@ -1379,21 +1364,6 @@ function isMutatingToolCall(input: ExecutionAttemptInput): boolean {
   return MUTATING_TOOL_NAMES.has(normalizedToolName(input.toolName))
 }
 
-function isNativeVisualProofBypass(
-  input: ExecutionAttemptInput,
-  attempt: NormalizedExecutionAttempt
-): boolean {
-  const name = normalizedToolName(input.toolName)
-  if (name === 'sciforge_look' || name === 'sciforge_capture') return false
-  const controlAction = sessionControlAction(input)
-  if (controlAction) return controlAction !== 'stop'
-  if (attempt.toolKind === 'command_execution') return true
-  return name === 'view_image' ||
-    name === 'viewimage' ||
-    name.endsWith('_view_image') ||
-    name.endsWith('_viewimage')
-}
-
 function semanticFailureScope(
   attempt: NormalizedExecutionAttempt,
   receipt: NormalizedExecutionReceipt
@@ -1506,10 +1476,6 @@ function failureDescription(receipt: NormalizedExecutionReceipt): string {
 
 function ownedVisualGuidance(): string {
   return 'Use the native sciforge_look tool to inspect the owned visual source. If the task requires a persisted workspace image, pass the returned snapshotRef or regionRef to the native sciforge_capture tool. Do not use screencapture, osascript, window enumeration, or another OS-level GUI fallback.'
-}
-
-function nativeVisualProofGuidance(): string {
-  return 'Continue the required visual path with sciforge_look and, when persistence is required, sciforge_capture. view_image, shell commands, file metadata, and command output do not produce the typed native visual proofs required for completion.'
 }
 
 function failureClassFor(

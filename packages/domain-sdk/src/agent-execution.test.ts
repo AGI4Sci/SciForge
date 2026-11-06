@@ -12,6 +12,15 @@ import {
 } from './agent-execution.js'
 
 describe('agent execution host contract', () => {
+  it('limits minimal context to new tool-free background Agent runs', () => {
+    const valid = { prompt: 'Classify the supplied evidence.', contextProfile: 'minimal', allowedTools: [] }
+    assert.equal(domainMainAgentExecutionRequestSchema.parse(valid).contextProfile, 'minimal')
+    for (const override of [
+      { allowedTools: undefined }, { allowedTools: ['bash'] }, { interaction: 'reviewable' },
+      { mode: 'plan' }, { runtimeId: 'codex', threadId: 'existing' }, { contextProfile: 'other' }
+    ]) assert.throws(() => domainMainAgentExecutionRequestSchema.parse({ ...valid, ...override }), z.ZodError)
+    assert.throws(() => domainMainAgentExecutionSessionRequestSchema.parse(valid), z.ZodError)
+  })
   it('can prepare a stable Session before a retryable directive reaches Runtime dispatch', async () => {
     const host: DomainMainAgentExecutionHost = {
       prepareSession: async () => ({ runtimeId: 'codex', threadId: 'thread-worker-stable' }),

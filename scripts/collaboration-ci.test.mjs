@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import { access, readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-const workflowSource = await readFile(
+const workflowSource = (await readFile(
   new URL('../.github/workflows/collaboration-ci.yml', import.meta.url),
   'utf8'
-)
+)).replace(/\r\n/g, '\n')
 const packageJson = JSON.parse(await readFile(
   new URL('../package.json', import.meta.url),
   'utf8'

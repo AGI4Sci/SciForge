@@ -87,6 +87,21 @@ function successfulSurfaceCaptureProvider(
 }
 
 describe('VisibleContextService capture', () => {
+  it('returns a detached current registered-target snapshot after registry updates', async () => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      now: () => new Date('2026-07-11T03:00:00.000Z'),
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(async () => ({ png: whitePng(), width: 100, height: 80, scaleFactor: 1 }))
+    })
+    await service.publish(snapshot())
+    const ref = await service.registeredTargetRef('electron:1', { componentId: 'right-sidebar.file-preview', targetId: 'current-page' })
+    expect(ref).toBeTruthy()
+    await service.publish(snapshot({ revision: 2 }))
+    const current = await service.currentRegisteredTargetSnapshot(ref!)
+    expect(current?.revision).toBe(2)
+    current!.components[0]!.title = 'mutated'
+    expect((await service.currentRegisteredTargetSnapshot(ref!))?.components[0]?.title).toBe('Paper.pdf')
+    expect(await service.currentRegisteredTargetSnapshot('unregistered')).toBeNull()
+  })
   it.each([
     {
       code: 'capture_surface_unsupported' as const,

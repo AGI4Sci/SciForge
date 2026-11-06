@@ -5,6 +5,15 @@ versioning, installation, and release boundary for the Python Evidence engine,
 durable update state, public contracts, main-process lifecycle, generic artifact
 ingestion, and optional renderer panel.
 
+Human review packets bind to a deterministic digest of the scientific graph,
+artifact registry, access policy and current checks. Changing evidence creates a
+new review identity even when target IDs and severity codes stay the same. An
+unchanged recomputation preserves the existing decision. Old approved packets
+remain audit history, not approval of new material. The current implementation
+conservatively binds the whole graph; unrelated material changes can also require
+another review. Incremental updates rebuild the current check projection without
+appending duplicate assessments to the ledger.
+
 The package intentionally has no root export. Consumers select one public
 boundary:
 
@@ -367,3 +376,143 @@ supplies only generic ordinary-Session capability invocation, preserving the
 original caller, Session, context, cancellation signal and invocation identity.
 The resolver and Host both fence stale or aborted calls; artifact access and
 write admission remain enforced by the canonical Capability Broker.
+
+## Native research record
+
+The bundled Evidence domain owns the research record backend and renderer. The
+same chapter-oriented view opens in the right panel or the workspace overlay,
+using SciForge theme tokens. Its presentation controller retains scope, nested
+folds, selection and scroll across these surfaces. Recursive phases contain
+rounds, progression steps, recorded Skill/Plugin groups and raw-action references.
+Historical phases fold as a whole; current progression opens by default while raw
+actions remain collapsed. Dates describe recorded observations, not experiment duration.
+
+The runtime observes public `agentThreads` snapshots independently of the panel.
+It stores derived organization, immutable source IDs/digests, job cursors and
+revisions under private Evidence storage. Original items stay with their runtime;
+source reads explicitly distinguish current, changed and unavailable content.
+Human phase moves remain locked against model placement; earlier step IDs and
+failure/cancellation facts survive new batches. Historical discussions and pinned
+handoff records are preserved unchanged and old discussions remain readable.
+
+Research records use one atomic commit manifest, verified delta segments and
+periodic checkpoints. Fixed reusable slots bound file count while checkpoints
+retain all history. Visible source boundaries survive restart; reordered or
+temporarily missing projections preserve prior organization, with explicit gaps.
+Availability-only recovery does not resynthesize already covered stages. See
+[durability and verification boundaries](../../../docs/design/research-record-durable.md).
+
+`evidence-dag.record.view` and `.edit` are the public capabilities. Caller
+workspace binding overrides untrusted input scope. The view fetches bounded
+canonical discussion context only when explicitly requested, not on every poll.
+The renderer opens the Host's persistent native side-chat via public
+`workbench.openSideConversation`, with an exact parent scope and distinct source
+references. Light/deep modes, composer, conversation history and reviewed Markdown
+transfer to the main conversation belong to the Host. Evidence exposes no second
+chat or handoff write path. Memory-read instructions do not claim memory was read.
+
+Visible chapter headers and raw details register public visible-context targets
+for anchored annotations. Registration keeps receiving runtime/thread/workspace
+separate from source runtime/thread/turn/item. Collapsed, offscreen or unmounted
+nodes unregister their targets; the Host issues and validates opaque anchors.
+
+The organizer uses public `agentExecution`, bound to source runtime/workspace.
+Each request creates a hidden side Session with an empty tool allowlist; scanning
+excludes side Sessions. Existing Agent configuration is reused, with an optional
+fast-model override (for example `gpt-6.1-terra` on Codex), and no separate HTTP
+client. Reasoning and compaction items are excluded. Unfinished streams settle
+before classification. Requests run singly at least 15 seconds apart, with a
+180-second deadline and 40,000-character output limit. Each batch selects at most
+48 sources with 12,000 serialized excerpt characters inside a 24,000-character
+total data budget, including bounded phase hints. Three failures
+leave a pending job until retry or new evidence. Pausing organization continues
+indexing; domain disablement aborts requests. Older sessions backfill in bounded
+batches. Coverage is **visible-session-snapshots**, not a complete event ledger;
+organization, discussion and annotation do not prove scientific validation.
+
+Validation entrypoints: `npm run desktop:test`, `npm run typecheck`, and from the
+repository root `node --import tsx scripts/research-record-ui-smoke.test.mjs <fresh-output-dir>`.
+The browser check uses the production capability Broker, runtime and React
+contributions, with synthetic session/model data and explicit public Workbench /
+visible-context receiver fixtures. It does not validate real Agent execution,
+Host anchor signing, main-session delivery, Cloud or an installed desktop package.
+
+### Research review (2.1)
+
+Read-only `record.review` and `record.audit` expose scoped changes, current leaf
+concerns, paginated revisions and source checks. New organization receipts retain
+native execution references, recipe version and business-input/output digests;
+the audit view verifies those against the native transcript on demand. Manual
+changes retain their before/after fields. Legacy missing evidence stays explicit.
+Browser viewing position is not an approval or verification receipt.
+
+Foreground activity defers new organization, followed by a 15-second quiet window;
+pending workspaces rotate. In-flight calls are not preempted. Review uses no LLM.
+The single JSON store and history scan remain scalability limits; this is not a
+tamper-proof ledger, complete event inventory or global token-budget scheduler.
+
+
+### Scientific audit observations (2.11)
+
+The record ingestion owner retains each settled, public visible source observation
+under its scoped digest in Evidence private storage. Its existing source reference
+is the durable index; v1/v2 record-state migration and manifest/segment replay are
+unchanged. Old states without retained bytes stay explicitly `not-retained` until
+the exact observed version is encountered. No latest-version substitution occurs.
+A source larger than 2 MiB is not retained; the gap is recorded. Historical reads
+verify the digest and enforce the same byte bound before reading. Corruption is
+visible and is never silently repaired. Source-thread and workspace authorization
+runs for each read, including retained bytes. Missing authorization denies bytes.
+
+`record.view` returns `retainedSource` and `rawOrigin` independently of live
+`sourceStatus`. Retained bytes are observational records, not scientific Artifacts,
+proof of complete recording, or a scientific truth claim. Model organization still
+requires current live sources; retention does not authorize processing stale input.
+
+The existing `evidence-dag.audit-query` capability now returns `scientificReview`
+through the SDK output contract. The projection consumes recorded corrections,
+ArtifactVersion lifecycle events, dependency links and formal reconcile effects.
+It follows recorded links to closure targets/review subjects without recomputing
+scientific support or changing approval identities. A changed material status is
+`requires-review`, never scientific falsification. `no-recorded-impact` describes
+only known links; unmapped or bounded queries report unknown. The projection scans
+at most 1,000 deltas per contributing chain and 10,000 nested values, with at most
+100 review impacts (20 affected subjects and 10 changes each) and 20 observations on each of five separate judgment axes.
+
+Dossier displays source independence, declared controls/comparison conditions,
+negative observations, reproduction and scope/limitations separately, with missing
+facts explicitly unknown. Recorded metadata is not a validation result. Existing
+exact ArtifactVersion navigation and closure routes remain the canonical entry.
+The deterministic repeatable integration evaluation is `npm run eval:scientific:audit`;
+use `npm run eval:scientific:audit -- --output <run-path>/results.json` for per-scenario measured machine results. Outputs are execution records, not repository documentation.
+
+
+The normal record inspector reads scientific review through the registered exact-version
+Evidence query. Full artifact/version/digest identity is required; an index string alone
+cannot prove this identity. Condition observations carry their target, review record and
+closure identities. Only selected scientific claim/source rows or attributed assessment
+holders contribute conditions, never tool schemas or unrelated branches.
+
+New closure seals record `semanticGapPolicy: explicit-v2`: missing evidence requires
+explicit gap declarations or unassessed owner metadata. Immutable historical policies
+without this field retain their original keyword semantics on restart, including their
+original digests, status, Snapshot bindings and approval identities.
+
+Inspector summary impact is read on demand. It follows entry source IDs, resolution
+source IDs and recorded discussion/human-revision citations; absent relationships remain
+unknown. Historical source audit and side-discussion excerpts use the same digest-verified,
+authorized retained observation as source inspection. Automatic organization remains
+live-current-only. Model input/output receipts may still be unavailable independently.
+
+
+### Long-history scientific review and source retention
+
+The canonical audit read port uses owner-maintained exact-version/closure indexes, append-only suffix updates and revision-bound projections. Cold index work and graph traversal have separate total budgets. `scientificReview.coverageDetails` reports indexed/scanned work, omitted records and explicit reasons; incomplete indexing or unknown relationships never establish absence of material impact. Historical closure and approval identities remain immutable.
+
+Research-record detail now reports local retained-source storage usage separately from bounded verification of authorized references. The retention manifest accounts for reservations, quota refusal and corrupt/missing observations, keeps referenced history, and performs no automatic pruning. A selected authorized source can be exported with its exact reference and digest through the existing view read contract; partial storage coverage is not a complete Session-history archive.
+
+The scientific-review panel handles exact references independently with bounded concurrency and local retry. Retained and pending responses are scoped to the full material identity, Session, workspace, revision and visible surface. Compact research rows register their own visible-context targets; a new scope remounts retained views before its first render.
+
+`evidence-dag.rerun-spec` and `evidence-dag.rerun-compare` are governed read capabilities over the existing Python reproduction engine. A selected closure resolves only through its recorded committed-snapshot binding; no latest substitution is allowed. The normal record/dossier UI previews the bound specification, requests execution explicitly through the existing Create Loop `workflow.execute` contract, compares pinned baseline/candidate specifications, and returns the selected current version to review. Admission, execution, byte integrity and scientific reproduction remain separate results. Previewing, exporting, browsing or comparing never creates a human approval.
+
+The companion real-material evaluation command is `node --import tsx scripts/scientific-human-audit.mjs` from the repository root (see its usage and `docs/local-release-and-human-audit.md`). Its default manifest is pending import and human measurements are null. Fixed synthetic cases and supplied observations are not evidence of human audit-quality benefit.

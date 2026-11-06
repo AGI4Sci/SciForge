@@ -235,10 +235,12 @@ describe('chat-store-maintenance-actions goal actions', () => {
     state.deliveryStateByThread = { thr_existing: 'needs_attention' }
     state.deliveryWorkIdByThread = { thr_existing: 'work-123' }
     state.deliveryReasonByThread = { thr_existing: 'The provider stopped before delivery.' }
+    state.readOnlyThreadIds = { thr_existing: true }
 
     await expect(actions.resumeActiveWork()).resolves.toBe(true)
 
     expect(provider.resumeIncompleteWork).toHaveBeenCalledWith('work-123')
+    expect(state.readOnlyThreadIds.thr_existing).toBeUndefined()
     expect(sendMessage).not.toHaveBeenCalled()
     expect(state.deliveryStateByThread.thr_existing).toBe('working')
     expect(state.deliveryReasonByThread.thr_existing).toBeUndefined()
@@ -617,7 +619,7 @@ describe('chat-store-maintenance-actions goal actions', () => {
     expect(refreshThreads).toHaveBeenCalledTimes(1)
   })
 
-  it('submits pending user input through the provider and marks the block submitted', async () => {
+  it.each(['pending', 'error'] as const)('submits %s user input through the provider and marks the block submitted', async (status) => {
     const { actions, provider, state } = buildHarness()
     const answers = [{ id: 'choice', label: 'Use neutral path', value: 'Use neutral path' }]
     Object.assign(state, {
@@ -631,7 +633,7 @@ describe('chat-store-maintenance-actions goal actions', () => {
           question: 'How should this resolve?',
           options: [{ label: 'Use neutral path', description: 'Submit directly to runtime.' }]
         }],
-        status: 'pending'
+        status
       }],
       busy: false,
       error: null
@@ -647,6 +649,25 @@ describe('chat-store-maintenance-actions goal actions', () => {
       answers
     })
     expect(state.error).toBeNull()
+  })
+
+  it.each(['pending', 'error'] as const)('cancels %s user input through the provider', async (status) => {
+    const { actions, provider, state } = buildHarness()
+    state.blocks = [{ kind: 'user_input', id: 'input-block', requestId: 'request-1', questions: [], status }]
+    await actions.resolveUserInput('input-block', { kind: 'cancel' })
+    expect(provider.cancelUserInput).toHaveBeenCalledWith('request-1')
+    expect(state.blocks[0]).toMatchObject({ status: 'cancelled' })
+  })
+
+  it('rejects an absent or settled input instead of reporting a successful submission', async () => {
+    const { actions, provider, state } = buildHarness()
+    for (const status of ['submitted', 'cancelled'] as const) {
+      state.blocks = [{ kind: 'user_input', id: 'input-block', requestId: 'request-1', questions: [], status }]
+      await expect(actions.resolveUserInput('input-block', { kind: 'submit', answers: [] })).rejects.toThrow()
+    }
+    await expect(actions.resolveUserInput('missing', { kind: 'cancel' })).rejects.toThrow()
+    expect(provider.submitUserInputResponse).not.toHaveBeenCalled()
+    expect(provider.cancelUserInput).not.toHaveBeenCalled()
   })
 
   it('fails unsupported user input submit without queueing or interrupting', async () => {
@@ -682,7 +703,7 @@ describe('chat-store-maintenance-actions goal actions', () => {
       error: null
     })
 
-    await actions.resolveUserInput('input-block', { kind: 'submit', answers })
+    await expect(actions.resolveUserInput('input-block', { kind: 'submit', answers })).rejects.toThrow('runtime_request_user_input_unsupported')
 
     expect(provider.submitUserInputResponse).toHaveBeenCalledWith('request-1', answers)
     expect(provider.interruptTurn).not.toHaveBeenCalled()
@@ -694,12 +715,12 @@ describe('chat-store-maintenance-actions goal actions', () => {
     expect(state.error).toBeTruthy()
     expect(state.blocks[0]).toMatchObject({
       kind: 'user_input',
-      status: 'error',
+      status: 'pending',
       errorMessage: state.error
     })
   })
 
-  it('settles local runtime work after interrupt succeeds', async () => {
+  it('keeps runtime work pending after interrupt acknowledgement until a terminal event', async () => {
     const { actions, drainQueuedMessages, provider, refreshThreads, state } = buildHarness()
     const blocks: ChatBlock[] = [
       { kind: 'user', id: 'user-1', text: 'run command' },
@@ -742,23 +763,22 @@ describe('chat-store-maintenance-actions goal actions', () => {
     await actions.interrupt()
 
     expect(provider.interruptTurn).toHaveBeenCalledWith('thr_existing', 'turn-1', undefined)
-    expect(state.busy).toBe(false)
-    expect(state.currentTurnId).toBeNull()
-    expect(state.currentTurnUserId).toBeNull()
-    expect(state.liveAssistant).toBe('')
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn-1')
+    expect(state.currentTurnUserId).toBe('user-1')
+    expect(state.liveAssistant).toBe('partial answer')
     expect(state.blocks.map((block) => ('status' in block ? block.status : block.kind))).toEqual([
       'user',
-      'error',
-      'error',
-      'cancelled',
-      'assistant'
+      'running',
+      'pending',
+      'pending'
     ])
     expect(refreshThreads).toHaveBeenCalledTimes(1)
     expect(drainQueuedMessages).not.toHaveBeenCalled()
     expect(state.queuedMessages).toEqual([{ id: 'q-1', text: 'queued follow up' }])
   })
 
-  it('clears local running UI immediately when interrupt is clicked before the runtime settles', async () => {
+  it('keeps the event stream alive while interrupt acknowledgement is pending', async () => {
     const { actions, provider, sseAbortRef, state } = buildHarness()
     const controller = new AbortController()
     sseAbortRef.current = controller
@@ -788,14 +808,14 @@ describe('chat-store-maintenance-actions goal actions', () => {
     void actions.interrupt()
 
     expect(provider.interruptTurn).toHaveBeenCalledWith('thr_existing', 'turn-1', undefined)
-    expect(controller.signal.aborted).toBe(true)
-    expect(sseAbortRef.current).toBeNull()
-    expect(state.busy).toBe(false)
-    expect(state.currentTurnId).toBeNull()
-    expect(state.currentTurnUserId).toBeNull()
+    expect(controller.signal.aborted).toBe(false)
+    expect(sseAbortRef.current).toBe(controller)
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn-1')
+    expect(state.currentTurnUserId).toBe('user-1')
     expect(state.blocks.map((block) => ('status' in block ? block.status : block.kind))).toEqual([
       'user',
-      'error'
+      'running'
     ])
   })
 
@@ -884,10 +904,25 @@ describe('chat-store-maintenance-actions goal actions', () => {
     await actions.interrupt()
 
     expect(provider.interruptTurn).toHaveBeenCalledWith('thr_existing', 'turn-stale', undefined)
-    expect(state.busy).toBe(false)
-    expect(state.currentTurnId).toBeNull()
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn-stale')
     expect(state.error).toBeTruthy()
     expect(refreshThreads).not.toHaveBeenCalled()
+  })
+
+  it('does not settle a newer turn when an older interrupt response arrives late', async () => {
+    const { actions, provider, state } = buildHarness()
+    let reject!: (error: Error) => void
+    provider.interruptTurn.mockImplementationOnce(() => new Promise((_, no) => { reject = no }))
+    Object.assign(state, { busy: true, currentTurnId: 'old-turn', currentTurnUserId: 'old-user' })
+    const pending = actions.interrupt()
+    Object.assign(state, { busy: true, currentTurnId: 'new-turn', currentTurnUserId: 'new-user', error: null })
+    reject(new Error(JSON.stringify({ code: 'turn_not_running', message: 'Old turn finished' })))
+    await pending
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('new-turn')
+    expect(state.currentTurnUserId).toBe('new-user')
+    expect(state.error).toBeNull()
   })
 })
 

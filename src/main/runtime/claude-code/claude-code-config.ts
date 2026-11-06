@@ -1,3 +1,4 @@
+import { TASK_EXECUTION_GUIDANCE } from '../agent-runtime/task-execution-guidance'
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, stat } from 'node:fs/promises'
@@ -98,6 +99,7 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   const extraArgs = claudeCodeSdkExtraArgs(runtime.extraArgs)
   const reasoningOptions = claudeCodeReasoningOptions(options.reasoningEffort)
   const sdkOptions: ClaudeAgentSdkOptions = {
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: TASK_EXECUTION_GUIDANCE },
     cwd,
     env,
     model: cliModel,

@@ -333,9 +333,10 @@ function dedupeChatBlocksById(blocks: ChatBlock[]): ChatBlock[] {
   return changed ? next.reverse() : blocks
 }
 
-function upsertAssistantMessageBlock(
+export function upsertAssistantMessageBlock(
   blocks: ChatBlock[],
-  ev: AssistantMessageEventPayload
+  ev: AssistantMessageEventPayload,
+  userBlockId: string | null = null
 ): ChatBlock[] {
   return insertCanonicalAssistantBlock(blocks, {
     kind: 'assistant',
@@ -343,7 +344,7 @@ function upsertAssistantMessageBlock(
     createdAt: ev.createdAt ?? new Date().toISOString(),
     text: ev.text,
     ...(ev.meta ? { meta: ev.meta } : {})
-  }, null)
+  }, userBlockId)
 }
 
 function sameAssistantText(left: string, right: string): boolean {

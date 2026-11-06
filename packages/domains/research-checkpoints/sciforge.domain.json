@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.research-checkpoints",
     "displayName": "Research Checkpoints",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "hostApi": {
       "minimum": "1.1.0",
       "maximumExclusive": "2.0.0"

@@ -28,6 +28,55 @@ const recoverySettings: RuntimeGuardSettingsV1 = {
 }
 
 describe('RuntimeGovernanceSupervisor', () => {
+  it.each([false, true])('waits for arguments before counting tool attempts (repeated=%s)', (repeated) => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 5; index += 1) {
+      const event = toolEvent(index)
+      const start = {
+        ...event,
+        toolName: 'sciforge_invoke',
+        meta: { callId: `call-${index}`, toolName: 'sciforge_invoke' }
+      }
+      supervisor.observe(start, baseCapabilities, strictBudgetSettings, controls)
+      const dispatch = {
+        ...start,
+        meta: {
+          ...start.meta,
+          arguments: {
+            operationRef: 'read-url',
+            input: { url: `https://example.com/${repeated ? 'same' : index}` }
+          }
+        }
+      }
+      supervisor.observe(dispatch, baseCapabilities, strictBudgetSettings, controls)
+      supervisor.observe(dispatch, baseCapabilities, strictBudgetSettings, controls)
+    }
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(repeated ? 1 : 0)
+    expect(controls.interruptTurn).toHaveBeenCalledTimes(repeated ? 1 : 0)
+  })
+
+  it('distinguishes unknown arguments from explicit zero-argument calls', () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 5; index += 1) {
+      const event = toolEvent(index)
+      supervisor.observe({ ...event, meta: { toolName: 'lookup' } }, baseCapabilities, strictBudgetSettings, controls)
+    }
+    expect(controls.steerTurn).not.toHaveBeenCalled()
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+
+    for (let index = 1; index <= 4; index += 1) {
+      const event = toolEvent(index)
+      supervisor.observe({ ...event, meta: { toolName: 'lookup', arguments: {} } }, baseCapabilities, strictBudgetSettings, controls)
+    }
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+  })
+
   it('steers at the exact-repeat threshold and interrupts the next exact repeat', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
@@ -162,24 +211,24 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.interruptTurn).not.toHaveBeenCalled()
   })
 
-  it('interrupts after the one matching retry also fails without evidence', async () => {
+  it('keeps independent work running after retry exhaustion and stops a further blocked attempt', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
-
     observeLookupFailure(supervisor, controls, 1, 'same query')
     observeLookupFailure(supervisor, controls, 2, 'same query')
-
-    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
-    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(controls.steerTurn).toHaveBeenCalledTimes(2)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
     await Promise.resolve()
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'error',
-      message: expect.stringMatching(/exhausted its one retry.*No retries remain/u)
+      kind: 'runtime_status',
+      metadata: expect.objectContaining({ level: 'soft', code: 'semantic_failure_exhausted' })
     }))
-    expect(controls.publishSyntheticEvent).not.toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'error',
-      message: expect.stringContaining('One retry is available')
-    }))
+    const independent = shellGuiFallbackEvent()
+    independent.meta = { ...independent.meta, arguments: { command: 'cat README.md' } }
+    supervisor.observe(independent, baseCapabilities, recoverySettings, controls)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    supervisor.observe(lookupEvent(3, 'same query'), baseCapabilities, recoverySettings, controls)
+    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
   })
 
   it('steers after a non-retryable failure and interrupts only a repeated objective', async () => {
@@ -304,7 +353,7 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.interruptTurn).not.toHaveBeenCalled()
   })
 
-  it('interrupts an explicit fatal receipt and preserves its diagnostic metadata', async () => {
+  it('reports a terminal operation failure without interrupting independent work', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
@@ -326,12 +375,12 @@ describe('RuntimeGovernanceSupervisor', () => {
     )
     await Promise.resolve()
 
-    expect(controls.steerTurn).not.toHaveBeenCalled()
-    expect(controls.interruptTurn).toHaveBeenCalled()
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'runtime_status',
       metadata: expect.objectContaining({
-        level: 'hard',
+        level: 'soft',
         code: 'fatal_error',
         outcome: 'fatal_error',
         exitCode: 126,
@@ -367,7 +416,7 @@ describe('RuntimeGovernanceSupervisor', () => {
       await Promise.resolve()
 
       expect(controls.interruptTurn).not.toHaveBeenCalled()
-      expect(controls.steerTurn).not.toHaveBeenCalled()
+      expect(controls.steerTurn).toHaveBeenCalledTimes(1)
       expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'runtime_status',
         metadata: expect.objectContaining({
@@ -448,8 +497,8 @@ describe('RuntimeGovernanceSupervisor', () => {
 
     supervisor.observe(capabilityInvokeReceipt(2), baseCapabilities, strictBudgetSettings, controls)
     await Promise.resolve()
-    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
-    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(controls.steerTurn).toHaveBeenCalledTimes(2)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
   })
 
   it('denies OS GUI automation when the native visual tools are available', async () => {
@@ -478,11 +527,11 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(published?.kind === 'error' ? published.detail : undefined).not.toContain('surface.inspect')
   })
 
-  it('denies ordinary command execution while the native visual proof chain is pending', async () => {
+  it('allows ordinary command execution alongside native visual tools', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = {
       ...controlsSpy(),
-      nativeVisualProofChainPending: true
+      ownedVisualToolsAvailable: true
     }
     const event = shellGuiFallbackEvent()
     event.meta = {
@@ -493,12 +542,8 @@ describe('RuntimeGovernanceSupervisor', () => {
     supervisor.observe(event, baseCapabilities, strictBudgetSettings, controls)
     await Promise.resolve()
 
-    expect(controls.interruptTurn).toHaveBeenCalled()
-    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'error',
-      code: 'runtime_execution_policy_denied',
-      detail: expect.stringContaining('typed native visual proofs')
-    }))
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    expect(controls.publishSyntheticEvent).not.toHaveBeenCalled()
   })
 
   it('does not infer native visual availability from broker capability descriptors', async () => {

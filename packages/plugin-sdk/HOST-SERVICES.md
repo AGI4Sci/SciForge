@@ -10,6 +10,8 @@ The seventh argument of `runtime.invoke(id, input, generation, signal, revision,
 
 A child uses `globalThis.__sciforgeHostServices.request(serviceId, operation, input)` inside an invocation. The frozen handle exposes `requestId`, `result` and `cancel()`. `HostServiceClient` describes this runner-local API. The runner adds request/invocation correlation, not authority. The Host validates the exact wire schema; extra authority/caller/scope/generation fields are rejected. Foreign or completed invocation IDs cannot grant access, including between different connections with the same generation number.
 
+The same object exposes `services`, the service ids the Host approved for the current generation through the trusted `serviceClients` composition. It is a projection for activation checks (a plugin may refuse to start when a promised service is absent), never a grant: the Host still requires a live invocation and the provider's own authorization. Plugins must treat an empty or missing list as "no service".
+
 ## Finite request deadlines
 
 `ProcessExtensionRuntime` and the public `ProcessExtensionHost.prepare`/`replace` options accept two Host-owned timer budgets:

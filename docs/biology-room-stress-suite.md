@@ -9,7 +9,7 @@ same SHA-256 before and after every room-only operation.
 Run:
 
 ```bash
-npm --prefix packages/domains/biology-room test
+npm run test -w @sciforge/domain-biology-workbench
 npx vitest run \
   src/main/capabilities/app-registry.test.ts \
   src/main/workspace-preview-asset-protocol.test.ts \

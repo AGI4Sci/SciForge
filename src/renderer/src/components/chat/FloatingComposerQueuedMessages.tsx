@@ -29,7 +29,7 @@ type Props = {
 }
 
 export function FloatingComposerQueuedMessages({
-  messages,
+  messages: inputs,
   persistenceDegraded = false,
   onRemove,
   onEdit,
@@ -41,11 +41,13 @@ export function FloatingComposerQueuedMessages({
   const { t } = useTranslation('common')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // Host hydration includes the running input as an admission barrier. It is
+  // already in the transcript, so it must not reappear as a queued message.
+  const messages = inputs.filter((message) => !isSessionInputExecuting(message.admissionReceipt))
   const isReadonlyInput = (message: QueuedComposerMessage): boolean =>
-    isSessionInputExecuting(message.admissionReceipt) || isSessionInputOutputPending(message.admissionReceipt)
+    isSessionInputOutputPending(message.admissionReceipt)
   const queuedCount = messages.filter((message) => !isReadonlyInput(message)).length
   const readonlyOnly = messages.length > 0 && queuedCount === 0
-  const hasActiveInput = messages.some((message) => isSessionInputExecuting(message.admissionReceipt))
   if (messages.length === 0 && !persistenceDegraded) return null
 
   if (messages.length === 0) {
@@ -87,8 +89,8 @@ export function FloatingComposerQueuedMessages({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="inline-flex items-center gap-2 text-[13px] font-medium text-ds-ink">
           <Clock3 className="h-3.5 w-3.5 text-ds-muted" strokeWidth={1.9} />
-          <span role={readonlyOnly ? 'status' : undefined} data-testid={readonlyOnly ? hasActiveInput ? 'session-input-executing' : 'session-output-validation' : undefined}>
-            {readonlyOnly ? t(hasActiveInput ? 'queuedMessageExecuting' : 'queuedMessageOutputPending') : t('queuedMessagesTitle', { count: queuedCount })}
+          <span role={readonlyOnly ? 'status' : undefined} data-testid={readonlyOnly ? 'session-output-validation' : undefined}>
+            {readonlyOnly ? t('queuedMessageOutputPending') : t('queuedMessagesTitle', { count: queuedCount })}
           </span>
         </div>
         <div className="inline-flex items-center gap-3">
@@ -114,7 +116,6 @@ export function FloatingComposerQueuedMessages({
       ) : null}
       <div className="mt-2 space-y-2">
         {messages.map((message, index) => {
-          const outputPending = isSessionInputOutputPending(message.admissionReceipt)
           const readOnly = isReadonlyInput(message)
           const editing = editingId === message.id && !readOnly
           const reexecute = canReexecuteSessionInput(message.admissionReceipt)
@@ -134,9 +135,9 @@ export function FloatingComposerQueuedMessages({
             {!readOnly ? <span className="mt-1 shrink-0 text-ds-faint">{messages.slice(0, index + 1).filter((entry) => !isReadonlyInput(entry)).length}.</span> : null}
             {readOnly ? (
               <div className="min-w-0 flex-1">
-                {!readonlyOnly || outputPending && hasActiveInput ? (
-                  <span role="status" data-testid={outputPending ? 'session-output-validation' : 'session-input-executing'} className="block text-[12px] leading-4 text-ds-muted">
-                    {t(outputPending ? 'queuedMessageOutputPending' : 'queuedMessageExecuting')}
+                {!readonlyOnly ? (
+                  <span role="status" data-testid="session-output-validation" className="block text-[12px] leading-4 text-ds-muted">
+                    {t('queuedMessageOutputPending')}
                   </span>
                 ) : null}
                 <details className="mt-1" data-testid="session-current-input-details">

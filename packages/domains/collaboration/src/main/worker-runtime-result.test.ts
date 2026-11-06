@@ -1,3 +1,4 @@
+import { humanAnswerFixture } from '@sciforge/collaboration-contracts/testing'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { z } from 'zod'
@@ -425,7 +426,7 @@ test('Worker prompt binds exact input and output names without inventing a legac
   assert.match(prompt, /meeting-minutes\.md/u)
   assert.match(prompt, /Do not rename/u)
   assert.doesNotMatch(prompt, /materialize|agentUploadNew|safeName/u)
-  assert.match(workerHumanAnswerPrompt('Proceed with option B.'), /same Project Task/u)
+  assert.match(workerHumanAnswerPrompt({ ...humanAnswerFixture, answer: 'Proceed with option B.' }), /same Project Task/u)
 })
 
 test('Worker revision prompt binds the Coordinator instruction to the new attempt', () => {
@@ -481,7 +482,7 @@ test('generic text Worker tasks do not inherit the design-only report contract',
 })
 
 test('Worker human-answer prompt repeats the closed result envelope contract', () => {
-  const prompt = workerHumanAnswerPrompt('Use the conservative option.')
+  const prompt = workerHumanAnswerPrompt({ ...humanAnswerFixture, answer: 'Use the conservative option.' })
   assert.match(prompt, /envelope is closed/iu)
   assert.match(prompt, /summary must be one JSON string/iu)
   assert.match(prompt, /add another root key/iu)

@@ -216,10 +216,10 @@ describe('capability trace adapter', () => {
           callId: 'invoke-join',
           arguments: { operationRef: 'op_join', input: {} }
         },
-        detail: JSON.stringify({ capabilityId: 'dataset-api.join', output: { ok: true } })
+        detail: JSON.stringify({ capabilityId: 'fixture-data.join', output: { ok: true } })
       })
     ])
-    expect(result.discoveredActions).toEqual(['dataset-api.join'])
+    expect(result.discoveredActions).toEqual(['fixture-data.join'])
     expect(result.discoveryEvidenceStatus).toBe('complete')
   })
 

@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
@@ -20,6 +20,7 @@ import {
 import {
   buildModelRouterSidecarLaunch,
   ensureModelRouterSidecar,
+  stopModelRouterSidecar,
   modelRouterConfigPath,
   syncModelRouterConfigFileFromSettings
 } from './model-router-sidecar'
@@ -177,7 +178,7 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.cwd).toBe('/repo/sciforge')
     expect(result.launch.args).toEqual([
       '--env-file-if-exists=.env',
-      join('/repo/sciforge', 'out/main/model-router-sidecar-node-entry.js'),
+      posix.join('/repo/sciforge', 'out/main/model-router-sidecar-node-entry.js'),
       '--host',
       '127.0.0.1',
       '--port',
@@ -262,6 +263,75 @@ describe('buildModelRouterSidecarLaunch', () => {
       tokenEnv: 'SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN',
       model: 'sci-modality'
     })
+  })
+
+  it('resolves provider references only into the sidecar environment and never persisted settings or config', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'model-router-env-reference-'))
+    const current = settings()
+    const members = current.modelRouter!.profiles.default
+    members.textReasoner.apiKey = '${ENV:SCIFORGE_PROVIDER_TEXT_KEY}'
+    members.imageGenerator.apiKey = '${ENV:SCIFORGE_PROVIDER_IMAGE_KEY}'
+    members.translators.vision.apiKey = '${ENV:SCIFORGE_PROVIDER_VISION_KEY}'
+    members.translators.scientific.apiKey = '${ENV:SCIFORGE_PROVIDER_SCIENTIFIC_KEY}'
+    const snapshot = JSON.stringify(current)
+    const sourceEnv = {
+      SCIFORGE_PROVIDER_TEXT_KEY: 'referenced-text-secret',
+      SCIFORGE_PROVIDER_IMAGE_KEY: 'referenced-image-secret',
+      SCIFORGE_PROVIDER_VISION_KEY: 'referenced-vision-secret',
+      SCIFORGE_PROVIDER_SCIENTIFIC_KEY: 'referenced-scientific-secret',
+      SCIFORGE_PROVIDER_UNUSED_KEY: 'unrelated-secret'
+    }
+    try {
+      const result = buildModelRouterSidecarLaunch(current, { userDataDir: root, env: sourceEnv })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.launch.env.SCIFORGE_MODEL_ROUTER_TEXT_API_KEY).toBe(sourceEnv.SCIFORGE_PROVIDER_TEXT_KEY)
+      expect(result.launch.env.SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY).toBe(sourceEnv.SCIFORGE_PROVIDER_IMAGE_KEY)
+      expect(result.launch.env.SCIFORGE_MODEL_ROUTER_VISION_API_KEY).toBe(sourceEnv.SCIFORGE_PROVIDER_VISION_KEY)
+      expect(result.launch.env.SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN).toBe(sourceEnv.SCIFORGE_PROVIDER_SCIENTIFIC_KEY)
+      expect(Object.keys(result.launch.env).some((key) => key.startsWith('SCIFORGE_PROVIDER_'))).toBe(false)
+      const { path } = await syncModelRouterConfigFileFromSettings(current, { userDataDir: root })
+      const generated = await readFile(path, 'utf8')
+      for (const secret of Object.values(sourceEnv)) {
+        expect(generated).not.toContain(secret)
+        expect(JSON.stringify(result.launch.config)).not.toContain(secret)
+        expect(JSON.stringify(current)).not.toContain(secret)
+      }
+      expect(generated).not.toContain('${ENV:')
+      expect(JSON.stringify(current)).toBe(snapshot)
+      expect(sourceEnv.SCIFORGE_PROVIDER_TEXT_KEY).toBe('referenced-text-secret')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses missing or invalid references instead of sending placeholders upstream', () => {
+    for (const key of ['${ENV:SCIFORGE_PROVIDER_MISSING_KEY}', '${ENV:OPENAI_API_KEY}']) {
+      const current = settings()
+      current.modelRouter!.profiles.default.textReasoner.apiKey = key
+      const result = buildModelRouterSidecarLaunch(current, { userDataDir: '/tmp/sciforge-user-data', env: {} })
+      expect(result).toEqual({ ok: false, reason: 'Model Router provider credential environment reference is invalid or unavailable.' })
+      expect(JSON.stringify(result)).not.toContain(key)
+    }
+  })
+
+  it('refuses an unavailable optional member reference too', () => {
+    const current = settings()
+    current.modelRouter!.profiles.default.translators.vision.apiKey = '${ENV:SCIFORGE_PROVIDER_VISION_KEY}'
+    expect(buildModelRouterSidecarLaunch(current, { userDataDir: '/tmp/sciforge-user-data', env: {} }).ok).toBe(false)
+  })
+
+  it('passes the vision member window independently of the text profile budget', () => {
+    const current = settings()
+    current.modelRouter!.profiles.default.textReasoner.contextWindow = 2048
+    current.modelRouter!.profiles.default.translators.vision.contextWindow = 32768
+    const result = buildModelRouterSidecarLaunch(current, {
+      appRoot: '/tmp/app', userDataDir: '/tmp/data', execPath: '/tmp/electron', isPackaged: false
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.launch.config?.profiles.default.translators.vision?.contextWindow).toBe(32768)
+    expect(result.launch.config?.profiles.default.textReasoner.contextWindow).toBe(2048)
   })
 
   it('builds a packaged launch from the unpacked app entry without system npm', () => {
@@ -406,6 +476,27 @@ describe('buildModelRouterSidecarLaunch', () => {
     }
   })
 
+  it('forwards explicit Chat thinking-type control for negotiated and pinned protocols without provider inference', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-thinking-control-'))
+    try {
+      const current = settings()
+      const member = current.modelRouter!.profiles.default.textReasoner
+      member.chatReasoningControl = 'thinking-type'
+      for (const protocol of ['auto', 'chat-completions', 'responses'] as const) {
+        member.protocol = protocol
+        const parsed = JSON.parse(await readFile(
+          (await syncModelRouterConfigFileFromSettings(current, { userDataDir })).path, 'utf8'))
+        expect(parsed.profiles.default.textReasoner.compatibility.chatReasoningControl).toBe('thinking-type')
+        expect(parsed.profiles.default.imageGenerator).not.toHaveProperty('compatibility')
+      }
+      delete member.chatReasoningControl
+      member.protocol = 'auto'
+      const parsed = JSON.parse(await readFile(
+        (await syncModelRouterConfigFileFromSettings(current, { userDataDir })).path, 'utf8'))
+      expect(parsed.profiles.default.textReasoner).not.toHaveProperty('compatibility')
+    } finally { await rm(userDataDir, { recursive: true, force: true }) }
+  })
+
   it('does not use the local config file as a launch bypass for incomplete UI settings', () => {
     const current = settings()
     current.modelRouter!.profiles.default.textReasoner = {
@@ -457,7 +548,32 @@ describe('buildModelRouterSidecarLaunch', () => {
     }
   })
 
-  it('spawns the managed sidecar instead of reusing an unmanaged healthy router on the same port', async () => {
+  it('waits for its own router instance after a delayed listener and a foreign health response', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-readiness-'))
+    const child = fakeChildProcess()
+    let instanceId: string | undefined
+    const spawnImpl = vi.fn((_command, _args, options) => {
+      instanceId = options.env.SCIFORGE_MODEL_ROUTER_INSTANCE_ID
+      return child
+    }) as unknown as typeof spawn
+    let attempts = 0
+    const fetchImpl = vi.fn(async () => {
+      attempts++
+      if (attempts === 1) throw new TypeError('listener not ready')
+      return new Response(JSON.stringify({ ok: true, service: 'sciforge.model-router',
+        instanceId: attempts === 2 ? 'foreign-instance' : instanceId }))
+    }) as unknown as typeof fetch
+    try {
+      await ensureModelRouterSidecar(settings(), { userDataDir, appRoot: '/repo/sciforge', env: {}, spawnImpl, fetchImpl })
+      expect(attempts).toBe(3)
+      expect(fetchImpl).toHaveBeenCalledWith('http://127.0.0.1:4567/health', expect.anything())
+    } finally {
+      await stopModelRouterSidecar({ userDataDir })
+      await rm(userDataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an unmanaged healthy router and cleans up the unsuccessful managed startup', async () => {
     const server = createServer((request, response) => {
       if (request.url === '/health') {
         response.setHeader('content-type', 'application/json')
@@ -480,15 +596,17 @@ describe('buildModelRouterSidecarLaunch', () => {
     const log = vi.fn()
 
     try {
-      await ensureModelRouterSidecar(current, {
+      await expect(ensureModelRouterSidecar(current, {
         userDataDir,
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        readyTimeoutMs: 100,
         log
-      })
+      })).rejects.toThrow('did not become ready')
 
       expect(spawnImpl).toHaveBeenCalledTimes(1)
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM')
       expect(log).toHaveBeenCalledWith('Starting Model Router sidecar from /repo/sciforge.')
       child.emit('exit', 0, null)
     } finally {
@@ -511,12 +629,13 @@ describe('buildModelRouterSidecarLaunch', () => {
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl),
         log
       })
 
       expect(spawnImpl).toHaveBeenCalledWith(
         process.execPath,
-        expect.arrayContaining([join('/repo/sciforge', 'out/main/model-router-sidecar-node-entry.js')]),
+        expect.arrayContaining([posix.join('/repo/sciforge', 'out/main/model-router-sidecar-node-entry.js')]),
         expect.objectContaining({
           cwd: '/repo/sciforge',
           stdio: ['ignore', 'pipe', 'pipe']
@@ -554,7 +673,8 @@ describe('buildModelRouterSidecarLaunch', () => {
         userDataDir,
         appRoot: '/repo/sciforge',
         env: {},
-        spawnImpl
+        spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl)
       })
 
       const content = await readFile(modelRouterConfigPath(userDataDir), 'utf8')
@@ -589,6 +709,7 @@ describe('buildModelRouterSidecarLaunch', () => {
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl),
         log
       })
 
@@ -601,6 +722,7 @@ describe('buildModelRouterSidecarLaunch', () => {
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl),
         log
       })
 
@@ -629,6 +751,7 @@ describe('buildModelRouterSidecarLaunch', () => {
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl),
         log
       })
       await ensureModelRouterSidecar(firstSettings, {
@@ -636,6 +759,7 @@ describe('buildModelRouterSidecarLaunch', () => {
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl),
         log
       })
 
@@ -647,6 +771,7 @@ describe('buildModelRouterSidecarLaunch', () => {
         appRoot: '/repo/sciforge',
         env: {},
         spawnImpl,
+        fetchImpl: healthyRouterFetch(spawnImpl),
         log
       })
 
@@ -658,6 +783,14 @@ describe('buildModelRouterSidecarLaunch', () => {
     }
   })
 })
+
+function healthyRouterFetch(spawnImpl: typeof spawn): typeof fetch {
+  return vi.fn(async () => {
+    const args = vi.mocked(spawnImpl).mock.calls.at(-1) as unknown as [string, string[], { env: NodeJS.ProcessEnv }]
+    return new Response(JSON.stringify({ ok: true, service: 'sciforge.model-router',
+      instanceId: args[2].env.SCIFORGE_MODEL_ROUTER_INSTANCE_ID }))
+  }) as unknown as typeof fetch
+}
 
 function fakeChildProcess(): ChildProcess {
   const child = new EventEmitter() as ChildProcess & {

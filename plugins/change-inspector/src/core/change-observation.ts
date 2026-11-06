@@ -1,5 +1,9 @@
+import { createHash } from 'node:crypto'
 import {
   CHANGE_INSPECTOR_DEFAULT_LIST_CHANGES,
+  CHANGE_INSPECTOR_MAX_LIST_CHANGES,
+  CHANGE_INSPECTOR_MAX_PATCH_BYTES,
+  CHANGE_INSPECTOR_MAX_SNAPSHOT_BYTES,
   CHANGE_INSPECTOR_MAX_SUMMARY_PATCH_BYTES,
   changeInspectorChangeSummarySchema,
   changeInspectorSnapshotSchema,
@@ -9,8 +13,7 @@ import {
 } from '../contract.js'
 
 const MAX_CHANGES = 5_000
-const MAX_PATCH_BYTES = 2_000_000
-const SUMMARY_PATCH_TRUNCATION_MARKER = '\n… patch truncated by SciForge …'
+const PATCH_TRUNCATION_MARKER = '\n… patch truncated by SciForge …'
 
 type SessionArtifactSource = Readonly<{
   id?: string
@@ -27,87 +30,126 @@ type PatchCandidate = Readonly<{
   filePath?: string
 }>
 
+type RawChange = Omit<ChangeInspectorChange, 'patchBytes' | 'patchTruncated'>
+
 export function projectSessionChangeSnapshot(
   sessionId: string,
   source: SessionArtifactSource
 ): ChangeInspectorSnapshot {
-  const topLevelArtifacts = source.artifacts.length > 0
+  const artifacts = source.artifacts.length > 0
     ? source.artifacts
     : (source.turns ?? []).flatMap((turn) => turn.artifacts)
-  const changes = topLevelArtifacts.flatMap((artifact, artifactIndex) =>
-    projectArtifactChanges(artifact, artifactIndex)
-  )
-  const truncated = changes.length > MAX_CHANGES
+  // Session watermarks also advance for reads and other non-change events.
+  // Hash only file changes, before truncation, so omitted tails and discarded
+  // changes still invalidate revisions and pagination cursors.
+  const hash = createHash('sha256').update(JSON.stringify([sessionId]))
+  let fileChangeIndex = 0
+  const changes: ChangeInspectorChange[] = []
+  const truncationReasons: ChangeInspectorSnapshot['truncationReasons'] = []
+  let changeCount = 0
+  let changesBytes = 0
+  // Reserve the revision and all explanatory metadata. Count serialized JSON
+  // bytes, including string escaping, not just the unescaped patch payloads.
+  const envelopeBytes = byteLength(JSON.stringify({
+    sessionId,
+    revision: `changes-${'0'.repeat(64)}`,
+    changes: [],
+    truncated: false,
+    truncationReasons: ['patch-byte-limit', 'snapshot-byte-limit', 'change-count-limit']
+  }))
+  const addReason = (reason: ChangeInspectorSnapshot['truncationReasons'][number]) => {
+    if (!truncationReasons.includes(reason)) truncationReasons.push(reason)
+  }
+  for (const artifact of artifacts) {
+    const record = asRecord(artifact)
+    if (!record || record.kind !== 'tool' || record.toolKind !== 'file_change') continue
+    // Count file-change artifacts only: unrelated tools must not shift fallback IDs.
+    const artifactIndex = fileChangeIndex++
+    const rawChanges = projectArtifactChanges(artifact, artifactIndex)
+    // Include identity and source detail even when no diff can be projected yet.
+    // Every new file-change artifact must invalidate an outstanding cursor.
+    hash.update(JSON.stringify([
+      normalizedString(record.id) ?? `file-change-${artifactIndex}`,
+      typeof record.detail === 'string' ? record.detail : null,
+      normalizedString(record.filePath) ?? null,
+      record.status === 'running' || record.status === 'error' ? record.status : 'success',
+      validDateTime(record.createdAt) ?? null,
+      rawChanges
+    ])).update('\n')
+    for (const rawChange of rawChanges) {
+      changeCount += 1
+      const patch = truncatePatch(rawChange.patch, CHANGE_INSPECTOR_MAX_PATCH_BYTES)
+      if (patch.patchTruncated) addReason('patch-byte-limit')
+      const change = { ...rawChange, ...patch }
+      changes.push(change)
+      changesBytes += byteLength(JSON.stringify(change)) + 1
+      if (changeCount > MAX_CHANGES) addReason('change-count-limit')
+      while (changes.length > MAX_CHANGES ||
+        envelopeBytes + changesBytes > CHANGE_INSPECTOR_MAX_SNAPSHOT_BYTES) {
+        if (envelopeBytes + changesBytes > CHANGE_INSPECTOR_MAX_SNAPSHOT_BYTES) {
+          addReason('snapshot-byte-limit')
+        }
+        const removed = changes.shift()!
+        changesBytes -= byteLength(JSON.stringify(removed)) + 1
+      }
+    }
+  }
   return changeInspectorSnapshotSchema.parse({
     sessionId,
-    revision: normalizedRevision(source.watermark, changes),
-    changes: truncated ? changes.slice(-MAX_CHANGES) : changes,
-    truncated
+    revision: `changes-${hash.digest('hex')}`,
+    changes,
+    truncated: truncationReasons.length > 0,
+    truncationReasons
   })
 }
 
-/**
- * Bounded change summaries for audit projections. Pagination walks the
- * canonical snapshot in storage order; the cursor is the opaque change id
- * that preceded the next page. An unknown cursor fails closed instead of
- * silently restarting the walk.
- */
+/** Pages the canonical snapshot using a session- and revision-bound cursor. */
 export function projectSessionChangeSummaries(
   snapshot: ChangeInspectorSnapshot,
   input: Readonly<{ limit?: number; cursor?: string }>
 ): { changes: ChangeInspectorChangeSummary[]; nextCursor: string | null } {
   const limit = input.limit ?? CHANGE_INSPECTOR_DEFAULT_LIST_CHANGES
+  if (!Number.isInteger(limit) || limit < 1 || limit > CHANGE_INSPECTOR_MAX_LIST_CHANGES) {
+    throw new Error('Change Inspector list limit is outside the supported range.')
+  }
+  const cursorPrefix = `ci1:${createHash('sha256')
+    .update(JSON.stringify([snapshot.sessionId, snapshot.revision])).digest('hex')}:`
   const startIndex = input.cursor
-    ? resolveCursor(snapshot.changes, input.cursor)
+    ? resolveCursor(snapshot.changes, input.cursor, cursorPrefix)
     : 0
   const page = snapshot.changes
     .slice(startIndex, startIndex + limit)
     .map(summarizeChange)
-  const nextCursor = startIndex + page.length < snapshot.changes.length &&
-    page.length > 0
-    ? page[page.length - 1]!.id
-    : null
-  return { changes: page, nextCursor }
+  const nextIndex = startIndex + page.length
+  return {
+    changes: page,
+    nextCursor: nextIndex < snapshot.changes.length
+      ? `${cursorPrefix}${nextIndex}`
+      : null
+  }
 }
 
 function resolveCursor(
   changes: readonly ChangeInspectorChange[],
-  cursor: string
+  cursor: string,
+  prefix: string
 ): number {
-  const index = changes.findIndex((change) => change.id === cursor)
-  if (index < 0) {
-    throw new Error('Change Inspector list cursor does not match this session.')
+  const suffix = cursor.startsWith(prefix) ? cursor.slice(prefix.length) : ''
+  const index = /^[1-9][0-9]*$/u.test(suffix) ? Number(suffix) : NaN
+  if (!Number.isSafeInteger(index) || index >= changes.length) {
+    throw new Error('Change Inspector list cursor does not match this session or revision.')
   }
-  return index + 1
+  return index
 }
 
-function summarizeChange(
-  change: ChangeInspectorChange
-): ChangeInspectorChangeSummary {
-  const patchBytes = byteLength(change.patch)
-  if (patchBytes <= CHANGE_INSPECTOR_MAX_SUMMARY_PATCH_BYTES) {
-    return changeInspectorChangeSummarySchema.parse({
-      id: change.id,
-      status: change.status,
-      ...(change.filePath ? { filePath: change.filePath } : {}),
-      patch: change.patch,
-      patchBytes,
-      patchTruncated: false,
-      ...(change.occurredAt ? { occurredAt: change.occurredAt } : {})
-    })
-  }
-  const markerBytes = byteLength(SUMMARY_PATCH_TRUNCATION_MARKER)
-  const head = Buffer.from(change.patch, 'utf8')
-    .subarray(0, CHANGE_INSPECTOR_MAX_SUMMARY_PATCH_BYTES - markerBytes)
-    .toString('utf8')
+function summarizeChange(change: ChangeInspectorChange): ChangeInspectorChangeSummary {
+  const patch = truncatePatch(change.patch, CHANGE_INSPECTOR_MAX_SUMMARY_PATCH_BYTES)
   return changeInspectorChangeSummarySchema.parse({
-    id: change.id,
-    status: change.status,
-    ...(change.filePath ? { filePath: change.filePath } : {}),
-    patch: `${head}${SUMMARY_PATCH_TRUNCATION_MARKER}`,
-    patchBytes,
-    patchTruncated: true,
-    ...(change.occurredAt ? { occurredAt: change.occurredAt } : {})
+    ...change,
+    patch: patch.patch,
+    // Preserve the original size through this second projection.
+    patchBytes: change.patchBytes,
+    patchTruncated: change.patchTruncated || patch.patchTruncated
   })
 }
 
@@ -120,11 +162,13 @@ export function extractUnifiedDiffCandidates(
   fallbackFilePath?: string
 ): readonly PatchCandidate[] {
   if (typeof rawDetail !== 'string') return []
-  const detail = rawDetail.trim()
-  if (!detail) return []
+  // Whitespace is meaningful patch data. Only test emptiness; never normalize
+  // the bytes used by output, original byte budgets, or revision hashing.
+  const detail = rawDetail
+  if (!detail.trim()) return []
   if (looksLikeUnifiedDiff(detail)) {
     return [{
-      patch: truncatePatch(detail),
+      patch: detail,
       ...(normalizedString(fallbackFilePath) ? { filePath: normalizedString(fallbackFilePath) } : {})
     }]
   }
@@ -141,7 +185,7 @@ export function extractUnifiedDiffCandidates(
 function projectArtifactChanges(
   artifact: unknown,
   artifactIndex: number
-): ChangeInspectorChange[] {
+): RawChange[] {
   const record = asRecord(artifact)
   if (!record || record.kind !== 'tool' || record.toolKind !== 'file_change') return []
   const artifactId = normalizedString(record.id) ?? `file-change-${artifactIndex}`
@@ -174,12 +218,9 @@ function extractCandidatesFromJson(
     normalizedString(record.file_path) ??
     normalizedString(fallbackFilePath)
   for (const key of ['diff', 'patch', 'unified_diff', 'unifiedDiff']) {
-    const patch = normalizedString(record[key])
-    if (patch && looksLikeUnifiedDiff(patch)) {
-      return [{
-        patch: truncatePatch(patch),
-        ...(filePath ? { filePath } : {})
-      }]
+    const patch = record[key]
+    if (typeof patch === 'string' && patch.trim() && looksLikeUnifiedDiff(patch)) {
+      return [{ patch, ...(filePath ? { filePath } : {}) }]
     }
   }
   if (record.changes !== undefined) {
@@ -189,33 +230,22 @@ function extractCandidatesFromJson(
 }
 
 function looksLikeUnifiedDiff(value: string): boolean {
-  return value.split('\n').some((line) =>
-    line.startsWith('diff --git ') ||
-    line.startsWith('@@') ||
-    line.startsWith('--- ') ||
-    line.startsWith('+++ ')
-  )
+  return /^(?:diff --git |@@|--- |\+\+\+ )/mu.test(value)
 }
 
-function truncatePatch(value: string): string {
-  return value.length <= MAX_PATCH_BYTES
-    ? value
-    : `${value.slice(0, MAX_PATCH_BYTES - 30)}\n… diff truncated by SciForge …`
-}
-
-function normalizedRevision(
-  watermark: string,
-  changes: readonly ChangeInspectorChange[]
-): string {
-  const candidate = watermark.trim()
-  if (candidate && candidate.length <= 256) return candidate
-  let hash = 0x811c9dc5
-  const input = `${candidate}\u0000${changes.map((change) => change.id).join('\u0000')}`
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return `changes-${(hash >>> 0).toString(16)}`
+/** Include the marker in the budget; never decode an incomplete UTF-8 scalar. */
+function truncatePatch(value: string, budget: number): {
+  patch: string; patchBytes: number; patchTruncated: boolean
+} {
+  const patchBytes = byteLength(value)
+  if (patchBytes <= budget) return { patch: value, patchBytes, patchTruncated: false }
+  const bytes = Buffer.from(value, 'utf8')
+  let end = budget - byteLength(PATCH_TRUNCATION_MARKER)
+  // `end` is the first excluded byte. Continuation bytes mean the preceding
+  // scalar straddles the boundary, so exclude that scalar in full.
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1
+  const head = bytes.subarray(0, end).toString('utf8')
+  return { patch: `${head}${PATCH_TRUNCATION_MARKER}`, patchBytes, patchTruncated: true }
 }
 
 function normalizedString(value: unknown): string | undefined {

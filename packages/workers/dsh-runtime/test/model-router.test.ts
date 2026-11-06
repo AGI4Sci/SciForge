@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import yaml from 'js-yaml'
 import { canonicalizeDshComposedConfig } from '../src/deployment.js'
 import { DSH_DARWIN_ARM64_PIN } from '../src/release-darwin-arm64.js'
+import { createDshDerivedModelRouterPatch } from '../src/model-router.js'
 
 test('reviewed production release composition pins the same model-router overlay used at launch', async () => {
   const text = await readFile(new URL('./fixtures/official-acp/safe-acp.yml', import.meta.url), 'utf8')
@@ -19,6 +20,22 @@ test('reviewed production release composition pins the same model-router overlay
   assert.equal(provider.apiKeyEnv, 'SCIFORGE_DSH_ROUTER_KEY')
   assert.deepEqual(provider.baseURL, { __jsExpr: 'process.env.SCIFORGE_DSH_ROUTER_URL' })
   assert.equal(createHash('sha256').update(canonicalizeDshComposedConfig(text)).digest('hex'), DSH_DARWIN_ARM64_PIN.configDigest)
+})
+test('derived pi-ai model inputs require explicit Host modalities while pinned bytes stay unchanged', () => {
+  const route = { baseUrl: 'http://127.0.0.1:3892/v1', apiKey: 'local-only', model: 'alias' }
+  assert.equal(createDshDerivedModelRouterPatch(route), runtime.DSH_MODEL_ROUTER_PATCH)
+  const schema = yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: (value: string) => ({ __jsExpr: value }) })])
+  for (const input of [['text'], ['text', 'image']] as const) {
+    const rows = yaml.load(createDshDerivedModelRouterPatch({ ...route, inputModalities: input }), { schema }) as any[]
+    const model = rows.find(row => row.id === 'llm-pi-ai').config.providers['sciforge-model-router'].models[0]
+    assert.deepEqual(model.input, input)
+    assert.deepEqual(model.id, { __jsExpr: 'process.env.SCIFORGE_DSH_ROUTER_MODEL' })
+    assert.equal(model.inputModalities, undefined)
+  }
+  assert.doesNotMatch(runtime.DSH_MODEL_ROUTER_PATCH, /input:/)
+  for (const inputModalities of [[], ['audio'], ['image', 'image']]) {
+    assert.throws(() => createDshDerivedModelRouterPatch({ ...route, inputModalities: inputModalities as never }), { code: 'runtime_model_route_invalid' })
+  }
 })
 const { createDshEnvironment } = runtime
 

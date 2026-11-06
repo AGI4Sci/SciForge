@@ -1,3 +1,4 @@
+import { TextareaLineGutter } from '../components/write/TextareaLineGutter'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -387,36 +388,39 @@ export function TextWorkspaceViewer({
               </span>
             </div>
           ) : null}
-          <textarea
-            ref={setEditorElement}
-            className="min-h-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-xs leading-5 text-ds-text outline-none focus:border-ds-accent"
-            data-text-preview-editor
-            aria-label={resolvedModel.title}
-            data-initial-selection={initialTextRange ? 'true' : 'false'}
-            value={draft}
-            readOnly={!resolvedModel.editable}
-            spellCheck={false}
-            onChange={(event) => {
-              const nextDraft = event.currentTarget.value
-              draftRef.current = nextDraft
-              setDraft(nextDraft)
-              onDraftChange?.(nextDraft)
-              if (saveState.kind === 'saved' || saveState.kind === 'error') {
-                setSaveState({ kind: 'idle' })
-              }
-            }}
-            onScroll={(event) => onEditorScroll?.(event.currentTarget)}
-            onKeyDown={(event) => {
-              if (
-                resolvedModel.editable &&
-                (event.metaKey || event.ctrlKey) &&
-                event.key.toLowerCase() === 's'
-              ) {
-                event.preventDefault()
-                void saveDraft()
-              }
-            }}
-          />
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            <TextareaLineGutter editorRef={editorRef} value={draft} />
+            <textarea
+              ref={setEditorElement}
+              className="min-h-0 w-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-xs leading-5 text-ds-text outline-none focus:border-ds-accent"
+              data-text-preview-editor
+              aria-label={resolvedModel.title}
+              data-initial-selection={initialTextRange ? 'true' : 'false'}
+              value={draft}
+              readOnly={!resolvedModel.editable}
+              spellCheck={false}
+              onChange={(event) => {
+                const nextDraft = event.currentTarget.value
+                draftRef.current = nextDraft
+                setDraft(nextDraft)
+                onDraftChange?.(nextDraft)
+                if (saveState.kind === 'saved' || saveState.kind === 'error') {
+                  setSaveState({ kind: 'idle' })
+                }
+              }}
+              onScroll={(event) => onEditorScroll?.(event.currentTarget)}
+              onKeyDown={(event) => {
+                if (
+                  resolvedModel.editable &&
+                  (event.metaKey || event.ctrlKey) &&
+                  event.key.toLowerCase() === 's'
+                ) {
+                  event.preventDefault()
+                  void saveDraft()
+                }
+              }}
+            />
+          </div>
           <div className="flex items-center justify-between gap-3 text-xs">
             <p
               className={saveState.kind === 'error' ? 'text-ds-danger' : 'text-ds-muted'}

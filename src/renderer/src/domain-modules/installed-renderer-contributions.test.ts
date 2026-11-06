@@ -138,15 +138,6 @@ describe('installed renderer contributions', () => {
       ownerId,
       contributionId: contribution.id
     }))).toEqual(expectedChatPanels)
-    expect(runtime.chatResultPanels.list().map(({ id, ownerId, contribution }) => ({
-      id,
-      ownerId,
-      contributionId: contribution.id
-    }))).toContainEqual({
-      id: 'dataset-api.timeline-results',
-      ownerId: 'sciforge.dataset-api',
-      contributionId: 'dataset-api.timeline-results'
-    })
     const expectedResourceNavigations = installedRendererDomainEntrySet.contributions
       .filter(({ declaration }) =>
         declaration.kind === RENDERER_RESOURCE_NAVIGATION_CONTRIBUTION_KIND

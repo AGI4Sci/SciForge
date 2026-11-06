@@ -54,6 +54,24 @@ test('official ToolRuntime retains callable closures behind RPC and validates sc
   }
 })
 
+for (const [effect, declared, expected] of [
+  ['workspace-write', 'confirmation', 'confirmation'],
+  ['external-write', 'none', 'confirmation']
+] as const) {
+  test(`declared approval ${declared} on ${effect} projects as ${expected} (raise yes, lower no)`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-tool-declared-approval-'))
+    const host = new ProcessExtensionHost({ resolveDshToolGrants: () => ({ echo: { id: 'ordinary.echo', effect, approval: declared } }) })
+    try {
+      const entryPath = join(root, 'main.mjs')
+      await writeFile(entryPath, source)
+      await host.replace({ pluginId: 'ordinary', packageName: 'ordinary', version: '1.0.0', entryPath })
+      const [descriptor] = host.runtime('ordinary')!.capabilityDescriptors
+      assert.equal(descriptor!.effect, effect)
+      assert.equal(descriptor!.approval, expected)
+    } finally { await host.disposeAll(); await rm(root, { recursive: true, force: true }) }
+  })
+}
+
 for (const effect of ['read', 'compute', 'workspace-write', 'external-write', 'destructive'] as const) {
   test(`native ${effect} projection retains the host-required approval level`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-tool-approval-'))

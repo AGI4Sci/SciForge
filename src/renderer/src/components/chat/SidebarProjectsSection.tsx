@@ -446,12 +446,12 @@ export function SidebarProjectsSection({
   }
 
   return (
-    <div className="ds-no-drag flex min-h-0 flex-1 flex-col">
+    <div className="ds-sidebar-projects ds-no-drag flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-[38px] items-center justify-between px-2 pb-1.5 pt-3">
         <button
           type="button"
           onClick={toggleAllGroups}
-          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
+          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] font-medium text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
           title={t('sidebarLocalWorkspaces')}
           aria-label={t('sidebarLocalWorkspaces')}
         >
@@ -503,7 +503,7 @@ export function SidebarProjectsSection({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 pt-0.5">
+      <div className="ds-sidebar-project-list min-h-0 flex-1 overflow-y-auto px-1 pb-2 pt-0.5">
         {groups.length === 0 ? (
           <SidebarEmpty
             runtimeReady={runtimeReady}
@@ -534,7 +534,7 @@ export function SidebarProjectsSection({
                 onClick={() =>
                   setCollapsed((current) => ({ ...current, [workspacePath]: !current[workspacePath] }))
                 }
-                className="min-h-[36px] text-[13.5px]"
+                className="min-h-[38px] text-[14px] font-medium"
                 buttonClassName="items-center gap-2 px-2.5 py-2"
                 actionsVisibility="hidden"
                 actionsLayout="overlay"
@@ -569,7 +569,7 @@ export function SidebarProjectsSection({
                 )}
                 <span className="min-w-0 flex-1 truncate">{folderName}</span>
                 {workspaceContext ? (
-                  <span className="min-w-0 max-w-[42%] shrink truncate text-[12.5px] text-ds-faint transition group-hover:opacity-0 group-focus-within:opacity-0">
+                  <span className="min-w-0 max-w-[34%] shrink truncate text-[12px] text-ds-muted transition group-hover:opacity-0 group-focus-within:opacity-0">
                     {workspaceContext}
                   </span>
                 ) : null}
@@ -801,7 +801,7 @@ function ThreadRow({
           </SidebarIconButton>
         </>
       }
-      className="min-h-[34px]"
+      className="ds-sidebar-thread min-h-[42px]"
       buttonClassName="items-center gap-2 px-2.5 py-1.5"
       disabled={deleting}
       ariaLabel={ariaLabel}
@@ -817,7 +817,7 @@ function ThreadRow({
       ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span
-          className={`min-w-0 flex-1 truncate text-[13.5px] leading-5 ${
+          className={`ds-sidebar-thread-title min-w-0 flex-1 text-[14px] leading-5 ${
             showUnreadDot && !active ? 'font-semibold text-ds-ink' : 'text-ds-ink'
           }`}
         >
@@ -834,7 +834,7 @@ function ThreadRow({
             deleting ? 'opacity-0' : 'group-hover:opacity-0 group-focus-within:opacity-0'
           }`}
         >
-          <span className="shrink-0 text-right text-[12px] leading-4 text-ds-faint tabular-nums">
+          <span className="shrink-0 text-right text-[12px] leading-4 text-ds-muted tabular-nums">
             {updatedLabel}
           </span>
           <ThreadActivityDot

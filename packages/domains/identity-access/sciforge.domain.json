@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.identity-access",
     "displayName": "Identity and Access",
-    "version": "5.0.2",
+    "version": "5.1.1",
     "hostApi": {
       "minimum": "1.6.0",
       "maximumExclusive": "2.0.0"
@@ -49,6 +49,14 @@
     "identity-access.account-overlay": {
       "location": "workbench.global-overlay",
       "title": "Identity"
+    },
+    "identity-access.current-user-profile": {
+      "location": "main.internal-service-descriptor",
+      "serviceId": "sciforge.current-user-profile",
+      "contractVersion": "1.0.0",
+      "allowedConsumerModuleIds": [
+        "sciforge.siyuan-content-space-provider"
+      ]
     }
   },
   "entrypoints": [
@@ -87,6 +95,12 @@
           "id": "identity-access.agent-cloud-runtime",
           "kind": "main.extension",
           "version": "4.0.0",
+          "priority": 900
+        },
+        {
+          "id": "identity-access.current-user-profile",
+          "kind": "main.extension",
+          "version": "1.0.0",
           "priority": 900
         }
       ]

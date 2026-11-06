@@ -189,7 +189,7 @@ describe('image generation engine', () => {
     expect(review).toMatchObject({ ok: false, status: 'vision_review_unavailable' })
   })
 
-  it('uses Model Router vision for semantic overlap and legibility review', async () => {
+  it('requests strict visual evidence and structured semantic overlap and legibility review', async () => {
     process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
     process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
     process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
@@ -217,6 +217,7 @@ describe('image generation engine', () => {
       workspaceRoot,
       outputPath,
       manifestPath,
+      referencePath: outputPath,
       task: 'Create a clean publication pipeline figure.',
     })
 
@@ -244,7 +245,51 @@ describe('image generation engine', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://127.0.0.1:3892/v1/responses')
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit
-    expect(String(request.body)).toContain('input_image')
+    expect(new Headers(request.headers).get('x-sciforge-model-router-evidence-policy')).toBe('required')
+    const body = JSON.parse(String(request.body))
+    expect(body.text.format).toMatchObject({
+      type: 'json_schema',
+      name: 'visual_artifact_review',
+      strict: true,
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['pass', 'needsContext', 'score', 'summary', 'violations', 'repairInstructions']
+      }
+    })
+    expect(body.input[0].content.filter((part: { type: string }) => part.type === 'input_image')).toHaveLength(2)
+    expect(body.input[0].content).toContainEqual({
+      type: 'input_image',
+      image_url: `data:image/png;base64,${readFileSync(outputPath).toString('base64')}`,
+      mime_type: 'image/png'
+    })
+  })
+
+  it('fails closed when the router rejects required visual evidence', async () => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const outputPath = join(workspaceRoot, 'vision-unavailable.png')
+    const canvas = createCanvas(256, 256)
+    writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const manifestPath = writeReviewManifest(outputPath)
+    globalThis.fetch = vi.fn(async () => Response.json({
+      error: {
+        code: 'vision_evidence_unavailable',
+        message: 'Strict visual evidence is unavailable because vision translation failed.'
+      }
+    }, { status: 503 })) as unknown as typeof fetch
+
+    const review = await reviewImageGenerationCandidate({
+      workspaceRoot,
+      outputPath,
+      manifestPath,
+      task: 'Review a publication figure.'
+    })
+
+    expect(review).toMatchObject({ ok: false, status: 'vision_review_unavailable' })
+    expect(review).not.toHaveProperty('semantic')
+    expect(review).not.toHaveProperty('score')
   })
 
   it('returns needs_context only when semantic review identifies missing external information', async () => {
@@ -666,7 +711,7 @@ describe('image generation engine', () => {
     expect(readFileSync(result.outputPath).toString('base64')).toBe(pngBase64)
     expect(result.modelExecution).toMatchObject({
       provider: 'image-endpoint',
-      model: { id: 'sciforge-router', version: 'sciforge-router' },
+      model: { id: 'sciforge-router' },
       effectivePrompt: 'A tiny generated image',
       parameters: {
         mode: 'text_to_image',
@@ -995,10 +1040,11 @@ describe('image generation engine', () => {
       modelExecution: {
         provider: 'image-endpoint',
         effectivePrompt: expect.stringContaining('换个颜色'),
-        references: [{
-          path: 'source-diagram.png',
-          contentDigest: createHash('sha256').update(readFileSync(sourcePath)).digest('hex')
-        }],
+        references: expect.arrayContaining([{
+          role: 'image', origin: 'workspace', path: sourcePath,
+          contentDigest: createHash('sha256').update(readFileSync(sourcePath)).digest('hex'),
+          byteLength: readFileSync(sourcePath).length, mediaType: 'image/png', snapshotPath: expect.any(String)
+        }]),
         parameters: {
           mode: 'image_to_image',
           outputFormat: 'png'
@@ -1008,7 +1054,7 @@ describe('image generation engine', () => {
     })
     expect(JSON.parse(readFileSync(result.outputs[0]!.artifactManifestPath, 'utf8'))).toMatchObject({
       modelExecution: {
-        references: [{ path: 'source-diagram.png' }]
+        references: expect.arrayContaining([expect.objectContaining({ path: sourcePath, role: 'image' })])
       }
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)

@@ -1,6 +1,8 @@
+import { TASK_EXECUTION_GUIDANCE } from '../agent-runtime/task-execution-guidance'
 import { createHash } from 'node:crypto'
 import { realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { CODEX_MINIMAL_BASE_INSTRUCTIONS, codexMinimalContextConfig } from './codex-minimal-context'
 import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
@@ -144,12 +146,6 @@ import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 class CodexCodingPlanAccountOperationInProgressError extends Error {}
 
 const dynamicToolDeliveryEffect = Symbol('sciforge.dynamic-tool-delivery-effect')
-// Multi-step capability workflows must be able to carry a bounded handoff
-// (for example a renderRequest with data sources and transformations) from
-// one action to the next. Keep the result finite, while leaving enough room
-// for structured workflow inputs instead of reducing the handoff to a bare
-// `_truncated` marker.
-const DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES = 4 * 1_024
 type DynamicToolDeliveryEffect = NonNullable<
   Awaited<ReturnType<AgentRuntimeToolSurface['call']>>['deliveryEffect']
 >
@@ -228,6 +224,13 @@ type CodexClientSession = {
   firstActivityInterruptions: Set<string>
 }
 
+type CodexTurnAdmission = {
+  accessKey: string
+  count: number
+  complete: Promise<void>
+  resolve: () => void
+}
+
 type CodexPendingTurnRecovery = {
   threadId: string
   text: string
@@ -237,6 +240,7 @@ type CodexPendingTurnRecovery = {
   serviceTier?: string
   outputSchema?: Readonly<Record<string, unknown>>
   fileReferences?: CodexTurnStartPayload['fileReferences']
+  allowedTools?: readonly string[]
   ownedVisualToolsAvailable: boolean
   nativeVisualProofChainPending: boolean
   runtime: ReturnType<typeof getCodexRuntimeSettings>
@@ -336,6 +340,7 @@ type CodexRuntimeEventSubscriber = {
 export class CodexRuntimeService {
   private client: CodexAppServerJsonRpcClient | null = null
   private clientSession: CodexClientSession | null = null
+  private turnAdmission: CodexTurnAdmission | null = null
   private readonly historyEditsInFlight = new Set<string>()
   /** Native compaction is acknowledged before its internal turn completes. */
   private readonly pendingNativeCompactions = new Map<string, Promise<void>>()
@@ -345,6 +350,9 @@ export class CodexRuntimeService {
   private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
   private readonly activeSubagents = new Map<string, ActiveCodexSubagent>()
   private readonly allowedToolsByThread = new Map<string, ReadonlySet<string>>()
+  private readonly nativeToolFreeThreads = new Map<string, { client: CodexAppServerJsonRpcClient | null; enabled: boolean }>()
+  private readonly minimalContextThreads = new Map<string, WeakRef<CodexAppServerJsonRpcClient>>()
+  private readonly minimalContextPolicies = new Map<string, readonly string[]>()
   private readonly scopedAgentToolsByThread = new Map<string, AgentRuntimeToolSurface>()
   private usageBackfillPromise: Promise<void> | null = null
   private readonly activeTurns = new Map<string, string>()
@@ -391,10 +399,10 @@ export class CodexRuntimeService {
     }
   }
 
-  async modelCatalog(): Promise<AgentRuntimeModelCatalog> {
+  async modelCatalog(settings?: AppSettingsV1): Promise<AgentRuntimeModelCatalog> {
     if (this.modelCatalogCache) return this.modelCatalogCache
     try {
-      const { client } = await this.ensureConnectedClient()
+      const { client } = await this.ensureConnectedClient(settings)
       const models: AgentRuntimeModelCatalog['models'][number][] = []
       let cursor: string | undefined
       let complete = false
@@ -644,7 +652,15 @@ export class CodexRuntimeService {
   }
 
   async startThread(payload: CodexThreadStartPayload): Promise<CodexThreadStartResult> {
+    let minimalNativeId: string | undefined
     try {
+      if (payload.contextProfile && (payload.threadId || payload.allowedTools?.length !== 0 ||
+        payload.sidebarVisibility !== 'hidden')) {
+        throw new Error('Minimal context requires a fresh hidden thread with explicit allowedTools: [].')
+      }
+      if (payload.contextProfile === 'minimal' && (!this.threadStore || !this.eventStore)) {
+        throw new Error('Minimal context requires durable runtime storage for its one-shot policy and audit.')
+      }
       const startedAtMs = Date.now()
       const settings = await this.options.settings()
       const workspace = resolveCodexWorkspace(settings, payload.workspace)
@@ -670,7 +686,7 @@ export class CodexRuntimeService {
       }
       const { client } = await this.ensureModelUseClient(settings)
       const selection = resolveCodexModelSelection(
-        await this.modelCatalog(), payload,
+        await this.modelCatalog(settings), payload,
         getModelAccessSettings(settings)?.mode === 'api' ? codexModelAccessThreadParams(settings).model : undefined
       )
       if (coldStart) {
@@ -684,16 +700,30 @@ export class CodexRuntimeService {
           { persist: false }
         )
       }
-      const dynamicTools = await this.codexDynamicTools(settings, payload.allowedTools)
+      const minimal = payload.contextProfile === 'minimal'
+      const dynamicTools = minimal ? [] : await this.codexDynamicTools(settings, payload.allowedTools)
       const response = await client.startThread({
         ...baseThreadParams(settings, workspace, {
           subagentsConfigured: this.isSubagentDelegationConfigured(settings),
           dynamicTools
         }),
+        ...(minimal ? {
+          baseInstructions: CODEX_MINIMAL_BASE_INSTRUCTIONS,
+          developerInstructions: '',
+          dynamicTools: [],
+          environments: [],
+          selectedCapabilityRoots: []
+        } : {}),
         ...codexModelAccessThreadParams(settings, selection.model),
         ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
-        ...(selection.reasoningEffort
-          ? { config: codexAppServerThreadReasoningConfig({ reasoningEffort: selection.reasoningEffort }) }
+        ...(selection.reasoningEffort || payload.allowedTools?.length === 0
+          ? { config: {
+              ...(selection.reasoningEffort
+                ? codexAppServerThreadReasoningConfig({ reasoningEffort: selection.reasoningEffort })
+                : {}),
+              ...codexToolFreeConfig(payload.allowedTools),
+              ...(minimal ? codexMinimalContextConfig() : {})
+            } }
           : {}),
         serviceName: 'SciForge',
         ephemeral: false,
@@ -719,6 +749,8 @@ export class CodexRuntimeService {
           : {})
       })
       const thread = normalizeThread(readThread(response))
+      if (minimal) minimalNativeId = thread.id
+      else this.nativeToolFreeThreads.set(thread.id, { client, enabled: payload.allowedTools?.length === 0 })
       const storedThread = await this.persistThread(
         {
           ...thread,
@@ -732,12 +764,23 @@ export class CodexRuntimeService {
           sidebarVisibility: thread.sidebarVisibility || payload.sidebarVisibility
         },
         {
+          ...(minimal ? { contextProfile: 'minimal' as const } : {}),
           ...(payload.threadId ? { guiThreadId: payload.threadId } : {})
         }
       )
       const policyIds = [payload.threadId, thread.id, storedThread?.guiThreadId, storedThread?.codexThreadId]
         .filter((id): id is string => Boolean(id?.trim()))
         .map((id) => id.trim())
+      if (minimal) {
+        // Register all policy aliases together after persistence; concurrent
+        // preparations cannot recreate entries already evicted by the bound.
+        if (this.minimalContextThreads.size >= 128) {
+          this.releaseMinimalContextPolicy(this.minimalContextThreads.keys().next().value!)
+        }
+        this.minimalContextThreads.set(thread.id, new WeakRef(client))
+        this.minimalContextPolicies.set(thread.id, policyIds)
+        this.nativeToolFreeThreads.set(thread.id, { client, enabled: true })
+      }
       if (payload.allowedTools !== undefined) {
         const allowed = new Set(payload.allowedTools)
         for (const id of policyIds) this.allowedToolsByThread.set(id, allowed)
@@ -767,6 +810,7 @@ export class CodexRuntimeService {
             }
       }
     } catch (error) {
+      if (minimalNativeId) this.releaseMinimalContextPolicy(minimalNativeId)
       await this.discardClientAfterFailure(error)
       return failure(error)
     }
@@ -832,13 +876,14 @@ export class CodexRuntimeService {
         }
       }
       const page = await this.eventStore.readPage(guiThreadId, options)
+      const leadingAssistant = await leadingStoredAssistantIdentity(this.eventStore, guiThreadId, page)
       const latestEvent = page.events.at(-1)
       const latestTurnId = stored?.latestTurnId ?? latestPageTurnId(page.events)
       const latestUserMessageId = stored?.latestUserMessageId ?? latestPageUserMessageId(page.events)
       return {
         ok: true,
         detail: {
-          blocks: storedEventsToBlocks(page.events),
+          blocks: storedEventsToBlocks(page.events, leadingAssistant),
           latestSeq: Math.max(stored?.latestSeq ?? 0, latestEvent?.seq ?? 0),
           workspace: stored?.workspace,
           latestTurnId,
@@ -896,6 +941,38 @@ export class CodexRuntimeService {
   }
 
   async publishSyntheticEvent(event: AgentRuntimeEvent): Promise<CodexThreadEventPayload> {
+    if (event.kind === 'user_input_requested' || event.kind === 'user_input_resolved' ||
+      (event.kind === 'item_snapshot' && event.item.kind === 'user_input')) {
+      const snapshot = event.kind === 'item_snapshot' ? event.item : undefined
+      const requestId = event.kind === 'item_snapshot' ? event.item.id : event.requestId
+      const status = event.kind === 'user_input_resolved' ? event.status : snapshot?.meta?.userInputStatus
+      const runtimeEvent: CodexThreadEventPayload = {
+        threadId: event.threadId, turnId: event.turnId, createdAt: event.createdAt,
+        tool: { itemId: requestId, summary: snapshot?.text ?? 'User input',
+          status: status === 'submitted' ? 'success' : status === 'cancelled' ? 'error' : 'running',
+          meta: { ...snapshot?.meta, codexRequestKind: 'user_input', requestId,
+            ...(event.kind === 'user_input_requested' ? { questions: event.questions } : {}),
+            ...(event.kind === 'user_input_resolved' ? { userInputStatus: event.status, answers: event.answers } : {}) }
+        }
+      }
+      const stored = await this.persistEvent(event.threadId, runtimeEvent)
+      if (!stored) throw new Error('User input history could not be persisted.')
+      this.broadcastEvent(stored.event)
+      return stored.event
+    }
+    if (event.kind === 'item_snapshot' && event.item.kind === 'tool') {
+      const { item } = event
+      const runtimeEvent: CodexThreadEventPayload = {
+        threadId: event.threadId, turnId: event.turnId,
+        tool: { itemId: item.id, summary: item.summary ?? 'Stored tool result',
+          status: 'success', toolKind: item.toolKind ?? 'tool_call',
+          detail: item.detail, detailArtifact: item.detailArtifact, meta: item.meta }
+      }
+      const stored = await this.persistEvent(event.threadId, runtimeEvent)
+      if (!stored) throw new Error('Tool result history could not be persisted.')
+      this.broadcastEvent(stored.event)
+      return stored.event
+    }
     if (event.kind === 'compaction_event') {
       const runtimeEvent: CodexThreadEventPayload = {
         threadId: event.threadId,
@@ -904,6 +981,7 @@ export class CodexRuntimeService {
         compaction: {
           status: event.status,
           summary: event.summary,
+          ...(event.contextSummary ? { contextSummary: event.contextSummary } : {}),
           ...(event.detail ? { detail: event.detail } : {}),
           ...(event.auto !== undefined ? { auto: event.auto } : {}),
           ...(event.messagesBefore !== undefined ? { messagesBefore: event.messagesBefore } : {}),
@@ -1106,6 +1184,9 @@ export class CodexRuntimeService {
     try {
       const stored = await this.findStoredThread(threadId)
       if (archived) {
+        if (!this.activeTurns.has(stored?.guiThreadId ?? threadId)) {
+          this.releaseMinimalContextPolicy(stored?.codexThreadId ?? threadId)
+        }
         try {
           const { client } = await this.ensureConnectedClient()
           await client.request('thread/archive', {
@@ -1138,7 +1219,9 @@ export class CodexRuntimeService {
   }
 
   async startTurn(payload: CodexTurnStartPayload): Promise<CodexTurnStartResult> {
+    let minimalContextThreadId: string | undefined
     let preparedGovernance: CodexPreparedTurnGovernance | null = null
+    let releaseTurnAdmission: (() => void) | null = null
     const dispatchState: { session: CodexClientSession | null } = { session: null }
     try {
       if (this.historyEditsInFlight.has(payload.threadId)) throw new Error('History editing is in progress.')
@@ -1153,8 +1236,44 @@ export class CodexRuntimeService {
             ...runtimePatchForPermissionLevel(payload.permissionLevel)
           })
         : baseSettings
+      const requestedAccessKey = codexModelAccessKey(settings, this.options.planGateway)
+      if (this.turnAdmission && this.turnAdmission.accessKey !== requestedAccessKey) {
+        throw new Error('Another Codex turn with different runtime permissions is still being admitted. Retry after it starts.')
+      }
+      if (
+        this.activeTurns.size > 0 &&
+        this.clientSession &&
+        !this.clientSession.cancelled &&
+        this.clientSession.accessKey !== requestedAccessKey
+      ) {
+        throw new Error(
+          'Codex cannot change runtime permissions while another turn is active. Wait for the active turn to finish and retry.'
+        )
+      }
+      let admission = this.turnAdmission
+      if (admission) {
+        admission.count += 1
+      } else {
+        let resolveAdmission!: () => void
+        admission = {
+          accessKey: requestedAccessKey,
+          count: 1,
+          complete: new Promise<void>((resolve) => { resolveAdmission = resolve }),
+          resolve: () => resolveAdmission()
+        }
+        this.turnAdmission = admission
+      }
+      releaseTurnAdmission = () => {
+        admission.count -= 1
+        if (admission.count > 0) return
+        if (this.turnAdmission === admission) this.turnAdmission = null
+        admission.resolve()
+      }
       const runtime = getCodexRuntimeSettings(settings)
       let storedThread = await this.findStoredThread(payload.threadId)
+      if (storedThread?.contextProfile === 'minimal' && payload.contextProfile !== 'minimal') {
+        throw new Error('A minimal context thread cannot be resumed as a coding session. Start a new session.')
+      }
       const workspace = resolveCodexWorkspace(settings, payload.workspace || storedThread?.workspace)
       const historyReplay = await this.takePendingHistoryReplay(payload.threadId)
       let modelText = historyReplay
@@ -1185,13 +1304,29 @@ export class CodexRuntimeService {
       }
       const { client } = await this.ensureModelUseClient(settings)
       await this.pendingNativeCompactions.get(codexThreadId)
+      const minimalContext = this.minimalContextThreads.get(codexThreadId)
+      if (payload.contextProfile === 'minimal' || minimalContext) {
+        if (payload.contextProfile !== 'minimal' || payload.allowedTools?.length !== 0 ||
+          !minimalContext || minimalContext.deref() !== client || historyReplay) {
+          throw new Error('Minimal context requires its fresh native thread; context recovery or reuse is unsupported.')
+        }
+        minimalContextThreadId = codexThreadId
+        this.minimalContextThreads.delete(codexThreadId)
+      }
       const selection = resolveCodexModelSelection(
-        await this.modelCatalog(), payload,
+        await this.modelCatalog(settings), payload,
         getModelAccessSettings(settings)?.mode === 'api' ? codexModelAccessThreadParams(settings).model : undefined
       )
       const runtimeModel = codexModelAccessThreadParams(settings, selection.model).model
+      const allowedTools = payload.allowedTools !== undefined
+        ? [...payload.allowedTools]
+        : this.allowedToolsByThread.has(payload.threadId)
+          ? [...this.allowedToolsByThread.get(payload.threadId)!]
+          : undefined
       const session = this.clientSession
       const dispatch = async (): Promise<unknown> => {
+        await this.configureNativeToolPolicy({ client, settings, threadId: codexThreadId,
+          guiThreadId: payload.threadId, workspace, allowedTools })
         const params = await turnStartParams({
           threadId: codexThreadId,
           guiThreadId: payload.threadId,
@@ -1225,17 +1360,14 @@ export class CodexRuntimeService {
       let response: unknown
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: codexThreadId,
-        allowedTools: payload.allowedTools !== undefined
-          ? payload.allowedTools
-          : this.allowedToolsByThread.has(payload.threadId)
-            ? [...this.allowedToolsByThread.get(payload.threadId)!]
-            : undefined,
+        allowedTools,
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
         nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
       })
       try {
         response = await dispatch()
       } catch (error) {
+        if (payload.contextProfile === 'minimal') throw error
         if (!isMissingOrUnmaterializedThreadError(error)) {
           throw error
         }
@@ -1247,7 +1379,8 @@ export class CodexRuntimeService {
           client,
           settings,
           threadId: codexThreadId,
-          workspace
+          workspace,
+          allowedTools
         })) {
           try {
             response = await dispatch()
@@ -1263,6 +1396,7 @@ export class CodexRuntimeService {
             guiThreadId: payload.threadId,
             storedThread,
             workspace,
+            allowedTools,
             replayHistory: true
           })
           const replacementReplay = await this.takePendingHistoryReplay(payload.threadId)
@@ -1273,11 +1407,7 @@ export class CodexRuntimeService {
           codexThreadId = replacement.codexThreadId
           preparedGovernance = await this.prepareCodexTurnGovernance({
             sessionId: codexThreadId,
-            allowedTools: payload.allowedTools !== undefined
-              ? payload.allowedTools
-              : this.allowedToolsByThread.has(payload.threadId)
-                ? [...this.allowedToolsByThread.get(payload.threadId)!]
-                : undefined,
+            allowedTools,
             ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
             nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
           })
@@ -1294,7 +1424,7 @@ export class CodexRuntimeService {
       })
       preparedGovernance = null
       this.recordTurnModelHint(payload.threadId, turnId, runtimeModel)
-      this.recordTurnRecovery(payload.threadId, turnId, {
+      if (payload.contextProfile !== 'minimal') this.recordTurnRecovery(payload.threadId, turnId, {
         threadId: payload.threadId,
         text: modelText,
         workspace,
@@ -1303,6 +1433,7 @@ export class CodexRuntimeService {
         serviceTier: selection.serviceTier,
         outputSchema: payload.outputSchema,
         fileReferences: payload.fileReferences,
+        allowedTools,
         ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
         nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true,
         runtime,
@@ -1338,11 +1469,14 @@ export class CodexRuntimeService {
         userMessageItemId
       }
     } catch (error) {
+      if (minimalContextThreadId) this.releaseMinimalContextPolicy(minimalContextThreadId)
       await this.releasePreparedCodexTurnGovernance(preparedGovernance).catch(() => undefined)
       // Pre-dispatch failures do not own a client; never discard a newer session.
       await this.discardClientAfterFailure(error, dispatchState.session)
       return failure(error)
     } finally {
+      if (minimalContextThreadId) this.minimalContextThreads.delete(minimalContextThreadId)
+      releaseTurnAdmission?.()
       if (dispatchState.session) dispatchState.session.turnStartsInFlight -= 1
     }
   }
@@ -1619,6 +1753,8 @@ export class CodexRuntimeService {
       if (!fork.id || fork.id === (stored?.codexThreadId ?? threadId)) {
         throw new Error('The runtime did not return a new context branch.')
       }
+      const inheritedPolicy = this.nativeToolFreeThreads.get(stored?.codexThreadId ?? threadId)
+      if (inheritedPolicy) this.nativeToolFreeThreads.set(fork.id, { ...inheritedPolicy, client: null })
       if (editId) {
         // A high-water record prevents new events from reusing old delivery sequence IDs.
         const seq = Math.max(stored!.latestSeq, events.at(-1)?.seq ?? 0) + 1
@@ -1714,8 +1850,12 @@ export class CodexRuntimeService {
   }
 
   async stop(reason: RuntimeToolReleaseReason = 'service_shutdown'): Promise<void> {
+    this.minimalContextThreads.clear()
     const session = this.clientSession
-    if (!session) return
+    if (!session) {
+      for (const id of this.minimalContextPolicies.keys()) this.releaseMinimalContextPolicy(id)
+      return
+    }
     await this.cleanupClientSession(session, {
       reason,
       failure: false
@@ -1747,6 +1887,7 @@ export class CodexRuntimeService {
     input: {
       reason: RuntimeToolReleaseReason | 'runtime_disconnected'
       failure: boolean
+      preserveEventSubscribers?: boolean
     }
   ): Promise<void> {
     if (session.cleanupPromise) return session.cleanupPromise
@@ -1771,6 +1912,9 @@ export class CodexRuntimeService {
         })
         if (this.clientSession === session) {
           this.activeTurns.clear()
+          this.nativeToolFreeThreads.clear()
+          this.minimalContextThreads.clear()
+          for (const id of this.minimalContextPolicies.keys()) this.releaseMinimalContextPolicy(id)
           this.turnTimings.clear()
           this.turnModelHints.clear()
           this.governanceBindingsByTurn.clear()
@@ -1783,7 +1927,7 @@ export class CodexRuntimeService {
               ? 'Codex runtime disconnected before login completed.'
               : 'Codex runtime stopped before login completed.'
           )
-          this.closeAllEventSubscribers()
+          if (!input.preserveEventSubscribers) this.closeAllEventSubscribers()
         }
         await Promise.all([
           ...governanceTurnIds.map((turnId) => this.preToolUseGovernanceBridge?.deleteTurnState(turnId)),
@@ -1861,6 +2005,11 @@ export class CodexRuntimeService {
       throw new Error('Codex must be the selected Agent runtime for the configured model access mode.')
     }
     const nextAccessKey = codexModelAccessKey(current, this.options.planGateway)
+    const admission = this.turnAdmission
+    if (access === 'runtime' && admission && admission.accessKey !== nextAccessKey) {
+      await admission.complete
+      return this.ensureConnectedClient(current, access)
+    }
     const existing = this.clientSession
     if (existing) {
       if (existing.accessKey === nextAccessKey && !existing.cancelled) {
@@ -1868,9 +2017,18 @@ export class CodexRuntimeService {
         if (access === 'runtime') await this.ensureRuntimeClientReady(existing)
         return connected
       }
+      // Read/list/status operations use persisted global settings. While a turn
+      // is active, keep the session that admitted that turn so a background UI
+      // refresh cannot replace its stricter per-turn permission boundary.
+      if (access === 'runtime' && this.activeTurns.size > 0 && !existing.cancelled) {
+        const connected = await existing.transportReadiness
+        await this.ensureRuntimeClientReady(existing)
+        return connected
+      }
       await this.cleanupClientSession(existing, {
         reason: 'service_shutdown',
-        failure: false
+        failure: false,
+        preserveEventSubscribers: true
       })
       return this.ensureConnectedClient(current, access)
     }
@@ -2182,6 +2340,38 @@ export class CodexRuntimeService {
       })
       return response
     }
+    // Native PreToolUse hooks do not cover app-server dynamic tool callbacks.
+    // Resolve the same typed turn policy here before the capability can run.
+    if (this.preToolUseGovernanceBridge) {
+      let denial: string | undefined
+      try {
+        const threadId = stringValue(contextualRequest.threadId).trim()
+        const turnId = stringValue(contextualRequest.turnId).trim()
+        const activeTurnId = this.activeTurns.get(threadId)
+        if (!threadId || !turnId || (activeTurnId && activeTurnId !== turnId)) {
+          denial = 'SciForge could not bind this dynamic tool call to its active Agent turn.'
+        } else {
+          const decision = await this.preToolUseGovernanceBridge.evaluate({
+            hook_event_name: 'PreToolUse',
+            session_id: await this.codexThreadIdFor(threadId),
+            turn_id: turnId,
+            tool_name: contextualRequest.tool,
+            tool_use_id: codexHostToolCallId(contextualRequest),
+            tool_input: dynamicToolArgumentsRecord(contextualRequest.arguments) ?? {}
+          })
+          if (decision.hookSpecificOutput?.permissionDecision === 'deny') {
+            denial = decision.hookSpecificOutput.permissionDecisionReason || 'This tool is disabled by the Agent turn policy.'
+          }
+        }
+      } catch (error) {
+        denial = `SciForge could not resolve this dynamic tool policy: ${error instanceof Error ? error.message : String(error)}`
+      }
+      if (denial) {
+        const response = failedDynamicToolCall(denial, { errorCode: 'tool_policy_denied', retryable: false })
+        await this.publishDynamicToolExecutionFact(contextualRequest, 'failed', response, { includePayload: false })
+        return response
+      }
+    }
     await this.publishDynamicToolExecutionFact(
       contextualRequest,
       'dispatched',
@@ -2288,7 +2478,7 @@ export class CodexRuntimeService {
       // instead of receiving a syntactically truncated JSON prefix.
       contentItems: [{
         type: 'inputText',
-        text: agentRuntimeToolModelContent(result) ?? modelVisibleCapabilityResult(result.value)
+        text: agentRuntimeToolModelContent(result) ?? JSON.stringify(result.value) ?? 'null'
       }],
       structuredContent: result.value,
       ...(capabilityIdentity ? { capabilityIdentity } : {}),
@@ -2471,6 +2661,7 @@ export class CodexRuntimeService {
         dynamicTools
       }),
       ...codexModelAccessThreadParams(settings),
+      config: codexToolFreeConfig(input.allowedTools),
       serviceName: 'SciForge',
       ephemeral: false,
       threadSource: 'subagent',
@@ -2486,6 +2677,7 @@ export class CodexRuntimeService {
       }
     })
     const childThread = normalizeThread(readThread(threadResponse))
+    this.nativeToolFreeThreads.set(childThread.id, { client, enabled: input.allowedTools?.length === 0 })
     if (!childThread.id) throw new Error('Codex child thread did not return a thread id.')
     if (input.signal.aborted) {
       const startupError = new Error('Codex child turn was aborted during thread startup.')
@@ -2579,7 +2771,8 @@ export class CodexRuntimeService {
         client,
         settings,
         threadId: storedChild.codexThreadId,
-        workspace
+        workspace,
+        allowedTools: input.allowedTools
       })) {
         try {
           return await run(storedChild.codexThreadId)
@@ -2598,6 +2791,7 @@ export class CodexRuntimeService {
           }))
         }),
         ...codexModelAccessThreadParams(settings),
+        config: codexToolFreeConfig(input.allowedTools),
         title: storedChild.title,
         serviceName: 'SciForge',
         ephemeral: false,
@@ -2614,6 +2808,7 @@ export class CodexRuntimeService {
         }
       })
       const replacementThread = normalizeThread(readThread(replacement))
+      this.nativeToolFreeThreads.set(replacementThread.id, { client, enabled: input.allowedTools?.length === 0 })
       if (!replacementThread.id) throw new Error('Codex replacement child thread did not return a thread id.')
       await this.threadStore?.upsert({
         guiThreadId: storedChild.guiThreadId,
@@ -2687,6 +2882,8 @@ export class CodexRuntimeService {
       })
       const modelAccess = codexModelAccessThreadParams(settings)
       const historyReplay = await this.takePendingHistoryReplay(childGuiThreadId)
+      await this.configureNativeToolPolicy({ client, settings, threadId: childCodexThreadId,
+        guiThreadId: childGuiThreadId, workspace, allowedTools: input.allowedTools })
       preparedGovernance = await this.prepareCodexTurnGovernance({
         sessionId: childCodexThreadId,
         allowedTools: input.allowedTools,
@@ -3255,6 +3452,7 @@ export class CodexRuntimeService {
   private async persistThread(
     thread: CodexNormalizedThread,
     options: {
+      contextProfile?: 'minimal'
       guiThreadId?: string
       workspace?: string
       title?: string
@@ -3263,6 +3461,7 @@ export class CodexRuntimeService {
   ): Promise<CodexStoredThread | null> {
     if (!this.threadStore || !thread.id) return null
     return this.threadStore.upsert({
+      ...(options.contextProfile ? { contextProfile: options.contextProfile } : {}),
       ...(options.guiThreadId !== undefined ? { guiThreadId: options.guiThreadId } : {}),
       codexThreadId: thread.codexThreadId ?? thread.id,
       workspace: options.workspace ?? thread.workspace,
@@ -3471,30 +3670,34 @@ export class CodexRuntimeService {
       threadId: event.threadId,
       turnId,
       phase: 'reconnecting',
-      message: 'Codex thread used a stale Model Router alias; rebuilding the thread and retrying this turn.'
+      message: `Codex thread used a stale Model Router alias; restoring its native session and retrying this turn. Original runtime failure: ${event.runtimeError!.message}`
     })
 
     let preparedGovernance: CodexPreparedTurnGovernance | null = null
     try {
       const { client } = await this.ensureConnectedClient(settings)
-      const replacement = await this.rematerializeThread({
-        client,
-        settings,
-        guiThreadId: event.threadId,
-        storedThread,
-        workspace: recovery.workspace,
-        replayHistory: true,
-        replayExcludeText: recovery.text
+      const nativeThreadId = storedThread?.codexThreadId ?? event.threadId
+      const resumed = await this.tryResumeNativeThread({
+        client, settings, threadId: nativeThreadId, workspace: recovery.workspace,
+        allowedTools: recovery.allowedTools
       })
-      const replay = await this.takePendingHistoryReplay(event.threadId)
+      // A routing configuration change does not invalidate native conversation history.
+      // Replace only when the provider confirms that the original session is unavailable.
+      const retryThreadId = resumed ? nativeThreadId : (await this.rematerializeThread({
+        client, settings, guiThreadId: event.threadId, storedThread,
+        workspace: recovery.workspace, allowedTools: recovery.allowedTools,
+        replayHistory: true, replayExcludeText: recovery.text
+      })).codexThreadId
+      const replay = resumed ? null : await this.takePendingHistoryReplay(event.threadId)
       preparedGovernance = await this.prepareCodexTurnGovernance({
-        sessionId: replacement.codexThreadId,
+        sessionId: retryThreadId,
+        allowedTools: recovery.allowedTools,
         ownedVisualToolsAvailable: recovery.ownedVisualToolsAvailable,
         nativeVisualProofChainPending: recovery.nativeVisualProofChainPending
       })
       const response = await client.startTurn(
         await turnStartParams({
-          threadId: replacement.codexThreadId,
+          threadId: retryThreadId,
           guiThreadId: event.threadId,
           text: replay ? `${replay}\n\nCurrent user request:\n${recovery.text}` : recovery.text,
           workspace: recovery.workspace,
@@ -3799,19 +4002,24 @@ export class CodexRuntimeService {
     workspace: string
     replayHistory?: boolean
     replayExcludeText?: string
+    allowedTools?: readonly string[]
   }): Promise<CodexStoredThread> {
-    const allowedTools = this.allowedToolsByThread.get(input.guiThreadId)
-    const dynamicTools = await this.codexDynamicTools(input.settings, allowedTools ? [...allowedTools] : undefined)
+    const threadPolicy = this.allowedToolsByThread.get(input.guiThreadId)
+    const allowedTools = input.allowedTools ?? (threadPolicy ? [...threadPolicy] : undefined)
+    const dynamicTools = await this.codexDynamicTools(input.settings, allowedTools)
     const response = await input.client.startThread({
       ...baseThreadParams(input.settings, input.workspace, {
         subagentsConfigured: this.isSubagentDelegationConfigured(input.settings),
         dynamicTools
       }),
       ...codexModelAccessThreadParams(input.settings),
+      config: codexToolFreeConfig(allowedTools),
       serviceName: 'SciForge',
       ephemeral: false
     })
     const thread = normalizeThread(readThread(response))
+    this.nativeToolFreeThreads.set(thread.id, { client: input.client,
+      enabled: allowedTools?.length === 0 })
     if (!thread.id) throw new Error('Codex app-server did not return a replacement thread id.')
     const stored = await this.persistThread(thread, {
       guiThreadId: input.storedThread?.guiThreadId ?? input.guiThreadId,
@@ -3819,9 +4027,9 @@ export class CodexRuntimeService {
       title: input.storedThread?.title || thread.title
     })
     if (!stored) throw new Error('Codex thread store is unavailable.')
-    if (allowedTools) {
-      this.allowedToolsByThread.set(stored.guiThreadId, allowedTools)
-      this.allowedToolsByThread.set(stored.codexThreadId, allowedTools)
+    if (threadPolicy) {
+      this.allowedToolsByThread.set(stored.guiThreadId, threadPolicy)
+      this.allowedToolsByThread.set(stored.codexThreadId, threadPolicy)
     }
     if (input.replayHistory && this.eventStore && (await this.eventStore.latestSeq(stored.guiThreadId)) > 0) {
       await this.stagePendingHistoryReplay(
@@ -3863,19 +4071,51 @@ export class CodexRuntimeService {
     settings: AppSettingsV1
     threadId: string
     workspace: string
+    allowedTools?: readonly string[]
   }): Promise<boolean> {
     if (typeof input.client.resumeThread !== 'function') return false
     try {
       const response = await input.client.resumeThread({
         threadId: input.threadId,
         ...baseThreadParams(input.settings, input.workspace),
-        ...codexModelAccessThreadParams(input.settings)
+        ...codexModelAccessThreadParams(input.settings),
+        config: codexToolFreeConfig(input.allowedTools)
       })
       const resumed = normalizeThread(readThread(response))
+      if (resumed.id === input.threadId) {
+        this.nativeToolFreeThreads.set(resumed.id, { client: input.client, enabled: input.allowedTools?.length === 0 })
+      }
       return resumed.id === input.threadId
     } catch (error) {
       if (isMissingOrUnmaterializedThreadError(error)) return false
       throw error
+    }
+  }
+
+  private async configureNativeToolPolicy(input: {
+    client: CodexAppServerJsonRpcClient
+    settings: AppSettingsV1
+    threadId: string
+    guiThreadId: string
+    workspace: string
+    allowedTools?: readonly string[]
+  }): Promise<void> {
+    const enabled = input.allowedTools?.length === 0
+    const previous = this.nativeToolFreeThreads.get(input.threadId)
+    if (previous?.client === input.client && previous.enabled === enabled) return
+    if (!enabled && !previous?.enabled) return
+    if (this.activeTurns.has(input.guiThreadId)) {
+      throw new Error('Codex tool policy can change only after the current turn completes.')
+    }
+    // Hosted web search bypasses local PreToolUse hooks. A warm native resume
+    // ignores config overrides, so release only this idle thread before resuming
+    // its exact rollout. Empty config restores the original configured defaults.
+    const released = asRecord(await input.client.request('thread/unsubscribe', { threadId: input.threadId }))
+    if (!['unsubscribed', 'notLoaded'].includes(stringValue(released?.status))) {
+      throw new Error('Codex cannot safely refresh the native tool policy for this thread.')
+    }
+    if (!await this.tryResumeNativeThread(input)) {
+      throw new Error(`Codex thread ${input.threadId} has no rollout found for tool policy refresh.`)
     }
   }
 
@@ -4055,6 +4295,26 @@ export class CodexRuntimeService {
       this.preToolUseGovernanceBridge?.deleteTurnState(turnId),
       governanceBinding ? this.preToolUseGovernanceBridge?.deleteSessionSeed(governanceBinding.sessionId) : undefined
     ])
+    this.releaseMinimalContextPolicy(threadId)
+  }
+
+  private releaseMinimalContextPolicy(threadId: string): void {
+    const pendingMinimal = this.minimalContextThreads.has(threadId)
+    for (const [nativeId, ids] of this.minimalContextPolicies) {
+      if (nativeId !== threadId && !ids.includes(threadId)) continue
+      this.minimalContextPolicies.delete(nativeId)
+      this.minimalContextThreads.delete(nativeId)
+      this.nativeToolFreeThreads.delete(nativeId)
+      for (const id of ids) {
+        this.allowedToolsByThread.delete(id)
+        this.scopedAgentToolsByThread.delete(id)
+      }
+    }
+    // Preparation can fail before policy aliases have been recorded.
+    if (pendingMinimal) {
+      this.minimalContextThreads.delete(threadId)
+      this.nativeToolFreeThreads.delete(threadId)
+    }
   }
 
   private noteFirstActivity(event: CodexThreadEventPayload): void {
@@ -4484,17 +4744,63 @@ function storedThreadToNormalizedThread(thread: CodexStoredThread): CodexNormali
   }
 }
 
+type StoredAssistantIdentity = { id: string; createdAt: string; turnId: string }
+
+/** Recover only the identity of a page-leading message, never its whole prefix.
+ * Each read stays bounded; snapshots and other visible blocks are hard message
+ * boundaries. This also gives separate pages the same ID for Host coalescing. */
+async function leadingStoredAssistantIdentity(
+  store: CodexEventStore,
+  threadId: string,
+  page: { events: CodexStoredEvent[]; nextCursor: string | null }
+): Promise<StoredAssistantIdentity | undefined> {
+  if (!page.nextCursor) return undefined
+  let turnId: string | undefined
+  for (const { event } of page.events) {
+    if (event.userMessage) return undefined
+    const delta = event.deltas?.find(delta => delta.text)
+    if (delta) {
+      if (delta.kind !== 'agent_message') return undefined
+      turnId = event.turnId
+      break
+    }
+    if (event.tool || event.compaction || event.runtimeError || event.turnComplete) return undefined
+  }
+  if (!turnId) return undefined
+  let identity: StoredAssistantIdentity | undefined
+  let cursor: string | null = page.nextCursor
+  while (cursor) {
+    const older = await store.readPage(threadId, { cursor, limit: 1 })
+    for (let index = older.events.length - 1; index >= 0; index--) {
+      const item = older.events[index], event = item.event
+      if ((event.turnId || event.userMessage?.turnId) !== turnId || event.tool || event.compaction || event.runtimeError || event.turnComplete) return identity
+      const deltas = event.deltas ?? []
+      for (let deltaIndex = deltas.length - 1; deltaIndex >= 0; deltaIndex--) {
+        const delta = deltas[deltaIndex]
+        if (!delta.text) continue
+        if (delta.kind !== 'agent_message' || delta.snapshot) return identity
+        identity = { id: codexModelDeltaItemId({ seq: item.seq, turnId }, delta, deltaIndex), createdAt: item.createdAt, turnId }
+      }
+      if (event.userMessage) return identity
+    }
+    cursor = older.nextCursor
+  }
+  return identity
+}
+
 type StoredBlocksAccumulator = {
   blocks: CodexChatBlock[]
   textChunksByBlock: Map<number, string[]>
+  leadingAssistant?: StoredAssistantIdentity
 }
 
 function createStoredBlocksAccumulator(): StoredBlocksAccumulator {
   return { blocks: [], textChunksByBlock: new Map() }
 }
 
-function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
+function storedEventsToBlocks(events: CodexStoredEvent[], leadingAssistant?: StoredAssistantIdentity): CodexChatBlock[] {
   const accumulator = createStoredBlocksAccumulator()
+  accumulator.leadingAssistant = leadingAssistant
   for (const item of events) appendStoredEventToBlocks(accumulator, item)
   return materializeStoredBlocks(accumulator)
 }
@@ -4526,7 +4832,7 @@ function appendStoredEventToBlocks(accumulator: StoredBlocksAccumulator, item: C
   }
   if (event.deltas) {
     for (const [index, delta] of event.deltas.entries()) {
-      appendStoredModelDelta(blocks, textChunksByBlock, item, turnId, delta, index)
+      appendStoredModelDelta(blocks, textChunksByBlock, item, turnId, delta, index, accumulator.leadingAssistant)
     }
   }
   if (event.tool) {
@@ -4575,7 +4881,8 @@ function appendStoredModelDelta(
   item: CodexStoredEvent,
   turnId: string,
   delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
-  index: number
+  index: number,
+  leadingAssistant?: StoredAssistantIdentity
 ): void {
   if (!delta.text) return
   const previous = blocks.at(-1)
@@ -4610,7 +4917,10 @@ function appendStoredModelDelta(
         if (canonicalModelText(previousText) === canonicalModelText(delta.text)) return
         // A different snapshot after a completed assistant message is a distinct
         // model message (e.g. one message per response item), not a rewrite.
-      } else if (isSnapshotFinalizingAccumulation(previousText, delta.text)) {
+      } else if (isSnapshotFinalizingAccumulation(previousText, delta.text) || (
+        previous.id === leadingAssistant?.id && previousText.length > 0 &&
+        canonicalModelText(delta.text).endsWith(canonicalModelText(previousText))
+      )) {
         blocks[blocks.length - 1] = {
           ...previous,
           text: delta.text,
@@ -4629,10 +4939,11 @@ function appendStoredModelDelta(
   }
 
   const blockIndex = blocks.length
+  const identity = blockIndex === 0 && leadingAssistant?.turnId === turnId ? leadingAssistant : undefined
   blocks.push({
     kind: 'assistant',
-    id: codexModelDeltaItemId({ seq: item.seq, turnId }, delta, index),
-    createdAt: item.createdAt,
+    id: identity?.id ?? codexModelDeltaItemId({ seq: item.seq, turnId }, delta, index),
+    createdAt: identity?.createdAt ?? item.createdAt,
     ...(turnId ? { turnId } : {}),
     text: delta.snapshot ? delta.text : '',
     ...(delta.snapshot ? { snapshot: true } : {})
@@ -4879,6 +5190,7 @@ function baseThreadParams(
 
 function threadDeveloperInstructions(input: { subagentsConfigured?: boolean }): string {
   return [
+    TASK_EXECUTION_GUIDANCE,
     CODEX_COMMAND_EXECUTION_INSTRUCTIONS,
     input.subagentsConfigured ? CODEX_SUBAGENT_DEVELOPER_INSTRUCTIONS : ''
   ].filter(Boolean).join('\n\n')
@@ -5043,7 +5355,9 @@ function codexModelAccessKey(settings: AppSettingsV1, planGateway: CodexPlanGate
   const launchKey = JSON.stringify({
     command: runtime.command.trim(),
     codexHome: runtime.codexHome.trim(),
-    extraArgs: runtime.extraArgs
+    extraArgs: runtime.extraArgs,
+    approvalPolicy: runtime.approvalPolicy,
+    sandboxMode: runtime.sandboxMode
   })
   if (access.mode === 'coding-plan') {
     return `coding-plan\u0000${launchKey}\u0000${access.planAdapterId}\u0000${planGateway?.baseUrl.trim() ?? ''}`
@@ -5572,6 +5886,10 @@ function safeUsageInteger(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
 }
 
+function codexToolFreeConfig(allowedTools?: readonly string[]): Record<string, unknown> {
+  return allowedTools?.length === 0 ? { web_search: 'disabled' } : {}
+}
+
 function isMissingOrUnmaterializedThreadError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /thread\s+.*not found|thread not found|no rollout found|not materialized yet|includeTurns is unavailable/i.test(
@@ -5784,122 +6102,6 @@ function dynamicToolResponseSummary(response: RuntimeToolCallResponse): string {
     .trim()
   if (!text) return response.success ? 'Dynamic tool completed successfully.' : 'Dynamic tool failed.'
   return text.length <= 2_000 ? text : `${text.slice(0, 2_000)}…`
-}
-
-function modelVisibleCapabilityResult(value: unknown): string {
-  // Size, not individual leaf length or nesting, determines whether a legal
-  // tool result needs compaction. IDs, encoded bytes and schemas are opaque
-  // contracts: shortening even one leaf can make a small result unusable.
-  const complete = JSON.stringify(value)
-  if (Buffer.byteLength(complete, 'utf8') <= DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES) return complete
-  // Discovery descriptors have a small, stable routing contract. Try the
-  // descriptor-specific projection first so inputShape is not discarded by
-  // the generic key-budget compactor before the Agent can read it.
-  const compactDiscovery = compactCapabilityDiscoveryResult(value)
-  if (compactDiscovery !== undefined) {
-    const compactSerialized = JSON.stringify(compactDiscovery)
-    if (Buffer.byteLength(compactSerialized, 'utf8') <= DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES) return compactSerialized
-    return JSON.stringify({ _truncated: true, summary: 'Discovery exceeded the model-visible result boundary. Do not invoke from this result; narrow sciforge_discover or lower its limit.' })
-  }
-  const projected = compactDynamicToolValue(value, 0)
-  const serialized = JSON.stringify(projected)
-  if (Buffer.byteLength(serialized, 'utf8') <= DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES) return serialized
-  return JSON.stringify({ _truncated: true, summary: 'Capability result exceeded the model-visible result boundary.' })
-}
-
-/**
- * Discovery returns a list of descriptors, so the normal structured-result
- * compactor can spend the small model-visible budget on descriptions and tag
- * arrays before preserving the operation references the Agent needs next.
- * Keep a descriptor-specific fallback that retains the routing contract.
- */
-function compactCapabilityDiscoveryResult(value: unknown): unknown[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) return undefined
-  const descriptors = value.filter((item): item is Record<string, unknown> => (
-    Boolean(item && typeof item === 'object' && !Array.isArray(item))
-    && typeof (item as Record<string, unknown>).operationRef === 'string'
-    && typeof (item as Record<string, unknown>).title === 'string'
-  ))
-  if (descriptors.length !== value.length) return undefined
-  const compact = descriptors.map((descriptor) => {
-    const routing: Record<string, unknown> = {}
-    for (const key of ['operationRef', 'schemaRef', 'title', 'effect', 'approval']) {
-      if (descriptor[key] !== undefined) routing[key] = descriptor[key]
-    }
-    if (descriptor.inputShape !== undefined) {
-      routing.schemaOmitted = 'Input shape exceeds the shared result budget. Do not invoke from an incomplete schema; use sciforge_discover with this operationRef and includeSchema=true. If still omitted, the schema is too large for this boundary.'
-    }
-    return routing
-  })
-  // Schemas are atomic contracts, not display summaries. Try every candidate
-  // against the same total budget without altering any nested leaf.
-  for (const [index, descriptor] of descriptors.entries()) {
-    if (descriptor.inputShape === undefined) continue
-    const omission = compact[index].schemaOmitted
-    delete compact[index].schemaOmitted
-    compact[index].inputShape = descriptor.inputShape
-    if (Buffer.byteLength(JSON.stringify(compact), 'utf8') > DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES) {
-      delete compact[index].inputShape
-      compact[index].schemaOmitted = omission
-    }
-  }
-  return compact
-}
-
-function compactDynamicToolValue(value: unknown, depth: number, key?: string): unknown {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
-  if (typeof value === 'string') {
-    const limit = isDynamicToolLocatorKey(key) ? 4 * 1_024 : 160
-    return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`
-  }
-  // Capability envelopes commonly place the useful result four levels down
-  // (response -> output -> domain envelope -> result -> records). Keep one
-  // more shallow record level visible so the Agent can inspect returned IDs
-  // and labels;
-  // the byte boundary and array cap still bound the model-visible payload.
-  // Small structured workflow payloads can legitimately place the useful
-  // values several levels down (for example renderRequest.data.series.x/y).
-  // Preserve those bounded leaves so the evaluator can independently parse
-  // the receipt instead of treating a successful action as unverifiable.
-  if (depth >= 8) return '[nested result omitted]'
-  if (Array.isArray(value)) {
-    // Preserve short primitive lists (status enumerations, identifiers, and
-    // similar contract values) in full. Nested result arrays remain bounded
-    // aggressively so large records cannot consume the handoff budget.
-    const primitiveList = value.every((item) => (
-      item === null || typeof item === 'boolean' || typeof item === 'number' || typeof item === 'string'
-    ))
-    const limit = primitiveList ? 16 : 3
-    const compacted = value.slice(0, limit).map((item) => compactDynamicToolValue(item, depth + 1))
-    return value.length > limit ? [...compacted, { _truncated: true }] : compacted
-  }
-  if (!value || typeof value !== 'object') return String(value)
-
-  const source = value as Record<string, unknown>
-  const target: Record<string, unknown> = {}
-  let omitted = false
-  for (const key of Object.keys(source).sort((left, right) => dynamicToolResultKeyPriority(left) - dynamicToolResultKeyPriority(right))) {
-    target[key] = compactDynamicToolValue(source[key], depth + 1, key)
-    if (Buffer.byteLength(JSON.stringify(target), 'utf8') > DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES) {
-      delete target[key]
-      omitted = true
-    }
-  }
-  if (omitted && Buffer.byteLength(JSON.stringify({ ...target, _truncated: true }), 'utf8') <= DYNAMIC_TOOL_MODEL_RESULT_MAX_BYTES) {
-    target._truncated = true
-  }
-  return target
-}
-
-function isDynamicToolLocatorKey(key: string | undefined): boolean {
-  return Boolean(key && /(?:path|artifact|filename|ref)$/iu.test(key)) || key === 'uri'
-}
-
-function dynamicToolResultKeyPriority(key: string): number {
-  if (/^(?:capabilityId|operationRef|resourceRef|artifactRef|path|relativePath|filePath|id|status|state|relation|changed|replayed)$/u.test(key)) return 0
-  if (/^(?:output|result|data|artifact|artifacts|manifest|lineage|source|target|recipe|figure|validation|versionCommit|versions|value|ref)$/u.test(key)) return 1
-  if (/^(?:error|message|summary|count|records|fields|items|events|completedAt)$/u.test(key)) return 2
-  return 3
 }
 
 function dynamicToolErrorMetadata(

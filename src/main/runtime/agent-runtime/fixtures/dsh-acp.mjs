@@ -1,5 +1,5 @@
 // Controlled ACP protocol fixture; never a real DSH/model acceptance claim.
-// The shell flow executes a real /bin/sh command under the real approval
+// The shell flow executes a native shell command under the real approval
 // round-trip, so tests can prove execution and land real output on disk.
 import { createInterface } from 'node:readline'
 import { readFileSync } from 'node:fs'
@@ -20,7 +20,15 @@ const sessions = new Map()
 const runShell = (cwd, marker) => {
   // A real shell command in the session workspace, exactly as an enabled
   // tool-bash call would run under the DSH sandbox.
-  execFileSync('/bin/sh', ['-c', `printf '%s' ${JSON.stringify(marker)} > ${JSON.stringify(join(cwd, 'dsh-shell-proof.txt'))}`])
+  const env = { ...process.env, SCIFORGE_FIXTURE_MARKER: marker }
+  if (process.platform === 'win32') {
+    const shell = join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    execFileSync(shell, ['-NoProfile', '-NonInteractive', '-Command',
+      "[IO.File]::WriteAllText((Join-Path (Get-Location) 'dsh-shell-proof.txt'), $env:SCIFORGE_FIXTURE_MARKER)"],
+    { cwd, env, windowsHide: true })
+  } else {
+    execFileSync('/bin/sh', ['-c', 'printf %s "$SCIFORGE_FIXTURE_MARKER" > dsh-shell-proof.txt'], { cwd, env })
+  }
   return readFileSync(join(cwd, 'dsh-shell-proof.txt'), 'utf8')
 }
 createInterface({ input: process.stdin }).on('line', line => {
@@ -53,7 +61,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     case 'session/resume': if (typeof msg.params.cwd === 'string') sessions.set(msg.params.sessionId, msg.params.cwd); reply(msg.id, {}); break
     case 'session/close': reply(msg.id, {}); break
     case 'session/prompt': {
-      const text = msg.params.prompt[0].text
+      // The fixture interprets the task portion of the real ACP prompt.
+      const prompt = msg.params.prompt[0].text
+      const text = prompt.includes('\n\nUser task:\n') ? prompt.split('\n\nUser task:\n').slice(1).join('\n\nUser task:\n') : prompt
       const sessionId = msg.params.sessionId
       if (text === 'hang') break
       if (text === 'approval') {
@@ -73,6 +83,7 @@ createInterface({ input: process.stdin }).on('line', line => {
         send({ id, method: 'session/request_permission', params: { sessionId, toolCall: { toolCallId, kind: 'execute', title: 'Run shell command' }, options: [{ optionId: 'yes', kind: 'allow_once', name: 'Once' }, { optionId: 'no', kind: 'reject_once', name: 'No' }] } })
         break
       }
+      if (args.includes('--echo-prompt')) update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
       if (args.includes('--history-updates')) {
         update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'fixture answer one' } })
         update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: ' + two' } })

@@ -1,3 +1,5 @@
+import type { HumanAnswer } from '@sciforge/collaboration-contracts'
+
 const WORKER_RESULT_FORMAT_INSTRUCTION = [
   'The Worker result envelope is closed and always contains exactly one top-level key: result.',
   'The result value must match exactly one closed shape: completed or needs_human.',
@@ -74,13 +76,22 @@ export function workerTaskPrompt(task: WorkerPromptTask): string {
   ].join('\n')
 }
 
-export function workerHumanAnswerPrompt(answer: string): string {
-  const bounded = answer.trim().slice(0, 32_000)
+export function workerHumanAnswerPrompt(answer: HumanAnswer): string {
+  const bounded = answer.answer.trim().slice(0, 32_000)
   if (!bounded) throw new Error('Worker User answer is empty.')
   return [
     'The authenticated Worker User answered the pending HumanNeeded request:',
     '',
     bounded,
+    '',
+    `Human request: ${answer.humanRequestId}; reviewed revision: ${answer.requestRevision}.`,
+    `Explicit action decision: ${answer.decision ?? 'none (information only)'}.`,
+    ...(answer.decision ? [
+      `Confirmation receipt: ${answer.confirmationId}.`,
+      answer.decision === 'reject'
+        ? 'The requested action was REJECTED. Do not execute it or interpret the explanation as approval. Continue only to handle the refusal or propose an alternative.'
+        : 'Only the exact requested action was approved. Use the existing confirmation and authority checks; this receipt grants no broader permission.'
+    ] : ['This answer supplies information only, not authorization for an external action.']),
     '',
     'Continue the same Project Task in the same Workspace and Agent Session.',
     ...WORKER_RESULT_RESPONSE_INSTRUCTIONS

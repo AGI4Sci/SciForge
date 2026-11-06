@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { openSession } from '../src/core/operations.js'
 import { ChangeInspectorService } from '../src/core/service.js'
 import type { ChangeInspectorSessionDetail } from '../src/ports/agent-threads.js'
-import { corpusSessions, WORKSPACE } from './cases.js'
+import { corpusSessions } from './cases.js'
 import { fakeAgentThreads } from './runner.js'
 
 function serviceWith(sessions: Record<string, ChangeInspectorSessionDetail>): ChangeInspectorService {
@@ -27,10 +27,10 @@ function activeHandles(): readonly string[] {
 
 test('200 operations leave no new active handles', async () => {
   const service = serviceWith(corpusSessions())
-  await openSession(service, { sessionId: 'thread-plain-diff', runtimeId: 'codex' }, WORKSPACE)
+  await openSession(service, { sessionId: 'thread-plain-diff', runtimeId: 'codex' })
   const before = activeHandles()
   for (let index = 0; index < 200; index += 1) {
-    await openSession(service, { sessionId: 'thread-json-keys', runtimeId: 'codex' }, WORKSPACE)
+    await openSession(service, { sessionId: 'thread-json-keys', runtimeId: 'codex' })
   }
   const after = activeHandles()
   assert.deepEqual(after, before)
@@ -41,8 +41,7 @@ test('fresh instances with identical inputs produce identical outputs', async ()
     const service = serviceWith(corpusSessions())
     const result = await openSession(
       service,
-      { sessionId: 'thread-nested-changes', runtimeId: 'codex' },
-      WORKSPACE
+      { sessionId: 'thread-nested-changes', runtimeId: 'codex' }
     )
     return result.output
   }
@@ -55,8 +54,7 @@ test('50 concurrent operations all settle with consistent results', async () => 
     Array.from({ length: 50 }, (_, index) =>
       openSession(
         service,
-        { sessionId: index % 2 === 0 ? 'thread-plain-diff' : 'thread-id-fallback', runtimeId: 'codex' },
-        WORKSPACE
+        { sessionId: index % 2 === 0 ? 'thread-plain-diff' : 'thread-id-fallback', runtimeId: 'codex' }
       ))
   )
   for (const [index, result] of results.entries()) {

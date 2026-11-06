@@ -96,12 +96,12 @@ export function SessionHeader({ compact = false, className = '', scopeLabel }: P
           <>
           <div className="min-w-0 flex-1">
             <div
-              className="truncate text-[13px] font-semibold leading-[18px] tracking-[-0.01em] text-ds-ink opacity-95"
+              className="session-header-title line-clamp-2 break-words text-[16px] font-semibold leading-[22px] tracking-[-0.01em] text-ds-ink opacity-95"
               title={active.title}
             >
               {active.title}
             </div>
-            <div className="session-header-compact-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10.5px] leading-[15px] text-ds-faint">
+            <div className="session-header-compact-meta flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] leading-[17px] text-ds-muted">
               <span className="session-meta-workspace max-w-[min(42vw,240px)] truncate">{activeWorkspaceLabel}</span>
               <span className="session-meta-workspace-separator opacity-70">·</span>
               <span className="session-meta-mode shrink-0 capitalize">{active.mode}</span>

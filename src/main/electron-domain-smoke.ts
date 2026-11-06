@@ -44,7 +44,6 @@ export type ElectronDomainNativeVisualSmokeResult = Readonly<{
   captureWidth: number
   captureHeight: number
   cropped: boolean
-  datasetLoopCapabilitiesDiscoverable: boolean
   nativeImageBindingValidated: boolean
   proofChainValidated: boolean
   unavailableRouteFailedVisibly: boolean
@@ -122,20 +121,6 @@ async function runElectronDomainNativeVisualSmoke(
     threadId,
     turnId,
     workspaceId: workspaceDirectory
-  }
-  for (const capabilityId of ['create-loop.build-dataset', 'dataset-api.materialize']) {
-    const discovered = await agentTools.call({
-      name: 'sciforge_discover',
-      arguments: { capabilityId, includeSchema: true, limit: 1 },
-      context: {
-        ...context,
-        requestId: `electron-domain-smoke-discover-${capabilityId}`,
-        callId: `electron-domain-smoke-discover-${capabilityId}`
-      }
-    })
-    if (discovered.tool !== 'sciforge_discover' || discovered.value.length !== 1) {
-      throw new Error(`Native agent capability discovery could not find ${capabilityId}.`)
-    }
   }
   const sourceRef = await openWorkspaceVisualSource(
     agentTools,
@@ -280,7 +265,6 @@ async function runElectronDomainNativeVisualSmoke(
     captureWidth: captured.width,
     captureHeight: captured.height,
     cropped: captured.proof.cropped,
-    datasetLoopCapabilitiesDiscoverable: true,
     nativeImageBindingValidated: true,
     proofChainValidated: true,
     unavailableRouteFailedVisibly

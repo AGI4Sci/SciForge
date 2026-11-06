@@ -33,9 +33,15 @@ export async function applyWorkspacePreviewOutletEdit(
   context: WorkspacePreviewPanelShellContext,
   operation: WorkspacePreviewEditOperation
 ): Promise<void> {
-  const result = await context.host.applyEdit(operation)
+  const sessionId = context.state.session?.id
+  if (!sessionId || context.host.getState().session?.id !== sessionId) {
+    throw new Error('Workspace preview session was superseded.')
+  }
+  const result = await context.host.applyEdit(sessionId, operation)
   if (result.ok) {
-    await context.host.observe(result.session.id)
+    if (context.host.getState().session?.id === result.session.id) {
+      await context.host.observe(result.session.id)
+    }
     return
   }
   throw new Error(result.message)

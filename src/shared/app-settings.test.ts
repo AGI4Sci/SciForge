@@ -186,14 +186,6 @@ describe('local runtime defaults', () => {
       storage: {
         backend: 'hybrid',
         sqlitePath: ''
-      },
-      contextCompaction: {
-        defaultSoftThreshold: 16000,
-        defaultHardThreshold: 24000,
-        summaryMode: 'heuristic',
-        summaryTimeoutMs: 15000,
-        summaryMaxTokens: 1200,
-        summaryInputMaxBytes: 98304
       }
     })
   })
@@ -602,17 +594,11 @@ describe('mergeLocalRuntimeSettings', () => {
     const next = mergeLocalRuntimeSettings(current, {
       storage: {
         sqlitePath: ' /tmp/sciforge.sqlite3 '
-      },
-      contextCompaction: {
-        defaultSoftThreshold: 64000
       }
     })
 
     expect(next.storage.backend).toBe('hybrid')
     expect(next.storage.sqlitePath).toBe('/tmp/sciforge.sqlite3')
-    expect(next.contextCompaction.defaultSoftThreshold).toBe(64000)
-    expect(next.contextCompaction.defaultHardThreshold).toBe(64000)
-    expect(next.contextCompaction.summaryMode).toBe('heuristic')
   })
 
   it('deep-merges runtime guard settings through the new config model', () => {
@@ -885,6 +871,23 @@ describe('agent runtime settings', () => {
 
     const kept = mergeModelRouterSettings(declared, { profiles: { default: { textReasoner: { model: 'next' } } } })
     expect(kept.profiles.default.textReasoner.chatStructuredOutputMode).toBe('json_object')
+  })
+
+  it('persists explicit Chat thinking-type control across unrelated patches and resets to default effort', () => {
+    const declared = mergeModelRouterSettings(defaultModelRouterSettings(), {
+      profiles: { default: { textReasoner: { chatReasoningControl: 'thinking-type' },
+        translators: { vision: { chatReasoningControl: 'thinking-type' } } } }
+    })
+    expect(declared.profiles.default.textReasoner.chatReasoningControl).toBe('thinking-type')
+    expect(declared.profiles.default.translators.vision.chatReasoningControl).toBe('thinking-type')
+    expect(declared.profiles.default.translators.scientific).not.toHaveProperty('chatReasoningControl')
+    const kept = mergeModelRouterSettings(declared, { profiles: { default: { textReasoner: { model: 'next' } } } })
+    expect(kept.profiles.default.textReasoner.chatReasoningControl).toBe('thinking-type')
+    const reset = mergeModelRouterSettings(kept, {
+      profiles: { default: { textReasoner: { chatReasoningControl: 'effort' } } }
+    })
+    expect(reset.profiles.default.textReasoner).not.toHaveProperty('chatReasoningControl')
+    expect(reset.profiles.default.translators.vision.chatReasoningControl).toBe('thinking-type')
   })
 
   it('normalizes local Model Router endpoint URLs back to the local v1 root', () => {

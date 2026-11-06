@@ -280,48 +280,46 @@ describe('manifest-driven internal runtime packaging', () => {
       .toThrow(/provenance/u)
   })
 
-  it('validates complete packaged inventories with SciForge-owned static reads', () => {
-    for (const corruption of [
-      'none',
-      'changed',
-      'missing',
-      'extra',
-      'symlink',
-      'ancestor-symlink'
-    ] as const) {
-      const root = tempRoot()
-      const resourcesPath = join(root, 'packaged-resources')
-      writeRuntimeFixture(root, `vendor-${corruption}`, `runtime-${corruption}`)
-      const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
-      const asset = composition.packagedRuntimes[0]?.assets[0]
-      if (!asset) throw new Error('Missing fixture asset.')
-      const packagedRoot = join(resourcesPath, asset.packagedResourcesPath)
-      if (corruption === 'ancestor-symlink') {
-        const realParent = join(resourcesPath, 'verified-asset-target')
-        cpSync(join(root, asset.sourceRoot), join(realParent, 'runtime-v1'), {
-          recursive: true
-        })
-        mkdirSync(dirname(dirname(packagedRoot)), { recursive: true })
-        symlinkSync(realParent, dirname(packagedRoot), 'dir')
-      } else {
-        cpSync(join(root, asset.sourceRoot), packagedRoot, { recursive: true })
-      }
-      const helper = join(packagedRoot, 'scripts/helper.cjs')
-      if (corruption === 'changed') write(helper, 'changed\n')
-      if (corruption === 'missing') rmSync(helper)
-      if (corruption === 'extra') write(join(packagedRoot, 'extra.cjs'), 'extra\n')
-      if (corruption === 'symlink') {
-        rmSync(helper)
-        symlinkSync(join(root, asset.sourceRoot, 'scripts/helper.cjs'), helper)
-      }
-
-      const verify = (): void => internalRuntimePackaging.verifyPackagedInternalRuntimes(
-        resourcesPath,
-        composition
-      )
-      if (corruption === 'none') expect(verify).not.toThrow()
-      else expect(verify).toThrow(/changed file|missing file|unreceipted file|symbolic link/u)
+  it.each([
+    'none',
+    'changed',
+    'missing',
+    'extra',
+    'symlink',
+    'ancestor-symlink'
+    ] as const)('validates packaged inventory: %s', (corruption) => {
+    const root = tempRoot()
+    const resourcesPath = join(root, 'packaged-resources')
+    writeRuntimeFixture(root, `vendor-${corruption}`, `runtime-${corruption}`)
+    const composition = internalRuntimePackaging.createInternalRuntimeComposition(root)
+    const asset = composition.packagedRuntimes[0]?.assets[0]
+    if (!asset) throw new Error('Missing fixture asset.')
+    const packagedRoot = join(resourcesPath, asset.packagedResourcesPath)
+    if (corruption === 'ancestor-symlink') {
+      const realParent = join(resourcesPath, 'verified-asset-target')
+      cpSync(join(root, asset.sourceRoot), join(realParent, 'runtime-v1'), {
+        recursive: true
+      })
+      mkdirSync(dirname(dirname(packagedRoot)), { recursive: true })
+      symlinkSync(realParent, dirname(packagedRoot), process.platform === 'win32' ? 'junction' : 'dir')
+    } else {
+      cpSync(join(root, asset.sourceRoot), packagedRoot, { recursive: true })
     }
+    const helper = join(packagedRoot, 'scripts/helper.cjs')
+    if (corruption === 'changed') write(helper, 'changed\n')
+    if (corruption === 'missing') rmSync(helper)
+    if (corruption === 'extra') write(join(packagedRoot, 'extra.cjs'), 'extra\n')
+    if (corruption === 'symlink') {
+      rmSync(helper)
+      symlinkSync(join(root, asset.sourceRoot, 'scripts/helper.cjs'), helper)
+    }
+
+    const verify = (): void => internalRuntimePackaging.verifyPackagedInternalRuntimes(
+      resourcesPath,
+      composition
+    )
+    if (corruption === 'none') expect(verify).not.toThrow()
+    else expect(verify).toThrow(/changed file|missing file|unreceipted file|symbolic link/u)
   })
 
   it('rejects changed, missing, extra, and unreceipted source overlays before composition', () => {
@@ -345,7 +343,7 @@ describe('manifest-driven internal runtime packaging', () => {
     }
   })
 
-  it('rejects missing evidence, executable smoke schema, and escaping source symlinks', () => {
+  it('rejects missing evidence and executable smoke schema', () => {
     const missingEvidenceRoot = tempRoot()
     writeRuntimeFixture(missingEvidenceRoot, 'vendor-no-evidence', 'runtime-a', {
       includeEvidence: false
@@ -358,6 +356,9 @@ describe('manifest-driven internal runtime packaging', () => {
     expect(() => internalRuntimePackaging.createInternalRuntimeComposition(smokeRoot))
       .toThrow(/unexpected or missing fields/u)
 
+  })
+
+  it('rejects escaping source symlinks', () => {
     const symlinkRoot = tempRoot()
     writeRuntimeFixture(symlinkRoot, 'vendor-symlink', 'runtime-a')
     const assetRoot = join(

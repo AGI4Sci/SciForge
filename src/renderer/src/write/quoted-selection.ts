@@ -11,7 +11,7 @@ export const WRITE_RETRIEVAL_HEADING = '[相关文献上下文]'
 export const WRITE_RETRIEVAL_END = '[/相关文献上下文]'
 
 const WRITE_ASSISTANT_INTERACTION_RULE =
-  '交互限制: 当前 GUI 无法提交 request_user_input 的 HTTP 响应；需要更多信息时，直接用普通文本向用户提问，不要调用 request_user_input。'
+  '交互规则: 需要用户决定缺失的需求或偏好时，使用已安装的结构化用户输入能力，优先选择题并允许自由输入。'
 const WRITE_ASSISTANT_FILE_ACCESS_RULE =
   '文件访问限制: 写作助手已经自动附带引用片段和相关文献上下文；请直接基于这些内容与用户请求回答，不要为了读取、确认或补全当前写作文件而调用 shell、cat、sed、rg、grep、python 等命令。若上下文不足，直接说明需要更多选区或扩大检索。'
 

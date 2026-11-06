@@ -16,7 +16,9 @@ it('carries canonical ordinary Session and original Broker context to a real run
   const descriptor = { contractVersion: 3, id: 'neutral.context', version: '1', title: 'Context', description: 'Canonical context.', audiences: ['agent'], scope: 'workspace', resourceKinds: [], effect: 'read', approval: 'none', concurrency: { revision: 'none', idempotency: 'none' }, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, tags: [] }
   await writeFile(join(plugin, 'main.mjs'), `export function getCapabilityDefinitions() { return [{descriptor: ${JSON.stringify(descriptor)}, handler: async () => ({output: await globalThis.__sciforgeHostServices.request('inspect', 'read', {}).result})}] }`)
   let delivered: any
-  const service = new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: new Map([[packageName, { hostApiRange: '^1', permissions: [], approved: true }]]),
+  const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: new Map([[packageName, { hostApiRange: '^1', permissions: [], approved: true }]]),
     hostServiceProviders: { inspect: { authorize: () => {}, operations: { read: request => { delivered = request; request.assertCurrent?.(); return request.owner.authority } } } } })
   try {
     await service.initialize()

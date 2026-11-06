@@ -48,19 +48,20 @@ describe('failed Session input actions', () => {
       expect(html).not.toContain(`aria-label="${Reflect.get(messages, action)}"`)
     }
   })
-  it.each(['delivering', 'delivered'] as const)('renders a known %s active input readonly instead of counting it as queued', (delivery) => {
+  it.each(['delivering', 'delivered'] as const)('hides a known %s active input restored by Session hydration', (delivery) => {
     const html = renderToStaticMarkup(<FloatingComposerQueuedMessages messages={[{ id: 'input', text: '当前任务说明',
       admissionReceipt: { ...receipt, delivery, execution: 'active' }, sendFailure: { message: 'obsolete' } }]}
       onRemove={() => {}} onEdit={() => {}} onSteer={() => {}} onRetry={() => {}} onReexecute={() => {}} />)
-    expect(html).toContain('正在执行')
-    expect(html).not.toContain('已排队')
-    expect(html).not.toContain('obsolete')
-    expect(html).not.toContain('发送失败')
-    for (const action of ['queuedMessageEdit', 'queuedMessageSteer', 'queuedMessageRemove', 'queuedMessageRetry', 'queuedMessageReexecute']) {
-      expect(html).not.toContain(`aria-label="${Reflect.get(messages, action)}"`)
-    }
+    expect(html).toBe('')
   })
-  it.each(['active', 'output_pending'] as const)('counts only the Member queue beside a readonly %s input', (execution) => {
+  it('keeps uncertain active delivery visible for explicit reconciliation', () => {
+    const html = renderToStaticMarkup(<FloatingComposerQueuedMessages messages={[{ id: 'input', text: '待核对的输入',
+      admissionReceipt: { ...receipt, delivery: 'uncertain', execution: 'active' },
+      sendFailure: { message: '需要核对发送状态' } }]} onRemove={() => {}} />)
+    expect(html).toContain('待核对的输入')
+    expect(html).toContain('需要核对发送状态')
+  })
+  it.each(['active', 'output_pending'] as const)('counts only waiting input when hydration includes an %s receipt', (execution) => {
     const html = renderToStaticMarkup(<FloatingComposerQueuedMessages messages={[
       { id: 'current', text: '当前任务说明', admissionReceipt: { ...receipt, execution } },
       { id: 'next', text: '新的成员要求', admissionReceipt: { ...receipt, clientDirectiveId: 'next', mode: 'queue',
@@ -68,13 +69,18 @@ describe('failed Session input actions', () => {
     ]} onRemove={() => {}} onEdit={() => {}} onSteer={() => {}} onRetry={() => {}} onReexecute={() => {}} />)
     expect(html).toContain('已排队 1 条')
     expect(html).not.toContain('已排队 2 条')
-    expect(html).toContain(execution === 'active' ? '正在执行' : '正在验证结果')
+    if (execution === 'active') {
+      expect(html).not.toContain('当前任务说明')
+      expect(html).not.toContain('正在执行')
+    } else {
+      expect(html).toContain('正在验证结果')
+    }
     for (const action of ['queuedMessageEdit', 'queuedMessageSteer', 'queuedMessageRemove']) {
       expect(html.match(new RegExp(`aria-label="${Reflect.get(messages, action)}"`, 'g'))).toHaveLength(1)
     }
   })
 
-  it.each(['active', 'output_pending'] as const)('keeps the %s input text in a closed keyboard-accessible disclosure', (execution) => {
+  it.each(['output_pending'] as const)('keeps the %s input text in a closed keyboard-accessible disclosure', (execution) => {
     const html = renderToStaticMarkup(<FloatingComposerQueuedMessages messages={[{
       id: 'current', text: '原始任务格式要求', admissionReceipt: { ...receipt, execution }
     }]} onRemove={() => {}} />)

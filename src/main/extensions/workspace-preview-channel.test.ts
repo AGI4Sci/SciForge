@@ -108,6 +108,8 @@ async function createPreviewFixture(options: Readonly<{
     dshAuthorization: { packageName: name, packageVersion: '1.0.0', dshRuntimeVersion }
   }
   const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,
     root: join(root, 'plugins'),
     userDataPath: join(root, 'data'),
     hostApiVersion: '1.0.0',

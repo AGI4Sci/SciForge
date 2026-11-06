@@ -1,6 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import * as engine from './image-generation-engine'
+import { planVisualProduction } from './visual-production-planner'
 import { createImageGenerationMcpServer } from './mcp-server'
 
 function record(value: unknown): Record<string, any> {
@@ -8,6 +10,50 @@ function record(value: unknown): Record<string, any> {
 }
 
 describe('image generation MCP', () => {
+  it('discovers hybrid composition and preserves its invocation arguments without fabricating an operation reference', async () => {
+    const plan = planVisualProduction({ task: 'Plot exact values over an illustration.', requirements: {
+      lockedElements: ['values'], modelOwnedElements: ['background'], reproducibleInputs: ['data.csv']
+    } })
+    if (!plan.ok || plan.status === 'needs_context') throw new Error('Expected a terminal hybrid plan')
+    const render = vi.spyOn(engine, 'renderImageGeneration').mockResolvedValue({
+      ok: true, status: 'rendered', outputPath: '/tmp/visual-layer.png', manifestPath: '/tmp/visual-layer.json'
+    } as never)
+    const server = createImageGenerationMcpServer({ workspaceRoot: '/tmp/visual-generate-test' })
+    const client = new Client({ name: 'hybrid-image-test', version: '0.1.0' })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+    try {
+      const prepared = await client.callTool({ name: 'image_generation_prepare', arguments: {
+        task: 'Plot exact values over an illustration.', visualPlan: plan.handoff,
+        referencePath: '/tmp/truth-layer.png'
+      } })
+      const rendered = await client.callTool({ name: 'image_generation_render',
+        arguments: record(record(prepared.structuredContent).nextCall).arguments })
+      const content = record(rendered.structuredContent)
+      expect(content.nextCall).toEqual({ tool: 'sciforge_discover', arguments: {
+        capabilityId: 'scientific-plotting.composite', includeSchema: true, limit: 1
+      } })
+      expect(content.invocationHandoff).toEqual({
+        tool: 'sciforge_invoke', capabilityId: 'scientific-plotting.composite',
+        requires: ['discoveredOperationRef', 'callerPersistedOperationId'],
+        arguments: {
+          workspaceRoot: '/tmp/visual-generate-test', visualPlan: plan.handoff,
+          reviewTask: expect.any(String), layers: [
+            { path: '/tmp/visual-layer.png', owner: 'model' },
+            { path: '/tmp/truth-layer.png', owner: 'code' }
+          ]
+        }
+      })
+      expect(JSON.stringify(content)).not.toContain('scientific_plotting_composite')
+      expect(content.invocationHandoff).not.toHaveProperty('operationRef')
+      expect(content.invocationHandoff.arguments).not.toHaveProperty('operationRef')
+      expect(render).toHaveBeenCalledOnce()
+    } finally {
+      render.mockRestore()
+      await client.close()
+      await server.close()
+    }
+  })
   it('exposes visual_generate as the single bounded visual-production planner', async () => {
     const server = createImageGenerationMcpServer({ workspaceRoot: '/tmp/visual-generate-test' })
     const client = new Client({ name: 'image-generation-test', version: '0.1.0' })

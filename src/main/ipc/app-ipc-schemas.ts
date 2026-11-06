@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   MAX_SUBAGENT_MAX_PARALLEL,
   MODEL_ROUTER_CHAT_STRUCTURED_OUTPUT_MODES,
+  MODEL_ROUTER_CHAT_REASONING_CONTROLS,
   MODEL_ROUTER_MAX_REASONING_EFFORT_TOKENS,
   MODEL_ROUTER_MAX_REASONING_EFFORT_TOKEN_LENGTH,
   SCHEDULE_MODEL_IDS,
@@ -50,7 +51,7 @@ import {
   domainPackageVersionSchema
 } from '@sciforge/domain-sdk'
 import { pluginDescriptionSchema, pluginPackageNameSchema } from '@sciforge/plugin-sdk/manifest'
-import { domainMainAgentExecutionOutputSchemaSchema } from '@sciforge/domain-sdk/agent-execution'
+import { domainMainAgentExecutionOutputSchemaSchema, domainMainAgentExecutionSessionRequestSchema } from '@sciforge/domain-sdk/agent-execution'
 import { TRACE_EVENT_KINDS } from '@sciforge/full-trace'
 import {
   WORKSPACE_HOST_LIMITS,
@@ -174,7 +175,10 @@ export const domainExtensionRendererContributionSchema = z.object({
   generation: z.number().int().nonnegative(),
   version: domainPackageVersionSchema,
   entryUrl: z.string().url().max(MAX_URL_LENGTH),
-  stateVersion: z.number().int().nonnegative()
+  stateVersion: z.number().int().nonnegative(),
+/** Host-computed allowlist for the panel capability bridge (absent = deny all). */
+  capabilityIds: z.array(z.string().trim().min(1).max(256)).max(2_048).optional(),
+  resourceKinds: z.array(trimmedString(128)).max(32).optional()
 }).strict()
 
 export const domainExtensionRendererContributionsResultSchema = z.array(
@@ -203,7 +207,6 @@ const claudeApprovalPolicySchema = z.enum(['on-request', 'untrusted', 'never', '
 const claudeSandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access'])
 const mcpSearchModeSchema = z.enum(['direct', 'search', 'auto'])
 const localRuntimeStorageBackendSchema = z.enum(['hybrid', 'file'])
-const localRuntimeCompactionSummaryModeSchema = z.enum(['heuristic', 'model'])
 const runModeSchema = z.enum(['agent', 'plan'])
 const scheduleKindSchema = z.enum(['manual', 'interval', 'daily', 'at'])
 const taskStatusSchema = z.enum(['idle', 'running', 'success', 'error'])
@@ -344,6 +347,7 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   threadId: trimmedString(MAX_ID_LENGTH),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
   outputSchema: domainMainAgentExecutionOutputSchemaSchema.optional(),
+  allowedTools: domainMainAgentExecutionSessionRequestSchema.shape.allowedTools,
   clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
   inputRevision: z.number().int().nonnegative().optional(),
   executionIntent: agentRuntimeExecutionIntentSchema.optional(),
@@ -523,7 +527,8 @@ const modelRouterMemberPatchSchema = z.object({
     .max(MODEL_ROUTER_MAX_REASONING_EFFORT_TOKENS)
     .optional(),
   protocol: z.enum(['auto', 'responses', 'chat-completions', 'anthropic-messages']).optional(),
-  chatStructuredOutputMode: z.enum(MODEL_ROUTER_CHAT_STRUCTURED_OUTPUT_MODES).optional()
+  chatStructuredOutputMode: z.enum(MODEL_ROUTER_CHAT_STRUCTURED_OUTPUT_MODES).optional(),
+  chatReasoningControl: z.enum(MODEL_ROUTER_CHAT_REASONING_CONTROLS).optional()
 }).strict()
 
 const modelRouterPatchSchema = z.object({
@@ -592,14 +597,6 @@ const localRuntimePatchSchema = z.object({
   storage: z.object({
     backend: localRuntimeStorageBackendSchema.optional(),
     sqlitePath: defaultPathSchema
-  }).strict().optional(),
-  contextCompaction: z.object({
-    defaultSoftThreshold: z.number().int().positive().optional(),
-    defaultHardThreshold: z.number().int().positive().optional(),
-    summaryMode: localRuntimeCompactionSummaryModeSchema.optional(),
-    summaryTimeoutMs: z.number().int().positive().max(120_000).optional(),
-    summaryMaxTokens: z.number().int().positive().max(16_000).optional(),
-    summaryInputMaxBytes: z.number().int().positive().max(8 * 1024 * 1024).optional()
   }).strict().optional()
 }).strict()
 
@@ -1336,27 +1333,7 @@ export const skillListPayloadSchema = z
   })
   .strict()
 
-export const scientificSkillsMcpConfigPayloadSchema = z
-  .object({
-    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
-  })
-  .strict()
-
-export const scientificPlottingMcpConfigPayloadSchema = z
-  .object({
-    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
-  })
-  .strict()
-
-export const scientificSkillsInstallPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    backend: z.enum(['git', 'npx']).optional(),
-    ref: z.string().trim().min(1).max(128).optional()
-  })
-  .strict()
-
-export const pptMasterMcpConfigPayloadSchema = z
+export const workspaceMcpConfigPayloadSchema = z
   .object({
     workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
   })

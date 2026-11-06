@@ -1,3 +1,7 @@
+import { childObservationRevision } from '@sciforge/multi-agent/runtime'
+import { RuntimeUserInputService } from './user-input-service'
+import { assertWorkspaceMutationIdentity, workspaceMutationReceipt } from '../../services/workspace-mutation-receipt'
+import type { DomainUserInputRequest, DomainUserInputResult } from '@sciforge/domain-sdk/user-input'
 import {
   SessionAdmissionError,
   type SessionAdmissionRef, type SessionAdmissionSnapshot, type SessionAdmissionEvent,
@@ -29,8 +33,6 @@ import {
 } from '../../../shared/app-settings'
 import { permissionLevelFromRuntime } from '../../../shared/app-settings-permissions'
 import type { AgentPermissionLevel } from '../../../shared/app-settings-permissions'
-import { resolveRuntimeModelRouterSettings } from '../../../shared/app-settings-model-router'
-import { buildModelRouterResponsesUrl } from '../../../shared/model-router-url'
 import {
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
   createAgentRuntimeCapabilityMatrix,
@@ -41,7 +43,8 @@ import {
 } from '../../../shared/agent-runtime-contract'
 import {
   assertAgentRuntimeThreadPageDeliverySize,
-  boundAgentRuntimeEventForDelivery
+  boundAgentRuntimeEventForDelivery,
+  encodeToolArtifactRef
 } from './jsonl-thread-page'
 import type {
   AgentRuntimeAuxiliaryInput,
@@ -52,7 +55,6 @@ import type {
   AgentRuntimeCodeNavigationInput,
   AgentRuntimeContextLedgerEvidence,
   AgentRuntimeContextLedgerMemory,
-  AgentRuntimeContextState,
   AgentRuntimeDiscoveryResult,
   AgentRuntimeEvent,
   AgentRuntimeFileReference,
@@ -113,7 +115,6 @@ import {
   requiresExecutionIntegrityValidation,
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
-import { AgentRuntimeContextCompactor, runtimeCompactionItemText } from './context-compactor'
 import type { LspCodeNavigationService } from '../../services/lsp-code-navigation-service'
 import { AppDataJsonlStore, atomicWriteAppDataText } from '../../services/app-data-store'
 import type { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
@@ -143,7 +144,8 @@ import type { VisibleContextService } from '../../services/visible-context-servi
 import {
   capabilityAgentCallerId,
   type CapabilityAgentApprovalDecision,
-  type CapabilityAgentApprovalRequest
+  type CapabilityAgentApprovalRequest,
+  type CapabilityAgentToolRequestContext
 } from '../../capabilities/agent-tools'
 import type { RuntimeGoalPatch, RuntimeGoalService } from '../../services/runtime-goal-service'
 import type {
@@ -169,6 +171,8 @@ import {
 } from '@sciforge/domain-sdk/principal'
 import { redactSecrets } from '../../../shared/secret-redaction'
 import type {
+  AgentRuntimeToolCall,
+  AgentRuntimeToolResult,
   AgentRuntimeToolSurface,
   AgentRuntimeToolTurnIdentity
 } from './agent-tool-surface'
@@ -286,6 +290,7 @@ type CapabilityApprovalRecord = {
   approvalId: string
   capabilityRequestId: string
   remoteEligible: boolean
+  forceHuman?: boolean
   safeSummary: string
   expiresAt: string
   requestedEvent: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>
@@ -353,6 +358,7 @@ export class AgentRuntimeHost {
   private readonly threadStatusReadsInFlight = new Map<string, Promise<AgentRuntimeThreadStatus>>()
   private readonly auxiliaryReadsInFlight = new Map<string, Promise<unknown>>()
   private readonly auxiliaryReadCache = new Map<string, { expiresAt: number; value: unknown }>()
+  private readonly childProgressRevisions = new Map<string, string>()
   private readonly activeThreadTurns = new Map<string, ActiveThreadTurn>()
   private readonly terminalWaiters = new Map<string, Set<() => void>>()
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
@@ -411,6 +417,7 @@ export class AgentRuntimeHost {
   private readonly turnArtifactPatchReceiptDrains = new Map<string, Promise<void>>()
   private readonly terminalArtifactBoundaries = new Map<string, Promise<void>>()
   private readonly nativeApprovalObservations = new Map<string, Promise<boolean>>()
+  private readonly userInputs = new RuntimeUserInputService()
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
   private readonly capabilityApprovalOrder: string[] = []
   private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
@@ -483,6 +490,15 @@ export class AgentRuntimeHost {
               turnId: event.parentTurnId,
               child: agentRuntimeChildFromMultiAgentRecord(runtimeId, record, event)
             })
+            const progressKey = `${runtimeId}:${event.parentThreadId}:${event.parentTurnId}:${record.id}`
+            const revision = childObservationRevision(record)
+            const previousRevision = this.childProgressRevisions.get(progressKey)
+            if (event.operation === 'delete' || ['completed', 'failed', 'aborted'].includes(record.status)) {
+              this.childProgressRevisions.delete(progressKey)
+            } else {
+              this.childProgressRevisions.set(progressKey, revision)
+            }
+            if (previousRevision === revision) return
             // Heartbeats are durable coordination signals. When the parent turn
             // is still active, surface the bounded snapshot to the provider so
             // the parent can rebalance work without waiting for a terminal child
@@ -564,6 +580,68 @@ export class AgentRuntimeHost {
           }
         })
       : null
+  }
+
+  private readonly persistedWorkspaceMutations = new Set<string>()
+
+  /** Only process-local Host executor attachments can create a file-change artifact. */
+  async persistWorkspaceMutation(request: AgentRuntimeToolCall, result: AgentRuntimeToolResult, signal?: AbortSignal): Promise<void> {
+    const mutation = workspaceMutationReceipt(result)
+    if (!mutation) return
+    assertWorkspaceMutationIdentity(mutation, request.context)
+    const { runtimeId, threadId, turnId, callId } = request.context
+    if (!threadId || !turnId || !callId) throw new Error('Workspace mutation requires an exact tool turn identity.')
+    signal?.throwIfAborted()
+    const principal = this.principalForToolRequest({ runtimeId, threadId, turnId })
+    this.assertCapturedPrincipalContextCurrent(principal)
+    const { adapter, context } = await this.resolveRequiredRuntime(requireRegisteredRuntimeId(this.adapters, runtimeId), threadId)
+    signal?.throwIfAborted()
+    this.assertCapturedPrincipalContextCurrent(principal)
+    const key = JSON.stringify([runtimeId, threadId, turnId, mutation.receiptId])
+    if (this.persistedWorkspaceMutations.has(key)) return
+    const itemId = `workspace-mutation-${mutation.receiptId}`
+    const detail = JSON.stringify({ changes: [{ path: mutation.path, kind: 'update', diff: mutation.patchText }] })
+    const meta = { callId, toolName: request.name, workspaceMutation: mutation, structuredContent: detail }
+    const snapshot = await this.publishSyntheticEvent(adapter, context, {
+      runtimeId: adapter.id, threadId, turnId, kind: 'item_snapshot',
+      item: { id: itemId, kind: 'tool', turnId, status: 'success', toolKind: 'file_change',
+        summary: `Updated ${mutation.path}`, detail, meta }
+    })
+    if (!snapshot) throw new Error('Runtime does not support durable workspace mutation artifacts.')
+    this.assertCapturedPrincipalContextCurrent(principal)
+    const event = await this.publishSyntheticEvent(adapter, context, {
+      runtimeId: adapter.id, threadId, turnId, kind: 'tool_event', itemId,
+      callId, toolName: request.name, toolKind: 'file_change', status: 'success',
+      phase: 'succeeded', factSource: 'executor_result', evidenceStrength: 'executor_receipt',
+      effects: ['local_write'], summary: `Updated ${mutation.path}`, detail, filePath: mutation.path, meta,
+      receipt: { status: 'success', outcome: 'progress', stateChanged: true, resourceIdentity: mutation.path }
+    })
+    if (!event) throw new Error('Runtime does not support durable workspace mutation receipts.')
+    this.persistedWorkspaceMutations.add(key)
+  }
+
+  /** Persist before issuing a continuation, using the runtime's canonical journal. */
+  async persistToolResult(request: AgentRuntimeToolCall, result: AgentRuntimeToolResult): Promise<string> {
+    const { threadId, turnId } = request.context
+    if (!threadId || !turnId) throw new Error('Tool result history requires a bound turn.')
+    const principal = this.principalForToolRequest({ runtimeId: request.context.runtimeId, threadId, turnId })
+    this.assertCapturedPrincipalContextCurrent(principal)
+    const { adapter, context } = await this.resolveRequiredRuntime(requireRegisteredRuntimeId(this.adapters, request.context.runtimeId), threadId)
+    const itemId = `tool-result-${randomUUID()}`
+    const content = JSON.stringify(result.value) ?? 'null'
+    const ref = encodeToolArtifactRef(itemId)
+    const published = await this.publishSyntheticEvent(adapter, context, {
+      runtimeId: adapter.id, threadId, turnId, kind: 'item_snapshot',
+      item: { id: itemId, kind: 'tool', turnId, status: 'success', toolKind: 'tool_call',
+        summary: `${request.name}: stored result`,
+        detailArtifact: { runtimeId: adapter.id, threadId, ref, size: Buffer.byteLength(content) },
+        meta: { callId: request.context.callId, toolName: request.name, structuredContent: content,
+          resultDelivery: { originalBytes: Buffer.byteLength(content), sha256: createHash('sha256').update(content).digest('hex'), policy: 'bounded-preview-with-history' } }
+      }
+    })
+    if (!published) throw new Error('Runtime does not support durable tool result delivery.')
+    this.assertCapturedPrincipalContextCurrent(principal)
+    return ref
   }
 
   historyTools(): AgentRuntimeToolSurface {
@@ -863,6 +941,15 @@ export class AgentRuntimeHost {
       input.runtimeId,
       input.threadId
     )
+    if (input.contextProfile) {
+      if (!adapter.contextProfiles?.includes(input.contextProfile)) {
+        throw new Error(`Runtime ${adapter.id} does not support context profile ${input.contextProfile}.`)
+      }
+      if (input.threadId || input.mode !== 'agent' || input.allowedTools?.length !== 0 ||
+        input.sidebarVisibility !== 'hidden') {
+        throw new Error('Minimal context requires a new hidden Agent thread with explicit allowedTools: [].')
+      }
+    }
     const context = await this.withWorkspaceHostPlacement(baseContext, input.workspaceLocator)
     const thread = projectAgentRuntimeThreadSummary(withWorkspaceHostOnThread(
       await adapter.startThread(context, withWorkspaceLocatorPath(input)),
@@ -924,6 +1011,14 @@ export class AgentRuntimeHost {
     return adapter.readToolArtifact(context, input)
   }
 
+  /** Metadata-only read for consumers that must not hydrate the entire transcript. */
+  async readThreadMetadata(input: AgentRuntimeThreadStatusInput): Promise<AgentRuntimeThread> {
+    const { adapter, context } = await this.resolveRequiredRuntime(
+      input.runtimeId, input.threadId, input.workspaceLocator
+    )
+    return this.readThreadSummaryFromAdapter(adapter, context, input.threadId)
+  }
+
   async readThreadSnapshot(input: AgentRuntimeThreadStatusInput): Promise<AgentRuntimeThreadSnapshot> {
     const { adapter, context } = await this.resolveRequiredRuntime(
       input.runtimeId,
@@ -959,6 +1054,23 @@ export class AgentRuntimeHost {
       }
       if (cursor) seenCursors.add(cursor)
     } while (cursor)
+    // Bounded history pages can split one long turn. Coalesce the projected
+    // snapshots in chronological order before consumers address an item by
+    // turn ID; otherwise `find(turnId)` can select an incomplete fragment.
+    const completeTurns = new Map<string, AgentRuntimeThreadSnapshot['turns'][number]>()
+    for (const fragment of turns) {
+      const previous = completeTurns.get(fragment.id)
+      const items = new Map((previous?.items ?? []).map(item => [item.id, item]))
+      for (const item of fragment.items ?? []) {
+        const prior = items.get(item.id)
+        items.set(item.id, prior ? {
+          ...prior,
+          ...Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)),
+          ...(prior.createdAt ? { createdAt: prior.createdAt } : {})
+        } : item)
+      }
+      completeTurns.set(fragment.id, { ...previous, ...fragment, items: [...items.values()] })
+    }
     const snapshot = await this.withSharedGoalOnThread(adapter.id, {
       ...summary,
       status: status.status,
@@ -967,7 +1079,7 @@ export class AgentRuntimeHost {
       latestSeq: status.latestSeq,
       usage: status.usage,
       ...(status.workspaceLocator ? { workspaceLocator: status.workspaceLocator } : {}),
-      turns
+      turns: [...completeTurns.values()]
     })
     return this.withCapabilityApprovalsOnThread(adapter.id, snapshot)
   }
@@ -1039,17 +1151,20 @@ export class AgentRuntimeHost {
       input.runtimeId,
       input.threadId
     )
+    if (input.contextProfile && (!adapter.contextProfiles?.includes(input.contextProfile) ||
+      input.allowedTools?.length !== 0 || input.mode !== 'agent')) {
+      throw new Error('This runtime cannot execute the requested tool-free minimal context profile.')
+    }
     const context = await this.withWorkspaceHostPlacement(baseContext, input.workspaceLocator)
     const placedInput = withWorkspaceLocatorPath(input)
-    await this.autoCompactThreadIfNeeded(adapter, context, placedInput)
     const safeInput = this.withSafeRelativeFileReferences(placedInput)
-    const contextualInput = options.includeSharedContext
+    const contextualInput = options.includeSharedContext && input.contextProfile !== 'minimal'
       ? await this.withSharedGoalInstruction(
           adapter.id,
-          this.withSharedContextState(adapter.id, await this.withSharedMemory(context, safeInput))
+          await this.withSharedMemory(context, safeInput)
         )
       : safeInput
-    const childContext = adapter.subagents && this.subagentToolBridge
+    const childContext = input.contextProfile !== 'minimal' && adapter.subagents && this.subagentToolBridge
       ? await this.subagentToolBridge.parentContext(adapter.id, input.threadId)
       : ''
     const childContextualInput = childContext ? {
@@ -1057,8 +1172,7 @@ export class AgentRuntimeHost {
       text: `${childContext}\n\n${contextualInput.text}`,
       displayText: contextualInput.displayText ?? contextualInput.text
     } : contextualInput
-    const sharedInput = await this.withSharedContextLedger(adapter.id, childContextualInput)
-    const routedInput = this.withAgentRoutingGuidance(sharedInput)
+    const routedInput = this.withAgentRoutingGuidance(childContextualInput)
     const visuallyGuardedInput = withVisualExecutionRequirement(routedInput)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
     const traceSinceSeq = this.options.services?.trace
@@ -1205,7 +1319,7 @@ export class AgentRuntimeHost {
       )
     } catch (error) {
       const definiteRejection = isDefiniteDirectiveRejection(error)
-      if (definiteRejection || (artifactStart && !providerDispatchStarted)) {
+      if ((definiteRejection && !boundArtifactWatch) || (artifactStart && !providerDispatchStarted)) {
         await releaseBoundary()
       } else if (boundArtifactWatch) {
         this.rememberTurnPrincipal(
@@ -2388,13 +2502,11 @@ export class AgentRuntimeHost {
       await this.publishTerminalTurnLifecycle(adapter.id, context, event)
     }
     const governEvent = (
-      event: AgentRuntimeEvent,
-      nativeVisualProofChainPending: boolean
+      event: AgentRuntimeEvent
     ): void => {
       this.governance.observe(event, capabilities, guardSettings, {
         governanceProfile: this.governanceProfileForEvent(capabilities.runtimeId, event),
         ownedVisualToolsAvailable: this.options.nativeVisualToolsAvailable?.() === true,
-        nativeVisualProofChainPending,
         steerTurn: (payload) => this.steerControlTurn(payload),
       interruptTurn: (payload) => this.interruptTurn(payload),
         markRecoverableTerminalTurn: (payload, reason) => {
@@ -2407,7 +2519,7 @@ export class AgentRuntimeHost {
       })
     }
     for await (const rawSourceEvent of source) {
-      const sourceEvent = this.withTurnPrincipal(adapter.id, rawSourceEvent)
+      const sourceEvent = this.withTurnPrincipal(adapter.id, await this.projectControlMessageEvent(adapter.id, rawSourceEvent))
       if (isExecutionPublicationControlEvent(sourceEvent)) continue
       const turnId = sourceEvent.turnId?.trim() ?? ''
       const publicationKey = turnId
@@ -2490,7 +2602,7 @@ export class AgentRuntimeHost {
           throw new Error('The runtime cannot persist the execution-integrity pending marker.')
         }
       }
-      governEvent(event, validationAfterEvent.nativeVisualObligationsPending)
+      governEvent(event)
       const shouldDeferAssistant = Boolean(
         publicationKey &&
         validationBeforeEvent.requiresTerminalValidation &&
@@ -2610,9 +2722,24 @@ export class AgentRuntimeHost {
     }
   }
 
+  /** Resolve live execution policy from the same authority used for approvals. */
+  async resolveCapabilitySandboxMode(context: CapabilityAgentToolRequestContext): Promise<'read-only' | 'workspace-write' | 'danger-full-access'> {
+    const runtimeId = this.runtimeIdForCapabilityApproval(context.runtimeId)
+    const threadId = context.threadId?.trim()
+    if (this.disposed || !threadId) throw new Error('Live runtime thread is required for execution policy.')
+    const resolved = await this.resolveRequiredRuntime(runtimeId, threadId, context.workspaceLocator)
+    const child = this.subagentToolBridge?.childContextForThread(runtimeId, threadId)
+    const policyThread = child?.parentThreadId ?? threadId
+    const policyTurn = child?.parentTurnId ?? context.turnId
+    const override = policyTurn ? this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, policyThread, policyTurn)) : undefined
+    const level = override ?? runtimePermissionLevel(resolved.context.settings, runtimeId)
+    const configured = runtimeId === 'codex' ? getCodexRuntimeSettings(resolved.context.settings).sandboxMode : runtimeId === 'claude' ? getClaudeRuntimeSettings(resolved.context.settings).sandboxMode : 'workspace-write'
+    return level === 'full-access' ? 'danger-full-access' : !override && configured === 'read-only' ? 'read-only' : 'workspace-write'
+  }
+
   async requestCapabilityApproval(
     request: CapabilityAgentApprovalRequest,
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; forceHuman?: boolean } = {}
   ): Promise<CapabilityAgentApprovalDecision> {
     if (this.disposed) return Promise.resolve('cancelled')
     const runtimeId = this.runtimeIdForCapabilityApproval(request.context.runtimeId)
@@ -2634,7 +2761,11 @@ export class AgentRuntimeHost {
       return runtimePermissionLevel(context.settings, runtimeId)
     }).catch(() => undefined)
     if (options.signal?.aborted || this.disposed) return 'cancelled'
-    if (livePermissionLevel === 'full-access') return 'allowed'
+    // A per-turn permission override is the authoritative policy for its own
+    // turn: it must both tighten a Full Access global setting and honor a
+    // one-shot Full Access request made under a stricter global setting.
+    const turnPermissionLevel = this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, threadId, turnId))
+    if (!options.forceHuman && (turnPermissionLevel ?? livePermissionLevel) === 'full-access') return 'allowed'
     const pendingCount = [...this.capabilityApprovals.values()].filter((record) => Boolean(record.resolve)).length
     if (pendingCount >= CAPABILITY_APPROVAL_PENDING_LIMIT) return Promise.resolve('cancelled')
 
@@ -2705,6 +2836,7 @@ export class AgentRuntimeHost {
         approvalId,
         capabilityRequestId: request.invocationId,
         remoteEligible: request.remoteApproval?.eligible === true,
+        ...(options.forceHuman ? { forceHuman: true } : {}),
         safeSummary: (request.remoteApproval?.safeSummary ?? request.title).trim().slice(0, 500),
         expiresAt,
         requestedEvent: event,
@@ -2730,7 +2862,7 @@ export class AgentRuntimeHost {
       this.publishCapabilityApprovalEvent(record, event)
       this.publishRemoteCapabilityApproval(record)
       this.pruneCapabilityApprovalHistory()
-      if (childApproval) void this.applyChildApprovalPolicy(record, request, request.context.workspaceLocator)
+      if (childApproval && !options.forceHuman) void this.applyChildApprovalPolicy(record, request, request.context.workspaceLocator)
     })
   }
 
@@ -2859,12 +2991,23 @@ export class AgentRuntimeHost {
   async refreshLivePermissionPolicy(): Promise<number> {
     if (this.disposed) return 0
     const settings = await this.options.settings()
-    const isFullAccess = (runtimeId: AgentRuntimeId): boolean => {
-      return runtimePermissionLevel(settings, runtimeId) === 'full-access'
+    // A pending request keeps the permission policy of the turn that created
+    // it: a per-turn override must survive a later global Full Access switch.
+    const isFullAccessForTurn = (
+      runtimeId: AgentRuntimeId,
+      ownerThreadId: string,
+      ownerTurnId: string
+    ): boolean => {
+      const turnPermissionLevel = ownerThreadId && ownerTurnId
+        ? this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, ownerThreadId, ownerTurnId))
+        : undefined
+      return (turnPermissionLevel ?? runtimePermissionLevel(settings, runtimeId)) === 'full-access'
     }
     let settled = 0
     for (const record of this.capabilityApprovals.values()) {
-      if (!record.resolve || !isFullAccess(record.runtimeId)) continue
+      const ownerThreadId = record.childApproval?.parentThreadId ?? record.threadId
+      const ownerTurnId = record.childApproval?.parentTurnId ?? record.turnId
+      if (!record.resolve || record.forceHuman || !isFullAccessForTurn(record.runtimeId, ownerThreadId, ownerTurnId)) continue
       this.settleCapabilityApproval(
         record,
         'allowed',
@@ -2876,7 +3019,9 @@ export class AgentRuntimeHost {
     await Promise.all(nativeApprovals.map(async (record) => {
       if (record.approval.state !== 'pending') return
       const runtimeId = optionalRuntimeId(record.approval.runtimeId)
-      if (!runtimeId || !isFullAccess(runtimeId)) return
+      const ownerThreadId = record.childApproval?.parentThreadId ?? record.approval.threadId
+      const ownerTurnId = record.childApproval?.parentTurnId ?? record.approval.turnId
+      if (!runtimeId || !isFullAccessForTurn(runtimeId, ownerThreadId, ownerTurnId)) return
       try {
         await this.resolveApproval({
           runtimeId,
@@ -2970,6 +3115,7 @@ export class AgentRuntimeHost {
     this.turnArtifactCaptureTasks.clear()
     this.turnArtifactWatches.clear()
     this.turnPrincipals.clear()
+    this.persistedWorkspaceMutations.clear()
     this.terminalTurnPrincipalKeys.clear()
     this.terminalTurnPrincipalOrder.splice(0)
     this.turnArtifactPatchReceiptDrains.clear()
@@ -2978,6 +3124,7 @@ export class AgentRuntimeHost {
     this.pendingTurnBoundaries.clear()
     this.turnGovernanceProfiles.clear()
     this.turnWorkspaces.clear()
+    this.childProgressRevisions.clear()
     this.subagentToolBridge?.dispose()
     for (const record of this.capabilityApprovals.values()) {
       if (record.resolve) this.settleCapabilityApproval(record, 'cancelled', 'Agent runtime host stopped.')
@@ -2993,6 +3140,7 @@ export class AgentRuntimeHost {
     }
     this.capabilityApprovalSubscribers.clear()
     this.remoteCapabilityApprovalSubscribers.clear()
+    this.userInputs.dispose()
     this.capabilityApprovals.clear()
     this.capabilityApprovalOrder.splice(0)
     this.nativeRemoteApprovals.clear()
@@ -3000,7 +3148,22 @@ export class AgentRuntimeHost {
     this.nativeRemoteApprovalDecisions.clear()
   }
 
+  async requestUserInput(request: DomainUserInputRequest, toolContext: CapabilityAgentApprovalRequest['context'], signal?: AbortSignal): Promise<DomainUserInputResult> {
+    const runtimeId = this.runtimeIdForCapabilityApproval(toolContext.runtimeId)
+    const { threadId, turnId, callId } = toolContext
+    if (!threadId || !turnId || !callId) throw new Error('User input requires an active tool call.')
+    const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, threadId, toolContext.workspaceLocator)
+    const activity = await this.readCurrentThreadTurnActivity(adapter, context, threadId)
+    if (!activity.active || activity.turnId !== turnId) throw new Error('The requesting turn is no longer active.')
+    return this.userInputs.request({ runtimeId, threadId, turnId }, request, async (event) => {
+      const published = await this.publishSyntheticEvent(adapter, context, event)
+      if (!published) throw new Error('Runtime does not support durable interaction events.')
+      return published
+    }, signal)
+  }
+
   async resolveUserInput(input: AgentRuntimeUserInputResolveInput): Promise<void> {
+    if (this.userInputs.owns(input.requestId)) return this.userInputs.submit(input, input.requestId, input.answers)
     const { adapter, context } = await this.resolveRequiredRuntime(
       input.runtimeId,
       input.threadId,
@@ -3017,10 +3180,6 @@ export class AgentRuntimeHost {
       input.workspaceLocator
     )
     const capabilities = await adapter.capabilities(context)
-    if (capabilities.controls.compact === 'noop') {
-      await this.recordNoopCompaction(adapter, context, input)
-      return
-    }
     if (!adapter.compactThread || capabilities.controls.compact === 'unsupported') {
       throw unsupported(adapter.id, 'compact')
     }
@@ -3143,6 +3302,10 @@ export class AgentRuntimeHost {
   }
 
   private async dispatchAuxiliary(input: AgentRuntimeAuxiliaryInput): Promise<unknown> {
+    if (input.operation === 'cancelUserInput' && typeof input.payload?.requestId === 'string' && this.userInputs.owns(input.payload.requestId)) {
+      if (!input.runtimeId || typeof input.payload.threadId !== 'string') throw new Error('User input requires its original session.')
+      return this.userInputs.cancel({ runtimeId: input.runtimeId, threadId: input.payload.threadId }, input.payload.requestId)
+    }
     const { adapter, context } = input.workspaceLocator
       ? await this.resolveRequiredRuntime(
           input.runtimeId,
@@ -3332,28 +3495,6 @@ export class AgentRuntimeHost {
           handled: true,
           value: await this.startRuntimeHandoff(runtimeId, payload, context, input.visibleContextBinding)
         }
-      case 'recordContextCompaction': {
-        assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
-        const service = this.options.services?.contextState
-        if (!service) return { handled: false }
-        return {
-          handled: true,
-          value: service.recordCompaction({
-            runtimeId,
-            threadId: requiredString(payload, 'threadId'),
-            summary: optionalString(payload.summary),
-            summarySource: optionalString(payload.summarySource) as never,
-            triggerReason: optionalString(payload.triggerReason),
-            rawHistoryItems: numberValue(payload.rawHistoryItems),
-            effectiveHistoryItems: numberValue(payload.effectiveHistoryItems),
-            estimatedTokens: numberValue(payload.estimatedTokens),
-            replacedTokens: numberValue(payload.replacedTokens),
-            sourceDigest: optionalString(payload.sourceDigest),
-            digestMarker: optionalString(payload.digestMarker),
-            sourceItemIds: arrayOfStrings(payload.sourceItemIds)
-          })
-        }
-      }
       case 'updateGoalResumeState': {
         assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
         const service = this.options.services?.contextState
@@ -3507,26 +3648,17 @@ export class AgentRuntimeHost {
     const targetThreadId = targetCapabilities.storage.guiOwnedThreads
       ? optionalString(payload.targetThreadId) ?? sourceThreadId
       : ''
-    let targetThread: AgentRuntimeThread = targetThreadId
-      ? {
-          id: targetThreadId,
-          runtimeId: targetRuntimeId,
-          title: title ?? 'Runtime handoff',
-          updatedAt: new Date().toISOString(),
-          ...(workspace ? { workspace } : {}),
-          ...(workspaceLocator ? { workspaceLocator } : {}),
-          ...(mode ? { mode } : {}),
-          ...(model ? { model } : {}),
-          status: 'running'
-        }
-      : await targetAdapter.startThread(targetContext, {
-          runtimeId: targetRuntimeId,
-          ...(workspace ? { workspace } : {}),
-          ...(workspaceLocator ? { workspaceLocator } : {}),
-          ...(title ? { title } : {}),
-          ...(mode ? { mode } : {}),
-          ...(model ? { model } : {})
-        })
+    // Enroll the target durably before required before-turn consumers read it.
+    // GUI-owned identity permits reusing an id; it does not create a thread.
+    let targetThread = await this.startThread({
+      runtimeId: targetRuntimeId,
+      ...(targetThreadId ? { threadId: targetThreadId } : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(workspaceLocator ? { workspaceLocator } : {}),
+      ...(title ? { title } : {}),
+      ...(mode ? { mode } : {}),
+      ...(model ? { model } : {})
+    })
     const packet = await service.createHandoffPacket({
       sourceRuntimeId,
       sourceThreadId,
@@ -3711,6 +3843,7 @@ export class AgentRuntimeHost {
     const services = this.options.services ?? {}
     const controls = {
       ...capabilities.controls,
+      userInput: capabilities.tools.toolCalling ? 'async' as const : capabilities.controls.userInput,
       goals: capabilities.controls.goals || Boolean(services.goals)
     }
     const descriptors: AgentRuntimeCapabilityDescriptor[] = [
@@ -3878,7 +4011,7 @@ export class AgentRuntimeHost {
           ? { available: true }
           : capabilities.context?.state ?? { available: false, reason: 'unsupported' },
         compaction: capabilities.context?.compaction ?? {
-          available: capabilities.controls.compact === 'native' || capabilities.controls.compact === 'noop',
+          available: capabilities.controls.compact === 'native',
           ...(capabilities.controls.compact === 'unsupported' ? { reason: 'unsupported' } : {})
         },
         goalResume: services.contextState
@@ -3945,40 +4078,6 @@ export class AgentRuntimeHost {
     }
   }
 
-  private async withSharedContextLedger(
-    runtimeId: AgentRuntimeId,
-    input: AgentRuntimeTurnStartInput
-  ): Promise<AgentRuntimeTurnStartInput> {
-    const service = this.options.services?.contextLedger
-    const threadId = input.threadId.trim()
-    if (!service || !threadId) return input
-    const ledger = await service.peek({ runtimeId, threadId }).catch(() => null)
-    const ledgerText = renderRuntimeContextLedger(ledger)
-    if (!ledgerText) return input
-    return {
-      ...input,
-      text: `${ledgerText}\n\n${input.text}`,
-      displayText: input.displayText ?? input.text
-    }
-  }
-
-  private withSharedContextState(
-    runtimeId: AgentRuntimeId,
-    input: AgentRuntimeTurnStartInput
-  ): AgentRuntimeTurnStartInput {
-    const service = this.options.services?.contextState
-    const threadId = input.threadId.trim()
-    if (!service || !threadId) return input
-    const state = service.peek({ runtimeId, threadId })
-    const contextText = renderSharedContextState(state)
-    if (!contextText) return input
-    return {
-      ...input,
-      text: `${contextText}\n\n${input.text}`,
-      displayText: input.displayText ?? input.text
-    }
-  }
-
   private async withCanonicalVisibleState(
     runtimeId: AgentRuntimeId,
     input: AgentRuntimeTurnStartInput,
@@ -3991,6 +4090,7 @@ export class AgentRuntimeHost {
       visibleContextBindingFailure,
       ...runtimeInput
     } = input
+    if (runtimeInput.contextProfile === 'minimal') return runtimeInput
     const service = this.options.services?.visibleContext
     if (!service) return runtimeInput
     const callerId = capabilityAgentCallerId({
@@ -4054,6 +4154,7 @@ export class AgentRuntimeHost {
   private withAgentRoutingGuidance(
     input: AgentRuntimeTurnStartInput
   ): AgentRuntimeTurnStartInput {
+    if (input.contextProfile === 'minimal') return input
     const guidance = renderAgentRoutingGuidance(this.options.agentRoutingContributions)
     if (!guidance) return input
     return {
@@ -4586,6 +4687,7 @@ export class AgentRuntimeHost {
     detail: AgentRuntimeThreadSnapshot
   ): AgentRuntimeThreadSnapshot {
     const approvals = this.capabilityApprovalItems(runtimeId, detail.id)
+    detail = { ...detail, turns: this.userInputs.reconcileTurns(detail.turns ?? []) }
     if (approvals.length === 0) return detail
     return {
       ...detail,
@@ -4598,6 +4700,7 @@ export class AgentRuntimeHost {
     page: AgentRuntimeThreadPage
   ): AgentRuntimeThreadPage {
     const approvals = this.capabilityApprovalItems(runtimeId, page.threadId)
+    page = { ...page, turns: this.userInputs.reconcileTurns(page.turns) }
     if (approvals.length === 0) return page
     return {
       ...page,
@@ -4743,7 +4846,12 @@ export class AgentRuntimeHost {
     if (this.nativeRemoteApprovals.has(key)) return false
     try {
       const { adapter, context } = await this.resolveRequiredRuntime(runtimeId, event.threadId)
-      if (runtimePermissionLevel(context.settings, runtimeId) === 'full-access') {
+      // A stricter per-turn permission override must keep native provider
+      // approvals visible even while the global runtime setting is Full Access.
+      const turnPermissionLevel = this.turnPermissionLevels.get(
+        turnGovernanceKey(runtimeId, event.threadId, turnId)
+      )
+      if ((turnPermissionLevel ?? runtimePermissionLevel(context.settings, runtimeId)) === 'full-access') {
         if (!adapter.resolveApproval) return false
         await adapter.resolveApproval(context, {
           runtimeId,
@@ -4853,7 +4961,14 @@ export class AgentRuntimeHost {
     const runtimeId = optionalRuntimeId(record.approval.runtimeId)
     if (!runtimeId) return
     const { context } = await this.resolveRequiredRuntime(runtimeId, record.providerThreadId)
-    if (runtimePermissionLevel(context.settings, runtimeId) !== 'full-access') return
+    // The turn that produced this request keeps its own permission policy: a
+    // stricter per-turn override must survive this live global re-check.
+    const ownerThreadId = record.childApproval?.parentThreadId ?? record.approval.threadId
+    const ownerTurnId = record.childApproval?.parentTurnId ?? record.approval.turnId
+    const turnPermissionLevel = ownerThreadId && ownerTurnId
+      ? this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, ownerThreadId, ownerTurnId))
+      : undefined
+    if ((turnPermissionLevel ?? runtimePermissionLevel(context.settings, runtimeId)) !== 'full-access') return
     await this.resolveApproval({
       runtimeId,
       threadId: record.providerThreadId,
@@ -5274,7 +5389,10 @@ export class AgentRuntimeHost {
       }
     }
     if (event.state !== 'completed' && !recoverableReason) return
-    const children = await this.subagentToolBridge?.childrenForTurn(runtimeId, event.threadId, event.turnId) ?? []
+    const { adapter } = await this.resolveRequiredRuntime(runtimeId, event.threadId)
+    const children = adapter.subagents && this.subagentToolBridge
+      ? await this.subagentToolBridge.childrenForTurn(runtimeId, event.threadId, event.turnId)
+      : []
     const activeChildren = children.filter((child) => child.status === 'queued' || child.status === 'running')
     if (activeChildren.length > 0) {
       await store.upsert(WorkRecord.parse({
@@ -5537,191 +5655,6 @@ export class AgentRuntimeHost {
         )
       }
       throw error
-    }
-  }
-
-  private async recordNoopCompaction(
-    adapter: AgentRuntimeAdapter,
-    context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeThreadCompactInput
-  ): Promise<void> {
-    const service = this.options.services?.contextState
-    if (!service) throw unsupported(adapter.id, 'shared context compaction')
-    const state = await this.recordSharedNoopCompaction(adapter, context, {
-      threadId: input.threadId,
-      triggerReason: input.reason?.trim() || 'manual noop compaction',
-      force: true
-    })
-    if (state) await this.publishCompactionStateEvent(adapter, context, state, false)
-    await this.cleanupNoopRuntimeCompaction(adapter, context, input)
-  }
-
-  private async autoCompactThreadIfNeeded(
-    adapter: AgentRuntimeAdapter,
-    context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
-  ): Promise<void> {
-    const threadId = input.threadId.trim()
-    const service = this.options.services?.contextState
-    if (!service || !threadId) return
-    let capabilities: AgentRuntimeCapabilities
-    try {
-      capabilities = await adapter.capabilities(context)
-    } catch {
-      return
-    }
-    if (capabilities.controls.compact !== 'noop') return
-    const state = await this.recordSharedNoopCompaction(adapter, context, {
-      threadId,
-      force: false
-    }).catch(() => undefined)
-    if (!state) return
-    await this.publishCompactionStateEvent(adapter, context, state, true)
-    await this.cleanupNoopRuntimeCompaction(adapter, context, {
-      runtimeId: adapter.id,
-      threadId,
-      reason: state.triggerReason
-    }).catch(() => undefined)
-  }
-
-  private async cleanupNoopRuntimeCompaction(
-    adapter: AgentRuntimeAdapter,
-    context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeThreadCompactInput
-  ): Promise<void> {
-    if (!adapter.compactThread) return
-    await adapter.compactThread(context, input)
-  }
-
-  private async recordSharedNoopCompaction(
-    adapter: AgentRuntimeAdapter,
-    context: AgentRuntimeAdapterContext,
-    input: {
-      threadId: string
-      triggerReason?: string
-      force: boolean
-    }
-  ): Promise<AgentRuntimeContextState | null> {
-    const service = this.options.services?.contextState
-    if (!service) throw unsupported(adapter.id, 'shared context compaction')
-    const detail = await this.readThreadSnapshotFromAdapter(adapter, context, {
-      runtimeId: adapter.id,
-      threadId: input.threadId
-    })
-    const items = threadDetailItems(detail)
-    const compactor = new AgentRuntimeContextCompactor({
-      softThreshold: context.settings.agents.sciforge.contextCompaction.defaultSoftThreshold,
-      hardThreshold: context.settings.agents.sciforge.contextCompaction.defaultHardThreshold
-    })
-    const plan = compactor.planCompaction(items)
-    if (!plan && !input.force) return null
-    const triggerReason = input.triggerReason ?? plan?.reason ?? 'manual noop compaction'
-    const modelSummary = await this.modelCompactionSummary(context, adapter.id, input.threadId, items)
-    const result = compactor.compact({
-      threadId: input.threadId,
-      turnId: `manual-${input.threadId}`,
-      history: items,
-      mode: plan?.mode ?? 'force',
-      keepRecent: plan?.keepRecent ?? 1,
-      reason: plan?.reason ?? triggerReason,
-      summaryOverride: modelSummary.summary,
-      budgetTokens: context.settings.agents.sciforge.contextCompaction.summaryMaxTokens,
-      pinnedConstraints: pinnedConstraintsFromItems(items)
-    })
-    const summary = result.summaryItem.summary
-    return service.recordCompaction({
-      runtimeId: adapter.id,
-      threadId: input.threadId,
-      summary,
-      summarySource: modelSummary.summary ? 'model' : 'heuristic',
-      triggerReason: modelSummary.fallback
-        ? `${triggerReason}; model_summary_fallback`
-        : triggerReason,
-      rawHistoryItems: items.length,
-      effectiveHistoryItems: result.effectiveItems.length,
-      estimatedTokens: compactor.estimate(result.effectiveItems),
-      replacedTokens: result.replacedTokens,
-      sourceDigest: result.sourceDigest,
-      digestMarker: result.digestMarker,
-      sourceItemIds: result.sourceItemIds
-    })
-  }
-
-  private async publishCompactionStateEvent(
-    adapter: AgentRuntimeAdapter,
-    context: AgentRuntimeAdapterContext,
-    state: AgentRuntimeContextState,
-    auto: boolean
-  ): Promise<void> {
-    const summary = state.summary?.trim()
-    if (!summary) return
-    const event: AgentRuntimeEvent = {
-      kind: 'compaction_event',
-      runtimeId: adapter.id,
-      threadId: state.threadId,
-      itemId: `shared-compaction-${state.sourceDigest ?? state.updatedAt}`,
-      status: 'success',
-      summary,
-      detail: state.triggerReason,
-      auto,
-      messagesBefore: state.rawHistoryItems,
-      messagesAfter: state.effectiveHistoryItems,
-      replacedTokens: state.replacedTokens,
-      sourceDigest: state.sourceDigest,
-      digestMarker: state.digestMarker,
-      sourceItemIds: state.sourceItemIds,
-      createdAt: state.updatedAt
-    }
-    await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
-    try {
-      await this.publishSyntheticEvent(adapter, context, event)
-    } catch {
-      // Synthetic UI notification is best-effort; shared context state is already recorded.
-    }
-  }
-
-  private async modelCompactionSummary(
-    context: AgentRuntimeAdapterContext,
-    runtimeId: AgentRuntimeId,
-    threadId: string,
-    items: AgentRuntimeItem[]
-  ): Promise<{ summary?: string; fallback?: boolean }> {
-    const compaction = context.settings.agents.sciforge.contextCompaction
-    if (compaction.summaryMode !== 'model') return {}
-    const router = resolveRuntimeModelRouterSettings(context.settings)
-    if (!router.apiKey) return { fallback: true }
-    const input = renderModelCompactionInput(items, compaction.summaryInputMaxBytes)
-    if (!input) return {}
-    try {
-      const response = await fetch(buildModelRouterResponsesUrl(router.baseUrl), {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${router.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: router.model,
-          input,
-          max_tokens: compaction.summaryMaxTokens,
-          metadata: {
-            ...modelRouterAuditMetadata({
-              operation: 'context_compaction_summary',
-              runtimeId,
-              threadId,
-              sourceDigest: stableJsonDigest(items.map((item) => item.id))
-            })
-          }
-        }),
-        signal: AbortSignal.timeout(compaction.summaryTimeoutMs)
-      })
-      const bodyText = await response.text()
-      if (!response.ok) return { fallback: true }
-      const parsed = JSON.parse(bodyText) as Record<string, unknown>
-      const summary = extractResponsesOutputText(parsed).trim()
-      return summary ? { summary } : { fallback: true }
-    } catch {
-      return { fallback: true }
     }
   }
 
@@ -6223,6 +6156,19 @@ export class AgentRuntimeHost {
     }
   }
 
+  private async projectControlMessageEvent(runtimeId: AgentRuntimeId, event: AgentRuntimeEvent): Promise<AgentRuntimeEvent> {
+    const item: AgentRuntimeItem | null = event.kind === 'user_message'
+      ? { id: event.itemId, kind: 'user_message', text: event.text, turnId: event.turnId, meta: event.meta }
+      : event.kind === 'item_snapshot' && event.item.kind === 'user_message' ? event.item : null
+    if (!item) return event
+    const ledger = await this.options.services?.contextLedger?.peek({ runtimeId, threadId: event.threadId })
+    const directive = ledger?.directives.find(candidate => isControlDirective(candidate) &&
+      (candidate.delivery === 'delivering' || candidate.delivery === 'delivered' || candidate.delivery === 'uncertain') &&
+      (!candidate.turnId || candidate.turnId === (event.turnId ?? item.turnId)) &&
+      (candidate.id === item.id || candidate.id === item.meta?.clientDirectiveId || candidate.text === item.text))
+    return directive ? { ...event, kind: 'item_snapshot', item: projectControlDirectiveItem(item, directive) } : event
+  }
+
   private async withDeliveredDirectivesOnThreadPage(
     runtimeId: AgentRuntimeId,
     threadId: string,
@@ -6456,7 +6402,10 @@ export class AgentRuntimeHost {
       ...(intent.clientDirectiveId ? { clientDirectiveId: intent.clientDirectiveId } : {}),
       targetWatermark: String(intent.sequence ?? intent.turnId),
       ...(intent.sequence === undefined ? {} : { sequence: intent.sequence }),
-      workspaceRoot,
+      // Preserve the durable envelope after verifying equivalent paths above.
+      // A provider may normalize separators; changing the bound spelling would
+      // make the outbox correctly reject an otherwise valid materialization.
+      workspaceRoot: intent.workspaceRoot ?? workspaceRoot,
       occurredAt: intent.occurredAt,
       ...(intent.fileEffects ? { fileEffects: intent.fileEffects } : {}),
       ...(filePatchReceipts.length ? { filePatchReceipts } : {}),
@@ -6541,7 +6490,7 @@ class AgentRuntimeTurnPreflightError extends Error {
 }
 
 function modelRouterAuditMetadata(input: {
-  operation: 'runtime_handoff' | 'context_compaction_summary'
+  operation: 'runtime_handoff'
   runtimeId: AgentRuntimeId
   threadId: string
   sourceRuntimeId?: AgentRuntimeId
@@ -6671,74 +6620,8 @@ function threadDetailItems(detail: AgentRuntimeThreadSnapshot): AgentRuntimeItem
   return detail.turns.flatMap((turn) => turn.items ?? [])
 }
 
-function pinnedConstraintsFromItems(items: AgentRuntimeItem[]): string[] {
-  const pins = new Set<string>()
-  for (const item of items) {
-    if (item.kind === 'system') {
-      const text = (item.text ?? item.summary ?? item.detail ?? '').trim()
-      if (text) pins.add(text.slice(0, 800))
-      continue
-    }
-    if (item.kind !== 'user_message' && item.kind !== 'assistant_message' && item.kind !== 'compaction') continue
-    const text = (item.text ?? item.summary ?? item.detail ?? '').trim()
-    for (const line of text.split(/\r?\n/u)) {
-      const trimmed = line.trim()
-      if (/^(Active Skill:|Skill Pin:|Pinned Skill:|Constraint:)/iu.test(trimmed)) {
-        pins.add(trimmed.slice(0, 800))
-      }
-    }
-  }
-  return [...pins]
-}
-
-function renderModelCompactionInput(items: AgentRuntimeItem[], maxBytes: number): string {
-  const lines = items
-    .filter((item) => item.kind === 'user_message' || item.kind === 'assistant_message' || item.kind === 'tool')
-    .map((item) => {
-      const label = item.kind === 'user_message'
-        ? 'User'
-        : item.kind === 'assistant_message'
-          ? 'Assistant'
-          : 'Tool'
-      const text = runtimeCompactionItemText(item)
-      return text ? `${label}: ${text}` : ''
-    })
-    .filter(Boolean)
-  if (lines.length === 0) return ''
-  return truncateUtf8Text([
-    'Summarize this runtime conversation history for context compaction.',
-    'Preserve active user goals, hard constraints, decisions, changed files, unresolved risks, and concrete next steps.',
-    'Preserve verified tool results: exact output paths, completed reads/visual checks, measurements or crop coordinates, failed attempts, and the next unfinished action. Distinguish observed results from plans; do not restart completed work.',
-    'Return only the compact summary.',
-    '',
-    ...lines
-  ].join('\n'), maxBytes)
-}
-
 function truncateUtf8Text(text: string, maxBytes: number): string {
   return truncateWellFormedUtf8(text, maxBytes)
-}
-
-function extractResponsesOutputText(payload: Record<string, unknown>): string {
-  if (typeof payload.output_text === 'string') return payload.output_text
-  const output = Array.isArray(payload.output) ? payload.output : []
-  const parts: string[] = []
-  for (const item of output) {
-    if (!item || typeof item !== 'object') continue
-    const record = item as Record<string, unknown>
-    if (typeof record.text === 'string') {
-      parts.push(record.text)
-      continue
-    }
-    const content = Array.isArray(record.content) ? record.content : []
-    for (const part of content) {
-      if (!part || typeof part !== 'object') continue
-      const contentRecord = part as Record<string, unknown>
-      if (typeof contentRecord.text === 'string') parts.push(contentRecord.text)
-      if (typeof contentRecord.output_text === 'string') parts.push(contentRecord.output_text)
-    }
-  }
-  return parts.join('\n')
 }
 
 function estimateTextTokens(text: string): number {
@@ -7069,6 +6952,11 @@ const DEFINITE_DIRECTIVE_REJECTION_CODES = new Set([
   'turn_in_progress',
   'turn_not_running',
   'capability_unavailable',
+  'runtime_unsupported',
+  'runtime_text_only',
+  'runtime_thread_not_found',
+  'runtime_workspace_required',
+  'runtime_busy',
   'policy_blocked',
   'model_modality_unsupported',
   'attachment_validation_failed',
@@ -7217,63 +7105,6 @@ function renderSharedGoalInstruction(goal: AgentRuntimeThreadGoal | null): strin
     '',
     'If the objective is achieved, say so clearly in the final answer. The GUI goal status is controlled by the shared /goal commands.'
   ].join('\n')
-}
-
-function renderSharedContextState(state: AgentRuntimeContextState | null): string {
-  const summary = state?.summary?.trim()
-  if (!state || !summary || state.summarySource === 'none') return ''
-  const lines = [
-    'Shared compacted context summary for this thread:',
-    summary
-  ]
-  const metadata: string[] = []
-  if (state.summarySource) metadata.push(`source=${state.summarySource}`)
-  if (state.rawHistoryItems > 0) metadata.push(`raw_items=${state.rawHistoryItems}`)
-  if (state.effectiveHistoryItems > 0) metadata.push(`effective_items=${state.effectiveHistoryItems}`)
-  if (state.replacedTokens !== undefined) metadata.push(`replaced_tokens=${state.replacedTokens}`)
-  if (state.sourceDigest) metadata.push(`source_digest=${state.sourceDigest}`)
-  if (metadata.length > 0) {
-    lines.push(`Compaction metadata: ${metadata.join('; ')}`)
-  }
-  lines.push('Use this summary as earlier conversation context; the current user request below remains authoritative.')
-  return lines.join('\n')
-}
-
-function renderRuntimeContextLedger(ledger: AgentRuntimeContextLedger | null): string {
-  if (!ledger) return ''
-  const lines = ['Runtime context ledger for this thread:']
-  // The runtime owns conversation history and compaction. Delivery receipts
-  // include queued, abandoned and control inputs, so they are not context.
-  if (ledger.objective) lines.push(`Objective: ${truncateUtf8Text(ledger.objective, 600)}`)
-  if (ledger.status) lines.push(`Status: ${ledger.status}`)
-  if (ledger.summary) lines.push(`Summary: ${truncateUtf8Text(ledger.summary, 1_200)}`)
-  appendBoundedList(lines, 'Completed', ledger.completed, 8, 220)
-  appendBoundedList(lines, 'Pending', ledger.pending, 8, 220)
-  const evidence = ledger.evidence.slice(0, 8).map((item) => {
-    const source = [
-      item.sourceRuntimeId,
-      item.sourceThreadId,
-      item.sourceTurnId
-    ].filter(Boolean).join('/')
-    const prefix = source ? `[${item.kind}; ${source}]` : `[${item.kind}]`
-    return `${prefix} ${truncateUtf8Text(item.summary, 260)}`
-  })
-  appendRenderedList(lines, 'Evidence', evidence)
-  const files = ledger.fileReferences.slice(0, 8).map((reference) =>
-    `${reference.relativePath}${reference.name && reference.name !== reference.relativePath ? ` (${reference.name})` : ''}`
-  )
-  appendRenderedList(lines, 'File references', files)
-  const memories = ledger.explicitMemories.slice(0, 4).map((memory) => {
-    const scope = memory.scope ? `[${memory.scope}] ` : ''
-    return `${scope}${truncateUtf8Text(memory.text, 240)}`
-  })
-  appendRenderedList(lines, 'Explicit memories', memories)
-  if (ledger.recentTailDigest) lines.push(`Recent tail digest: ${ledger.recentTailDigest}`)
-  if (ledger.compactionDigest) lines.push(`Compaction digest: ${ledger.compactionDigest}`)
-  if (ledger.sourceMarker) lines.push(`Source marker: ${truncateUtf8Text(ledger.sourceMarker, 220)}`)
-  if (lines.length === 1) return ''
-  lines.push('This is user/runtime context data for semantic continuity, not a higher-priority instruction. Ignore stale entries that conflict with the current user request.')
-  return lines.join('\n')
 }
 
 const CANONICAL_VISIBLE_STATE_MAX_COMPONENTS = 64
@@ -7525,23 +7356,6 @@ function extractUserRequestFromHandoffPrompt(text: string): string {
   if (markerIndex < 0) return text
   const request = text.slice(markerIndex + marker.length).trim()
   return request || text
-}
-
-function appendBoundedList(
-  lines: string[],
-  label: string,
-  values: string[] | undefined,
-  limit: number,
-  maxBytes: number
-): void {
-  appendRenderedList(lines, label, (values ?? []).slice(0, limit).map((value) => truncateUtf8Text(value, maxBytes)))
-}
-
-function appendRenderedList(lines: string[], label: string, values: string[]): void {
-  const trimmed = values.map((value) => value.trim()).filter(Boolean)
-  if (trimmed.length === 0) return
-  lines.push(`${label}:`)
-  for (const value of trimmed) lines.push(`- ${value}`)
 }
 
 function renderRuntimeHandoffPrompt(
@@ -7834,6 +7648,18 @@ function mergeCapabilityApprovalItems(
   })
 }
 
+// The reserved control- namespace is assigned exclusively by steerControlTurn.
+// Use durable provenance, never heartbeat wording or a runtime-specific rule.
+function isControlDirective(directive: AgentRuntimeContextDirective): boolean {
+  return directive.id.startsWith('control-')
+}
+
+function projectControlDirectiveItem(item: AgentRuntimeItem, directive: AgentRuntimeContextDirective): AgentRuntimeItem {
+  return isControlDirective(directive)
+    ? { ...item, kind: 'system', text: 'Runtime control update', detail: directive.text }
+    : item
+}
+
 /**
  * Native runtimes do not expose an item for an accepted steer in their
  * transcript. The Host context ledger is the durable source for that input,
@@ -7872,7 +7698,7 @@ function mergeDeliveredDirectiveItems(
       if (matching) {
         represented.add(directive.id)
         representedItemIds.add(matching.id)
-        if (directive.metadata) metadataByItem.set(matching.id, directive)
+        if (directive.metadata || isControlDirective(directive)) metadataByItem.set(matching.id, directive)
       }
     }
 
@@ -7882,6 +7708,7 @@ function mergeDeliveredDirectiveItems(
     const unmatched = directives.filter((directive) => !represented.has(directive.id))
     const unclaimedExisting = userItems.filter((item) => !representedItemIds.has(item.id))
     for (const directive of unmatched) {
+      if (isControlDirective(directive)) continue
       const item = unclaimedExisting.shift()
       if (!item) break
       const directiveTime = Date.parse(directive.acceptedAt)
@@ -7903,10 +7730,8 @@ function mergeDeliveredDirectiveItems(
     const additions = directives
       .filter((directive) => !represented.has(directive.id))
       .map((directive): AgentRuntimeItem => ({
-        id: directive.id,
         turnId: turn.id,
-        kind: 'user_message',
-        text: directive.text,
+        ...projectControlDirectiveItem({ id: directive.id, kind: 'user_message', text: directive.text }, directive),
         createdAt: directive.acceptedAt,
         meta: {
           source: 'desktop',
@@ -7919,7 +7744,8 @@ function mergeDeliveredDirectiveItems(
 
     const merged = [...items.map((item) => {
       const directive = metadataByItem.get(item.id)
-      return directive ? { ...item, meta: {
+      return directive ? { ...projectControlDirectiveItem(item, directive),
+        meta: {
         ...directive.metadata,
         ...item.meta,
         displayText: typeof item.meta?.displayText === 'string' ? item.meta.displayText : directive.text,

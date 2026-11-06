@@ -12,7 +12,7 @@ import {
   type ProjectRequirementsDocument,
   type ProjectResult
 } from '@sciforge/collaboration-contracts'
-import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
+import type { DomainRendererCapabilityContract, DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
 import type { DomainCapabilityResourceHandle } from '@sciforge/domain-sdk/renderer-contributions'
 import {
   DELIVERY_CONTENT_ACTIONS,
@@ -277,6 +277,185 @@ const confirmationApproval = Object.freeze({
   approval: Object.freeze({ mode: 'confirmation' as const })
 })
 
+const transientFaultCodes = [
+  'revision_conflict',
+  'authority_unverified',
+  'transport_unavailable'
+] as const
+
+type TransientFaultCode = (typeof transientFaultCodes)[number]
+
+/**
+ * Both faults below are self-healing: the Cloud rejects commands whose expected
+ * revisions are stale, and the Device connection drops for a moment while it
+ * re-verifies itself. The Connection recovers on its own, and a fresh workspace
+ * read carries the current revisions, so a single replay finishes the caller's
+ * action. Users must never be shown the raw protocol fault.
+ */
+export const projectCoordinatorTransientFaultMessages: Readonly<Record<TransientFaultCode, string>> = {
+  revision_conflict: '项目已被其他成员更新，已为你重新读取最新数据，请再试一次',
+  authority_unverified: '正在重新校验这台设备与云端的连接，请稍候再试',
+  transport_unavailable: '与云端的连接中断了，已尝试重新连接，请稍候再试'
+}
+
+export class ProjectCoordinatorTransientFaultError extends Error {
+  readonly code: TransientFaultCode
+
+  constructor(code: TransientFaultCode, cause?: unknown) {
+    super(projectCoordinatorTransientFaultMessages[code], { cause })
+    this.name = 'ProjectCoordinatorTransientFaultError'
+    this.code = code
+  }
+}
+
+const cloudAccessMessages = {
+  cloud_unavailable: '暂时无法连接云端，请检查网络后重试。',
+  cloud_timeout: '连接云端超时，请稍后重试。',
+  identity_required: '请重新登录云端后再试。',
+  device_required: '这台设备尚未获得云端授权，请到账户设置检查设备连接。'
+} as const
+
+type CloudAccessFaultCode = keyof typeof cloudAccessMessages
+
+export class ProjectCoordinatorCloudAccessError extends Error {
+  constructor(readonly code: CloudAccessFaultCode, cause: unknown) {
+    super(cloudAccessMessages[code], { cause })
+    this.name = 'ProjectCoordinatorCloudAccessError'
+  }
+}
+
+const structuredReasonCode = (error: unknown): string | undefined => {
+  if (!error || typeof error !== 'object') return undefined
+  const details = 'details' in error ? error.details : undefined
+  const reason = details && typeof details === 'object' && 'reasonCode' in details
+    ? details.reasonCode : 'code' in error ? error.code : undefined
+  return typeof reason === 'string' && reason !== 'handler_failed' ? reason : undefined
+}
+
+const cloudAccessError = (error: unknown): unknown => {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = structuredReasonCode(error)
+  for (const candidate of Object.keys(cloudAccessMessages) as CloudAccessFaultCode[]) {
+    if (code === candidate || (code === undefined && new RegExp(`\\b${candidate}\\b`, 'u').test(message))) {
+      return new ProjectCoordinatorCloudAccessError(candidate, error)
+    }
+  }
+  return error
+}
+
+const transientFaultCode = (error: unknown): TransientFaultCode | undefined => {
+  const code = structuredReasonCode(error)
+  if (code !== undefined) return transientFaultCodes.find((candidate) => candidate === code)
+  const message = error instanceof Error ? error.message : String(error)
+  if (/\brevision_conflict\b|The resource revision is stale/u.test(message)) return 'revision_conflict'
+  if (/\bauthority_unverified\b|Connection interrupted/u.test(message)) return 'authority_unverified'
+  if (/\btransport_unavailable\b/u.test(message)) return 'transport_unavailable'
+  return undefined
+}
+
+type ProjectRevisions = ReadonlyMap<string, Readonly<{
+  revision: number
+  authorityEpoch: number
+  membershipRevisions: ReadonlyMap<string, number>
+}>>
+
+type InvokeOptions = NonNullable<Parameters<DomainRendererCapabilityInvoker['invoke']>[2]>
+
+const readProjectRevisions = async (
+  invoker: DomainRendererCapabilityInvoker,
+  input: unknown,
+  options?: InvokeOptions
+): Promise<ProjectRevisions> => {
+  options?.signal?.throwIfAborted()
+  const projectId = input && typeof input === 'object' && 'projectId' in input
+    ? input.projectId : undefined
+  const workspace: ProjectCoordinatorWorkspace = await invoker.invoke(
+    workspaceReadContract,
+    typeof projectId === 'string' ? { projectId } : {},
+    {
+      ...(options?.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
+      ...(options?.signal === undefined ? {} : { signal: options.signal })
+    }
+  )
+  if (workspace.connection.state !== 'ready') {
+    if (workspace.connection.state === 'cloud_unavailable' &&
+        workspace.connection.reasonCode === 'authority_unverified') {
+      throw new ProjectCoordinatorTransientFaultError('authority_unverified')
+    }
+    throw new ProjectCoordinatorCloudAccessError(workspace.connection.state, workspace.connection)
+  }
+  return new Map(
+    workspace.projects.map(({ project, memberships }) => [
+      project.projectId,
+      {
+        revision: project.revision,
+        authorityEpoch: project.coordinatorAuthorityEpoch,
+        membershipRevisions: new Map(memberships.map(membership => [membership.projectMembershipId, membership.revision]))
+      }
+    ])
+  )
+}
+
+const withCurrentExpectedRevisions = <TInput>(input: TInput, revisions: ProjectRevisions): TInput => {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  const projectId = record.projectId
+  if (typeof projectId !== 'string') return input
+  const current = revisions.get(projectId)
+  if (current === undefined) return input
+  const patched: Record<string, unknown> = { ...record }
+  if ('expectedProjectRevision' in patched) patched.expectedProjectRevision = current.revision
+  if ('expectedCoordinatorAuthorityEpoch' in patched) {
+    patched.expectedCoordinatorAuthorityEpoch = current.authorityEpoch
+  }
+  if ('expectedMembershipRevision' in patched && typeof patched.projectMembershipId === 'string') {
+    const membershipRevision = current.membershipRevisions.get(patched.projectMembershipId)
+    if (membershipRevision !== undefined) patched.expectedMembershipRevision = membershipRevision
+  }
+  return Object.freeze(patched) as TInput
+}
+
+/**
+ * Replays one invocation after a self-healing Cloud fault: re-read the Project
+ * revisions the caller's command was fenced on, then send the same command once
+ * more. A second failure is reported as a user-facing message, never as the raw
+ * protocol error.
+ */
+const invokeWithTransientRecovery = async <TInput, TOutput>(
+  invoker: DomainRendererCapabilityInvoker,
+  contract: DomainRendererCapabilityContract<TInput, TOutput>,
+  input: TInput,
+  options?: InvokeOptions
+): Promise<TOutput> => {
+  try {
+    return await invoker.invoke(contract, input, options)
+  } catch (error) {
+    const fault = transientFaultCode(error)
+    if (fault === undefined) throw cloudAccessError(error)
+    let revisions: ProjectRevisions
+    try {
+      revisions = await readProjectRevisions(invoker, input, options)
+    } catch (readError) {
+      const readFault = transientFaultCode(readError)
+      throw readFault ? new ProjectCoordinatorTransientFaultError(readFault, readError) : cloudAccessError(readError)
+    }
+    const replayed = withCurrentExpectedRevisions(input, revisions)
+    try {
+      options?.signal?.throwIfAborted()
+      return await invoker.invoke(contract, replayed, options)
+    } catch (replayError) {
+      const replayFault = transientFaultCode(replayError)
+      throw replayFault ? new ProjectCoordinatorTransientFaultError(replayFault, replayError) : cloudAccessError(replayError)
+    }
+  }
+}
+
+const withTransientRecovery = (invoker: DomainRendererCapabilityInvoker): DomainRendererCapabilityInvoker =>
+  Object.freeze({
+    ...invoker,
+    invoke: (contract, input, options) => invokeWithTransientRecovery(invoker, contract, input, options)
+  })
+
 export type ProjectCoordinatorRendererClient = Readonly<{
   readWorkspace(input?: ProjectCoordinatorWorkspaceReadInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<ProjectCoordinatorWorkspace>
   createProject(input: ProjectCoordinatorProjectCreateInput): Promise<ProjectCoordinatorProjectCreateResult>
@@ -310,8 +489,9 @@ export type ProjectCoordinatorRendererClient = Readonly<{
 }>
 
 export function createProjectCoordinatorRendererClient(
-  invoker: DomainRendererCapabilityInvoker
+  hostInvoker: DomainRendererCapabilityInvoker
 ): ProjectCoordinatorRendererClient {
+  const invoker = withTransientRecovery(hostInvoker)
   const invokeMutation = async <T>(
     operation: () => Promise<T>
   ): Promise<T> => {
@@ -367,7 +547,9 @@ export function createProjectCoordinatorRendererClient(
       input,
       confirmationApproval
     ),
-    acceptInvitation: (input) => invoker.invoke(
+    // The review helper owns conflict recovery: never upgrade approved facts or
+    // replay a write whose transport outcome may be unknown here.
+    acceptInvitation: (input) => hostInvoker.invoke(
       membershipAcceptContract,
       input,
       confirmationApproval

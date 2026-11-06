@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -43,13 +44,11 @@ describe('Codex PreToolUse hook definition', () => {
     expect(definition.command).toContain(
       '"permissionDecision":"deny"'
     )
-    expect(definition.commandWindows).toContain('set "ELECTRON_RUN_AS_NODE=1"&&')
-    expect(definition.commandWindows).toContain(
-      'out/main/codex-pre-tool-use-governance-node-entry.js'
-    )
-    expect(definition.commandWindows).toContain(
-      '|| echo {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"'
-    )
+    expect(definition.commandWindows).toMatch(/^powershell\.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/u)
+    const script = Buffer.from(definition.commandWindows.split(' ').at(-1)!, 'base64').toString('utf16le')
+    expect(script).toContain("$env:ELECTRON_RUN_AS_NODE = '1'")
+    expect(script).toContain("'/tmp/Sci''Forge App/out/main/codex-pre-tool-use-governance-node-entry.js'")
+    expect(script).toContain('"permissionDecision":"deny"')
   })
 
   it('uses the stable development Node runtime instead of the replaceable Electron dist', () => {
@@ -210,9 +209,14 @@ process.stdout.write(JSON.stringify({
     })).rejects.toThrow(/exact deny challenge/u)
   })
 
-  it('trust probe accepts only a denial produced by the real challenge path', async () => {
+  it.each([
+    { name: 'Node', execPath: process.execPath },
+    ...(process.platform === 'win32'
+      ? [{ name: 'Windows GUI Electron', execPath: createRequire(import.meta.url)('electron') as string }]
+      : [])
+  ])('$name trust probe preserves stdin and waits for the real challenge response', async ({ execPath }) => {
     const root = await tempRoot()
-    const appPath = join(root, 'app')
+    const appPath = join(root, "app ' quoted space")
     const entryPath = join(
       appPath,
       'out/main/codex-pre-tool-use-governance-node-entry.js'
@@ -235,7 +239,7 @@ process.stdout.write(JSON.stringify({
       codexHome: join(root, 'codex-home'),
       launch: {
         appPath,
-        execPath: process.execPath,
+        execPath,
         isPackaged: false
       }
     })
@@ -248,6 +252,30 @@ process.stdout.write(JSON.stringify({
       denied: true,
       reason: expect.stringMatching(/^sciforge_hook_deny_challenge:/u)
     })
+    if (process.platform === 'win32') {
+      const input = JSON.stringify({ tool_input: { nonce: 'both-windows-shells' } })
+      for (const shell of ['cmd', 'powershell'] as const) {
+        const result = await runShellHook(definition.commandWindows, input, root, shell)
+        expect(result.status).toBe(0)
+        expect(parseCodexPreToolUseHookOutput(result.stdout)).toMatchObject({
+          hookSpecificOutput: {
+            permissionDecision: 'deny',
+            permissionDecisionReason: 'sciforge_hook_deny_challenge:both-windows-shells'
+          }
+        })
+      }
+    }
+  })
+
+  it.skipIf(process.platform !== 'win32')('denies launcher failure under the native PowerShell hook shell', async () => {
+    const root = await tempRoot()
+    const definition = createCodexPreToolUseHookDefinition({
+      codexHome: join(root, 'codex-home'),
+      launch: { appPath: join(root, 'missing app'), execPath: join(root, 'missing executable'), isPackaged: false }
+    })
+    const result = await runShellHook(definition.commandWindows, '{}', root, 'powershell')
+    expect(result.status).toBe(0)
+    expect(parseCodexPreToolUseHookOutput(result.stdout)?.hookSpecificOutput?.permissionDecision).toBe('deny')
   })
 })
 
@@ -274,13 +302,18 @@ ${body}
 async function runShellHook(
   command: string,
   input: string,
-  cwd: string
+  cwd: string,
+  shell: 'cmd' | 'powershell' = 'cmd'
 ): Promise<{ status: number | null; stdout: string }> {
-  const child = spawn(command, [], {
+  const usePowerShell = shell === 'powershell'
+  const child = spawn(usePowerShell ? 'powershell.exe' : command, usePowerShell
+    ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command]
+    : [], {
     cwd,
     env: process.env,
-    shell: true,
-    stdio: 'pipe'
+    shell: !usePowerShell,
+    stdio: 'pipe',
+    windowsHide: true
   })
   const stdout: Buffer[] = []
   let stdinError: NodeJS.ErrnoException | undefined

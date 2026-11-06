@@ -4,20 +4,14 @@
   "entry": "dist/main.js",
   "title": "变更检查器",
   "summary": {
-    "zh": "以只读方式打开一次会话的变更快照（open_session）：读取会话工作区的变更记录供检查与审计，不写文件、不改工作区。",
-    "en": "Opens a read-only snapshot of one session's workspace changes for inspection and audit. Reads only; does not write files or modify the workspace."
+    "zh": "独立只读插件：检查当前真实 Agent 会话的 file_change，返回有界 diff 快照和 revision 绑定的分页摘要。不修改或回滚文件；所有公开工具契约归本插件。",
+    "en": "Independent read-only inspection of actual file_change artifacts from the authenticated Agent session, with bounded diffs and revision-bound pagination. No file writes or rollback; this plugin owns its public tool contracts."
   },
-  "categories": [
-    "workspace",
-    "inspection"
-  ],
-  "hostDependencies": [
-    "@deepseek-ai/dsh-tools"
-  ],
+  "categories": ["workspace", "inspection"],
+  "hostDependencies": ["@deepseek-ai/dsh-tools"],
   "tools": {
-    "open_session": {
-      "id": "change-inspector.open-session",
-      "effect": "read"
-    }
-  }
+    "open_session": { "id": "change-inspector.open-session", "effect": "read" },
+    "list_changes": { "id": "change-inspector.list-changes", "effect": "read" }
+  },
+  "ports": ["agent-threads.read"]
 }

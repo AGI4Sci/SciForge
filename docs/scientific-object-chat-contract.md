@@ -69,8 +69,9 @@ result.
 ## Interaction boundary
 
 - The timeline initially renders a static, accessible card.
-- The card has one open action. Supported biology formats route directly to Biology Room;
-  other formats use the ordinary workspace preview.
+- The card has one open action through the ordinary Workspace Preview manifest/provider chain.
+  Supported biology formats use the built-in Life Science Preview contributions; persistent
+  Biology Room state is accessed through generic Broker capabilities, not a separate viewer route.
 - Opening preserves the structured selection and SHA-256 integrity expectation. Chat does not
   create a second viewer session or maintain a parallel selection state.
 - “Ask about current selection” writes a provenance-bound prompt into the composer; it does not

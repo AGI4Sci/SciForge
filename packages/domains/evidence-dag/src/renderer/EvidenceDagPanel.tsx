@@ -52,6 +52,16 @@ export type EvidenceDagPanelTarget = Readonly<{
   nodeId?: string
 }>
 
+/** Workspace authorization follows the owning surface; never infer it from a global default. */
+export function evidenceDagPanelViewInput(target: EvidenceDagPanelTarget): EvidenceDagViewInput | null {
+  const workspaceRoot = target.workspaceRoot?.trim()
+  if (!workspaceRoot || Boolean(target.runtimeId) !== Boolean(target.threadId)) return null
+  return {
+    workspaceRoot,
+    ...(target.runtimeId && target.threadId ? { runtimeId: target.runtimeId, threadId: target.threadId } : {})
+  }
+}
+
 export function evidenceDagPanelTarget(
   session: DomainWorkbenchRightPanelSession,
   activation?: DomainWorkbenchRightPanelActivation
@@ -124,12 +134,11 @@ export function EvidenceDagPanel({
   const [summary, setSummary] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const viewInput = useMemo<EvidenceDagViewInput>(
-    () => target.runtimeId && target.threadId
-      ? { runtimeId: target.runtimeId, threadId: target.threadId }
-      : {},
-    [target.runtimeId, target.threadId]
+  const viewInput = useMemo(
+    () => evidenceDagPanelViewInput(target),
+    [target.runtimeId, target.threadId, target.workspaceRoot]
   )
+  const workspaceError = !viewInput ? t('evidenceDagWorkspaceRequired') : null
   const frameUrl = useMemo(
     () => view
       ? evidenceDagViewUrlWithNode(
@@ -145,12 +154,13 @@ export function EvidenceDagPanel({
 
   useEffect(() => {
     setView(null)
+    setLoading(false)
     setSummary(null)
     setError(null)
   }, [identityKey])
 
   useEffect(() => {
-    if (!active) return
+    if (!active || !viewInput) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -180,10 +190,11 @@ export function EvidenceDagPanel({
   }, [active, status?.pending])
 
   useEffect(() => {
-    if (!target.runtimeId || !target.threadId) return
+    if (!target.runtimeId || !target.threadId || !viewInput?.workspaceRoot) return
     void client.priority({
       runtimeId: target.runtimeId,
       threadId: target.threadId,
+      workspaceRoot: viewInput.workspaceRoot,
       surfaceId,
       visible: active && document.visibilityState === 'visible'
     }).catch(() => undefined)
@@ -191,14 +202,15 @@ export function EvidenceDagPanel({
       void client.priority({
         runtimeId: target.runtimeId!,
         threadId: target.threadId!,
+        workspaceRoot: viewInput.workspaceRoot,
         surfaceId,
         visible: false
       }).catch(() => undefined)
     }
-  }, [active, client, surfaceId, target.runtimeId, target.threadId])
+  }, [active, client, surfaceId, target.runtimeId, target.threadId, viewInput?.workspaceRoot])
 
   useEffect(() => {
-    if (!frameUrl) return
+    if (!frameUrl || !viewInput?.workspaceRoot) return
     const onMessage = (event: MessageEvent): void => {
       void handleEvidenceDagPreviewMessage({
         event,
@@ -211,7 +223,7 @@ export function EvidenceDagPanel({
         committedSnapshotDigest: committedDigest,
         activationRevision: activation?.revision,
         workspacePreview,
-        resolvePreview: client.resolvePreview,
+        resolvePreview: request => client.resolvePreview({ ...request, workspaceRoot: viewInput.workspaceRoot }),
         t
       }).then((result) => {
         if (result.status === 'rejected') setError(result.message)
@@ -230,12 +242,13 @@ export function EvidenceDagPanel({
     t,
     target.runtimeId,
     target.threadId,
-    workspacePreview
+    workspacePreview,
+    viewInput?.workspaceRoot
   ])
 
   const submitUpdate = (): void => {
-    if (!target.runtimeId || !target.threadId) {
-      setError(t('evidenceDagUnavailable'))
+    if (!target.runtimeId || !target.threadId || !viewInput?.workspaceRoot) {
+      setError(workspaceError ?? t('evidenceDagUnavailable'))
       return
     }
     setSubmitting(true)
@@ -244,7 +257,7 @@ export function EvidenceDagPanel({
     void client.update({
       runtimeId: target.runtimeId,
       threadId: target.threadId,
-      ...(target.workspaceRoot ? { workspaceRoot: target.workspaceRoot } : {})
+      workspaceRoot: viewInput.workspaceRoot
     }).then((result) => {
       setView({
         url: result.url,
@@ -297,7 +310,7 @@ export function EvidenceDagPanel({
           <button
             type="button"
             onClick={submitUpdate}
-            disabled={loading || updateBusy || !target.runtimeId || !target.threadId}
+            disabled={loading || updateBusy || !target.runtimeId || !target.threadId || !viewInput}
             className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {updateBusy
@@ -308,7 +321,7 @@ export function EvidenceDagPanel({
           <button
             type="button"
             onClick={() => setRequestRevision((revision) => revision + 1)}
-            disabled={loading}
+            disabled={loading || !viewInput}
             className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50"
             aria-label={t('evidenceDagRefresh')}
             title={t('evidenceDagRefresh')}
@@ -342,23 +355,23 @@ export function EvidenceDagPanel({
           {pendingMeta}
         </div>
       ) : null}
-      {error || pendingError ? (
+      {workspaceError || error || pendingError ? (
         <div
           role="alert"
           className="flex shrink-0 items-start gap-2 border-b border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-4 text-rose-700"
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>{error ?? pendingError}</span>
+          <span>{workspaceError ?? error ?? pendingError}</span>
         </div>
       ) : null}
 
       <div className="min-h-0 flex-1 bg-ds-main">
-        {loading && !view ? (
+        {loading && !view && viewInput ? (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-ds-muted">
             <Loader2 className="h-4 w-4 animate-spin" />
             {t('evidenceDagLoading')}
           </div>
-        ) : frameUrl && view ? (
+        ) : frameUrl && view && viewInput ? (
           <iframe
             ref={iframeRef}
             key={evidenceDagCommittedFrameKey(frameUrl, committedDigest)}
@@ -373,7 +386,7 @@ export function EvidenceDagPanel({
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ds-muted">
             <Network className="h-8 w-8 text-ds-faint" />
             <span>{error ? t('evidenceDagUnavailable') : t('evidenceDagEmpty')}</span>
-            {target.runtimeId && target.threadId ? (
+            {target.runtimeId && target.threadId && viewInput ? (
               <button
                 type="button"
                 onClick={submitUpdate}

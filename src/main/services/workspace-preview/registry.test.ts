@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-life-science-preview/contract'
+import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-biology-workbench/workspace-preview-contract'
 import {
   DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,

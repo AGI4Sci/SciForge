@@ -19,7 +19,7 @@ describe('Collaboration domain package definition', () => {
     const packageJson = JSON.parse(
       await readFile(new URL('../package.json', import.meta.url), 'utf8')
     ) as { dependencies: Record<string, string> }
-    assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.24')
+    assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.32')
   })
 
   it('requests no Provider system capability grant through its packaged lifecycle contract', () => {

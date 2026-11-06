@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -316,6 +317,21 @@ describe('RuntimeContextLedgerService', () => {
     })).resolves.toMatchObject({ directives: [{ delivery: 'uncertain' }] })
   })
 
+  it('preserves a queued lightweight question tool policy across restart and refuses escalation', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-side-question-policy-'))
+    const ref = { runtimeId: 'codex' as const, threadId: 'side-question' }
+    const service = new RuntimeContextLedgerService(dataDir, ledgerRuntimes)
+    await service.acceptQueuedInput({ ...ref, clientDirectiveId: 'question', text: 'Explain the result.',
+      payload: { text: 'Explain the result.', allowedTools: [], chatMode: 'light' } })
+    const restarted = new RuntimeContextLedgerService(dataDir, ledgerRuntimes)
+    await expect(restarted.acceptDirective({ ...ref, id: 'question', text: 'Explain the result.', inputRevision: 1,
+      deliveryPayload: {} })).rejects.toThrow('Queued allowedTools changed')
+    await expect(restarted.acceptDirective({ ...ref, id: 'question', text: 'Explain the result.', inputRevision: 1,
+      deliveryPayload: { allowedTools: ['bash'] } })).rejects.toThrow('Queued allowedTools changed')
+    await expect(restarted.acceptDirective({ ...ref, id: 'question', text: 'Explain the result.', inputRevision: 1,
+      deliveryPayload: { allowedTools: [] } })).resolves.toMatchObject({ delivery: 'accepted' })
+  })
+
   it('allows the Host to reject an interrupted delivery only after proving it has no durable owner', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
     const service = new RuntimeContextLedgerService(dataDir, ledgerRuntimes)
@@ -427,6 +443,15 @@ describe('RuntimeContextLedgerService', () => {
     await expect(readFile(outsideFile, 'utf8')).resolves.toBe('outside')
   })
 
+  it('preserves task summaries when compaction reports only lifecycle status', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
+    const service = new RuntimeContextLedgerService(dataDir, ledgerRuntimes)
+    const identity = { runtimeId: 'codex' as const, threadId: 'thread-1' }
+    await service.record({ ...identity, patch: { summary: 'Artifact saved; verify references next.' } })
+    await service.observeEvent({ ...identity, kind: 'compaction_event', status: 'success', summary: 'Native compaction complete' })
+    expect((await service.get(identity))?.summary).toBe('Artifact saved; verify references next.')
+  })
+
   it('observes only semantic runtime events into goals, handoff evidence, and compaction', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
     const service = new RuntimeContextLedgerService(dataDir, ledgerRuntimes)
@@ -480,7 +505,8 @@ describe('RuntimeContextLedgerService', () => {
       turnId: 'turn-1',
       itemId: 'compact-1',
       status: 'success',
-      summary: 'Earlier work defined the host-owned ledger.',
+      summary: 'Compaction complete',
+      contextSummary: 'Earlier work defined the host-owned ledger.',
       detail: 'manual compact',
       sourceDigest: 'digest-1',
       digestMarker: '<runtime:compaction_digest sha256="digest-1">'

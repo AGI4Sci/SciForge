@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { createEvaluationMatrix, deriveCaseMatrixContract, renderMatrixHtml } from './generate-capability-eval-matrix.mjs'
 
 const expected = {
-  domain: 'dataset-api',
-  requiredActions: ['dataset-api.filter'],
+  domain: 'fixture-data',
+  requiredActions: ['fixture-data.filter'],
   taskSuccess: true,
   authorization: {},
   invocation: {},
@@ -121,7 +121,7 @@ test('dimension outcome columns use dimension results instead of case outcome', 
 test('catalog-only scenarios remain visible without executable cases', () => {
   const matrix = createEvaluationMatrix([], [], [{
     scenarioId: 'catalog-only',
-    domain: 'dataset-api',
+    domain: 'fixture-data',
     taskType: 'end_to_end',
     userGoal: 'planned workflow',
     requiredDimensions: ['runtime', 'tool_execution', 'task_result'],

@@ -831,6 +831,22 @@ describe('createCodexAgentRuntimeAdapter', () => {
     ])
   })
 
+  it('keeps Host-owned user input live when it is absent from the native request registry', async () => {
+    const service = {
+      pendingServerRequests: vi.fn(() => []),
+      readThreadPage: vi.fn(async () => ({ ok: true as const, detail: {
+        latestSeq: 2, latestTurnId: 'turn-1', threadStatus: 'running',
+        blocks: [{ kind: 'tool' as const, id: 'external-request', turnId: 'turn-1',
+          summary: 'Choose?', status: 'running' as const,
+          meta: { codexRequestKind: 'user_input', requestId: 'external-request',
+            questions: [{ id: 'q', header: '', question: 'Choose?', options: [] }] } }]
+      } }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    expect(detail.items).toEqual([expect.objectContaining({ kind: 'user_input', status: 'pending' })])
+  })
+
   it('keeps pending approval blocks live while the app-server registry still has the request', async () => {
     const service = {
       pendingServerRequests: vi.fn(() => [{ requestId: 4 }]),
@@ -893,6 +909,41 @@ describe('createCodexAgentRuntimeAdapter', () => {
       id: 'turn-1',
       status: 'aborted'
     })
+  })
+
+  it.each([
+    ['aborted', 'aborted'],
+    ['interrupted', 'aborted'],
+    ['cancelled', 'cancelled'],
+    ['canceled', 'cancelled'],
+    ['provider_error', 'failed'],
+    ['reconnecting', 'completed'],
+    ['tool_waiting', 'completed'],
+    ['stream_recovering', 'completed']
+  ])('preserves historical terminal state %s after a later turn completes', async (code, status) => {
+    const service = {
+      readThreadPage: vi.fn(async () => ({
+        ok: true as const,
+        detail: {
+          latestSeq: 5,
+          latestTurnId: 'turn-2',
+          threadStatus: 'completed',
+          blocks: [
+            { kind: 'user' as const, id: 'user-1', turnId: 'turn-1', text: 'Q1' },
+            { kind: 'assistant' as const, id: 'partial', turnId: 'turn-1', text: 'Partial reply' },
+            { kind: 'system' as const, id: 'terminal', turnId: 'turn-1', text: 'Terminal event', code, severity: 'error' as const },
+            { kind: 'user' as const, id: 'user-2', turnId: 'turn-2', text: 'Q2' },
+            { kind: 'assistant' as const, id: 'reply', turnId: 'turn-2', text: 'Recovered reply' }
+          ]
+        }
+      }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(withEventSubscription(service) as never)
+    const detail = await readAdapterThreadPage(adapter, { settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
+    expect(detail.turns?.map(turn => ({ id: turn.id, status: turn.status }))).toEqual([
+      { id: 'turn-1', status },
+      { id: 'turn-2', status: 'completed' }
+    ])
   })
 
   it('keeps a Codex turn running while later tools are still active after a tool error', async () => {

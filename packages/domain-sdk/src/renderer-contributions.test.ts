@@ -1,3 +1,4 @@
+import { domainRendererSelectionSnapshotSchema } from './renderer-contributions.js'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { z } from 'zod'
@@ -36,6 +37,7 @@ import {
   domainRendererWorkbenchWorkspaceSectionContractSchema,
   domainRendererWorkspacePickResultSchema,
   domainWorkbenchOpenResourceInputSchema,
+  isDomainRendererChatResultPanelValue,
   isDomainRendererCommandActive,
   isDomainRendererCommandAvailable,
   isDomainRendererCommandHandler,
@@ -43,6 +45,7 @@ import {
   isDomainRendererResourceNavigationValue,
   isDomainRendererResearchSummaryValue,
   isDomainRendererWorkbenchSurfaceValue,
+  isDomainRendererWorkbenchGlobalOverlayValue,
   isDomainRendererWorkbenchToolbarActionValue,
   isDomainRendererWorkbenchNavigationSectionValue,
   isDomainRendererWorkbenchWorkspaceSectionValue,
@@ -219,6 +222,10 @@ describe('renderer extension contribution contracts', () => {
       id: 'duplicated-manifest-id',
       render: () => ({})
     }), false)
+    assert.equal(isDomainRendererWorkbenchGlobalOverlayValue({ render: () => ({}), placement: 'workspace' }), true)
+    assert.equal(isDomainRendererWorkbenchGlobalOverlayValue({ render: () => ({}), placement: 'window' }), true)
+    assert.equal(isDomainRendererWorkbenchGlobalOverlayValue({ render: () => ({}), placement: 'foreign' }), false)
+    assert.equal(isDomainRendererWorkbenchSurfaceValue({ render: () => ({}), placement: 'workspace' }), false)
   })
 
   it('publishes package-neutral composed workspace sections', () => {
@@ -261,10 +268,15 @@ describe('renderer extension contribution contracts', () => {
       label: 'fixturePage',
       preferredHostSidebar: 'expanded'
     })
+    assert.deepEqual(domainRendererWorkbenchMainAreaContractSchema.parse({ ...contract,
+      docking: { defaultPosition: 'right', preferredWidth: 520 }
+    }).docking, { defaultPosition: 'right', preferredWidth: 520 })
     for (const invalid of [
       { ...contract, projectId: 'host-private-project' },
       { ...contract, contractVersion: '2.0.0' },
-      { ...contract, label: ' ' }
+      { ...contract, label: ' ' },
+      { ...contract, docking: { defaultPosition: 'floating' } },
+      { ...contract, docking: { defaultPosition: 'left', preferredWidth: 100 } }
     ]) {
       assert.throws(() => domainRendererWorkbenchMainAreaContractSchema.parse(invalid), z.ZodError)
     }
@@ -620,4 +632,28 @@ describe('Workbench message sources', () => {
     assert.equal(domainRendererWorkbenchSendMessageInputSchema.safeParse({ sessionId: 'exact-session', reexecuteInput: { clientDirectiveId: 'failed-input' } }).success, false)
     assert.equal(domainRendererWorkbenchSendMessageInputSchema.safeParse({ sessionId: 'exact-session', text: 'ordinary new input' }).success, true)
   })
+})
+
+ it('portable selections are bounded data snapshots without approval or workspace authority', () => {
+  const value = { schemaVersion: 1, kind: 'resource-text-selection', resourceKind: 'owned-record', resourceId: 'item', label: 'Item', quote: '  original\nquote  ', revision: 'view:5', capturedAt: '2026-11-04T00:00:00.000Z', scope: { runtimeId: 'fixture', threadId: 'parent', workspaceRoot: '/workspace' }, bounds: { x: 0, y: 0, width: 1, height: 1 }, viewport: { width: 100, height: 100, scaleFactor: 1 } }
+  assert.deepEqual(domainRendererSelectionSnapshotSchema.parse(value), value)
+  for (const invalid of [{ ...value, approval: true }, { ...value, quote: 'a'.repeat(4001) }, { ...value, kind: 'execute' }, { ...value, bounds: { ...value.bounds, x: -1 } }]) assert.equal(domainRendererSelectionSnapshotSchema.safeParse(invalid).success, false)
+ })
+
+it('bounds non-authorizing resource context before recursive JSON parsing', () => {
+  const parse = (context: unknown) => domainWorkbenchOpenResourceInputSchema.safeParse({ sessionId: 'session', resource: { resourceKind: 'text', resourceId: 'one', context } })
+  assert.equal(parse({ quote: 'exact', scope: { threadId: 'parent' } }).success, true)
+  const cycle: Record<string, unknown> = {}; cycle.self = cycle
+  for (const value of [cycle, { quote: 'x'.repeat(32769) }, { quote: '中'.repeat(12000) }, Array(1025).fill(0), { run: () => undefined }, { value: Infinity }]) assert.equal(parse(value).success, false)
+  let deep: unknown = 'leaf'; for (let index = 0; index < 10; index++) deep = { child: deep }
+  assert.equal(parse(deep).success, false)
+})
+
+it('requires result panels to declare an explicit stream placement', () => {
+  const panel = { id: 'panel', render: () => null }
+  assert.equal(isDomainRendererChatResultPanelValue(panel), false)
+  assert.equal(isDomainRendererChatResultPanelValue({ ...panel, placement: 'after-item' }), true)
+  assert.equal(isDomainRendererChatResultPanelValue({ ...panel, placement: 'turn-end' }), true)
+  assert.equal(isDomainRendererChatResultPanelValue({ ...panel, placement: 'floating' }), false)
+
 })

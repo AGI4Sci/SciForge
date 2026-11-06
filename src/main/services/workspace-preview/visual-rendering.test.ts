@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rename, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rename, writeFile } from 'node:fs/promises'
+import { symlink } from '../../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCanvas, loadImage } from '@napi-rs/canvas'

@@ -26,6 +26,7 @@
 import { createHash } from 'node:crypto'
 import { getModelRouterSettings, type AppSettingsV1 } from '../../shared/app-settings'
 import { upstreamOpenAiModelsUrl } from '../../shared/openai-compat-url'
+import { resolveModelProviderSecret } from '../model-provider-secret'
 import type {
   ReasoningDiscoveryQuery,
   UpstreamReasoningDeclaration
@@ -46,6 +47,8 @@ export type UpstreamCatalogObserverLike = Readonly<{
 
 export type UpstreamCatalogObserverOptions = Readonly<{
   loadSettings: () => Promise<AppSettingsV1> | AppSettingsV1
+  /** Runtime credential source; an explicit environment never falls back to process.env. */
+  env?: NodeJS.ProcessEnv
   fetchImpl?: typeof fetch
   now?: () => number
   /** Successful observation TTL. */
@@ -181,7 +184,13 @@ export class UpstreamCatalogObserver implements UpstreamCatalogObserverLike {
     }
     const textReasoner = getModelRouterSettings(settings).profiles.default.textReasoner
     const endpoint = normalizeEndpoint(textReasoner.baseUrl)
-    const apiKey = textReasoner.apiKey.trim()
+    let apiKey: string
+    try {
+      apiKey = resolveModelProviderSecret(textReasoner.apiKey, this.#options.env ?? process.env)
+    } catch {
+      // No request, placeholder credential or diagnostic containing a secret.
+      return null
+    }
     const requestedModel = query.model.trim()
     if (!endpoint || !apiKey || !requestedModel) return null
 
@@ -282,7 +291,7 @@ export class UpstreamCatalogObserver implements UpstreamCatalogObserverLike {
       this.#recordFailure(
         input.key,
         now,
-        error instanceof Error ? error.message : 'upstream catalog request failed'
+        error instanceof Error ? error.message.split(input.apiKey).join('[redacted]') : 'upstream catalog request failed'
       )
       return this.#servePriorObservation(input.key, now)
     }

@@ -102,6 +102,25 @@ test('generated composition and package-owned domain entrypoints satisfy the sta
   }, 'packages/domains/example'), /versions differ/u)
 })
 
+test('private import audit resolves relative imports against the owning package', () => {
+  const path = 'packages/domains/example/scripts/smoke.ts'
+  assert.deepEqual(auditChangedProductionSources([{
+    path,
+    source: "import { run } from '../src/main/smoke.js'\nimport('../src/renderer/view.js')\n"
+  }]), [])
+  for (const source of [
+    "import { secret } from '../../../../src/main/secret.js'",
+    "import '../../../../src/shared/secret.js'",
+    "import('../../../../src/renderer/secret.js')",
+    "require('../../../../src/main/secret.js')",
+    "export { secret } from '@shared/secret'"
+  ]) {
+    assert.deepEqual(auditChangedProductionSources([{ path, source }]), [
+      `${path}: domain package imports a Host-private source path`
+    ])
+  }
+})
+
 test('packaged bundle contains frozen OIDC/build identities and no source/mock fixtures', () => {
   const sourceCommit = 'a'.repeat(40)
   const bytes = Buffer.from([

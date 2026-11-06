@@ -31,7 +31,7 @@ import {
   getCodexRuntimeSettings
 } from '@shared/app-settings'
 import type { AgentRuntimeContextState } from '@shared/agent-runtime-contract'
-import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage } from './chat-store-types'
+import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage, ChatStreamRef } from './chat-store-types'
 import { resetAgentFocusState } from './chat-store-focus-actions'
 import { reconcileStoredReasoningEffort } from './chat-store-app-actions'
 import {
@@ -84,7 +84,7 @@ import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
 import { supportedComposerTurnSettings } from '../lib/composer-runtime-options'
 
-type SseAbortRef = { current: AbortController | null }
+type SseAbortRef = ChatStreamRef
 
 function adoptExplicitHandoffThread(
   threads: NormalizedThread[],
@@ -158,6 +158,7 @@ const queueHydrations = new WeakMap<ChatStoreGet, Map<string, { timer?: ReturnTy
 
 async function hydrateSessionQueue(set: ChatStoreSet, get: ChatStoreGet, threadId: string): Promise<void> {
   const state = get()
+  if (state.readOnlyThreadIds?.[threadId]) return
   const runtimeId = state.threads.find((thread) => thread.id === threadId)?.runtimeId ?? state.activeAgentRuntime
   const key = JSON.stringify([runtimeId, threadId])
   const hydrations = queueHydrations.get(get) ?? new Map<string, { timer?: ReturnType<typeof setTimeout> }>()
@@ -169,7 +170,7 @@ async function hydrateSessionQueue(set: ChatStoreSet, get: ChatStoreGet, threadI
   const isIdleSession = (): boolean => {
     const current = get()
     const currentRuntime = current.threads.find((thread) => thread.id === threadId)?.runtimeId ?? current.activeAgentRuntime
-    return current.activeThreadId === threadId && currentRuntime === runtimeId && !current.busy && current.runtimeConnection === 'ready'
+    return !current.readOnlyThreadIds?.[threadId] && current.activeThreadId === threadId && currentRuntime === runtimeId && !current.busy && current.runtimeConnection === 'ready'
   }
   const finish = (): void => {
     if (hydrations.get(key) === hydration) hydrations.delete(key)
@@ -188,7 +189,7 @@ async function hydrateSessionQueue(set: ChatStoreSet, get: ChatStoreGet, threadI
   }
   const refresh = async (attempt: number): Promise<void> => {
     const messages = await readSessionInputs({ runtimeId, threadId })
-    if (hydrations.get(key) !== hydration) return
+    if (hydrations.get(key) !== hydration || get().readOnlyThreadIds?.[threadId]) { finish(); return }
     set((current) => ({ queuedMessages: [
       ...current.queuedMessages.filter((message) =>
         !queuedMessageMatchesThread(message, threadId, runtimeId) ||
@@ -369,34 +370,42 @@ export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'loadEarlierThreadHistory' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'clearQueuedMessages' | 'updateQueuedMessage' | 'retryQueuedMessage' | 'reexecuteFailedInput' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
   let selectThreadRequestSeq = 0
+  const allowExplicitThreadInput = (threadId: string): void => {
+    if (!get().readOnlyThreadIds?.[threadId]) return
+    const readOnlyThreadIds = { ...get().readOnlyThreadIds }
+    delete readOnlyThreadIds[threadId]
+    set({ readOnlyThreadIds, conversationSourceNavigation: null })
+  }
 
   return {
   loadEarlierThreadHistory: async () => {
     const state = get()
     const threadId = state.activeThreadId
     const cursor = state.threadHistoryCursor
+    const selectionEpoch = selectThreadRequestSeq
     if (!threadId || !cursor || state.threadHistoryLoading) return
     set({ threadHistoryLoading: true })
     try {
       const provider = getProvider()
       rememberProviderThreadRuntime(provider, threadId, state.threads)
       const page = await provider.getThreadPage(threadId, cursor)
-      if (get().activeThreadId !== threadId) return
+      if (get().activeThreadId !== threadId || selectionEpoch !== selectThreadRequestSeq) return
       const olderBlocks = hydrateBlockModelLabels(threadId, page.blocks)
       set((snapshot) => {
-        const currentIds = new Set(snapshot.blocks.map((block) => block.id))
+        const currentById = new Map(snapshot.blocks.map((block) => [block.id, block]))
+        const olderIds = new Set(olderBlocks.map((block) => block.id))
         return {
           blocks: [
-            ...olderBlocks.filter((block) => !currentIds.has(block.id)),
-            ...snapshot.blocks
+            ...olderBlocks.map((block) => currentById.get(block.id) ?? block),
+            ...snapshot.blocks.filter((block) => !olderIds.has(block.id))
           ],
           threadHistoryCursor: page.nextCursor
         }
       })
     } catch (error) {
-      set({ error: formatRuntimeError(error) })
+      if (get().activeThreadId === threadId && selectionEpoch === selectThreadRequestSeq) set({ error: formatRuntimeError(error) })
     } finally {
-      if (get().activeThreadId === threadId) set({ threadHistoryLoading: false })
+      if (get().activeThreadId === threadId && selectionEpoch === selectThreadRequestSeq) set({ threadHistoryLoading: false })
     }
   },
 
@@ -571,14 +580,17 @@ export function createThreadActions(
         : null
       const currentTurnId = busy ? state.currentTurnId ?? latestTurnId ?? null : null
 
-      set((s) => ({
+      set((s) => {
+        const prefixEnd = s.readOnlyThreadIds?.[activeThreadId]
+          ? s.blocks.findIndex(block => block.id === blocks[0]?.id) : 0
+        return {
         activeThreadId,
         activeThreadGoal: goal ?? null,
         activeThreadTodos: todos ?? null,
         activeThreadContextState: contextState,
-        blocks,
+        blocks: prefixEnd > 0 ? [...s.blocks.slice(0, prefixEnd), ...blocks] : blocks,
         lastSeq: latestSeq,
-        threadHistoryCursor: nextCursor ?? null,
+        threadHistoryCursor: prefixEnd > 0 ? s.threadHistoryCursor : nextCursor ?? null,
         threadHistoryLoading: false,
         liveReasoning: '',
         liveAssistant: '',
@@ -588,7 +600,8 @@ export function createThreadActions(
         currentTurnUserId,
         turnDurationByUserId,
         queuedMessages: s.queuedMessages
-      }))
+        }
+      })
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: latestSeq })
@@ -597,7 +610,7 @@ export function createThreadActions(
         armBusyWatchdog(set, get)
       } else {
         resetBusyRecoveryAttempts()
-        if (get().queuedMessages.length > 0) {
+        if (!get().readOnlyThreadIds?.[activeThreadId] && get().queuedMessages.length > 0) {
           void get().drainQueuedMessages()
         }
       }
@@ -614,11 +627,15 @@ export function createThreadActions(
     }
   },
 
-  selectThread: async (id) => {
+  selectThread: async (id, options = {}) => {
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return
     }
+    const readOnlyThreadIds = { ...get().readOnlyThreadIds }
+    if (options.readOnly) readOnlyThreadIds[id] = true
+    else delete readOnlyThreadIds[id]
+    set({ readOnlyThreadIds, conversationSourceNavigation: null })
     const requestSeq = ++selectThreadRequestSeq
     const isCurrentSelection = () => selectThreadRequestSeq === requestSeq && get().activeThreadId === id
     const prevId = get().activeThreadId
@@ -672,10 +689,10 @@ export function createThreadActions(
       threadHistoryLoading: false
     })
     set(reconcileStoredReasoningEffort(get()))
-    if (selectionChanged) {
+    if (selectionChanged || options.readOnly) {
       set(resetAgentFocusState(get(), id))
     }
-    const reasoningDiscovery = get().refreshComposerReasoningDiscovery()
+    const reasoningDiscovery = options.readOnly ? Promise.resolve() : get().refreshComposerReasoningDiscovery()
     syncTurnCompletionPoll(set, get)
     try {
       rememberProviderThreadRuntime(p, id, get().threads)
@@ -734,7 +751,7 @@ export function createThreadActions(
       subscribeThreadEventsWithRecovery(p, id, latestSeq, sink, ac.signal, get)
       if (busy) {
         armBusyWatchdog(set, get)
-      } else {
+      } else if (!get().readOnlyThreadIds?.[id]) {
         void get().drainQueuedMessages()
       }
     } catch (e) {
@@ -749,6 +766,7 @@ export function createThreadActions(
   },
 
   drainQueuedMessages: async () => {
+    if (get().readOnlyThreadIds?.[get().activeThreadId ?? '']) return
     if (drainingQueuedMessages) return
     drainingQueuedMessages = true
     try {
@@ -764,7 +782,7 @@ export function createThreadActions(
         // A failed send is an ordering barrier. Later scientific instructions
         // must not overtake it while the user decides whether to retry/remove.
         if (
-          !next || next.guiPlan || !canDispatchSessionInput(next.admissionReceipt) || next.sendFailure || next.restoredAttachmentWarning ||
+          state.readOnlyThreadIds?.[state.activeThreadId ?? ''] || !next || next.guiPlan || !canDispatchSessionInput(next.admissionReceipt) || next.sendFailure || next.restoredAttachmentWarning ||
           next.deliveryAttempt || state.busy
         ) return
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
@@ -779,13 +797,13 @@ export function createThreadActions(
 
   drainQueuedMessagesForThread: async (threadId) => {
     const targetThreadId = threadId.trim()
-    if (!targetThreadId || backgroundQueueDrains.has(targetThreadId)) return false
+    if (!targetThreadId || get().readOnlyThreadIds?.[targetThreadId] || backgroundQueueDrains.has(targetThreadId)) return false
     try { await hydrateSessionQueue(set, get, targetThreadId) } catch (error) {
       set({ error: formatRuntimeError(error) })
       return false
     }
     const initialState = get()
-    if (initialState.runtimeConnection !== 'ready' || initialState.activeThreadId === targetThreadId) {
+    if (initialState.readOnlyThreadIds?.[targetThreadId] || initialState.runtimeConnection !== 'ready' || initialState.activeThreadId === targetThreadId) {
       return false
     }
     const thread = initialState.threads.find((item) => item.id === targetThreadId)
@@ -811,6 +829,7 @@ export function createThreadActions(
       rememberProviderThreadRuntime(provider, targetThreadId, initialState.threads)
       const settings = await rendererRuntimeClient.getSettings()
       const latestState = get()
+      if (latestState.readOnlyThreadIds?.[targetThreadId]) return false
       const latestQueued = latestState.queuedMessages.find((message) => message.id === queued.id)
       if (
         !latestQueued ||
@@ -844,6 +863,7 @@ export function createThreadActions(
         serviceTier: latestQueued.serviceTier ?? ''
       }, latestState.composerModelCatalog, { providerManaged: latestState.modelAccessMode === 'api' })
       const turnHandle = await provider.sendUserMessage(targetThreadId, runtimeText, {
+        runtimeId: targetRuntimeId,
         clientDirectiveId: queued.id,
         inputRevision: queued.admissionReceipt?.revision,
         ...(latestQueued.mode ? { mode: latestQueued.mode } : {}),
@@ -958,6 +978,7 @@ export function createThreadActions(
   retryQueuedMessage: async (id) => {
     const state = get()
     if (!state.activeThreadId || state.busy || state.runtimeConnection !== 'ready') return false
+    allowExplicitThreadInput(state.activeThreadId)
     try {
       await hydrateSessionQueue(set, get, state.activeThreadId)
       let queued = get().queuedMessages.find((message) => message.id === id)
@@ -985,6 +1006,7 @@ export function createThreadActions(
       set({ error: i18n.t('common:sessionInputReexecutionOpenOriginal') })
       return false
     }
+    allowExplicitThreadInput(input.threadId)
     inputReexecutions.add(key)
     const ref = { runtimeId: input.runtimeId, threadId: input.threadId }
     try {
@@ -1036,6 +1058,7 @@ export function createThreadActions(
     }
     try {
       rememberProviderThreadRuntime(p, activeThreadId, get().threads)
+      allowExplicitThreadInput(activeThreadId)
       await p.steerUserMessage(activeThreadId, currentTurnId, queued.text, {
         clientDirectiveId: queued.id,
         inputRevision: queued.admissionReceipt?.revision
@@ -1102,6 +1125,8 @@ export function createThreadActions(
     let deliveryStartedInForeground =
       !requestedTargetThreadId || requestedTargetThreadId === initialActiveThreadId
     const ownerThreadId = requestedTargetThreadId || initialActiveThreadId || ''
+    if (queued && get().readOnlyThreadIds?.[ownerThreadId]) return false
+    if (!queued && ownerThreadId) allowExplicitThreadInput(ownerThreadId)
     if (!queued && ownerThreadId && !overrides?.attachmentIds?.length && !overrides?.attachments?.length &&
       !overrides?.fileReferences?.length && !overrides?.guiPlan) {
       try {
@@ -1482,6 +1507,9 @@ export function createThreadActions(
       clearBusyWatchdog()
     }
     let turnAccepted = false
+    const pendingStart = { threadId: activeThreadId ?? '', cancelRequested: false, discard: undefined as boolean | undefined }
+    sseAbortRef.pendingTurnStarts ??= new Map()
+    sseAbortRef.pendingTurnStarts.set(userBlockId, pendingStart)
     let acceptedUserMessageItemId: string | undefined
     const deliveryOwnsActiveSession = (): boolean => {
       if (!deliveryStartedInForeground || get().activeThreadId !== activeThreadId) return false
@@ -1496,9 +1524,10 @@ export function createThreadActions(
       const seqAtSend = deliveryStartedInForeground ? previousLastSeq : 0
       const sendingThread = get().threads.find((thread) => thread.id === previousThreadId)
       rememberProviderThreadRuntime(p, previousThreadId, get().threads)
-      const desiredRuntimeId = deliveryStartedInForeground
+      const boundRuntimeId = queued?.runtimeId ?? (requestedTargetThreadId || !deliveryStartedInForeground ? sendingThread?.runtimeId : undefined)
+      const desiredRuntimeId = boundRuntimeId ?? (deliveryStartedInForeground
         ? initialActiveRuntimeId
-        : sendingThread?.runtimeId
+        : sendingThread?.runtimeId)
       const sendingRuntimeId = sendingThread?.runtimeId
       const runtimeSwitchExpected = Boolean(
         sendingRuntimeId && desiredRuntimeId && sendingRuntimeId !== desiredRuntimeId
@@ -1507,7 +1536,24 @@ export function createThreadActions(
       const runtimeText = buildCodeRuntimePrompt(settings, messageText)
       const runtimeDisplayText = userDisplayText ?? messageText
       const governanceProfile = requestedGovernanceProfile
+      if (queued && get().readOnlyThreadIds?.[previousThreadId]) {
+        // A source-view selection can arrive while settings/admission are awaiting.
+        set(state => ({
+          ...(deliveryOwnsActiveSession() ? {
+            busy: false, currentTurnUserId: previousCurrentTurnUserId,
+            blocks: state.blocks.filter(block => block.id !== userBlockId),
+            turnStartedAtByUserId: previousTurnStartedAtByUserId
+          } : {}),
+          queuedMessages: state.queuedMessages.map(message => {
+            if (message.id !== queued.id || message.deliveryAttempt?.startedAt !== now) return message
+            const { deliveryAttempt: _attempt, ...retained } = message
+            return retained
+          })
+        }))
+        return false
+      }
       const turnHandle = await p.sendUserMessage(previousThreadId, runtimeText, {
+        ...(boundRuntimeId ? { runtimeId: boundRuntimeId } : {}),
         clientDirectiveId: userBlockId,
         inputRevision: queued?.admissionReceipt?.revision,
         mode,
@@ -1586,6 +1632,7 @@ export function createThreadActions(
         }).catch(() => undefined)
       }
       const { turnId, userMessageItemId } = turnHandle
+      pendingStart.threadId = activeThreadId
       acceptedUserMessageItemId = userMessageItemId
       // Mirror the composer model selection against the runtime's stable
       // user_message item id so the badge survives page refresh / thread
@@ -1638,6 +1685,23 @@ export function createThreadActions(
           })()
         }))
       }
+      // Bind the handle and its terminal-event stream before metadata work.
+      // A slow title update must not hide a running turn from Stop.
+      if (deliveryOwnsActiveSession()) {
+        set({ currentTurnId: turnId })
+        const ac = new AbortController()
+        sseAbortRef.current = ac
+        const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: subscribedFromSeq })
+        subscribeThreadEventsWithRecovery(p, activeThreadId, subscribedFromSeq, sink, ac.signal, get)
+        armBusyWatchdog(set, get)
+      } else {
+        watchBackgroundThreadCompletion(set, get, activeThreadId)
+      }
+      if (sseAbortRef.pendingTurnStarts?.get(userBlockId) === pendingStart) sseAbortRef.pendingTurnStarts.delete(userBlockId)
+      if (pendingStart.cancelRequested) {
+        await p.interruptTurn(activeThreadId, turnId,
+          pendingStart.discard === undefined ? undefined : { discard: pendingStart.discard })
+      }
       if (shouldRenameThreadAfterSend) {
         const renamed = await p.renameThread(activeThreadId, generatedTitle).then(() => true).catch(() => {
           /* keep message delivery successful even if auto-title update fails */
@@ -1651,17 +1715,6 @@ export function createThreadActions(
           }))
         }
       }
-      if (!deliveryOwnsActiveSession()) {
-        watchBackgroundThreadCompletion(set, get, activeThreadId)
-        await get().refreshThreads()
-        return true
-      }
-      set({ currentTurnId: turnId })
-      const ac = new AbortController()
-      sseAbortRef.current = ac
-      const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: subscribedFromSeq })
-      subscribeThreadEventsWithRecovery(p, activeThreadId, subscribedFromSeq, sink, ac.signal, get)
-      armBusyWatchdog(set, get)
       await get().refreshThreads()
       return true
     } catch (e) {
@@ -1759,6 +1812,8 @@ export function createThreadActions(
       })
       await get().refreshThreads()
       return false
+    } finally {
+      if (sseAbortRef.pendingTurnStarts?.get(userBlockId) === pendingStart) sseAbortRef.pendingTurnStarts.delete(userBlockId)
     }
   },
 
@@ -1837,6 +1892,7 @@ export function createThreadActions(
         currentTurnId: null,
         currentTurnUserId: null
       })
+      allowExplicitThreadInput(activeThreadId)
       const { turnId, userMessageItemId } = await p.reviewThread(activeThreadId, target, {
         ...(composerModel ? { model: composerModel } : {})
       })

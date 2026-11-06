@@ -30,7 +30,7 @@ export type ExecutionObligation = {
   requiresRegionRef?: boolean
   dependsOn?: string[]
   completion?: 'terminal' | 'success'
-  source: 'intent' | 'native_tool'
+  source: 'intent'
 }
 
 export type ExecutionIntent = AgentRuntimeExecutionIntent
@@ -209,7 +209,6 @@ export class RuntimeExecutionIntegrityGuard {
     const receipt = receiptFromEvent(event)
     if (receipt) {
       rememberReceipt(state, receipt)
-      rememberNativeVisualPlan(state, event, receipt)
     }
 
     if (event.kind === 'child_event') rememberChildReceipt(state, event)
@@ -518,66 +517,6 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
   })
   closeCorrelatedAsyncReceipts(state, key, receipt)
   closeCorrelatedChildReceipts(state, key, receipt)
-}
-
-function rememberNativeVisualPlan(
-  state: ExecutionIntegrityState,
-  event: AgentRuntimeEvent,
-  tool: ToolReceipt
-): void {
-  if (event.kind !== 'tool_event' && event.kind !== 'item_snapshot') return
-  const meta = recordValue(event.kind === 'tool_event' ? event.meta : event.item.meta)
-  const argumentsRecord = recordValue(meta.arguments)
-  const captureMode = stringValue(argumentsRecord.capture)
-  if (
-    tool.toolName !== 'sciforge_look' ||
-    (captureMode !== 'snapshot' && captureMode !== 'region') ||
-    state.obligations.some((obligation) => (
-      obligation.kind === 'receipt' && obligation.receiptKind === 'visual.capture'
-    ))
-  ) {
-    return
-  }
-  const locateId = `native-visual-locate:${tool.callId}`
-  const captureId = `native-visual-capture:${tool.callId}`
-  addObligations(state, [
-    {
-      id: locateId,
-      kind: 'receipt',
-      receiptKind: 'visual.look',
-      ...(captureMode === 'region' ? { requiresRegionRef: true } : {}),
-      completion: 'success',
-      source: 'native_tool'
-    },
-    {
-      id: captureId,
-      kind: 'receipt',
-      receiptKind: 'visual.capture',
-      ...(captureMode === 'region' ? { requiresRegionRef: true } : {}),
-      dependsOn: [locateId],
-      completion: 'success',
-      source: 'native_tool'
-    },
-    {
-      id: `native-visual-final-look:${tool.callId}`,
-      kind: 'receipt',
-      receiptKind: 'visual.look',
-      dependsOn: [captureId],
-      completion: 'success',
-      source: 'native_tool'
-    }
-  ])
-}
-
-function addObligations(
-  state: ExecutionIntegrityState,
-  obligations: ExecutionObligation[]
-): void {
-  for (const obligation of dedupeObligations(obligations)) {
-    if (state.obligationRefCounts.has(obligation.id)) continue
-    state.obligationRefCounts.set(obligation.id, 1)
-    state.obligations.push(obligation)
-  }
 }
 
 function mergeEffectClasses(

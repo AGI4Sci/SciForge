@@ -45,7 +45,9 @@ vi.mock('./MarkdownWorkspaceViewer', () => ({
 
 import {
   createWorkspacePreviewAssetTransportClient,
+  createWorkspacePreviewHost,
   createWorkspacePreviewHostState,
+  type WorkspacePreviewBridgeAdapter,
   type WorkspacePreviewHost
 } from './host'
 import {
@@ -121,13 +123,14 @@ function createContext(
   hostOverrides: Record<string, unknown> = {}
 ): WorkspacePreviewPanelShellContext {
   const host = {
+    getState: () => context.state,
     applyEdit: vi.fn(),
     observe: vi.fn(),
     readRange: vi.fn(),
     ...hostOverrides
   } as unknown as WorkspacePreviewHost
 
-  return {
+  const context: WorkspacePreviewPanelShellContext = {
     state: createWorkspacePreviewHostState({
       observation,
       session: observation
@@ -154,6 +157,7 @@ function createContext(
     refresh: vi.fn(),
     refreshing: false
   }
+  return context
 }
 
 describe('WorkspacePreviewPluginOutlet', () => {
@@ -668,7 +672,10 @@ describe('WorkspacePreviewPluginOutlet', () => {
         ranges: [{ startLine: 1, startColumn: 1, endLine: 1, endColumn: 8 }]
       }
     }
-    const applyEdit = vi.fn(async () => ({
+    let activeSessionId = 'session-1'
+    const applyEdit = vi.fn(async () => {
+      activeSessionId = 'session-after-edit'
+      return {
       ok: true as const,
       session: {
         id: 'session-after-edit',
@@ -688,19 +695,60 @@ describe('WorkspacePreviewPluginOutlet', () => {
         operationKind: 'workspace.setSelection' as const,
         effect: 'session-update' as const
       }
-    }))
+      }
+    })
     const observe = vi.fn(async () => ({
       ok: true as const,
       observation: createObservation('text')
     }))
     const context = createContext(createObservation('text'), {
       applyEdit,
-      observe
+      observe,
+      getState: () => ({ session: { id: activeSessionId } })
     })
 
     await applyWorkspacePreviewOutletEdit(context, operation)
 
-    expect(applyEdit).toHaveBeenCalledWith(operation)
+    expect(applyEdit).toHaveBeenCalledWith('session-1', operation)
     expect(observe).toHaveBeenCalledWith('session-after-edit')
+  })
+
+  it('uses the real host without reobserving an old write after the document changes', async () => {
+    const registry = rendererWorkspacePreviewRegistry
+    const descriptor = registry.resolve({ path: '/workspace/lab/a.txt' })!
+    let finish!: (result: Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>) => void
+    const pending = new Promise<Awaited<ReturnType<WorkspacePreviewBridgeAdapter['applyEdit']>>>(resolve => { finish = resolve })
+    const observe = vi.fn()
+    const applyEdit = vi.fn(() => pending)
+    const bridge = {
+      open: async (input: { path: string; workspaceRoot: string }) => ({
+        ok: true, session: { id: input.path.endsWith('a.txt') ? 'session-a' : 'session-b',
+          path: input.path, workspaceRoot: input.workspaceRoot, pluginId: descriptor.manifest.id,
+          modality: descriptor.manifest.modality, mode: 'preview', openedAt: '2026-11-06T00:00:00Z', updatedAt: '2026-11-06T00:00:00Z' },
+        manifest: descriptor.manifest, route: 'matched',
+        file: { path: input.path, workspaceRoot: input.workspaceRoot, relativePath: input.path, size: 1, mtimeMs: 1 }
+      }), applyEdit, observe
+    } as unknown as WorkspacePreviewBridgeAdapter
+    const host = createWorkspacePreviewHost({ registry, bridge })
+    await host.open({ path: '/workspace/lab/a.txt', workspaceRoot: '/workspace/lab' })
+    const initial = host.getState()
+    const context = { ...createContext(null), host, state: initial }
+    const operation: WorkspacePreviewEditOperation = {
+      kind: 'workspace.setSelection', path: '/workspace/lab/a.txt',
+      selection: { kind: 'text', ranges: [{ startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 }] }
+    }
+    const saving = applyWorkspacePreviewOutletEdit(context, operation)
+    await host.open({ path: '/workspace/lab/b.txt', workspaceRoot: '/workspace/lab' })
+    const current = host.getState()
+    finish({ ok: true, session: { ...initial.session!, selection: operation.selection },
+      operationKind: operation.kind, appliedAt: '2026-11-06T00:00:01Z',
+      audit: { pluginId: descriptor.manifest.id, path: operation.path, operationKind: operation.kind, effect: 'session-update' } })
+    await saving
+    expect(applyEdit).toHaveBeenCalledWith('session-a', operation)
+    expect(host.getState()).toEqual(current)
+    expect(observe).not.toHaveBeenCalled()
+    // The old renderer callback cannot start a fresh write into the replacement session.
+    await expect(applyWorkspacePreviewOutletEdit(context, operation)).rejects.toThrow('superseded')
+    expect(applyEdit).toHaveBeenCalledTimes(1)
   })
 })

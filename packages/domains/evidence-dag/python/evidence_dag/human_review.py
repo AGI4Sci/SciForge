@@ -255,14 +255,45 @@ def _packet_id(
     level: HumanReviewLevel,
     target_ids: Iterable[str],
     reason_codes: Iterable[str],
+    material_digest: str,
 ) -> str:
     canonical = json.dumps({
         "policyVersion": policy_version,
         "level": level.value,
         "targetIds": sorted(set(target_ids)),
         "reasonCodes": sorted(set(reason_codes)),
+        "materialDigest": material_digest,
     }, sort_keys=True, separators=(",", ":"))
     return "review-packet:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+
+
+def _review_material_digest(graph: ThreadGraph, checks: list[Assessment]) -> str:
+    """Bind review identity to scientific inputs, excluding decision/audit metadata.
+
+    This conservatively binds a packet to the whole Evidence graph. It never
+    treats unchanged target IDs or severity codes as unchanged evidence.
+    """
+    def ordered(items: Iterable[dict[str, Any]]) -> list[str]:
+        return sorted(json.dumps(item, sort_keys=True, ensure_ascii=False,
+                                 separators=(",", ":")) for item in items)
+
+    registry = graph.to_dict()["artifact_registry"]
+    registry = {key: ordered({k: v for k, v in item.items() if k not in {"observedAt", "createdAt"}}
+                            for item in values) for key, values in registry.items()}
+    material = {
+        "thread": graph.thread_id,
+        "nodes": ordered({k: v for k, v in node.to_dict().items() if k != "created_at"}
+                         for node in graph.nodes.values()),
+        "edges": ordered({k: v for k, v in edge.to_dict().items() if k != "assessment_ids"}
+                         for edge in graph.edges.values()),
+        "registry": registry,
+        "accessPolicy": graph.meta.get("accessPolicy"),
+        "checks": ordered({k: v for k, v in item.to_dict().items()
+                           if k not in {"assessmentId", "targetDigest", "createdAt", "humanReview"}}
+                          for item in checks),
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False,
+                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _unique_reasons(reasons: Iterable[HumanReviewReason]) -> tuple[HumanReviewReason, ...]:
@@ -300,10 +331,18 @@ def attach_human_reviews(
 ) -> tuple[list[Assessment], list[ReviewPacket]]:
     """Annotate assessments and create a bounded, deduplicated review queue."""
     support = graph.supports_digraph()
+    # The compiler appends only changed checks. Rebuild the current review
+    # projection from the latest check per checker/target, not only that delta;
+    # otherwise new evidence with an unchanged verdict can keep an old approval.
+    latest: dict[tuple, Assessment] = {}
+    for item in [*graph.assessments, *assessments]:
+        latest[(item.target_id, item.level, item.dimension, item.actor, item.method)] = item
+    current_checks = list(latest.values())
+    material_digest = _review_material_digest(graph, current_checks)
     reviewed = [replace(
         assessment,
         human_review=_score_assessment(graph, assessment, policy, computed_at=computed_at),
-    ) for assessment in assessments]
+    ) for assessment in current_checks]
 
     # Aggregate by review severity, never by ancestor/target.  A compile can
     # therefore create at most three active packets (optional/recommended/required).
@@ -322,7 +361,8 @@ def attach_human_reviews(
             reason for item in members for reason in item.human_review.reasons  # type: ignore[union-attr]
         )
         targets = tuple(sorted({item.target_id for item in members}))
-        packet_id = _packet_id(policy.version, level, targets, (reason.code for reason in reasons))
+        packet_id = _packet_id(policy.version, level, targets,
+                               (reason.code for reason in reasons), material_digest)
         score = max(item.human_review.score for item in members if item.human_review is not None)
         blocking = level == HumanReviewLevel.REQUIRED
         candidate = ReviewPacket(
@@ -423,12 +463,14 @@ def attach_human_reviews(
             for packet in packets
         )
         superseded = covered_by_current or bool(affected_targets.intersection(old.target_ids))
-        if superseded and old.status == HumanReviewStatus.PENDING:
+        if superseded and old.status in {HumanReviewStatus.PENDING, HumanReviewStatus.DEFERRED,
+                                         HumanReviewStatus.REJECTED}:
             packets.append(replace(old, status=HumanReviewStatus.EXPIRED, blocking=False))
         else:
             packets.append(old)
     packets.sort(key=lambda packet: packet.review_packet_id)
-    return reviewed, packets
+    new_ids = {item.assessment_id for item in assessments}
+    return [item for item in reviewed if item.assessment_id in new_ids], packets
 
 
 def remap_review_packet_assessment_ids(

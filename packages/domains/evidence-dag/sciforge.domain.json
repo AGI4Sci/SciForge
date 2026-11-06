@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.evidence-dag",
     "displayName": "Evidence DAG",
-    "version": "1.1.5",
+    "version": "2.13.0",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -31,21 +31,38 @@
     }
   },
   "contributionContracts": {
+    "evidence-dag.research-record-overlay": {
+      "location": "workbench.global-overlay",
+      "title": "科研审计",
+      "resourceKind": "research-record"
+    },
     "evidence-dag.workbench-right-panel": {
       "location": "workbench.right-panel",
       "title": "Evidence DAG",
       "titleKey": "common:rightPanelEvidenceDag",
-      "resourceKind": "evidence-dag"
+      "resourceKind": "evidence-dag",
+      "navigation": "resource-only"
     },
     "evidence-dag.research-summary": {
       "slot": "status",
       "label": "Evidence",
       "order": 30,
-      "scopeKinds": ["workspace"],
-      "resourceKinds": ["evidence-dag", "evidence-claim", "evidence-closure"]
+      "scopeKinds": [
+        "workspace"
+      ],
+      "resourceKinds": [
+        "evidence-dag",
+        "evidence-claim",
+        "evidence-closure"
+      ]
     },
     "evidence-dag.resource-navigation": {
-      "resourceKinds": ["evidence-dag", "evidence-claim", "evidence-closure", "evidence-snapshot"],
+      "resourceKinds": [
+        "evidence-dag",
+        "evidence-claim",
+        "evidence-closure",
+        "evidence-snapshot"
+      ],
       "target": {
         "surface": "right-panel",
         "contributionId": "evidence-dag.workbench-right-panel"
@@ -55,6 +72,15 @@
       "contractVersion": 1,
       "kind": "capability-evaluation",
       "actionSource": "packages/domains/evidence-dag/src/contract.ts"
+    },
+    "evidence-dag.research-workspace": {
+      "location": "research.workspace",
+      "order": 0
+    },
+    "evidence-dag.audit-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "evidence-dag.open-audit",
+      "label": "researchAuditOpen"
     }
   },
   "entrypoints": [
@@ -94,6 +120,11 @@
       "export": "./renderer",
       "contributions": [
         {
+          "kind": "renderer.workbench-global-overlay",
+          "id": "evidence-dag.research-record-overlay",
+          "priority": 160
+        },
+        {
           "kind": "renderer.workbench-right-panel",
           "id": "evidence-dag.workbench-right-panel",
           "priority": 160
@@ -112,6 +143,21 @@
           "kind": "renderer.i18n-resource",
           "id": "evidence-dag.translations",
           "priority": 160
+        },
+        {
+          "kind": "renderer.extension",
+          "id": "evidence-dag.research-workspace",
+          "priority": 160
+        },
+        {
+          "kind": "renderer.command",
+          "id": "evidence-dag.open-audit",
+          "priority": 161
+        },
+        {
+          "kind": "renderer.workbench-toolbar-action",
+          "id": "evidence-dag.audit-toolbar-action",
+          "priority": 161
         }
       ]
     }

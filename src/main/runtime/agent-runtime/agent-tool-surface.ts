@@ -47,7 +47,8 @@ export type AgentRuntimeToolResult = Readonly<{
   deliveryEffect?: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
 }>
 
-export const AGENT_RUNTIME_TOOL_MODEL_CONTENT_MAX_BYTES = 4 * 1_024
+export const AGENT_RUNTIME_TOOL_MODEL_CONTENT_DEFAULT_BYTES = 4 * 1_024
+export const AGENT_RUNTIME_TOOL_MODEL_CONTENT_MAX_BYTES = 16 * 1_024
 
 /** Validate an exact owner-prepared payload before any provider transport delivers it. */
 export function agentRuntimeToolModelContent(result: AgentRuntimeToolResult): string | undefined {

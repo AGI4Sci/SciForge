@@ -58,7 +58,9 @@ export function relativeModuleImports(source) {
  */
 export async function resolvePluginRuntimeFiles(sourceDirectory, entry = PLUGIN_RUNTIME_RUNNER_ENTRY) {
   const resolved = new Set()
-  const pending = [entry]
+  // The client factory is loaded by an absolute Host-selected path rather than
+  // a static runner import, so it is an explicit runtime entry as well.
+  const pending = entry === PLUGIN_RUNTIME_RUNNER_ENTRY ? [entry, 'host-service-client.mjs'] : [entry]
   while (pending.length > 0) {
     const file = pending.shift()
     if (resolved.has(file)) continue
@@ -78,6 +80,7 @@ export async function resolvePluginRuntimeFiles(sourceDirectory, entry = PLUGIN_
 /** Files the runner needs next to it, in the build output and in the package. */
 export const PLUGIN_RUNTIME_RUNNER_FILES = Object.freeze([
   'process-extension-runner.mjs',
+  'host-service-client.mjs',
   'dsh-storage-root.mjs',
   'plugin-package-identity.mjs'
 ])

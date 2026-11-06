@@ -48,6 +48,17 @@ describe('normalizeCodexEvent', () => {
     })
   })
 
+  it('marks only provider-supplied compaction summaries as continuation content', () => {
+    for (const event of [
+      { method: 'thread/compacted', params: { threadId: 'thread', summary: 'Artifact A verified; check B remains.' } },
+      { method: 'item/completed', params: { threadId: 'thread', item: { type: 'contextCompaction', summary: 'Artifact A verified; check B remains.' } } }
+    ]) {
+      expect(normalizeCodexEvent(event)?.compaction).toMatchObject({
+        status: 'success', contextSummary: 'Artifact A verified; check B remains.'
+      })
+    }
+  })
+
   it('maps agent message deltas without exposing raw JSON-RPC payloads', () => {
     expect(normalizeCodexEvent({
       jsonrpc: '2.0',

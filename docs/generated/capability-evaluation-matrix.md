@@ -2,9 +2,9 @@
 
 This generated matrix maps canonical product-evaluation cases to six evidence layers. It is a coverage inventory, not a single product quality score.
 
-Unique executable cases: **192** · scenarios in bounded catalog: **21** · domains: **16**
+Unique executable cases: **109** · scenarios in bounded catalog: **15** · domains: **14**
 
-Catalog coverage: 21/21. Readiness: partial=137, ready=28. Persisted observation counts by mode: deterministic=0, live=0, replay=0; these are run observations, not unique scenarios.
+Catalog coverage: 15/15. Readiness: partial=79, ready=19. Persisted observation counts by mode: deterministic=0, live=0, replay=0; these are run observations, not unique scenarios.
 
 Live evidence binding: . Only `verified` runs are current-case evidence; legacy reports without a dataset SHA are retained as `unverified`.
 
@@ -12,30 +12,28 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 
 | Dimension | Planned | Declared | Inferred | Not covered | Live-observed | Live-verified | Independent evidence | PASS | FAIL | INCONCLUSIVE |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 运行可用性 | 165 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 理解与交互 | 165 | 1 | 1 | 163 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 工具执行 | 165 | 37 | 128 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 任务结果 | 165 | 21 | 130 | 14 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 状态与产物 | 165 | 12 | 89 | 64 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 鲁棒与安全 | 165 | 3 | 17 | 145 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 运行可用性 | 98 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 理解与交互 | 98 | 1 | 1 | 96 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 工具执行 | 98 | 22 | 76 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 任务结果 | 98 | 15 | 75 | 8 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 状态与产物 | 98 | 9 | 52 | 37 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 鲁棒与安全 | 98 | 2 | 11 | 85 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 ## Domain summary
 
 | Domain | Scenarios | Cases | Ready | Partial | Catalog-only | Blocked | Live runs | Live verified | PASS | FAIL | INCONCLUSIVE |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| anchored-comments | 7 | 7 | 0 | 7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| anchored-comments | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | artifact-versions | 24 | 30 | 6 | 18 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | biology-room | 9 | 9 | 1 | 8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| create-loop | 10 | 10 | 1 | 9 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| create-loop | 9 | 9 | 1 | 8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | cross-domain | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| dataset-api | 48 | 64 | 9 | 39 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | evidence-dag | 4 | 4 | 2 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | git-checkpoints | 6 | 6 | 2 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | paper-radar | 22 | 22 | 0 | 22 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | project-coordinator | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | research-checkpoints | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| scientific-compute | 9 | 9 | 0 | 9 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| scientific-plotting | 12 | 17 | 6 | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| scientific-plotting | 9 | 14 | 6 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | unknown | 2 | 2 | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | version-control | 4 | 4 | 0 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | workspace-preview | 5 | 5 | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -44,12 +42,6 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 
 | Scenario | Domain | Cases | Runtime | Interaction | Tool execution | Task result | State | Robustness | Readiness |
 | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
-| `anchored-comments-delete-local-fixture` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
-| `anchored-comments-feedback-status-local-fixture` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `anchored-comments-get-local-fixture` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `anchored-comments-list-local-fixture` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `anchored-comments-read-asset-local-fixture` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `anchored-comments-upsert-local-fixture` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `artifact-compare` | artifact-versions | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
 | `artifact-describe` | artifact-versions | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
 | `artifact-history` | artifact-versions | 3 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
@@ -79,9 +71,6 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 | `biology-room-open-local-fixture` | biology-room | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `biology-room-open-or-create-local-fixture` | biology-room | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `biology-room-refresh-local-fixture` | biology-room | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `compute-provider-retry` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
-| `compute-retry-recovered` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
-| `create-loop-build-dataset-approval` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
 | `create-loop-check-code` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `create-loop-export-dsl` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `create-loop-import-dsl` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
@@ -90,46 +79,6 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 | `create-loop-run-node-approval` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
 | `create-loop-status-final-state` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `create-loop-test-node` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-api-catalog-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-confirm-plan-denied` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | partial |
-| `dataset-api-execute-plan-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-filter-validate-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-graph-organize-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-id-map-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-id-map-provider-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-join-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-list-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-list-object-stores-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-list-objects-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-materialize-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-metadata-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-object-metadata-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-object-raw-data-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-prepare-plan-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-processing-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-profile-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-publish-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-raw-data-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-register-provider-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-resume-plan-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-structure-profile-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-api-structure-validate-local-fixture` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-catalog` | dataset-api | 4 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-confirm-plan-approval` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
-| `dataset-deduplicate` | dataset-api | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `dataset-filter` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-filter-score` | dataset-api | 3 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `dataset-id-map` | dataset-api | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `dataset-join` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-join-annotations` | dataset-api | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `dataset-list` | dataset-api | 3 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `dataset-list-registered` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-prepare-plan` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-profile-fields` | dataset-api | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `dataset-profile-final-state` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `dataset-select-columns` | dataset-api | 3 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-transform` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `dataset-validate` | dataset-api | 4 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `evidence-dag-view` | evidence-dag | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `git-checkpoints-create-local-fixture` | git-checkpoints | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `git-checkpoints-list` | git-checkpoints | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
@@ -148,10 +97,7 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 | `paper-radar-sync-profile-local-fixture` | paper-radar | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `plot-compare` | scientific-plotting | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
 | `plot-environment-status` | scientific-plotting | 3 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `plot-map-data` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `plot-render` | scientific-plotting | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
-| `plot-render-final-state` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `plot-rerun-replication` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `plot-temperature-trend` | scientific-plotting | 2 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
 | `product-ambiguous-clarification` | cross-domain | 1 | NOT_RUN (harness) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `product-approval-denial` | create-loop | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | ready |
@@ -162,12 +108,6 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 | `product-checkpoint-create` | git-checkpoints | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
 | `product-checkpoint-restore` | git-checkpoints | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | ready |
 | `product-comments-review` | anchored-comments | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `product-compute-run` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_RUN (declared) | partial |
-| `product-compute-status` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `product-dataset-catalog` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `product-dataset-filter-validate` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
-| `product-dataset-join` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
-| `product-dataset-profile` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
 | `product-evidence-export` | evidence-dag | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
 | `product-evidence-view` | evidence-dag | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
 | `product-plot-render` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
@@ -175,10 +115,6 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 | `product-plot-workflow` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | ready |
 | `product-project-plan` | project-coordinator | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (declared) | NOT_RUN (declared) | NOT_COVERED (absent) | NOT_COVERED (absent) | ready |
 | `research-checkpoints-status` | research-checkpoints | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `scientific-compute-baseline-blocked-local-fixture` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `scientific-compute-baseline-success-local-fixture` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `scientific-compute-status` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `scientific-compute-status-local-fixture` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `scientific-plotting-status-local-fixture` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `scientific-plotting-workflow-local-fixture` | scientific-plotting | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `version-control-create-snapshot` | version-control | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
@@ -186,11 +122,6 @@ Live evidence binding: . Only `verified` runs are current-case evidence; legacy 
 | `version-control-open-status` | version-control | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
 | `version-control-restore-approval` | version-control | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_RUN (inferred) | partial |
 | `workflow-capability-explanation-no-call` | unknown | 1 | NOT_RUN (harness) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | NOT_COVERED (absent) | partial |
-| `workflow-compute-baseline-artifacts` | scientific-compute | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `workflow-dataset-clean-validate` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `workflow-dataset-filter-transform` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `workflow-dataset-join-validate` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
-| `workflow-dataset-to-plot` | dataset-api | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `workflow-evidence-project-review` | evidence-dag | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `workflow-paper-digest-grounded` | paper-radar | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_COVERED (absent) | partial |
 | `workflow-paper-empty-result` | paper-radar | 1 | NOT_RUN (harness) | NOT_COVERED (absent) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | NOT_RUN (inferred) | partial |

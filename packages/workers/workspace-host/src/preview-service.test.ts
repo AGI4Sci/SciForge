@@ -9,7 +9,7 @@ import {
 } from '@sciforge/domain-sdk/workspace-server'
 import {
   LIFE_SCIENCE_WORKSPACE_PREVIEW_MANIFESTS_BY_PLUGIN_ID
-} from '@sciforge/domain-life-science-preview/contract'
+} from '@sciforge/domain-biology-workbench/workspace-preview-contract'
 
 import { createWorkspaceHostPreviewOperation } from './preview-service.js'
 
@@ -71,7 +71,10 @@ describe('Workspace Host preview operation', () => {
         pluginId: 'sequence-genomics', method: 'readRange',
         input: { sessionId, range: { start: { line: 2, column: 1 }, maxCharacters: 100 } }
       }, { workspaceRoot, sessionId: 'session', publishEvent: () => undefined })
+      const snapshotId = (textRange as Record<string, unknown>).snapshotId
+      assert.match(String(snapshotId), /^[a-f0-9]{64}$/)
       assert.deepEqual(textRange, {
+        snapshotId,
         ok: true, sessionId, text: 'ACGT\n', start: { line: 2, column: 1 },
         end: { line: 3, column: 1 }, truncated: false
       })

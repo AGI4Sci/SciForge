@@ -1,4 +1,6 @@
 import { createServer } from 'node:net'
+import { readFile } from 'node:fs/promises'
+import { modelAccessGatewayStatePath } from './model-access-gateway-sidecar'
 import {
   getModelRouterSettings,
   type AppSettingsV1
@@ -12,6 +14,8 @@ import { isLocalModelRouterBaseUrl } from '../shared/model-router-url'
 export async function relocateModelRouterIfPortIsOccupied(
   settings: AppSettingsV1,
   options: {
+    userDataDir?: string
+    fetchImpl?: typeof fetch
     isPortAvailableImpl?: (port: number) => Promise<boolean>
     findAvailablePortImpl?: () => Promise<number>
   } = {}
@@ -31,7 +35,20 @@ export async function relocateModelRouterIfPortIsOccupied(
   if (!Number.isInteger(configuredPort) || configuredPort <= 0) return null
 
   const isPortAvailable = options.isPortAvailableImpl ?? isLoopbackPortAvailable
-  if (await isPortAvailable(configuredPort)) return null
+  // WSL localhost forwarding can answer HTTP even though this namespace can
+  // bind the same port. Probe the endpoint consumers actually use as well.
+  const [available, health] = await Promise.all([
+    isPortAvailable(configuredPort),
+    probeEndpoint(new URL('/health', parsed).href, options.fetchImpl ?? fetch)
+  ])
+  if (available && !health.reachable) return null
+  if (options.userDataDir && health.instanceId) {
+    try {
+      const state = JSON.parse(await readFile(modelAccessGatewayStatePath(options.userDataDir), 'utf8'))
+      if (state.mode === 'model-router' && state.instanceId === health.instanceId &&
+          state.healthUrl === new URL('/health', parsed).href) return null
+    } catch { /* No verifiable ownership: leave the other listener alone. */ }
+  }
 
   const findAvailablePort = options.findAvailablePortImpl ?? findAvailableLoopbackPort
   const port = await findAvailablePort()
@@ -40,6 +57,15 @@ export async function relocateModelRouterIfPortIsOccupied(
     configuredPort,
     activePort: port
   }
+}
+
+async function probeEndpoint(url: string, fetchImpl: typeof fetch): Promise<{ reachable: boolean; instanceId?: string }> {
+  try {
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(500) })
+    const body = await response.json().catch(() => null)
+    return { reachable: true, instanceId: body?.service === 'sciforge.model-router' &&
+      typeof body.instanceId === 'string' ? body.instanceId : undefined }
+  } catch { return { reachable: false } }
 }
 
 async function findAvailableLoopbackPort(): Promise<number> {

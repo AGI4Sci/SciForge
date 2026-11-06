@@ -9,6 +9,8 @@ import type { CollaborationRendererClient } from '../collaboration-capability-cl
 import type { WorkerDeliveryView } from '../../worker-delivery.js'
 import { CollaborationWorkspaceStructure } from './CollaborationWorkspaceStructure.js'
 import { createWorkspaceViewModel, type WorkspacePersonalItem, type WorkspaceRoute } from './workspace-view-model.js'
+import { ResearchView } from './research/ResearchView.js'
+import { sendResearchQuestion } from './research/research-conversation.js'
 import { RequirementsView } from './requirements/RequirementsView.js'
 import { SettingsView } from './settings/SettingsView.js'
 import { PersonalList } from './personal/PersonalList.js'
@@ -18,6 +20,7 @@ import { readSealedDeliverySummary } from './files/delivery-bundle-summary.js'
 import { NewProjectDialog } from './projects/NewProjectDialog.js'
 import { CompleteProjectDialog } from './dialogs/CompleteProjectDialog.js'
 import { waitForRefresh } from '../../refresh-await.js'
+import { answerReviewedHumanRequest, type HumanDecision, type HumanAnswerFeedback } from './human-request-decision.js'
 import { acceptReviewedInvitation } from './accept-reviewed-invitation.js'
 
 import { openCollaborationTaskSession } from '../task-session-navigation.js'
@@ -48,6 +51,7 @@ export function CollaborationWorkspacePage({ coordinatorClient, collaborationCli
     failedCompletionDraft?: ProjectRequirementsDocument
   }> | null>(null)
   const error = pageError?.message ?? null
+  const [humanAnswerFeedback, setHumanAnswerFeedback] = useState<HumanAnswerFeedback>()
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const [action, setAction] = useState<Readonly<{ kind: string; target: string }> | null>(null)
@@ -352,7 +356,7 @@ export function CollaborationWorkspacePage({ coordinatorClient, collaborationCli
     setBusy(true); setAction(nextAction); setPageError(null)
     try {
       await operation()
-      await refresh()
+      await refresh(undefined, { refreshDashboards: nextAction.kind === 'answer' })
       return true
     } catch (cause) {
       // The original attempt continues. Refresh its authoritative progress
@@ -370,17 +374,17 @@ export function CollaborationWorkspacePage({ coordinatorClient, collaborationCli
     const alreadyLoaded = workspace?.focusedProjectId === projectId
     applySelection(projectId); setSelectedCardId(null)
     // An invited member lands on the requirements page so the invitation banner is the first thing they see.
-    setRoute(model.inbox.some((item) => item.kind === 'invite' && item.projectId === projectId) ? 'requirements' : 'board')
+    setRoute(model.inbox.some((item) => item.kind === 'invite' && item.projectId === projectId) ? 'requirements' : 'research')
     if (!alreadyLoaded) beginProjectSwitch(projectId)
     void refresh(projectId)
   }, [applySelection, beginProjectSwitch, model.inbox, refresh, workspace?.focusedProjectId])
   useEffect(() => {
     const payload = activation?.payload
     if (!active || !payload || typeof payload !== 'object' || Array.isArray(payload) ||
-        typeof payload.projectId !== 'string' || typeof payload.taskId !== 'string') return
+        typeof payload.projectId !== 'string' || (typeof payload.taskId !== 'string' && payload.route !== 'research')) return
     applySelection(payload.projectId)
-    setRoute('board')
-    setSelectedCardId(payload.taskId)
+    setRoute(payload.route === 'research' ? 'research' : 'board')
+    setSelectedCardId(typeof payload.taskId === 'string' ? payload.taskId : null)
     void refresh(payload.projectId)
   }, [activation, active, applySelection, refresh])
   const selectRoute = useCallback((nextRoute: WorkspaceRoute) => { setRoute(nextRoute); setSelectedCardId(null); setConfirmOnOpen(false) }, [])
@@ -452,13 +456,20 @@ export function CollaborationWorkspacePage({ coordinatorClient, collaborationCli
     if (!model.projectId || !selectedCard.executionId || !selectedCard.canReturnExecution || selectedCard.assigneeUserId !== model.currentUserId) return Promise.resolve(false)
     return run(() => collaborationClient.returnTask({ projectId: model.projectId!, taskId: selectedCard.id, executionId: selectedCard.executionId!, reason }), { kind: 'return-task', target: selectedCard.id })
   }, [collaborationClient, model.currentUserId, model.projectId, run, selectedCard])
-  const answerSelectedHumanRequest = useCallback((answer: string): Promise<boolean> | void => {
-    const request = model.project?.pendingHumanNeeded.find((item) => item.humanRequestId === selectedCard.humanRequestId)
-    const text = answer.trim()
-    // Only the Member the Agent asked may answer; every other reader stays read-only.
-    if (!model.projectId || !request || !text || request.targetUserId !== model.currentUserId) return
-    return run(() => coordinatorClient.answerHumanNeeded({ projectId: model.projectId!, humanRequestId: request.humanRequestId, requestRevision: request.revision, answer: text }), { kind: 'answer', target: selectedCard.id })
-  }, [coordinatorClient, model.currentUserId, model.project?.pendingHumanNeeded, model.projectId, run, selectedCard.humanRequestId, selectedCard.id])
+  const answerSelectedHumanRequest = useCallback((answer: string, decision?: HumanDecision): Promise<boolean> => {
+    const request = selectedCard.humanRequest
+    const userId = model.currentUserId
+    if (!request || !userId || !model.projectId) return Promise.resolve(false)
+    // Freeze what was actually displayed; never approve a newer unseen revision.
+    const reviewed = structuredClone(request)
+    return run(async () => {
+      await answerReviewedHumanRequest(coordinatorClient, reviewed, userId, answer, decision)
+      if (reviewed.context.scope === 'worker_execution') setHumanAnswerFeedback({
+        projectId: reviewed.projectId, taskId: reviewed.context.taskId, executionId: reviewed.context.executionId,
+        userId, humanRequestId: reviewed.humanRequestId, ...(decision ? { decision } : {})
+      })
+    }, { kind: 'answer', target: selectedCard.id })
+  }, [coordinatorClient, model.currentUserId, model.projectId, run, selectedCard.humanRequest, selectedCard.id])
   const submitDelivery = useCallback((summary: string): Promise<boolean> => {
     if (!workerDelivery?.draft || selectedCard.assigneeUserId !== model.currentUserId) return Promise.resolve(false)
     return run(async () => {
@@ -612,15 +623,16 @@ export function CollaborationWorkspacePage({ coordinatorClient, collaborationCli
   const requirementsError = action?.target === `requirements:${model.projectId}` || action?.target === `invitation:${invitationItem?.membershipId}` ? error : null
   const createError = action?.target === 'create-project' ? error : null
   const errorShownInline = (route === 'board' && selectedCardId !== null && taskError) || (route === 'requirements' && requirementsError) || (newProjectOpen && createError)
-  const content = route === 'board' ? undefined
+  const content = route === 'research' ? <ResearchView key={model.projectId} model={model} busy={busy} onSend={(input) => run(() => { if (!workbench) throw new Error('研究会话入口暂不可用。'); return sendResearchQuestion(coordinatorClient, workbench, input) }, { kind: 'research', target: 'page' })} onOpenTask={(card) => { setSelectedCardId(card.id); setRoute('board') }} onPlan={() => selectRoute('requirements')} />
+    : route === 'board' ? undefined
     : route === 'requirements' ? <RequirementsView key={`${model.projectId}:${confirmOnOpen}`} model={model} busy={busy} error={requirementsError} pendingAction={busy ? action?.kind : undefined} invitation={invitationItem} confirmOnOpen={confirmOnOpen} onAcceptInvitation={invitationItem ? () => acceptInvitationItem(invitationItem) : undefined} onOpenModule={openModuleCard} onSave={(goals, inputs) => void run(() => coordinatorClient.saveRequirementsDraft({ projectId: model.projectId!, expectedProjectRevision: model.project!.project.revision, expectedRequirementsRevision: model.requirements?.revision ?? 0, goalsDeliverables: goals, inputsBoundaries: inputs }), { kind: 'save-requirements', target: `requirements:${model.projectId}` })} onComplete={() => void run(() => coordinatorClient.completeRequirements({ projectId: model.projectId!, expectedRequirementsRevision: model.requirements?.revision ?? undefined }), { kind: 'complete-requirements', target: `requirements:${model.projectId}` })} onConfirm={confirmRequirements} />
     : route === 'settings' ? <SettingsView key={model.projectId} model={model} busy={busy} onAddMember={addMember} onRemoveMember={removeMember} />
     : route === 'my-work' ? <PersonalList title="我的工作" subtitle="跨所有项目，分配给你和等你处理的任务" items={model.myWork} loading={!model.loaded} onOpen={openPersonalItem} />
     : route === 'inbox' ? <PersonalList title="收件箱" subtitle="邀请、待接受的任务、Agent 提问和待采纳的交付" items={model.inbox} loading={!model.loaded} onOpen={openPersonalItem} />
     : <FilesView groups={fileGroups} loading={filesLoading} onPreview={openDeliveryPreview} />
-  const projectRoute = route === 'board' || route === 'requirements' || route === 'files' || route === 'settings'
+  const projectRoute = route === 'research' || route === 'board' || route === 'requirements' || route === 'files' || route === 'settings'
   const activeRoute = route === 'my-work' || route === 'inbox' ? route : undefined
-  const activeTab = route === 'requirements' ? 'requirements' : route === 'files' ? 'files' : route === 'settings' ? 'settings' : 'board'
+  const activeTab = route === 'research' ? 'research' : route === 'requirements' ? 'requirements' : route === 'files' ? 'files' : route === 'settings' ? 'settings' : 'board'
   return (
     <div className={`collaboration-workspace-page${className ? ` ${className}` : ''}`}>
       <CollaborationWorkspaceStructure
@@ -648,6 +660,7 @@ export function CollaborationWorkspacePage({ coordinatorClient, collaborationCli
         onRequestRevision={requestSelectedRevision}
         onOfferDecision={decideSelectedOffer}
         onHumanAnswer={answerSelectedHumanRequest}
+        humanAnswerFeedback={humanAnswerFeedback?.projectId === model.projectId && humanAnswerFeedback?.taskId === selectedCard.id && humanAnswerFeedback?.executionId === selectedCard.executionId && humanAnswerFeedback?.userId === model.currentUserId ? humanAnswerFeedback : undefined}
         onReturnTask={returnSelectedTask}
         onReexecute={workbench?.sendMessage ? reexecuteSelectedTask : undefined}
         onContinueSession={workbench?.openSession ? continueSelectedTask : undefined}

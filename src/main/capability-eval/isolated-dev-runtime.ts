@@ -36,8 +36,8 @@ export type IsolatedDevBrowserBridgeRuntime = DevBrowserBridgeRuntime & Readonly
 
 /**
  * Starts one disposable SciForge development process for one live workflow.
- * Electron's explicit user-data directory isolates Paper Radar's local DB,
- * profiles, Host approval caches, and other app-local durable state. The
+ * Electron's explicit user-data directory isolates Host approval caches
+ * and other app-local durable state. The
  * caller must still treat external providers as shared unless their own
  * harness offers an isolated endpoint or fixture.
  */

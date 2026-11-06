@@ -2,8 +2,8 @@
 import { defineInstalledDomainPackageSet } from '@sciforge/domain-sdk'
 import type { DomainWorkspaceServerHost } from '@sciforge/domain-sdk/workspace-server'
 import { defineInstalledWorkspaceServerDomainEntrySet } from '@sciforge/domain-sdk/workspace-server'
-import { domainPackageDefinition as domainPackageDefinition0 } from '@sciforge/domain-life-science-preview/definition'
-import { createDomainWorkspaceServerEntry as createDomainWorkspaceServerEntry0 } from '@sciforge/domain-life-science-preview/workspace-server'
+import { domainPackageDefinition as domainPackageDefinition0 } from '@sciforge/domain-biology-workbench/definition'
+import { createDomainWorkspaceServerEntry as createDomainWorkspaceServerEntry0 } from '@sciforge/domain-biology-workbench/workspace-server'
 
 const installedWorkspaceServerDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0

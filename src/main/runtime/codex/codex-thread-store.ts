@@ -9,6 +9,7 @@ import {
 } from '../../../shared/agent-runtime-contract'
 
 export type CodexStoredThread = {
+  contextProfile?: 'minimal'
   guiThreadId: string
   codexThreadId: string
   runtimeId: 'codex'
@@ -45,6 +46,7 @@ export type CodexThreadStoreOptions = {
 export type CodexStoredThreadRelation = 'primary' | 'fork' | 'side'
 
 export type CodexThreadStoreUpsertInput = {
+  contextProfile?: 'minimal'
   guiThreadId?: string
   codexThreadId: string
   workspace?: string
@@ -85,6 +87,7 @@ function applyThreadUpsert(
     ? undefined
     : input.archived
   const next = mergeThreadRecords(matchingThreads, {
+    contextProfile: input.contextProfile,
     guiThreadId,
     codexThreadId,
     updatedAt,
@@ -115,7 +118,7 @@ function applyThreadUpsert(
 }
 
 function sameStoredThread(a: CodexStoredThread, b: CodexStoredThread): boolean {
-  return a.guiThreadId === b.guiThreadId &&
+  return a.contextProfile === b.contextProfile && a.guiThreadId === b.guiThreadId &&
     a.codexThreadId === b.codexThreadId &&
     a.runtimeId === b.runtimeId &&
     a.workspace === b.workspace &&
@@ -316,6 +319,7 @@ function normalizeThread(raw: unknown): CodexStoredThread | null {
     guiThreadId,
     codexThreadId,
     runtimeId: 'codex',
+    ...(record.contextProfile === 'minimal' ? { contextProfile: 'minimal' } : {}),
     workspace: stringValue(record.workspace),
     ...(stringValue(record.workspaceDisplayName)
       ? { workspaceDisplayName: stringValue(record.workspaceDisplayName) }
@@ -367,6 +371,7 @@ function sameThreadIdentity(a: CodexStoredThread, b: CodexStoredThread): boolean
 function mergeThreadRecords(
   records: CodexStoredThread[],
   overrides: {
+    contextProfile?: 'minimal'
     guiThreadId?: string
     codexThreadId?: string
     workspace?: string
@@ -395,8 +400,14 @@ function mergeThreadRecords(
   const guiThreadId = nonEmpty(overrides.guiThreadId, preferred?.guiThreadId ?? overrides.codexThreadId ?? '')
   const codexThreadId = nonEmpty(overrides.codexThreadId, preferred?.codexThreadId ?? guiThreadId)
   const latestTurnIdField = optionalString('latestTurnId', overrides.latestTurnId, preferredRecords)
-  const durableTerminalStatus = preferredRecords.find((thread) => (
-    thread.latestTurnId === latestTurnIdField.latestTurnId && isAgentRuntimeTerminalTurnState(thread.latestTurnStatus)
+  // A new turn can first report activity without a status (turn_start_sent).
+  // Carrying the previous turn's terminal state here would bind it to the new
+  // identity and then prevent its following user_message from becoming running.
+  const sameTurnRecords = preferredRecords.filter((thread) => (
+    thread.latestTurnId === latestTurnIdField.latestTurnId
+  ))
+  const durableTerminalStatus = sameTurnRecords.find((thread) => (
+    isAgentRuntimeTerminalTurnState(thread.latestTurnStatus)
   ))?.latestTurnStatus
   const latestTurnStatusOverride = durableTerminalStatus && !isAgentRuntimeTerminalTurnState(overrides.latestTurnStatus)
     ? durableTerminalStatus
@@ -405,6 +416,8 @@ function mergeThreadRecords(
     guiThreadId,
     codexThreadId,
     runtimeId: 'codex',
+    ...(overrides.contextProfile === 'minimal' || records.some((record) => record.contextProfile === 'minimal')
+      ? { contextProfile: 'minimal' } : {}),
     workspace: chooseString([overrides.workspace, ...preferredRecords.map((thread) => thread.workspace)]),
     ...optionalString('workspaceDisplayName', overrides.workspaceDisplayName, preferredRecords),
     title: chooseDisplayTitle([overrides.title, ...preferredRecords.map((thread) => thread.title)]) ?? 'Codex thread',
@@ -416,7 +429,7 @@ function mergeThreadRecords(
       ...preferredRecords.map((thread) => thread.latestSeq)
     ),
     ...latestTurnIdField,
-    ...optionalTurnStatus('latestTurnStatus', latestTurnStatusOverride, preferredRecords),
+    ...optionalTurnStatus('latestTurnStatus', latestTurnStatusOverride, sameTurnRecords),
     ...optionalString('latestUserMessageId', overrides.latestUserMessageId, preferredRecords),
     ...optionalRelation('relation', overrides.relation, preferredRecords),
     ...optionalString('parentThreadId', overrides.parentThreadId, preferredRecords),

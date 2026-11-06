@@ -14,6 +14,10 @@ import {
 import type { ProjectCoordinatorWorkspacePort } from './ports.js'
 import { executeUserCloud } from './ports.js'
 
+class ProjectMembershipRevisionConflictError extends Error {
+  readonly code = 'revision_conflict'
+}
+
 export type ProjectCoordinatorMembershipPort = Readonly<{
   addMember(input: ProjectCoordinatorMembershipAddInput, idempotencyKey: string): Promise<ProjectCoordinatorWorkspace>
   acceptInvitation(input: ProjectCoordinatorMembershipAcceptInput, idempotencyKey: string): Promise<ProjectCoordinatorWorkspace>
@@ -43,7 +47,7 @@ export function createProjectCoordinatorMembershipPort(options: Readonly<{
       const input = projectCoordinatorMembershipAddInputSchema.parse(rawInput)
       const project = await readOwnerProject(input.projectId)
       if (project.project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project changed before the member add confirmation.')
+        throw new ProjectMembershipRevisionConflictError('Project changed before the member add confirmation.')
       }
       const response = await executeUserCloud(options.transport, {
         protocolVersion: CURRENT_PROTOCOL_VERSION,
@@ -72,7 +76,7 @@ export function createProjectCoordinatorMembershipPort(options: Readonly<{
         throw new Error('Only the exact invited OIDC User may accept this Project invitation.')
       }
       if (project.project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project invitation acceptance lost the exact current Project revision.')
+        throw new ProjectMembershipRevisionConflictError('Project invitation acceptance lost the exact current Project revision.')
       }
       if (!project.confirmedRequirements) {
         throw new Error('Requirements are not confirmed yet.')
@@ -100,7 +104,7 @@ export function createProjectCoordinatorMembershipPort(options: Readonly<{
       const input = projectCoordinatorMembershipRemoveInputSchema.parse(rawInput)
       const project = await readOwnerProject(input.projectId)
       if (project.project.revision !== input.expectedProjectRevision) {
-        throw new Error('Project changed before the member removal confirmation.')
+        throw new ProjectMembershipRevisionConflictError('Project changed before the member removal confirmation.')
       }
       const response = await executeUserCloud(options.transport, {
         protocolVersion: CURRENT_PROTOCOL_VERSION,

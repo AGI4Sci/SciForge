@@ -29,10 +29,19 @@ const HOST_PROVIDED = new Set(['@deepseek-ai/dsh-tools', '@napi-rs/canvas'])
 export async function bundledCapabilityIds(root = resolve('packages/domains')) {
   const ids = new Set()
   const { readdir, readFile } = await import('node:fs/promises')
+  // An operator that excludes a static domain from the application must gate the
+  // market against the same set, otherwise the plugin it installs looks colliding.
+  const excluded = new Set((process.env.SCIFORGE_EXCLUDED_DOMAIN_PACKAGES ?? '')
+    .split(',').map((name) => name.trim()).filter(Boolean))
   async function walk(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name)
       if (entry.isDirectory()) {
+        if (excluded.size > 0) {
+          const declaration = await readFile(join(path, 'sciforge.domain.json'), 'utf8')
+            .then((text) => JSON.parse(text)).catch(() => undefined)
+          if (declaration?.packageName && excluded.has(declaration.packageName)) continue
+        }
         await walk(path)
       } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
         const text = await readFile(path, 'utf8')
@@ -100,7 +109,13 @@ export async function indexFromBatchReport(report, readArtifact, bundledIds = ne
     // not a copy of whatever the packaging step happened to print.
     const validated = await readArtifact(record.artifact.path)
     const tools = Object.entries(validated.manifest.tools)
-      .map(([name, grant]) => ({ name, id: grant.id, effect: grant.effect }))
+      .map(([name, grant]) => ({
+        name, id: grant.id, effect: grant.effect,
+        ...(grant.approval !== undefined ? { approval: grant.approval } : {}),
+        ...(grant.tags !== undefined ? { tags: grant.tags } : {}),
+        ...(grant.scope !== undefined ? { scope: grant.scope } : {}),
+        ...(grant.readResource !== undefined ? { readResource: grant.readResource } : {})
+      }))
       .sort((left, right) => left.name.localeCompare(right.name))
     const enriched = {
       ...record,
@@ -108,6 +123,7 @@ export async function indexFromBatchReport(report, readArtifact, bundledIds = ne
         ...record.artifact,
         tools,
         capabilityIds: tools.map((tool) => tool.id),
+        ports: validated.manifest.ports ?? [],
         hostDependencies: validated.manifest.hostDependencies
       }
     }
@@ -132,6 +148,7 @@ export async function indexFromBatchReport(report, readArtifact, bundledIds = ne
       categories: declared.categories ?? [],
       entry: validated.manifest.entry,
       tools,
+      ports: validated.manifest.ports ?? [],
       hostDependencies: validated.manifest.hostDependencies,
       publisher: record.artifact.publisherId,
       artifact: {
@@ -139,7 +156,7 @@ export async function indexFromBatchReport(report, readArtifact, bundledIds = ne
         sizeBytes: record.artifact.sizeBytes,
         sha256: record.artifact.sha256
       },
-      source: `plugins/${record.plugin}`,
+      source: record.source ?? declared.source ?? `plugins/${record.plugin}`,
       runtimeNote: record.runtimeGap ?? null
     })
   }
@@ -172,10 +189,8 @@ async function publishArtifacts(index) {
 }
 
 /**
- * The two demo plugins are test fixtures now (tests/fixtures/dsh-plugins). Their
- * catalogue is signed with a repository-external *test* key, so it must never be
- * written over the product catalogue that ships inside the app. Refuse that
- * combination outright instead of trusting the caller to pass matching paths.
+ * Alternate plugin sources must publish to a separate catalogue so test
+ * artifacts cannot overwrite the product catalogue that ships inside the app.
  */
 function assertProductCatalogueIsNotBuiltFromFixtures() {
   const pluginsRoot = process.env.SCIFORGE_PLUGINS_DIR?.trim()
@@ -184,7 +199,7 @@ function assertProductCatalogueIsNotBuiltFromFixtures() {
   if (INDEX_PATH === resolve('market/index.json')) {
     throw new Error(
       `Refusing to write the product catalogue ${INDEX_PATH} from ${pluginsRoot}. ` +
-      'Fixtures are test-only; set SCIFORGE_MARKET_INDEX_OUT to a fixture path (npm run market:fixtures does this).'
+      'Alternate sources require a separate catalogue; set SCIFORGE_MARKET_INDEX_OUT to a test output path.'
     )
   }
 }

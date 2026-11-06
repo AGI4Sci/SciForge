@@ -145,6 +145,8 @@ export class WorkspacePreviewHost {
   private readonly listeners = new Set<WorkspacePreviewHostListener>()
   private state: WorkspacePreviewHostState = createWorkspacePreviewHostState()
   private openRequestSequence = 0
+  private observeRequestSequence = 0
+  private editRequestSequence = 0
 
   constructor(options: WorkspacePreviewHostOptions) {
     this.registry = options.registry
@@ -248,10 +250,15 @@ export class WorkspacePreviewHost {
 
     const bridge = this.bridgeOrError()
     if (!bridge) return this.failObserve(missingBridgeMessage())
+    const openSequence = this.openRequestSequence
+    const requestSequence = this.state.session?.id === resolvedSessionId
+      ? ++this.observeRequestSequence : -1
+    const isCurrent = () => this.state.session?.id === resolvedSessionId &&
+      this.openRequestSequence === openSequence && requestSequence === this.observeRequestSequence
 
     try {
       const result = await bridge.observe(resolvedSessionId)
-      if (this.state.session?.id !== resolvedSessionId) return result
+      if (!isCurrent()) return result
       if (!result.ok) {
         this.patchState({ error: result.message })
         return result
@@ -264,7 +271,7 @@ export class WorkspacePreviewHost {
       })
       return result
     } catch (error) {
-      if (this.state.session?.id !== resolvedSessionId) {
+      if (!isCurrent()) {
         return { ok: false, message: 'Workspace preview session was superseded.' }
       }
       return this.failObserve(messageFromError(error))
@@ -407,15 +414,7 @@ export class WorkspacePreviewHost {
     const resolvedOperation = typeof sessionIdOrOperation === 'string' ? operation : sessionIdOrOperation
     if (!sessionId || !resolvedOperation) return this.failApplyEdit(missingSessionMessage())
 
-    const bridge = this.bridgeOrError()
-    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
-
-    try {
-      const result = await bridge.applyEdit(sessionId, resolvedOperation)
-      return this.acceptApplyEditResult(result)
-    } catch (error) {
-      return this.failApplyEdit(messageFromError(error))
-    }
+    return this.runScopedEdit(sessionId, bridge => bridge.applyEdit(sessionId, resolvedOperation))
   }
 
   async listAnnotations(
@@ -438,37 +437,19 @@ export class WorkspacePreviewHost {
   async updateAnnotation(input: WorkspacePreviewAnnotationUpdateInput): Promise<WorkspacePreviewApplyEditResult> {
     const sessionId = this.state.session?.id
     if (!sessionId) return this.failApplyEdit(missingSessionMessage())
-    const bridge = this.bridgeOrError()
-    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
-    try {
-      return this.acceptApplyEditResult(await bridge.updateAnnotation(sessionId, input))
-    } catch (error) {
-      return this.failApplyEdit(messageFromError(error))
-    }
+    return this.runScopedEdit(sessionId, bridge => bridge.updateAnnotation(sessionId, input))
   }
 
   async resolveAnnotation(input: WorkspacePreviewAnnotationResolveInput): Promise<WorkspacePreviewApplyEditResult> {
     const sessionId = this.state.session?.id
     if (!sessionId) return this.failApplyEdit(missingSessionMessage())
-    const bridge = this.bridgeOrError()
-    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
-    try {
-      return this.acceptApplyEditResult(await bridge.resolveAnnotation(sessionId, input))
-    } catch (error) {
-      return this.failApplyEdit(messageFromError(error))
-    }
+    return this.runScopedEdit(sessionId, bridge => bridge.resolveAnnotation(sessionId, input))
   }
 
   async deleteAnnotation(input: WorkspacePreviewAnnotationDeleteInput): Promise<WorkspacePreviewApplyEditResult> {
     const sessionId = this.state.session?.id
     if (!sessionId) return this.failApplyEdit(missingSessionMessage())
-    const bridge = this.bridgeOrError()
-    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
-    try {
-      return this.acceptApplyEditResult(await bridge.deleteAnnotation(sessionId, input))
-    } catch (error) {
-      return this.failApplyEdit(messageFromError(error))
-    }
+    return this.runScopedEdit(sessionId, bridge => bridge.deleteAnnotation(sessionId, input))
   }
 
   async importAnnotations(
@@ -584,6 +565,33 @@ export class WorkspacePreviewHost {
       workspaceId: session.workspaceRoot,
       resource: capability.resource
     })
+  }
+
+  private async runScopedEdit(
+    sessionId: string,
+    invoke: (bridge: WorkspacePreviewBridgeAdapter) => Promise<WorkspacePreviewApplyEditResult>
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    const openSequence = this.openRequestSequence
+    const requestSequence = ++this.editRequestSequence
+    // Reads issued before or during a write cannot overwrite its acknowledged state.
+    this.observeRequestSequence += 1
+    const isCurrent = () => this.state.session?.id === sessionId &&
+      this.openRequestSequence === openSequence && requestSequence === this.editRequestSequence
+    try {
+      const result = await invoke(bridge)
+      // An already completed external write remains a real result, but cannot
+      // reactivate its old UI session or replace a newer selection receipt.
+      if (!isCurrent()) return result
+      this.observeRequestSequence += 1
+      return this.acceptApplyEditResult(result)
+    } catch (error) {
+      const message = messageFromError(error)
+      if (!isCurrent()) return { ok: false, message }
+      this.observeRequestSequence += 1
+      return this.failApplyEdit(message)
+    }
   }
 
   private acceptApplyEditResult(result: WorkspacePreviewApplyEditResult): WorkspacePreviewApplyEditResult {
@@ -723,6 +731,10 @@ export function createWorkspacePreviewAssetTransportClient(input: {
         const result = await input.readRange(range)
         if (!result.ok) {
           readFailure = result
+          return
+        }
+        if (!('dataBase64' in result)) {
+          readFailure = { ok: false, message: 'Preview byte-range read returned text instead of binary data.' }
           return
         }
         const chunk = decodeBase64Bytes(result.dataBase64)

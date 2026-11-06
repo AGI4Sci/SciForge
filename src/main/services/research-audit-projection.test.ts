@@ -7,15 +7,13 @@ import {
   type EvidenceDagSidechainRecordV1
 } from '@sciforge/domain-evidence-dag/contract'
 import { createEvidenceDagCapabilityFactory } from '@sciforge/domain-evidence-dag/main'
+import { z } from 'zod'
 import {
-  CHANGE_INSPECTOR_CAPABILITY_IDS,
-  changeInspectorChangeSummarySchema,
-  changeInspectorListChangesOutputSchema,
-  type ChangeInspectorChangeSummary,
-  type ChangeInspectorListChangesInput,
-  type ChangeInspectorListChangesOutput
-} from '@sciforge/domain-change-inspector/contract'
-import { createChangeInspectorCapabilityFactory } from '@sciforge/domain-change-inspector/main'
+  RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS,
+  researchAuditSessionChangeSummarySchema,
+  researchAuditSessionChangeListChangesOutputSchema,
+  type ResearchAuditSessionChangeSummary
+} from '@sciforge/domain-sdk/research-audit'
 import {
   PROJECT_DAG_CAPABILITY_IDS,
   projectDagReleaseV1Schema,
@@ -47,15 +45,22 @@ const RAW_THREAD_ID = 'thread-1'
 
 type FixtureDefinition = CapabilityDefinition
 
+const testOnlyListChangesInputSchema = z.object({
+  sessionId: z.string().min(1),
+  limit: z.number().int().positive().max(500).optional(),
+  cursor: z.string().min(1).optional()
+}).strict()
+type TestOnlyListChangesInput = z.infer<typeof testOnlyListChangesInputSchema>
+
 /**
- * Fixture ports behind the real capability definitions: the registry holds
- * the production descriptors (so the structural zero-write assertion looks
- * real effects up via the registry), while the handlers serve fixture data.
+ * Unit-only port fixture, not a production plugin substitute. The neutral SDK
+ * descriptor/output verifies aggregation and zero-write structure in isolation;
+ * the integration suite separately loads the actual independent plugin entry.
  */
 function createFixturePorts() {
   const invocations: { actionId: string; input: unknown }[] = []
   const auditQuery = new Map<string, (input: EvidenceDagAuditQueryInput) => unknown>()
-  const listChanges = new Map<string, (input: ChangeInspectorListChangesInput) => unknown>()
+  const listChanges = new Map<string, (input: TestOnlyListChangesInput) => unknown>()
   const readRecords = new Map<string, (input: ProjectDagReadRecordsInput) => unknown>()
 
   const evidenceFactory = createEvidenceDagCapabilityFactory<FixtureDefinition>({
@@ -68,15 +73,22 @@ function createFixturePorts() {
       }
     }) as never
   })
-  const changeInspectorFactory = createChangeInspectorCapabilityFactory<FixtureDefinition>({
-    defineCapability: (options) => defineCapability(options as never),
-    snapshot: () => {
-      throw new Error('open-session is not part of the audit projection.')
-    },
-    listChanges: async (input) => {
+  const testOnlyListChangesDefinition = defineCapability({
+    id: RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS.sessionChangeListChanges,
+    version: 'test-only',
+    title: 'Test-only neutral session-change read port',
+    description: 'Unit fixture only; integration verifies the real process plugin.',
+    audiences: ['agent'],
+    scope: 'workspace',
+    effect: 'read',
+    approval: 'none',
+    concurrency: { revision: 'none', idempotency: 'none' },
+    inputSchema: testOnlyListChangesInputSchema,
+    outputSchema: researchAuditSessionChangeListChangesOutputSchema,
+    handler: async (input) => {
       const handler = listChanges.get(input.sessionId)
       if (!handler) throw new Error(`No list-changes fixture for ${input.sessionId}`)
-      return await handler(input) as ChangeInspectorListChangesOutput
+      return { output: researchAuditSessionChangeListChangesOutputSchema.parse(await handler(input)) }
     }
   })
   const projectDagFactory = createProjectDagCapabilityFactory<FixtureDefinition>({
@@ -92,7 +104,7 @@ function createFixturePorts() {
 
   const registry = new CapabilityRegistry([
     ...evidenceFactory.createDefinitions(),
-    ...changeInspectorFactory.createDefinitions(),
+    testOnlyListChangesDefinition,
     ...projectDagFactory.createDefinitions()
   ])
 
@@ -160,8 +172,8 @@ const DIFF = [
 function changeSummary(
   id: string,
   occurredAt = '2026-10-26T00:30:00.000Z'
-): ChangeInspectorChangeSummary {
-  return changeInspectorChangeSummarySchema.parse({
+): ResearchAuditSessionChangeSummary {
+  return researchAuditSessionChangeSummarySchema.parse({
     id,
     status: 'success',
     patch: DIFF,
@@ -221,14 +233,14 @@ function installAuditFixture(
 function installSessionFixture(
   ports: ReturnType<typeof createFixturePorts>,
   sessionId: string,
-  pages: ChangeInspectorChangeSummary[][]
+  pages: ResearchAuditSessionChangeSummary[][]
 ) {
   ports.listChanges.set(sessionId, (input) => {
     const startIndex = input.cursor ? pages.flat().findIndex((change) => change.id === input.cursor) + 1 : 0
     const flat = pages.flat()
     const limit = input.limit ?? 100
     const slice = flat.slice(startIndex, startIndex + limit)
-    return changeInspectorListChangesOutputSchema.parse({
+    return researchAuditSessionChangeListChangesOutputSchema.parse({
       changes: slice,
       nextCursor: startIndex + slice.length < flat.length ? slice[slice.length - 1]!.id : null,
       revision: 'rev-fixture',
@@ -311,7 +323,7 @@ describe('ResearchAuditProjectionService availability matrix', () => {
       'session-change'
     ])
     const sessionInvoke = ports.invocations.find((invocation) =>
-      invocation.actionId === CHANGE_INSPECTOR_CAPABILITY_IDS.listChanges
+      invocation.actionId === RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS.sessionChangeListChanges
     )
     expect(sessionInvoke?.input).toEqual(expect.objectContaining({ sessionId: RAW_THREAD_ID }))
   })
@@ -660,7 +672,7 @@ describe('ResearchAuditProjectionService zero-write structure', () => {
     const invokedActionIds = [...new Set(ports.invocations.map((invocation) => invocation.actionId))]
     expect(invokedActionIds).toEqual([
       EVIDENCE_DAG_CAPABILITY_IDS.auditQuery,
-      CHANGE_INSPECTOR_CAPABILITY_IDS.listChanges,
+      RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS.sessionChangeListChanges,
       PROJECT_DAG_CAPABILITY_IDS.readRecords
     ])
     for (const actionId of invokedActionIds) {

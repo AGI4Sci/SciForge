@@ -147,12 +147,31 @@ export const domainRendererWorkspacePickResultSchema = z.object({
   })
 })
 
+/** Non-authorizing context: reject cycles, non-JSON values and excessive nesting before parsing. */
+const resourceContextSchema = z.unknown().refine((value) => {
+  const pending = [{ value, depth: 0 }], seen = new Set<object>()
+  let nodes = 0
+  while (pending.length) {
+    const item = pending.pop()!
+    if (++nodes > 1024 || item.depth > 8) return false
+    const current = item.value
+    if (current === null || typeof current === 'boolean' || typeof current === 'string') continue
+    if (typeof current === 'number') { if (!Number.isFinite(current)) return false; continue }
+    if (typeof current !== 'object' || seen.has(current)) return false
+    if (!Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype && Object.getPrototypeOf(current) !== null) return false
+    seen.add(current)
+    for (const child of Object.values(current)) pending.push({ value: child, depth: item.depth + 1 })
+  }
+  return new TextEncoder().encode(JSON.stringify(value)).length <= 32768
+}, 'Resource context must be bounded JSON (32 KiB, depth 8, 1024 values).').pipe(domainPackageJsonValueSchema)
+
 const domainWorkbenchOpenResourceInputFields = {
   sessionId: z.string().trim().min(1).max(256),
   resource: z.object({
     resourceKind: z.string().trim().min(1).max(192),
     resourceId: z.string().trim().min(1).max(512),
     resourceRef: z.string().trim().regex(/^res_[A-Za-z0-9_-]{20,}$/u).optional(),
+    context: resourceContextSchema.optional(),
     integrity: z.object({
       algorithm: z.literal('sha256'),
       expectedDigest: z.string().trim().toLowerCase()
@@ -254,6 +273,8 @@ export function isDomainRendererChatMessageValue(
 }
 
 export type DomainRendererChatResultPanelRenderContext = Readonly<{
+  /** Item panels receive exactly their source item; turn summaries receive the turn. */
+  anchor: Readonly<{ kind: 'item'; itemId: string }> | Readonly<{ kind: 'turn-end' }>
   blocks: readonly unknown[]
   workspaceRoot?: string
   sessionId?: string
@@ -271,13 +292,15 @@ export type DomainRendererChatResultPanelRenderContext = Readonly<{
 
 export type DomainRendererChatResultPanelValue<View = unknown> = Readonly<{
   id: string
+  placement: 'after-item' | 'turn-end'
   render: (context: DomainRendererChatResultPanelRenderContext) => View | null
 }>
 
 export function isDomainRendererChatResultPanelValue(
   value: unknown
 ): value is DomainRendererChatResultPanelValue {
-  return hasOnlyKeys(value, ['id', 'render']) &&
+  return hasOnlyKeys(value, ['id', 'placement', 'render']) &&
+    (value.placement === 'after-item' || value.placement === 'turn-end') &&
     typeof value.id === 'string' &&
     value.id.trim().length > 0 &&
     typeof value.render === 'function'
@@ -356,7 +379,9 @@ export const domainRendererWorkbenchRightPanelContractSchema = z.object({
   ...surfaceContractFields,
   preferredWidth: z.number().int().min(300).max(1_200).optional(),
   /** Whether this surface may be duplicated into another right-panel pane. */
-  allowSplit: z.boolean().optional()
+  allowSplit: z.boolean().optional(),
+  /** Resource surfaces stay addressable without another default navigation entry. */
+  navigation: z.enum(['default', 'resource-only']).optional()
 }).strict()
 
 export const domainRendererWorkbenchBottomPanelContractSchema = z.object({
@@ -456,14 +481,18 @@ export type DomainRendererWorkbenchWorkspaceSectionContract = z.infer<
 >
 
 /**
- * A full-page surface the Host left sidebar switches to instead of a Session
- * page. The label is the sidebar entry; the page owns everything it renders.
+ * A package-owned page opened from the Host sidebar. Pages may opt into
+ * movable edge docking; the Host owns placement and the page owns its content.
  */
 export const domainRendererWorkbenchMainAreaContractSchema = z.object({
   location: z.literal(WORKBENCH_MAIN_AREA_LOCATION),
   contractVersion: z.literal(WORKBENCH_MAIN_AREA_CONTRACT_VERSION),
   label: z.string().trim().min(1).max(160),
-  preferredHostSidebar: z.enum(['expanded', 'collapsed']).default('expanded')
+  preferredHostSidebar: z.enum(['expanded', 'collapsed']).default('expanded'),
+  docking: z.object({
+    defaultPosition: z.enum(['main', 'left', 'right', 'bottom']),
+    preferredWidth: z.number().int().min(280).max(1_200).optional()
+  }).strict().optional()
 }).strict()
 
 export type DomainRendererWorkbenchMainAreaContract = z.infer<
@@ -556,7 +585,10 @@ export type DomainRendererWorkbenchBottomPanelValue<View = unknown> =
   DomainRendererWorkbenchSurfaceValue<DomainRendererWorkbenchBottomPanelRenderContext, View>
 
 export type DomainRendererWorkbenchGlobalOverlayValue<View = unknown> =
-  DomainRendererWorkbenchSurfaceValue<DomainRendererWorkbenchGlobalOverlayRenderContext, View>
+  DomainRendererWorkbenchSurfaceValue<DomainRendererWorkbenchGlobalOverlayRenderContext, View> & Readonly<{
+    /** Workspace canvases retain Host navigation and auxiliary conversations. */
+    placement?: 'window' | 'workspace'
+  }>
 
 /** A durable navigation claim, independent of current permission to show its contents. */
 export type DomainRendererWorkbenchSessionOwnership = Readonly<{
@@ -732,6 +764,13 @@ export function isDomainRendererWorkbenchSurfaceValue(
   return hasOnlyKeys(value, ['render']) && typeof value.render === 'function'
 }
 
+export function isDomainRendererWorkbenchGlobalOverlayValue(
+  value: unknown
+): value is DomainRendererWorkbenchGlobalOverlayValue {
+  return hasOnlyKeys(value, ['render', 'placement']) && typeof value.render === 'function' &&
+    (value.placement === undefined || value.placement === 'window' || value.placement === 'workspace')
+}
+
 export function isDomainRendererWorkbenchNavigationSectionValue(
   value: unknown
 ): value is DomainRendererWorkbenchNavigationSectionValue {
@@ -852,3 +891,33 @@ function hasOnlyKeys(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
+/** Package-owned primary research presentation, composed through renderer.extension. */
+export const RESEARCH_WORKSPACE_LOCATION = 'research.workspace' as const
+export const domainRendererResearchWorkspaceContractSchema = z.object({
+  location: z.literal(RESEARCH_WORKSPACE_LOCATION),
+  order: z.number().int().default(0)
+}).strict()
+export type DomainRendererResearchWorkspaceValue<View = unknown> = Readonly<{
+  render: (context: DomainRendererWorkbenchRightPanelRenderContext & Readonly<{
+    /** Owning presentation to restore after source/global navigation. */
+    returnContributionId: string
+  }>) => View
+}>
+
+/** Portable, non-authorizing selection snapshot. Consumers must bind their own workspace. */
+export const domainRendererSelectionSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal('resource-text-selection'),
+  resourceKind: z.string().min(1).max(128),
+  resourceId: z.string().min(1).max(512),
+  label: z.string().min(1).max(512),
+  quote: z.string().min(1).max(4000),
+  revision: z.string().min(1).max(256),
+  capturedAt: z.string().datetime(),
+  scope: z.object({ runtimeId: z.string().min(1).max(256), threadId: z.string().min(1).max(256), workspaceRoot: z.string().min(1).max(2048) }).strict(),
+  source: z.object({ runtimeId: z.string().min(1).max(256), threadId: z.string().min(1).max(256), turnId: z.string().min(1).max(256), itemId: z.string().min(1).max(256) }).strict().optional(),
+  bounds: z.object({ x: z.number().nonnegative(), y: z.number().nonnegative(), width: z.number().positive(), height: z.number().positive() }).strict(),
+  viewport: z.object({ width: z.number().positive(), height: z.number().positive(), scaleFactor: z.number().positive().max(16) }).strict()
+}).strict()
+export type DomainRendererSelectionSnapshot = z.infer<typeof domainRendererSelectionSnapshotSchema>

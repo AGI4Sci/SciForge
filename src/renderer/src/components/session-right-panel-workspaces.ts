@@ -5,6 +5,7 @@ import { workspaceRootIdentityKey } from '../lib/workspace-path'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
 
 export const SESSION_RIGHT_PANEL_DEFAULT_WIDTH = 360
+export const SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH = 11
 export const SESSION_RIGHT_PANEL_MIN_WIDTH = 300
 const RIGHT_PANEL_HISTORY_LIMIT = 50
 let fallbackInstanceSequence = 0

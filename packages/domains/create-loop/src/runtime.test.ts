@@ -14,10 +14,6 @@ import {
   type SciForgeReproSpecV1
 } from '@sciforge/domain-sdk/reproducibility'
 import {
-  createDatasetWorkflowExecutionReceiptProvider,
-  renderDatasetLoopRunReport
-} from '@sciforge/domain-dataset-api/receipt-provider'
-import {
   CreateLoopRuntime,
   createLoopStatePath,
   checkWorkflowCode
@@ -138,6 +134,166 @@ test('persists the canonical Workflow V1 graph and run history', async (context)
   await deactivateReloaded()
 })
 
+test('rejects a missing resource provider before run_started or upstream execution', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-missing-provider-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const events: string[] = []
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    setInterval: () => ({ timer: true }),
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext({
+    executionEvents: {
+      publish: async (event) => {
+        events.push(event.phase)
+        return publishedEvent(event, events.length)
+      }
+    }
+  }))
+  context.after(deactivate)
+  const workflow = fixtureWorkflow()
+  workflow.nodes[1] = {
+    id: 'template', name: 'Missing resource', type: 'resource', disabled: false,
+    position: { x: 200, y: 0 },
+    config: {
+      providerId: 'test-provider', resourceId: 'record', resourceName: 'Record',
+      operationId: 'read', inputTemplate: '{}'
+    }
+  }
+  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] }, 0)
+  assert.deepEqual(await runtime.runWorkflow(workflow.id, {}, root), {
+    ok: false, message: "Resource provider 'test-provider' is not installed."
+  })
+  assert.deepEqual(events, [])
+  assert.deepEqual(runtime.status().runningWorkflowIds, [])
+  assert.equal((await runtime.read()).settings.workflows[0]?.runs.length, 0)
+})
+
+test('resource preflight recursively rejects nested providers without side effects', async (context) => {
+  for (const mode of ['subworkflow', 'loop', 'multi-level', 'disabled-target'] as const) {
+    await context.test(mode, async (nestedContext) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-nested-provider-'))
+      nestedContext.after(() => rm(root, { recursive: true, force: true }))
+      const events: string[] = []
+      let executions = 0
+      let ids = 0
+      const runtime = new CreateLoopRuntime({
+        statePath: createLoopStatePath(root),
+        createId: () => `unexpected-${++ids}`,
+        setInterval: () => ({ timer: true }),
+        clearInterval: () => undefined,
+        resourceExecutors: [{
+          id: 'installed-provider',
+          execute: async () => { executions += 1; return { result: null } }
+        }]
+      })
+      nestedContext.after(await runtime.activate(runtimeContext({
+        executionEvents: {
+          publish: async (event) => {
+            events.push(event.phase)
+            return publishedEvent(event, events.length)
+          }
+        }
+      })))
+      const parent = fixtureWorkflow()
+      parent.nodes[1] = resourceFixtureNode('template', 'installed-provider')
+      parent.nodes[2] = workflowCallFixtureNode('output', 'body', mode === 'loop' ? 'loop' : 'subworkflow')
+      const body = fixtureWorkflow()
+      body.id = 'body'
+      body.enabled = mode !== 'disabled-target'
+      body.nodes[1] = resourceFixtureNode('template', 'missing-nested-provider')
+      const workflows = [parent, body]
+      if (mode === 'multi-level') {
+        const leaf = { ...structuredClone(body), id: 'leaf' }
+        body.nodes[1] = workflowCallFixtureNode('template', leaf.id, 'loop')
+        workflows.push(leaf)
+      }
+      await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows }, 0)
+      const before = await runtime.read()
+      const stateBefore = await readFile(createLoopStatePath(root), 'utf8')
+      const idsBefore = ids
+      assert.deepEqual(await runtime.runWorkflow(parent.id, {}, root), {
+        ok: false, message: "Resource provider 'missing-nested-provider' is not installed."
+      })
+      assert.equal(executions, 0, 'installed upstream executor must not execute')
+      assert.equal(ids, idsBefore, 'startup must not allocate a run id')
+      assert.deepEqual(events, [])
+      assert.deepEqual(runtime.status(), {
+        runningWorkflowIds: [], nodeStatus: {}, nodeResults: {},
+        powerSaveBlockerActive: false, pendingApprovals: []
+      })
+      assert.deepEqual(await runtime.read(), before)
+      assert.equal(await readFile(createLoopStatePath(root), 'utf8'), stateBefore)
+    })
+  }
+})
+
+test('resource preflight follows nested trigger choice and skips disabled or unreachable work', async (context) => {
+  for (const mode of ['disabled-call', 'disabled-loop', 'unreachable-call', 'disabled-resource', 'disabled-pass-through', 'unreachable-resource', 'manual-priority', 'disabled-trigger', 'fallback-trigger', 'first-fallback'] as const) {
+    await context.test(mode, async (nestedContext) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-provider-reachability-'))
+      nestedContext.after(() => rm(root, { recursive: true, force: true }))
+      const runtime = new CreateLoopRuntime({
+        statePath: createLoopStatePath(root),
+        setInterval: () => ({ timer: true }), clearInterval: () => undefined
+      })
+      nestedContext.after(await runtime.activate(runtimeContext()))
+      const parent = fixtureWorkflow()
+      parent.nodes[1] = workflowCallFixtureNode('template', 'body', 'subworkflow')
+      const body = fixtureWorkflow()
+      body.id = 'body'
+      body.nodes[1] = resourceFixtureNode('template', 'missing-nested-provider')
+      let blocked = false
+      if (mode === 'disabled-call') parent.nodes[1].disabled = true
+      if (mode === 'disabled-loop') {
+        parent.nodes[1] = workflowCallFixtureNode('template', 'body', 'loop')
+        parent.nodes[1].disabled = true
+      }
+      if (mode === 'unreachable-call') parent.connections = []
+      if (mode === 'disabled-resource') body.nodes[1].disabled = true
+      if (mode === 'disabled-pass-through') {
+        parent.nodes[1]!.disabled = true
+        parent.nodes[2] = resourceFixtureNode('output', 'missing-nested-provider')
+        blocked = true
+      }
+      if (mode === 'unreachable-resource') body.connections = []
+      if (mode === 'manual-priority' || mode === 'fallback-trigger' || mode === 'first-fallback') {
+        // Schedule nodes do not open a listener; injected scheduler never ticks.
+        const schedule: WorkflowV1['nodes'][number] = {
+          id: 'schedule', name: 'Schedule', type: 'schedule-trigger', disabled: false,
+          position: { x: 0, y: 0 },
+          config: { schedule: { kind: 'manual', everyMinutes: 60, timeOfDay: '', atTime: '', cron: '' } }
+        }
+        body.nodes.unshift(schedule)
+        body.connections = [{ id: 'schedule-edge', source: 'schedule', sourceHandle: '', target: 'template', targetHandle: '' }]
+        if (mode === 'fallback-trigger' || mode === 'first-fallback') {
+          body.nodes = body.nodes.filter((node) => node.type !== 'manual-trigger')
+          blocked = mode === 'fallback-trigger'
+        }
+        if (mode === 'first-fallback') {
+          body.nodes.push({ ...structuredClone(schedule), id: 'later-schedule' })
+          body.connections[0]!.source = 'later-schedule'
+        }
+      }
+      if (mode === 'disabled-trigger') {
+        body.nodes[0]!.disabled = true
+        blocked = true // Runtime passes a disabled trigger through to its downstream nodes.
+      }
+      await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [parent, body] }, 0)
+      const result = await runtime.runWorkflow(parent.id, {}, root)
+      assert.equal(result.ok, !blocked)
+      if (blocked) {
+        assert.equal(result.message, "Resource provider 'missing-nested-provider' is not installed.")
+        assert.equal((await runtime.read()).settings.workflows[0]?.runs.length, 0)
+      } else {
+        await waitForRun(runtime, parent.id)
+        assert.equal((await runtime.read()).settings.workflows[0]?.lastStatus, 'success')
+      }
+    })
+  }
+})
+
 test('runs resource nodes through the installed provider executor', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-resource-'))
   context.after(() => rm(root, { recursive: true, force: true }))
@@ -155,12 +311,12 @@ test('runs resource nodes through the installed provider executor', async (conte
     setInterval: () => ({ timer: true }),
     clearInterval: () => undefined,
     resourceExecutors: [{
-      id: 'dataset-api',
+      id: 'test-provider',
       execute: async (request) => {
         calls.push(request)
         return {
           result: {
-            source: { id: 'uniprot' },
+            source: { id: 'fixture-resource' },
             response: { status: 200, rawSequence }
           }
         }
@@ -170,31 +326,31 @@ test('runs resource nodes through the installed provider executor', async (conte
   const deactivate = await runtime.activate(runtimeContext())
   const workflow = fixtureWorkflow()
   workflow.nodes[1] = {
-    id: 'dataset',
-    name: 'UniProt REST',
+    id: 'resource',
+    name: 'Fixture resource',
     type: 'resource',
     position: { x: 200, y: 0 },
     disabled: false,
     config: {
-      providerId: 'dataset-api',
-      resourceId: 'uniprot',
-      resourceName: 'UniProt REST',
+      providerId: 'test-provider',
+      resourceId: 'fixture-resource',
+      resourceName: 'Fixture resource',
       operationId: 'metadata',
-      inputTemplate: '{"sourceId":"uniprot","pathParameters":{"identifier":"{{json.accession}}"}}',
+      inputTemplate: '{"sourceId":"fixture-resource","pathParameters":{"identifier":"{{json.accession}}"}}',
       preserveInput: true,
-      resultKey: 'uniprotResult'
+      resultKey: 'resourceResult'
     }
   }
   workflow.connections = [
-    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'dataset', targetHandle: '' },
-    { id: 'edge-2', source: 'dataset', sourceHandle: '', target: 'output', targetHandle: '' }
+    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'resource', targetHandle: '' },
+    { id: 'edge-2', source: 'resource', sourceHandle: '', target: 'output', targetHandle: '' }
   ]
   await runtime.save(
     { ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] },
     0
   )
 
-  await runtime.runWorkflow(workflow.id, { accession: 'P04637' }, root)
+  await runtime.runWorkflow(workflow.id, { accession: 'record-1' }, root)
   await waitForRun(runtime, workflow.id)
 
   assert.equal(calls.length, 1)
@@ -206,21 +362,21 @@ test('runs resource nodes through the installed provider executor', async (conte
     input: resourceCall.input,
     workspaceRoot: resourceCall.workspaceRoot
   }, {
-    providerId: 'dataset-api',
-    resourceId: 'uniprot',
+    providerId: 'test-provider',
+    resourceId: 'fixture-resource',
     operationId: 'metadata',
-    input: { sourceId: 'uniprot', pathParameters: { identifier: 'P04637' } },
+    input: { sourceId: 'fixture-resource', pathParameters: { identifier: 'record-1' } },
     workspaceRoot: root
   })
-  assert.match(resourceCall.idempotencyKey, /^create-loop:.+:dataset$/)
+  assert.match(resourceCall.idempotencyKey, /^create-loop:.+:resource$/)
   const completed = await runtime.read()
   assert.equal(completed.settings.workflows[0]?.lastStatus, 'success')
   const persistedOutput = completed.settings.workflows[0]?.runs[0]?.nodeResults[1]?.outputJson ?? ''
-  assert.match(persistedOutput, /uniprot/)
-  assert.match(persistedOutput, /P04637/)
-  assert.match(persistedOutput, /uniprotResult/)
+  assert.match(persistedOutput, /fixture-resource/)
+  assert.match(persistedOutput, /record-1/)
+  assert.match(persistedOutput, /resourceResult/)
   assert.ok(persistedOutput.length > 10_000)
-  const liveOutput = runtime.status().nodeResults[workflow.id]?.dataset?.outputJson ?? ''
+  const liveOutput = runtime.status().nodeResults[workflow.id]?.resource?.outputJson ?? ''
   assert.equal(liveOutput.length, 10_000)
   assert.match(liveOutput, /\[truncated in live status\]$/)
   await deactivate()
@@ -1313,351 +1469,6 @@ test('execution events retain the resolved default and trigger workspace scope',
   await deactivate()
 })
 
-test('hydrates dataset preparation from the immutable execution report instead of Agent claims', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-receipt-'))
-  context.after(() => rm(root, { recursive: true, force: true }))
-  const runsRoot = path.join(root, '.sciforge', 'datasets', 'runs')
-  const artifactPath = path.join(root, '.sciforge', 'datasets', 'processed', 'actual.tsv')
-  await mkdir(path.dirname(artifactPath), { recursive: true })
-  await mkdir(runsRoot, { recursive: true })
-  await writeFile(artifactPath, 'id\tvalue\n1\tobserved\n', 'utf8')
-  const artifactSha256 = createHash('sha256').update(await readFile(artifactPath)).digest('hex')
-  const execution = {
-    version: 1,
-    runId: 'run-actual',
-    planId: 'plan-actual',
-    status: 'succeeded',
-    completedAt: '2026-08-06T00:00:01.000Z',
-    steps: [{
-      index: 0,
-      tool: 'dataset_filter',
-      status: 'succeeded',
-      counts: { inputRecords: 2, outputRecords: 1, recordSamples: [{ id: '1', value: 'observed' }] },
-      artifacts: [{ key: 'artifact', path: artifactPath, sha256: artifactSha256 }]
-    }]
-  }
-  const runPath = path.join(runsRoot, 'run-actual.json')
-  await writeFile(runPath, JSON.stringify(execution), 'utf8')
-
-  const runtime = new CreateLoopRuntime({
-    statePath: createLoopStatePath(root),
-    executionReceiptProviders: [createDatasetWorkflowExecutionReceiptProvider()],
-    setInterval: () => ({ timer: true }),
-    clearInterval: () => undefined
-  })
-  const deactivate = await runtime.activate(runtimeContext({
-    agentExecution: {
-      run: async () => ({
-        text: JSON.stringify({
-          preparationPlanId: 'plan-actual',
-          preparationExecution: { planId: 'plan-actual', status: 'succeeded', steps: [] },
-          preparationArtifacts: [{ path: 'invented.tsv', sha256: 'fake' }],
-          processingComplete: true,
-          groundingComplete: true
-        }),
-        runtimeId: 'codex',
-        threadId: 'preparation-thread',
-        turnId: 'preparation-turn',
-        state: 'completed'
-      })
-    }
-  }))
-  const workflow = fixtureWorkflow()
-  workflow.id = 'dataset-receipt-hydration'
-  workflow.env = [{ key: 'SCIFORGE_GENERATED_KIND', value: 'dataset-generation', type: 'string' }]
-  workflow.nodes[1] = {
-    id: 'preparation',
-    name: 'Preparation',
-    type: 'ai-agent',
-    position: { x: 200, y: 0 },
-    disabled: false,
-    config: {
-      prompt: 'Execute preparation.',
-      workspaceRoot: '',
-      providerId: '',
-      model: '',
-      reasoningEffort: 'medium',
-      mode: 'agent',
-      interaction: 'background'
-    }
-  }
-  workflow.connections = [
-    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'preparation', targetHandle: '' },
-    { id: 'edge-2', source: 'preparation', sourceHandle: '', target: 'output', targetHandle: '' }
-  ]
-  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] }, 0)
-  const started = await runtime.runWorkflow(workflow.id, {}, root)
-  assert.equal(started.ok, true, JSON.stringify(started))
-  await waitForRun(runtime, workflow.id)
-
-  const completed = await runtime.read()
-  const completedWorkflow = completed.settings.workflows.find((candidate) => candidate.id === workflow.id)
-  assert.ok(completedWorkflow, JSON.stringify(completed.settings.workflows.map((candidate) => candidate.id)))
-  const completedRun = completedWorkflow.runs.at(-1)
-  const result = completedRun?.nodeResults.find((node) => node.nodeId === 'preparation')
-  assert.ok(result, JSON.stringify(completedRun))
-  assert.equal(result.status, 'success', JSON.stringify(result))
-  const wrapped = JSON.parse(result?.outputJson ?? '{}') as { text?: string }
-  const hydrated = JSON.parse(wrapped.text ?? '{}') as {
-    preparationExecution?: { steps?: Array<{ counts?: { outputRecords?: number } }> }
-    preparationArtifacts?: Array<{ path: string; sha256: string }>
-  }
-  assert.equal(hydrated.preparationExecution?.steps?.[0]?.counts?.outputRecords, 1)
-  assert.equal(hydrated.preparationArtifacts?.some((artifact) => artifact.path === 'invented.tsv'), false)
-  assert.equal(hydrated.preparationArtifacts?.some((artifact) => artifact.path === artifactPath && artifact.sha256 === artifactSha256), true)
-  assert.equal(hydrated.preparationArtifacts?.some((artifact) => artifact.path === runPath), true)
-  await deactivate()
-})
-
-test('recovers dataset preparation from a matching verified run after Agent failure', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-recovery-'))
-  context.after(() => rm(root, { recursive: true, force: true }))
-  const runsRoot = path.join(root, '.sciforge', 'datasets', 'runs')
-  const artifactPath = path.join(root, '.sciforge', 'datasets', 'processed', 'recovered.tsv')
-  await mkdir(path.dirname(artifactPath), { recursive: true })
-  await mkdir(runsRoot, { recursive: true })
-  await writeFile(artifactPath, 'id\tvalue\n1\trecovered\n', 'utf8')
-  const artifactSha256 = createHash('sha256').update(await readFile(artifactPath)).digest('hex')
-  const runPath = path.join(runsRoot, 'run-recovered.json')
-  await writeFile(runPath, JSON.stringify({
-    version: 1,
-    runId: 'run-recovered',
-    planId: 'plan-recovered',
-    status: 'succeeded',
-    startedAt: '2999-01-01T00:00:00.000Z',
-    completedAt: '2999-01-01T00:00:01.000Z',
-    steps: [{
-      index: 0,
-      tool: 'dataset_filter',
-      status: 'succeeded',
-      counts: { inputRecords: 2, outputRecords: 1, recordSamples: [{ id: '1', value: 'recovered' }] },
-      artifacts: [{ key: 'artifact', path: artifactPath, sha256: artifactSha256 }]
-    }]
-  }), 'utf8')
-
-  const runtime = new CreateLoopRuntime({
-    statePath: createLoopStatePath(root),
-    executionReceiptProviders: [createDatasetWorkflowExecutionReceiptProvider()],
-    setInterval: () => ({ timer: true }),
-    clearInterval: () => undefined
-  })
-  const deactivate = await runtime.activate(runtimeContext({
-    agentExecution: { run: async () => { throw new Error('Agent stopped after tool execution.') } }
-  }))
-  const workflow = fixtureWorkflow()
-  workflow.id = 'dataset-receipt-recovery'
-  workflow.env = [{ key: 'SCIFORGE_GENERATED_KIND', value: 'dataset-generation', type: 'string' }]
-  workflow.nodes[1] = {
-    id: 'preparation',
-    name: 'Preparation',
-    type: 'ai-agent',
-    position: { x: 200, y: 0 },
-    disabled: false,
-    config: {
-      prompt: 'Execute preparation.', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent', interaction: 'background'
-    }
-  }
-  workflow.connections = [
-    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'preparation', targetHandle: '' },
-    { id: 'edge-2', source: 'preparation', sourceHandle: '', target: 'output', targetHandle: '' }
-  ]
-  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] }, 0)
-  const started = await runtime.runWorkflow(workflow.id, {
-    processingRecipe: [{ capability: 'dataset-api.filter', purpose: 'Filter records.' }]
-  }, root)
-  assert.equal(started.ok, true, JSON.stringify(started))
-  await waitForRun(runtime, workflow.id)
-
-  const completed = await runtime.read()
-  const completedRun = completed.settings.workflows.find((candidate) => candidate.id === workflow.id)?.runs.at(-1)
-  const result = completedRun?.nodeResults.find((node) => node.nodeId === 'preparation')
-  assert.equal(result?.status, 'success', JSON.stringify(completedRun))
-  assert.match(result?.error ?? '', /Recovered from immutable execution receipt/)
-  const wrapped = JSON.parse(result?.outputJson ?? '{}') as { text?: string }
-  const recovered = JSON.parse(wrapped.text ?? '{}') as {
-    preparationPlanId?: string
-    preparationExecution?: { steps?: Array<{ counts?: { outputRecords?: number } }> }
-    preparationArtifacts?: Array<{ path: string; sha256: string }>
-  }
-  assert.equal(recovered.preparationPlanId, 'plan-recovered')
-  assert.equal(recovered.preparationExecution?.steps?.[0]?.counts?.outputRecords, 1)
-  assert.equal(recovered.preparationArtifacts?.some((artifact) => artifact.path === runPath), true)
-  await deactivate()
-})
-
-test('replaces an Agent-reported failed preparation plan with a matching successful retry', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-failed-receipt-'))
-  context.after(() => rm(root, { recursive: true, force: true }))
-  const runsRoot = path.join(root, '.sciforge', 'datasets', 'runs')
-  const artifactPath = path.join(root, '.sciforge', 'datasets', 'processed', 'successful-retry.tsv')
-  await mkdir(path.dirname(artifactPath), { recursive: true })
-  await mkdir(runsRoot, { recursive: true })
-  await writeFile(artifactPath, 'id\tvalue\n1\tsuccessful retry\n', 'utf8')
-  const artifactSha256 = createHash('sha256').update(await readFile(artifactPath)).digest('hex')
-  await writeFile(path.join(runsRoot, 'run-failed.json'), JSON.stringify({
-    version: 1,
-    runId: 'run-failed',
-    planId: 'plan-failed',
-    status: 'failed',
-    startedAt: '2999-01-01T00:00:02.000Z',
-    completedAt: '2999-01-01T00:00:03.000Z',
-    steps: [{ index: 0, tool: 'dataset_filter', status: 'failed', artifacts: [] }]
-  }), 'utf8')
-  const successfulRunPath = path.join(runsRoot, 'run-successful-retry.json')
-  await writeFile(successfulRunPath, JSON.stringify({
-    version: 1,
-    runId: 'run-successful-retry',
-    planId: 'plan-successful-retry',
-    status: 'succeeded',
-    startedAt: '2999-01-01T00:00:00.000Z',
-    completedAt: '2999-01-01T00:00:01.000Z',
-    steps: [{
-      index: 0,
-      tool: 'dataset_filter',
-      status: 'succeeded',
-      counts: { inputRecords: 2, outputRecords: 1, recordSamples: [{ id: '1', value: 'successful retry' }] },
-      artifacts: [{ key: 'artifact', path: artifactPath, sha256: artifactSha256 }]
-    }]
-  }), 'utf8')
-
-  const runtime = new CreateLoopRuntime({
-    statePath: createLoopStatePath(root),
-    executionReceiptProviders: [createDatasetWorkflowExecutionReceiptProvider()],
-    setInterval: () => ({ timer: true }),
-    clearInterval: () => undefined
-  })
-  const deactivate = await runtime.activate(runtimeContext({
-    agentExecution: {
-      run: async () => ({
-        text: JSON.stringify({
-          preparationPlanId: 'plan-failed',
-          preparationExecution: { planId: 'plan-failed', status: 'failed', steps: [] },
-          preparationArtifacts: [],
-          processingComplete: false,
-          groundingComplete: false
-        }),
-        runtimeId: 'codex',
-        threadId: 'preparation-thread',
-        turnId: 'preparation-turn',
-        state: 'completed'
-      })
-    }
-  }))
-  const workflow = fixtureWorkflow()
-  workflow.id = 'dataset-failed-receipt-recovery'
-  workflow.env = [{ key: 'SCIFORGE_GENERATED_KIND', value: 'dataset-generation', type: 'string' }]
-  workflow.nodes[1] = {
-    id: 'preparation',
-    name: 'Preparation',
-    type: 'ai-agent',
-    position: { x: 200, y: 0 },
-    disabled: false,
-    config: {
-      prompt: 'Execute preparation.', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent', interaction: 'background'
-    }
-  }
-  workflow.connections = [
-    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'preparation', targetHandle: '' },
-    { id: 'edge-2', source: 'preparation', sourceHandle: '', target: 'output', targetHandle: '' }
-  ]
-  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] }, 0)
-  const started = await runtime.runWorkflow(workflow.id, {
-    processingRecipe: [{ capability: 'dataset-api.filter', purpose: 'Filter records.' }]
-  }, root)
-  assert.equal(started.ok, true, JSON.stringify(started))
-  await waitForRun(runtime, workflow.id)
-
-  const completed = await runtime.read()
-  const completedRun = completed.settings.workflows.find((candidate) => candidate.id === workflow.id)?.runs.at(-1)
-  const result = completedRun?.nodeResults.find((node) => node.nodeId === 'preparation')
-  assert.equal(result?.status, 'success', JSON.stringify(completedRun))
-  const wrapped = JSON.parse(result?.outputJson ?? '{}') as { text?: string }
-  const recovered = JSON.parse(wrapped.text ?? '{}') as {
-    preparationPlanId?: string
-    preparationExecution?: { status?: string }
-    preparationArtifacts?: Array<{ path: string; sha256: string }>
-  }
-  assert.equal(recovered.preparationPlanId, 'plan-successful-retry')
-  assert.equal(recovered.preparationExecution?.status, 'succeeded')
-  assert.equal(recovered.preparationArtifacts?.some((artifact) => artifact.path === successfulRunPath), true)
-  await deactivate()
-})
-
-test('failure reports retain the latest designed state and node errors', () => {
-  const workflow = fixtureWorkflow()
-  workflow.env = [{ key: 'SCIFORGE_GENERATED_KIND', value: 'dataset-generation', type: 'string' }]
-  const run: WorkflowRunV1 = {
-    id: 'failed-run',
-    trigger: 'manual',
-    status: 'error',
-    startedAt: '2026-08-06T00:00:00.000Z',
-    finishedAt: '2026-08-06T00:01:00.000Z',
-    message: 'Agent execution failed.',
-    nodeResults: [
-      {
-        nodeId: 'initialize',
-        status: 'success',
-        startedAt: '2026-08-06T00:00:00.000Z',
-        finishedAt: '2026-08-06T00:00:01.000Z',
-        message: '',
-        inputJson: '{}',
-        outputJson: JSON.stringify({
-          outputSchema: { question: { type: 'string', required: true } },
-          processingRecipe: [{ capability: 'dataset-api.raw-data', purpose: 'Acquire evidence.' }],
-          strategy: { version: 1, revisions: [] }
-        }),
-        retries: 0,
-        threadId: '',
-        error: '',
-        componentFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        inputFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        outputFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        attempts: [],
-        artifactRefs: []
-      },
-      {
-        nodeId: 'grounding',
-        status: 'error',
-        startedAt: '2026-08-06T00:00:01.000Z',
-        finishedAt: '2026-08-06T00:01:00.000Z',
-        message: '',
-        inputJson: '{}',
-        outputJson: '',
-        retries: 1,
-        threadId: '',
-        error: 'Agent execution failed.',
-        componentFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        inputFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        outputFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        attempts: [],
-        artifactRefs: []
-      },
-      {
-        nodeId: 'generation-loop',
-        status: 'error',
-        startedAt: '2026-08-06T00:00:01.000Z',
-        finishedAt: '2026-08-06T00:01:00.000Z',
-        message: '',
-        inputJson: '{}',
-        outputJson: '',
-        retries: 0,
-        threadId: '',
-        error: 'Model Router rejected a private model slug.',
-        componentFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        inputFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        outputFingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-        attempts: [],
-        artifactRefs: []
-      }
-    ]
-  }
-  const report = renderDatasetLoopRunReport(workflow, run)
-  assert.match(report, /\| question \| string \| yes \|/)
-  assert.match(report, /dataset-api\.raw-data/)
-  assert.match(report, /\| Message \| Agent execution failed\. \|/)
-  assert.match(report, /`grounding` \| error .* Agent execution failed\./)
-})
-
 test('repairs common JSON-like model output before downstream workflow nodes run', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-'))
   context.after(() => rm(root, { recursive: true, force: true }))
@@ -1733,6 +1544,27 @@ test('prefers the final parseable JSON value after malformed reasoning examples'
   )
   await deactivate()
 })
+
+function resourceFixtureNode(id: string, providerId: string): WorkflowV1['nodes'][number] {
+  return {
+    id, name: id, type: 'resource', disabled: false, position: { x: 0, y: 0 },
+    config: { providerId, resourceId: 'record', resourceName: 'Record', operationId: 'read', inputTemplate: '{}' }
+  }
+}
+
+function workflowCallFixtureNode(
+  id: string,
+  workflowId: string,
+  type: 'subworkflow' | 'loop'
+): WorkflowV1['nodes'][number] {
+  const base = { id, name: id, disabled: false, position: { x: 0, y: 0 } }
+  return type === 'subworkflow'
+    ? { ...base, type, config: { workflowId } }
+    : {
+        ...base, type,
+        config: { workflowId, maxIterations: 1, leftExpr: '', operator: 'equals', rightValue: '', caseSensitive: false }
+      }
+}
 
 function fixtureWorkflow(): WorkflowV1 {
   const now = '2026-07-28T00:00:00.000Z'

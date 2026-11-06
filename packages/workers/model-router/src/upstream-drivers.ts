@@ -95,6 +95,7 @@ type DriverRequest = {
   signal?: AbortSignal;
   toolNameAliases?: Record<string, string>;
   onReasoningDelta?: (text: string) => void;
+  onTextDelta?: (text: string, phase?: string) => void;
   traceAttempt?: (attempt: UpstreamTraceAttemptStart) => UpstreamTraceAttemptObserver | undefined;
 };
 
@@ -745,7 +746,7 @@ const responsesDriver: UpstreamDriver = {
     let request: ResponsesRequest;
     let body: JsonObject;
     try {
-      request = normalizeProviderResponsesRequest(options.request, profile);
+      request = normalizeProviderResponsesRequest(anthropicReasoningForOpenAI(options.request), profile);
       body = responsesRequestBody(request, options.model);
     } catch (error) {
       throw providerNormalizationCapabilityError(error);
@@ -755,7 +756,7 @@ const responsesDriver: UpstreamDriver = {
       url: buildUpstreamEndpointUrl(options.baseUrl, 'responses'),
       headers: bearerHeaders(options.apiKey),
       body,
-      parse: (response) => parseResponsesResponse(response, options.onReasoningDelta),
+      parse: (response) => parseResponsesResponse(response, options.onReasoningDelta, options.onTextDelta),
     };
   },
 };
@@ -763,13 +764,14 @@ const responsesDriver: UpstreamDriver = {
 const chatCompletionsDriver: UpstreamDriver = {
   protocol: 'chat-completions',
   prepare(options) {
-    assertChatCapabilities(options.request);
+    const request = anthropicReasoningForOpenAI(options.request);
+    assertChatCapabilities(request);
     const profile = resolveProviderCompatibility(options.compatibility, 'chat-completions');
     let body: JsonObject;
     let localContract: LocalStructuredOutputContract | undefined;
     try {
       const chatBody = responsesToChatCompletions({
-        ...options.request,
+        ...request,
         model: options.model,
       }, { defaultModel: options.model });
       localContract = profile.chatStructuredOutputMode === 'json_object'
@@ -792,7 +794,7 @@ const chatCompletionsDriver: UpstreamDriver = {
       body,
       parse: async (response) => {
         const canonical = chatCompletionToResponse(
-          await parseChatCompletionsResponse(response, options.onReasoningDelta),
+          await parseChatCompletionsResponse(response, options.onReasoningDelta, options.onTextDelta),
           { model: options.model },
           aliases,
         );
@@ -851,7 +853,7 @@ const anthropicMessagesDriver: UpstreamDriver = {
       },
       body,
       parse: async (response) => anthropicMessageToResponse(
-        await parseAnthropicMessagesResponse(response, options.onReasoningDelta),
+        await parseAnthropicMessagesResponse(response, options.onReasoningDelta, options.onTextDelta),
         { model: options.model },
       ),
     };
@@ -892,6 +894,35 @@ function bearerHeaders(apiKey: string): Record<string, string> {
     'content-type': 'application/json',
     authorization: `Bearer ${apiKey}`,
   };
+}
+
+/** Translate effort-based adaptive thinking at the protocol boundary. Fixed
+ * token budgets and unknown controls remain explicit capability failures. */
+function anthropicReasoningForOpenAI(request: ResponsesRequest): ResponsesRequest {
+  const result = { ...request };
+  const config = request.output_config;
+  if (isRecord(config) && config.effort !== undefined) {
+    const effort = config.effort;
+    if (typeof effort !== 'string' || !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
+      throw new UpstreamCapabilityError('Unsupported Anthropic output_config effort.');
+    }
+    const existing = explicitReasoningEffort({ reasoning: request.reasoning, reasoning_effort: request.reasoning_effort });
+    if (existing && existing !== effort) {
+      throw new UpstreamCapabilityError('Conflicting Anthropic and OpenAI reasoning effort.');
+    }
+    result.reasoning = { ...(isRecord(request.reasoning) ? request.reasoning : {}), effort };
+    const { effort: _effort, ...remaining } = config;
+    result.output_config = Object.keys(remaining).length ? remaining : undefined;
+  }
+  if (isRecord(request.thinking) && request.thinking.type === 'adaptive') {
+    const { type: _type, display, ...unknown } = request.thinking;
+    if (Object.keys(unknown).length || (display !== undefined && display !== 'summarized' && display !== 'omitted')) {
+      throw new UpstreamCapabilityError('Unsupported Anthropic adaptive thinking controls.');
+    }
+    // Without effort, preserve the upstream model's own adaptive default.
+    delete result.thinking;
+  }
+  return result;
 }
 
 function responsesRequestBody(request: ResponsesRequest, model: string): JsonObject {
@@ -992,11 +1023,14 @@ function assertNoUnmappedResponsesTextControls(
 async function parseResponsesResponse(
   response: Response,
   onReasoningDelta?: (text: string) => void,
+  onTextDelta?: (text: string, phase?: string) => void,
 ): Promise<JsonObject> {
   if (isEventStream(response)) {
     const events = readSse(response);
     let completed: JsonObject | undefined;
     let explicitError: JsonObject | undefined;
+    let firstTextKey: string | undefined;
+    const phases = new Map<string, string>();
     let sawModelOutput = false;
     let sawAmbiguousData = false;
     for await (const event of events) {
@@ -1016,6 +1050,15 @@ async function parseResponsesResponse(
       const eventType = event.event || (typeof payload.type === 'string' ? payload.type : '');
       if ((eventType === 'response.reasoning_summary_text.delta' || eventType === 'response.reasoning_text.delta')
           && typeof payload.delta === 'string') onReasoningDelta?.(payload.delta);
+      if (eventType === 'response.output_item.added' && isRecord(payload.item) && typeof payload.item.phase === 'string') {
+        phases.set(String(payload.item.id ?? payload.output_index), payload.item.phase);
+      }
+      if (eventType === 'response.output_text.delta' && typeof payload.delta === 'string') {
+        const itemKey = String(payload.item_id ?? payload.output_index ?? 0);
+        const key = `${itemKey}:${payload.content_index ?? 0}`;
+        firstTextKey ??= key;
+        if (key === firstTextKey) onTextDelta?.(payload.delta, phases.get(itemKey));
+      }
       const terminalEvent = eventType === 'response.completed'
         || eventType === 'response.incomplete'
         || eventType === 'response.failed';
@@ -1107,7 +1150,7 @@ function numericField(value: Record<string, unknown> | undefined, key: string): 
   return typeof field === 'number' && Number.isFinite(field) ? field : 0;
 }
 
-async function parseChatCompletionsResponse(response: Response, onReasoningDelta?: (text: string) => void): Promise<JsonObject> {
+async function parseChatCompletionsResponse(response: Response, onReasoningDelta?: (text: string) => void, onTextDelta?: (text: string, phase?: string) => void): Promise<JsonObject> {
   if (!isEventStream(response)) {
     const payload = await readJsonObject(response);
     assertNoErrorPayload(payload);
@@ -1135,7 +1178,8 @@ async function parseChatCompletionsResponse(response: Response, onReasoningDelta
     const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
     const choice = isRecord(choices[0]) ? choices[0] : {};
     const delta = isRecord(choice.delta) ? choice.delta : {};
-    if (typeof delta.content === 'string') content += delta.content;
+    assertNoErrorPayload(chunk as JsonObject);
+    if (typeof delta.content === 'string') { content += delta.content; onTextDelta?.(delta.content); }
     if (typeof delta.reasoning_content === 'string') {
       reasoningContent += delta.reasoning_content;
       onReasoningDelta?.(delta.reasoning_content);
@@ -1158,6 +1202,7 @@ async function parseChatCompletionsResponse(response: Response, onReasoningDelta
       });
     }
   }
+  if (finishReason === null) throw invalidResponse('Chat stream ended without a finish reason.');
   const payload = compactObject({
     id,
     object: 'chat.completion',
@@ -1179,7 +1224,7 @@ async function parseChatCompletionsResponse(response: Response, onReasoningDelta
   return payload;
 }
 
-async function parseAnthropicMessagesResponse(response: Response, onReasoningDelta?: (text: string) => void): Promise<JsonObject> {
+async function parseAnthropicMessagesResponse(response: Response, onReasoningDelta?: (text: string) => void, onTextDelta?: (text: string, phase?: string) => void): Promise<JsonObject> {
   if (!isEventStream(response)) {
     const payload = await readJsonObject(response);
     assertNoErrorPayload(payload);
@@ -1188,6 +1233,8 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
   }
 
   const events = readSse(response);
+  let firstTextIndex: number | undefined;
+  let stopped = false;
   let message: Record<string, unknown> = {};
   const content = new Map<number, Record<string, unknown>>();
   let stopReason: unknown = null;
@@ -1200,6 +1247,8 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
         && typeof payload.delta.thinking === 'string') {
       onReasoningDelta?.(payload.delta.thinking);
     }
+    assertNoErrorPayload(payload as JsonObject);
+    if (payload.type === 'message_stop') stopped = true;
     if (payload.type === 'message_start' && isRecord(payload.message)) {
       message = { ...payload.message };
       if (isRecord(payload.message.usage)) usage = { ...payload.message.usage };
@@ -1207,12 +1256,18 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
     const index = typeof payload.index === 'number' ? payload.index : 0;
     if (payload.type === 'content_block_start' && isRecord(payload.content_block)) {
       content.set(index, { ...payload.content_block });
+      if (payload.content_block.type === 'text') {
+        firstTextIndex ??= index;
+        if (index === firstTextIndex && typeof payload.content_block.text === 'string') onTextDelta?.(payload.content_block.text);
+      }
     }
     if (payload.type === 'content_block_delta' && isRecord(payload.delta)) {
       const current = content.get(index) ?? { type: 'text', text: '' };
       const delta = payload.delta;
       if (delta.type === 'text_delta' && typeof delta.text === 'string') {
         current.text = `${typeof current.text === 'string' ? current.text : ''}${delta.text}`;
+        firstTextIndex ??= index;
+        if (index === firstTextIndex) onTextDelta?.(delta.text);
       }
       if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
         current.thinking = `${typeof current.thinking === 'string' ? current.thinking : ''}${delta.thinking}`;
@@ -1231,6 +1286,7 @@ async function parseAnthropicMessagesResponse(response: Response, onReasoningDel
       if (isRecord(payload.usage)) usage = { ...usage, ...payload.usage };
     }
   }
+  if (!stopped) throw invalidResponse('Messages stream ended without message_stop.');
   const blocks = [...content.entries()].sort(([left], [right]) => left - right).map(([, block]) => {
     if (block.type !== 'tool_use' || typeof block.__partialJson !== 'string') return block;
     const { __partialJson, ...rest } = block;
@@ -1376,6 +1432,9 @@ async function* readSse(response: Response): AsyncGenerator<{ event?: string; da
     }
     if (pending) yield* parseSse(pending);
   } finally {
+    // A parser can reject an error frame before EOF. Close the upstream reader
+    // as well, so failed partial streams do not keep consuming provider output.
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }

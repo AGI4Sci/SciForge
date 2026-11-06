@@ -54,15 +54,36 @@ export type PluginPermissionCheck = Readonly<{
   allowed: boolean
   reason?: string
 }>
+/** Explicit service requirements; availability is checked by trusted host composition. */
+export const pluginHostServicesSchema = z.union([
+  z.literal('none'),
+  z.array(z.string().trim().min(1).max(128)).min(1).max(32)
+    .refine((services) => new Set(services).size === services.length, 'hostServices must be unique')
+])
+
 /** Host-owned, version-bound authorization; never read from a plugin declaration. */
 export type PluginDshAuthorization = Readonly<{ packageName: string; packageVersion: string; dshRuntimeVersion: string;
   /** Audited pure tools only; unknown tools/effects require a separate contract. */
   tools?: import('./process-extension-host.js').DshToolGrants;
+  /**
+   * `none` explicitly approves running without Host service clients. A list
+   * requires those services from trusted Host composition. Absent retains the
+   * existing trusted-composition requirement for non-compute tools.
+   */
+  hostServices?: 'none' | readonly string[];
   /** Private lifecycle data only, not a Broker tool file-write grant. */
   storage?: 'plugin-private';
   /** Host port operations approved for this exact package/runtime version pair. */
   ports?: readonly string[] }>
-export type PluginAdapterContract = Readonly<{ hostApiRange: string; permissions: readonly string[]; approved?: boolean; dshAuthorization?: PluginDshAuthorization }>
+export type PluginAdapterContract = Readonly<{ hostApiRange: string; permissions: readonly string[]; approved?: boolean;
+  dshAuthorization?: PluginDshAuthorization
+  /**
+   * Plain UI capabilities (outside this plugin's own tools) that its renderer
+   * panel may invoke through the Host bridge. Host-owned, exact-version scoped.
+   */
+  uiCapabilities?: readonly string[]
+  /** Resource kinds this plugin's renderer panel can display and navigate to. */
+  uiResourceKinds?: readonly string[] }>
 
 export const pluginAdapterOperationSchema = z.object({
   effect: z.enum(['read', 'compute']).optional(),

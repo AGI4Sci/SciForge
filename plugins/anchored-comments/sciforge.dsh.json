@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-anchored-comments",
+  "entry": "dist/main.js",
+  "title": "Anchored Comments",
+  "summary": {
+    "zh": "独立锚定批注插件：通过工具或插件面板保存精确文字选区；业务状态与截图资产按宿主绑定工作区隔离。",
+    "en": "Independent anchored comments tools and owner panel for exact text selections, with Host-bound workspace state and evidence assets."
+  },
+  "categories": [
+    "collaboration",
+    "evidence"
+  ],
+  "hostDependencies": [
+    "@deepseek-ai/dsh-tools"
+  ],
+  "ports": [
+    "visual-capture.read",
+    "visual-capture.capture"
+  ],
+  "tools": {
+    "anchored_comments_list": {
+      "id": "anchored-comments.list",
+      "scope": "workspace",
+      "effect": "read",
+      "tags": [
+        "anchored-comments",
+        "comment",
+        "thread",
+        "list",
+        "评论",
+        "锚定评论"
+      ]
+    },
+    "anchored_comments_get": {
+      "id": "anchored-comments.get",
+      "scope": "workspace",
+      "effect": "read",
+      "tags": [
+        "anchored-comments",
+        "comment",
+        "thread",
+        "read",
+        "评论",
+        "读取"
+      ]
+    },
+    "anchored_comments_upsert": {
+      "id": "anchored-comments.upsert",
+      "scope": "workspace",
+      "effect": "workspace-write",
+      "tags": [
+        "anchored-comments",
+        "comment",
+        "thread",
+        "save",
+        "评论",
+        "保存"
+      ]
+    },
+    "anchored_comments_delete": {
+      "id": "anchored-comments.delete",
+      "scope": "workspace",
+      "effect": "workspace-write",
+      "approval": "confirmation",
+      "tags": [
+        "anchored-comments",
+        "comment",
+        "thread",
+        "delete",
+        "评论",
+        "删除"
+      ]
+    },
+    "anchored_comments_read_asset": {
+      "id": "anchored-comments.asset.read",
+      "scope": "workspace",
+      "effect": "read",
+      "tags": [
+        "anchored-comments",
+        "screenshot",
+        "asset",
+        "evidence",
+        "截图",
+        "证据"
+      ]
+    },
+    "anchored_comments_capture": {
+      "id": "anchored-comments.capture",
+      "scope": "workspace",
+      "effect": "workspace-write",
+      "tags": [
+        "anchored-comments",
+        "capture",
+        "screenshot",
+        "evidence",
+        "截屏",
+        "证据"
+      ]
+    },
+    "anchored_comments_submit_feedback": {
+      "id": "anchored-comments.feedback.submit",
+      "scope": "workspace",
+      "effect": "external-write",
+      "approval": "confirmation",
+      "tags": [
+        "anchored-comments",
+        "feedback",
+        "issue",
+        "github",
+        "产品反馈",
+        "提交"
+      ]
+    },
+    "anchored_comments_feedback_status": {
+      "id": "anchored-comments.feedback.status",
+      "scope": "workspace",
+      "effect": "read",
+      "tags": [
+        "anchored-comments",
+        "feedback",
+        "status",
+        "产品反馈",
+        "状态"
+      ]
+    }
+  },
+  "ui": {
+    "entry": "dist/ui/index.html",
+    "stateVersion": 1
+  }
+}

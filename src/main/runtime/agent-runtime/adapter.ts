@@ -129,6 +129,7 @@ export type AgentRuntimeThreadRelationInput = {
 
 export type AgentRuntimeTurnGovernanceSnapshot = {
   ownedVisualToolsAvailable: boolean
+  /** Completion/preflight state only; never a blanket restriction on tool execution. */
   nativeVisualProofChainPending: boolean
 }
 
@@ -271,6 +272,8 @@ export type AgentRuntimeSubagentAdapter = {
 
 export type AgentRuntimeAdapter = {
   id: AgentRuntimeId
+  /** Explicitly supported context profiles; absence means unsupported, never fallback. */
+  contextProfiles?: readonly 'minimal'[]
   transport: AgentRuntimeTransport
   /** Stop owned producers and revoke all tool leases before Host sinks drain. */
   close?(): Promise<void>

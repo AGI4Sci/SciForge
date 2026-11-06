@@ -255,10 +255,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     const outputPath = join(outputDir, imageId + '.' + (recipe.outputFormat ?? 'png'))
     const providerResult = await renderWithProvider({ workspaceRoot, outputPath, recipe })
     const modelExecution = withReviewReference(
-      await enrichModelExecutionReferences(
       requireModelExecution(providerResult),
-      workspaceRoot
-      ),
       request.visualDocumentId
     )
     warnings.push(...providerResult.warnings)
@@ -369,7 +366,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
       ...(recipe.referencePath ? {
-        referenceHash: await hashWorkspaceFileIfAvailable(workspaceRoot, recipe.referencePath)
+        referenceHash: modelExecution.requestCapture?.references.find((ref) => ref.role === 'image')?.contentDigest
       } : {}),
       visualPlan: recipe.visualPlan
     })
@@ -1016,7 +1013,7 @@ export async function editFrameworkComponentsWithImage2(
     })
     const modelExecution = providerResult.modelExecution
       ? withReviewReference(
-          await enrichModelExecutionReferences(providerResult.modelExecution, workspaceRoot),
+          providerResult.modelExecution,
           request.visualDocumentId
         )
       : undefined
@@ -1078,7 +1075,7 @@ export async function editFrameworkComponentsWithImage2(
       componentBasePath: manifest.componentBasePath,
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
       referencePath: sourceImagePath,
-      referenceHash: createHash('sha256').update(await readFile(sourceImagePath)).digest('hex'),
+      referenceHash: modelExecution?.requestCapture?.references.find((ref) => ref.role === 'image')?.contentDigest,
       title: request.instruction.slice(0, 90) || imageId,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
@@ -2315,7 +2312,7 @@ export async function editImageFromVisualReviewPacket(
       })
       const modelExecution = providerResult.modelExecution
         ? withReviewReference(
-            await enrichModelExecutionReferences(providerResult.modelExecution, workspaceRoot),
+            providerResult.modelExecution,
             visualDocumentId
           )
         : undefined
@@ -2352,7 +2349,7 @@ export async function editImageFromVisualReviewPacket(
         sourcePath: intent.sourcePath,
         ...(intent.sourcePath ? {
           referencePath: intent.sourcePath,
-          referenceHash: await hashWorkspaceFileIfAvailable(workspaceRoot, intent.sourcePath)
+          referenceHash: modelExecution?.requestCapture?.references.find((ref) => ref.role === 'image')?.contentDigest
         } : {}),
         title: intent.instruction.slice(0, 90) || imageId,
         ...(visualDocumentId ? { visualDocumentId } : {}),
@@ -2391,7 +2388,7 @@ export async function reviewImageGenerationCandidate(request: ImageGenerationCan
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const outputPath = await resolveWorkspacePath(workspaceRoot, request.outputPath)
     const manifestPath = await resolveWorkspacePath(workspaceRoot, request.manifestPath)
-    const { visualPlan, outputHash: manifestOutputHash } = await verifiedReviewManifest(workspaceRoot, outputPath, manifestPath)
+    const { visualPlan, outputHash: manifestOutputHash, manifestDigest } = await verifiedReviewManifest(workspaceRoot, outputPath, manifestPath)
     const image = await loadImage(outputPath)
     const warnings: string[] = []
     const sizeScore = image.width >= MIN_IMAGE_SIZE && image.height >= MIN_IMAGE_SIZE ? 1 : 0.35
@@ -2430,6 +2427,7 @@ export async function reviewImageGenerationCandidate(request: ImageGenerationCan
           : 'repair_required',
       reviewedArtifactPath: outputPath,
       reviewedArtifactHash: manifestOutputHash,
+      reviewedManifest: { path: manifestPath, contentDigest: manifestDigest },
       reviewedAt: new Date().toISOString(),
       score: {
         overall,
@@ -2471,10 +2469,12 @@ async function verifiedReviewManifest(
   workspaceRoot: string,
   outputPath: string,
   manifestPath: string
-): Promise<{ visualPlan: ImageGenerationRecipe['visualPlan']; outputHash: string }> {
+): Promise<{ visualPlan: ImageGenerationRecipe['visualPlan']; outputHash: string; manifestDigest: string }> {
   let manifest: JsonRecord
+  let manifestBytes: Buffer
   try {
-    manifest = asRecord(JSON.parse(await readFile(manifestPath, 'utf8')))
+    manifestBytes = await readFile(manifestPath)
+    manifest = asRecord(JSON.parse(manifestBytes.toString('utf8')))
   } catch (error) {
     throw new ReviewManifestError('Visual review requires a readable JSON render manifest: ' + (error instanceof Error ? error.message : String(error)))
   }
@@ -2493,7 +2493,7 @@ async function verifiedReviewManifest(
   }
   const actualHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
   if (actualHash !== outputHash) throw new ReviewManifestError('Reviewed artifact hash does not match its render manifest.')
-  return { visualPlan: visualPlan!, outputHash }
+  return { visualPlan: visualPlan!, outputHash, manifestDigest: createHash('sha256').update(manifestBytes).digest('hex') }
 }
 
 type ModelRouterVisualReview =
@@ -2565,10 +2565,31 @@ async function requestModelRouterVisualReview(input: {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: 'Bearer ' + endpoint.apiKey
+        authorization: 'Bearer ' + endpoint.apiKey,
+        'x-sciforge-model-router-evidence-policy': 'required'
       },
       body: JSON.stringify({
         model: endpoint.model,
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'visual_artifact_review',
+            strict: true,
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                pass: { type: 'boolean' },
+                needsContext: { type: 'boolean' },
+                score: { type: 'number' },
+                summary: { type: 'string' },
+                violations: { type: 'array', items: { type: 'string' } },
+                repairInstructions: { type: 'array', items: { type: 'string' } }
+              },
+              required: ['pass', 'needsContext', 'score', 'summary', 'violations', 'repairInstructions']
+            }
+          }
+        },
         input: [{ role: 'user', content }]
       })
     })
@@ -2683,12 +2704,12 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
   const receiptRecipe = input.recipe ?? input.receiptRecipe
   if (providerKind() === 'image-endpoint') {
     try {
-      await renderWithConfiguredImageEndpoint(input)
+      const requestCapture = await renderWithConfiguredImageEndpoint(input)
       return {
         provider: 'image-endpoint',
         placeholder: false,
         ...(receiptRecipe
-          ? { modelExecution: imageModelExecution(receiptRecipe, 'image-endpoint') }
+          ? { modelExecution: { ...imageModelExecution(receiptRecipe, 'image-endpoint'), requestCapture, effectivePrompt: requestCapture.prompt, effectivePromptHash: requestCapture.promptHash, references: requestCapture.references } }
           : {}),
         warnings: []
       }
@@ -2722,18 +2743,6 @@ function requireModelExecution(result: ProviderRenderResult): ImageGenerationMod
   throw new Error('Generated image render did not capture its model execution recipe.')
 }
 
-async function enrichModelExecutionReferences(
-  execution: ImageGenerationModelExecutionV1,
-  workspaceRoot: string
-): Promise<ImageGenerationModelExecutionV1> {
-  if (!execution.references?.length) return execution
-  const references = await Promise.all(execution.references.map(async (reference) => {
-    const contentDigest = await hashWorkspaceFileIfAvailable(workspaceRoot, reference.path)
-    return contentDigest ? { ...reference, contentDigest } : reference
-  }))
-  return { ...execution, references }
-}
-
 function withReviewReference(
   execution: ImageGenerationModelExecutionV1,
   visualDocumentId: string | undefined
@@ -2755,9 +2764,7 @@ function imageModelExecution(
     provider,
     model: {
       id: modelId,
-      // SciForge exposes a versioned public Model Router identity rather than
-      // leaking the private provider/model split into workspace artifacts.
-      version: provider === 'placeholder' ? RENDERER_VERSION : modelId
+      ...(provider === 'placeholder' ? { version: RENDERER_VERSION } : {})
     },
     effectivePrompt,
     effectivePromptHash: createHash('sha256').update(effectivePrompt).digest('hex'),
@@ -2805,7 +2812,7 @@ function allowPlaceholderProvider(): boolean {
   return process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER === '1'
 }
 
-async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Promise<void> {
+async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Promise<NonNullable<ImageGenerationModelExecutionV1['requestCapture']>> {
   const endpoint = configuredModelRouterImageEndpoint()
   if (!endpoint) throw new ProviderError('Missing Model Router image endpoint configuration.')
   const prompt = input.recipe
@@ -2835,6 +2842,7 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
         outputPath: input.outputPath,
         ...(input.recipe?.seed !== undefined ? { seed: input.recipe.seed } : {})
       }
+      let capture: NonNullable<ImageGenerationModelExecutionV1['requestCapture']>
       if (input.editIntent?.sourcePath && editSourcePath) {
         const maskPath = input.editIntent.maskPath
           ? await resolveWorkspacePath(input.workspaceRoot, input.editIntent.maskPath)
@@ -2842,23 +2850,26 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
         const generatedMask = maskPath || !input.editIntent.selectedRegions?.length
           ? undefined
           : createVisualReviewEditMask(editSource!.width, editSource!.height, input.editIntent.selectedRegions)
-        await renderWithImageEditEndpoint(candidateBaseUrl, {
+        capture = await renderWithImageEditEndpoint(candidateBaseUrl, {
           ...providerInput,
           sourcePath: editSourcePath,
           maskPath,
           generatedMask
         })
-        await compositeImageEditWithMask(editSourcePath, input.outputPath, { maskPath, generatedMask })
-        await assertImageEditChangedPixels(editSourcePath, input.outputPath, { maskPath, generatedMask })
+        const capturedSource = capture.references.find((ref) => ref.role === 'image')!.snapshotPath!
+        const capturedMask = capture.references.find((ref) => ref.role === 'mask')?.snapshotPath
+        await compositeImageEditWithMask(capturedSource, input.outputPath, { maskPath: capturedMask })
+        await assertImageEditChangedPixels(capturedSource, input.outputPath, { maskPath: capturedMask })
+        if (capturedMask) capture.gaps.push('Output includes deterministic mask compositing against the captured source input.')
       } else if (input.recipe?.referencePath && recipeReferencePath) {
-        await renderWithImageEditEndpoint(candidateBaseUrl, {
+        capture = await renderWithImageEditEndpoint(candidateBaseUrl, {
           ...providerInput,
           sourcePath: recipeReferencePath
         })
       } else {
-        await renderWithImageEndpoint(candidateBaseUrl, providerInput)
+        capture = await renderWithImageEndpoint(candidateBaseUrl, providerInput)
       }
-      return
+      return capture
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error))
     }
@@ -2879,7 +2890,7 @@ async function renderWithImageEditEndpoint(
     maskPath?: string
     generatedMask?: File
   }
-): Promise<void> {
+): Promise<NonNullable<ImageGenerationModelExecutionV1['requestCapture']>> {
   const form = new FormData()
   form.set('model', input.model)
   form.set('prompt', [
@@ -2896,6 +2907,24 @@ async function renderWithImageEditEndpoint(
   if (input.maskPath) form.set('mask', await imageFileForForm(input.maskPath))
   else if (input.generatedMask) form.set('mask', input.generatedMask)
 
+  const references: NonNullable<ImageGenerationModelExecutionV1['requestCapture']>['references'][number][] = []
+  for (const role of ['image', 'mask'] as const) {
+    const file = form.get(role)
+    if (!(file instanceof File)) continue
+    const bytes = Buffer.from(await file.arrayBuffer())
+    const contentDigest = createHash('sha256').update(bytes).digest('hex')
+    const snapshotPath = input.outputPath + '.' + role + '.' + contentDigest + '.input'
+    try {
+      await writeFile(snapshotPath, bytes, { flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !(await readFile(snapshotPath)).equals(bytes)) throw error
+    }
+    references.push({ role, origin: role === 'mask' && input.generatedMask ? 'derived' : 'workspace',
+      ...(role === 'mask' && input.generatedMask ? { derivedFrom: references.filter((ref) => ref.role === 'image').map((ref) => ref.contentDigest!) } : {}),
+      path: role === 'image' ? input.sourcePath : input.maskPath ?? 'generated-mask', snapshotPath, contentDigest, byteLength: bytes.length, mediaType: file.type })
+  }
+  const prompt = String(form.get('prompt'))
+  const capture = capturedRequest('edit', { ...input, prompt }, references)
   const response = await fetch(baseUrl + '/images/edits', {
     method: 'POST',
     headers: { authorization: 'Bearer ' + input.apiKey },
@@ -2904,7 +2933,7 @@ async function renderWithImageEditEndpoint(
   const payload = await parseProviderJson(response, 'Image edit endpoint')
   if (!response.ok) throw new ProviderError(providerHttpError('Image edit endpoint', response.status, payload))
   const first = payload.data?.[0]
-  if (await writeProviderImage(first, input.outputPath)) return
+  if (await writeProviderImage(first, input.outputPath)) return capture
   throw new ProviderError('Image edit endpoint response did not include b64_json or a data URL.')
 }
 
@@ -3131,7 +3160,7 @@ async function renderWithImageEndpoint(
     outputPath: string
     seed?: number
   }
-): Promise<void> {
+): Promise<NonNullable<ImageGenerationModelExecutionV1['requestCapture']>> {
   let response = await fetchOpenAiImagesEndpoint(baseUrl, input, 'prompt')
   let payload = await parseProviderJson(response, 'Image endpoint')
 
@@ -3142,8 +3171,28 @@ async function renderWithImageEndpoint(
 
   if (!response.ok) throw new ProviderError(providerHttpError('Image endpoint', response.status, payload))
   const first = payload.data?.[0]
-  if (await writeProviderImage(first, input.outputPath)) return
+  if (await writeProviderImage(first, input.outputPath)) return capturedRequest('generation', input, [])
   throw new ProviderError('Image endpoint response did not include b64_json or a data URL.')
+}
+
+function capturedRequest(
+  operation: 'generation' | 'edit',
+  input: { model: string; prompt: string; size: ImageSize; seed?: number },
+  references: NonNullable<ImageGenerationModelExecutionV1['requestCapture']>['references']
+): NonNullable<ImageGenerationModelExecutionV1['requestCapture']> {
+  return {
+    schemaVersion: 1, operation, model: input.model, prompt: input.prompt,
+    promptHash: createHash('sha256').update(input.prompt).digest('hex'),
+    parameters: {
+      size: `${input.size.width}x${input.size.height}`, n: 1,
+      ...(input.seed !== undefined ? { seed: input.seed } : {}),
+      ...(operation === 'edit' ? { quality: 'high', input_fidelity: 'high' } : {})
+    },
+    references,
+    gaps: ['Provider immutable model revision is unavailable.',
+      ...(input.seed === undefined ? ['Seed was not supplied.'] : []),
+      ...(references.length ? ['Workspace-path input permissions must be verified against exact versions before acceptance.'] : [])]
+  }
 }
 
 async function fetchOpenAiImagesEndpoint(
@@ -3505,16 +3554,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2) + '\n', 'utf8')
 }
 
-async function hashWorkspaceFileIfAvailable(workspaceRoot: string, rawPath: string): Promise<string | undefined> {
-  try {
-    const path = await resolveWorkspacePath(workspaceRoot, rawPath)
-    return createHash('sha256').update(await readFile(path)).digest('hex')
-  } catch {
-    // A reference may be an externally-resolved locator that is not present in
-    // the local workspace. Preserve the locator but do not fabricate a digest.
-    return undefined
-  }
-}
+
 
 async function loadReviewPacket(request: ImageGenerationEditFromVisualReviewPacketRequest, workspaceRoot: string): Promise<unknown> {
   if (request.reviewPacket) return request.reviewPacket

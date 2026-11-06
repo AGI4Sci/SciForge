@@ -6,10 +6,13 @@
 - `evidence_dag_snapshot_status`
 - `evidence_dag_seal_closure`
 - `evidence_dag_poll_artifact_events`
+- `evidence_dag_poll_producer_provenance`（当前 Host Session 的 producer inbox 显式投递）
 - `evidence_dag_append_sidechain`（`{input: canonical append input}`）
 - `evidence_dag_export_snapshot_products`（`{input: canonical export input}`）
 
 静态对照入口 `createStaticEvidenceAdapter(ports)` 不注册工具，复用同一 canonical core 与 ports。对照测试另使用原生 `EvidenceDagRuntime`，比较同一 synthetic Artifact Versions 输入产生的 delta/状态/回执；UI URL 排除在本后端范围之外。
+
+当前 producer 最小真实生产合同、canonical npm identity、builtin/optional owner 分离与验收阻断见 [PRODUCER-DELIVERY.md](PRODUCER-DELIVERY.md)。当前科学绘图验收保留 builtin Evidence 唯一 owner，不激活 optional Evidence 第二 writer。
 
 ## 事实所有权与持久化
 

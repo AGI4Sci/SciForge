@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile } from 'node:fs/promises'
 import { z } from 'zod'
+import { dshToolGrantSchema, pluginHostServicesSchema } from '@sciforge/plugin-sdk'
 import { readExtensionArtifact } from './artifact-reader'
 import { canonicalJson, type CanonicalJsonValue } from './canonical-json'
 import { ExtensionStoreError, extensionErrorMessage, type ExtensionStoreErrorCode } from './errors'
@@ -57,14 +58,51 @@ const FORBIDDEN_LIFECYCLE_SCRIPTS = Object.freeze([
   'postpublish'
 ])
 
-export const dshPluginToolGrantSchema = z.object({
+const RESERVED_DISCOVERY_TAGS = new Set([
+  'dsh-tool', 'dsh-workspace-read', 'dsh-workspace-opener', 'managed-mcp', 'native', 'sensitive-input'
+])
+
+export const dshDiscoveryTagsSchema = z.array(
+  z.string().trim().min(1).max(64).regex(/^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u)
+    .refine((tag) => !RESERVED_DISCOVERY_TAGS.has(tag.toLowerCase()), 'discovery tag is reserved')
+).max(16)
+  .refine((tags) => new Set(tags).size === tags.length, 'discovery tags must be unique')
+  .optional()
+
+export const dshPluginToolGrantSchema = dshToolGrantSchema.extend({
   id: z.string().trim().min(3).max(128).regex(canonicalIdentity),
   effect: z.enum(DSH_PLUGIN_TOOL_EFFECTS),
-  readResource: z.literal('workspace').optional()
-}).strict()
+  /** Plugin-declared approval level; the host projection can only raise the effect-derived floor. */
+  approval: dshToolGrantSchema.shape.approval,
+  /** Plugin-owned discovery metadata, never authorization. */
+  tags: dshDiscoveryTagsSchema
+}).strict().superRefine((grant, context) => {
+  if (grant.scope === 'workspace' && grant.readResource !== undefined) {
+    context.addIssue({
+      code: 'custom',
+      path: ['scope'],
+      message: 'workspace scope and a read resource are mutually exclusive'
+    })
+  }
+  // A write grant without `scope` projects as a global tool: the Host would not
+  // bind the caller's workspace, so the tool would write wherever the caller
+  // points it. Installing such an artifact is refused instead of shipped.
+  if ((grant.effect === 'workspace-write' || grant.effect === 'destructive') && grant.scope !== 'workspace') {
+    context.addIssue({
+      code: 'custom',
+      path: ['scope'],
+      message: `${grant.effect} grants must declare scope: 'workspace'`
+    })
+  }
+})
 
 /** DSH tool names are grant lookup keys (`status`, `map_data`); the runner only pattern-checks the grant id. */
 const dshToolName = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/
+
+/** Requested Host operations, never grants; exact canonical ids keep signed intent unambiguous. */
+export const dshPluginPortOperationsSchema = z.array(
+  z.string().min(3).max(128).regex(canonicalIdentity)
+).max(64).refine((ports) => new Set(ports).size === ports.length, 'port operations must be unique')
 
 export const dshPluginArtifactManifestSchema = z.object({
   schemaVersion: z.literal(1),
@@ -74,9 +112,14 @@ export const dshPluginArtifactManifestSchema = z.object({
   dsh: z.record(z.string(), z.unknown()),
   engines: z.object({ dsh: z.string().trim().min(1).max(128).optional() }).strict().optional(),
   hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64),
+  /** G7 exemption approved by the publisher declaration; absent keeps the gate closed. */
+  hostServices: pluginHostServicesSchema.optional(),
+  ports: dshPluginPortOperationsSchema.optional(),
   tools: z.record(z.string().trim().min(1).max(128).regex(dshToolName), dshPluginToolGrantSchema),
   files: z.record(z.string().trim().min(1).max(1_024), z.string().regex(sha256Pattern))
-}).strict()
+}).strict().refine((manifest) => manifest.hostServices !== 'none' || !manifest.ports?.length, {
+  path: ['ports'], message: 'hostServices: none conflicts with requested ports'
+})
 
 export type DshPluginToolGrant = z.infer<typeof dshPluginToolGrantSchema>
 export type DshPluginArtifactManifest = z.infer<typeof dshPluginArtifactManifestSchema>
@@ -185,6 +228,32 @@ export async function readDshPluginArtifact(
     if (sha256Hex(contents) !== manifest.files[path]) {
       fail(`DSH plugin payload digest mismatch: ${path}`)
     }
+  }
+
+  // Rechecked for archives and installed directories alike. The source
+  // declaration is digest covered; it cannot request a different port set.
+  const declarationBytes = payloadFiles.get('sciforge.dsh.json')
+  if (declarationBytes) {
+    let declaration: Record<string, unknown>
+    try {
+      const value = JSON.parse(declarationBytes.toString('utf8'))
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('object required')
+      declaration = value
+    } catch { fail('DSH plugin declaration is not a valid object.') }
+    const ports = dshPluginPortOperationsSchema.safeParse(declaration.ports ?? [])
+    if (!ports.success || (declaration.hostServices === 'none' && ports.data.length > 0)) {
+      fail('DSH plugin declaration ports are invalid or conflict with hostServices: none.')
+    }
+    const hostServices = pluginHostServicesSchema.optional().safeParse(declaration.hostServices)
+    if (!hostServices.success) {
+      fail('DSH plugin declaration hostServices is unknown.')
+    }
+    if (canonicalJson([...ports.data].sort()) !== canonicalJson([...(manifest.ports ?? [])].sort()) ||
+        canonicalJson(hostServices.data ?? null) !== canonicalJson(manifest.hostServices ?? null)) {
+      fail('DSH plugin declaration ports/hostServices do not match the artifact manifest.')
+    }
+  } else if (manifest.ports?.length) {
+    fail('DSH plugin requested ports require a digest-covered sciforge.dsh.json declaration.')
   }
 
   const packageJsonBytes = payloadFiles.get('package.json')

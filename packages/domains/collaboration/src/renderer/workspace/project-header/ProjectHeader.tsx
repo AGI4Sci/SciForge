@@ -1,7 +1,7 @@
 import React, { type KeyboardEvent, type ReactElement } from 'react'
 import type { ProjectStatus } from '../workspace-types.js'
 
-type ProjectTab = 'board' | 'requirements' | 'files' | 'settings'
+type ProjectTab = 'research' | 'board' | 'requirements' | 'files' | 'settings'
 
 export function ProjectHeader({
   initials,
@@ -27,7 +27,8 @@ export function ProjectHeader({
   progress?: Readonly<{ adopted: number; total: number }>
 }>): ReactElement {
   const tabs: readonly Readonly<{ id: ProjectTab; label: string }>[] = [
-    { id: 'board', label: '看板' },
+    { id: 'research', label: '研究对话' },
+    { id: 'board', label: '工作与协作' },
     { id: 'requirements', label: '需求' },
     { id: 'files', label: '文件' },
     ...(canOpenSettings ? [{ id: 'settings' as const, label: '项目设置' }] : []),

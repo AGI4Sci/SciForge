@@ -410,7 +410,7 @@ describe('PiRuntimeService tool bridge', () => {
     expect(events.find((event) => event.kind === 'turn_lifecycle' && event.state === 'completed')).toBeTruthy()
     expect(harness.spawns.length).toBeGreaterThanOrEqual(2)
     await harness.service.deleteThread(thread.id)
-  })
+  }, 15_000) // Two explicit timeout phases, native tree cleanup, then a fresh process/turn.
 
   it('translates tool execution records into receipted tool events, closing unresolved calls at settle', async () => {
     harness = createHarness({

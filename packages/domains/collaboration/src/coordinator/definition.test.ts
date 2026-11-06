@@ -55,7 +55,8 @@ test('manifest composes independent main and renderer entrypoints', () => {
       location: 'workbench.main-area',
       contractVersion: '1.0.0',
       label: 'collaborationTitle',
-      preferredHostSidebar: 'collapsed'
+      preferredHostSidebar: 'collapsed',
+      docking: { defaultPosition: 'main', preferredWidth: 520 }
     }
   )
 })
@@ -99,6 +100,6 @@ test('publishable dependencies target the frozen Host and domain contract majors
   assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '8.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], undefined)
   assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], undefined)
-  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '5.0.2')
-  assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.24')
+  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '5.1.0')
+  assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.32')
 })

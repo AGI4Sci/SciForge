@@ -1,21 +1,34 @@
 import { readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, relative, sep } from 'node:path'
 import { z } from 'zod'
-import { hostApiRangeSchema, pluginExactVersionSchema, pluginPackageNameSchema, type PluginAdapterContract } from '@sciforge/plugin-sdk'
+import { dshToolGrantSchema, hostApiRangeSchema, pluginExactVersionSchema, pluginHostServicesSchema, pluginPackageNameSchema, type PluginAdapterContract } from '@sciforge/plugin-sdk'
 import type { DevelopmentExternalPluginService } from './development-external-plugins'
+import { ensureDshAgentResolverModule } from './dsh-agent-resolver'
 
 type ServiceOptions = ConstructorParameters<typeof DevelopmentExternalPluginService>[0]
 // This development seam is Host-owned: every tool effect still requires an exact grant.
-const dshToolEffectSchema = z.enum(['read', 'compute', 'workspace-write', 'external-write', 'destructive'])
+// Keep scope semantics aligned with artifact admission: workspace binding and
+// resource handles are alternative lanes, and local writes require binding.
+const developmentToolGrantSchema = dshToolGrantSchema
+  .refine(grant => grant.readResource === undefined || grant.effect === 'read', 'readResource requires read effect')
+  .refine(grant => grant.scope === undefined || grant.readResource === undefined, 'workspace scope and a read resource are mutually exclusive')
+  .refine(grant => (grant.effect !== 'workspace-write' && grant.effect !== 'destructive') || grant.scope === 'workspace', "workspace-write and destructive grants must declare scope: 'workspace'")
+
 const contractSchema = z.object({
   hostApiRange: hostApiRangeSchema, permissions: z.array(z.never()), approved: z.boolean(),
   dshAuthorization: z.object({
     packageName: pluginPackageNameSchema, packageVersion: pluginExactVersionSchema, dshRuntimeVersion: pluginExactVersionSchema,
-    tools: z.record(z.string().min(1), z.object({ id: z.string().min(1), effect: dshToolEffectSchema, readResource: z.literal('workspace').optional() }).strict().refine(grant => grant.readResource === undefined || grant.effect === 'read', 'readResource requires read effect')).optional(),
+/** G7 exemption: approved to run with no Host service clients at all. */
+    hostServices: pluginHostServicesSchema.optional(),
+    tools: z.record(z.string().min(1), developmentToolGrantSchema).optional(),
     storage: z.literal('plugin-private').optional(),
     /** Host port operations approved for this exact package/runtime version pair. */
     ports: z.array(z.string().trim().min(1)).max(32).optional()
-  }).strict()
+  }).strict(),
+  /** Plain UI capabilities this plugin's panel may invoke beyond its own tools. */
+  uiCapabilities: z.array(z.string().trim().min(1).max(192)).max(64).optional(),
+  /** Resource kinds this plugin's panel can display. */
+  uiResourceKinds: z.array(z.string().trim().min(1).max(128)).max(32).optional()
 }).strict()
 
 /** Host-owned development configuration; packaged applications never read this seam.
@@ -50,5 +63,8 @@ export async function loadDevelopmentPluginOptions(input: Readonly<{
   }
   return { root, userDataPath: input.userDataPath, hostApiVersion: input.hostApiVersion,
     dshRuntimeVersion: input.env.SCIFORGE_DSH_RUNTIME_VERSION?.trim() || undefined,
-    adapterContracts, allowedPermissionIds: new Set() }
+    adapterContracts, allowedPermissionIds: new Set(),
+    ...(input.env.SCIFORGE_DEV_PLUGIN_RUNTIME_ENV_JSON ? { pluginRuntimeEnv: z.record(z.string().regex(/^[A-Z][A-Z0-9_]*$/), z.string()).parse(JSON.parse(input.env.SCIFORGE_DEV_PLUGIN_RUNTIME_ENV_JSON)) } : {}),
+    // G9: ordinary-Session invocations need the child-local ordinary Agent resolver.
+    dshAgentResolver: await ensureDshAgentResolverModule(input.userDataPath) }
 }

@@ -168,13 +168,13 @@ describe('domain module boundaries', () => {
 
   it('recognizes private worker package root and deep source imports', () => {
     expect(privateWorkerSourceImportPattern.test(
-      "from '../../../packages/workers/paper-radar/src'"
+      "from '../../../packages/workers/write-assist/src'"
     )).toBe(true)
     expect(privateWorkerSourceImportPattern.test(
       "from '../../../packages/workers/write-assist/src/service'"
     )).toBe(true)
     expect(privateWorkerSourceImportPattern.test(
-      "from '@sciforge/paper-radar/service'"
+      "from '@sciforge/write-assist/service'"
     )).toBe(false)
   })
 
@@ -507,8 +507,9 @@ describe('domain module boundaries', () => {
     )
   })
 
-  it('keeps the runtime installer on public SDK contracts and out of extension execution', () => {
+  it('keeps the application and runtime installer on public SDK contracts and the installer out of extension execution', () => {
     const installerFiles = productionSourceFiles('src/main/extensions')
+    const boundaryFiles = [...installerFiles, resolve(projectRoot, 'src/main/index.ts')]
     expect(installerFiles.length).toBeGreaterThan(0)
 
     const sdkPackageName = '@sciforge/domain-sdk'
@@ -518,7 +519,7 @@ describe('domain module boundaries', () => {
     const publicSdkSpecifiers = new Set(Object.keys(sdkPackage.exports).map((subpath) =>
       subpath === '.' ? sdkPackageName : `${sdkPackageName}/${subpath.replace(/^\.\//u, '')}`
     ))
-    const violations = installerFiles.flatMap((path) => {
+    const violations = boundaryFiles.flatMap((path) => {
       const source = readFileSync(path, 'utf8')
       const relativePath = relative(projectRoot, path)
       const importViolations = importSpecifiers(source).flatMap((specifier) => {
@@ -539,8 +540,9 @@ describe('domain module boundaries', () => {
         return []
       })
       const codeLoadingViolations =
-        /\b(?:import|require)\s*\(/u.test(source) ||
-        /\b(?:createRequire|runInNewContext|runInThisContext|SourceTextModule)\b/u.test(source)
+        installerFiles.includes(path) && (
+          /\b(?:import|require)\s*\(/u.test(source) ||
+          /\b(?:createRequire|runInNewContext|runInThisContext|SourceTextModule)\b/u.test(source))
           ? [`${relativePath} -> dynamic code loading`]
           : []
       return [...importViolations, ...codeLoadingViolations]
@@ -680,61 +682,5 @@ describe('domain module boundaries', () => {
     }
   })
 
-  it('keeps in-app Paper Radar agents off the retired domain MCP business path', () => {
-    const retiredMainFiles = [
-      ['paper', 'radar', 'mcp', 'config.ts'].join('-'),
-      ['paper', 'radar', 'mcp', 'server.ts'].join('-'),
-      ['paper', 'radar', 'mcp', 'node', 'entry.ts'].join('-')
-    ].map((name) => resolve(projectRoot, 'src/main', name))
-    expect(retiredMainFiles.filter(existsSync)).toEqual([])
 
-    const sources = [
-      'src/main/index.ts',
-      'src/main/gui-mcp-registry.ts',
-      'electron.vite.config.ts',
-      'scripts/release-worker-manifest.cjs'
-    ].map((path) => readFileSync(resolve(projectRoot, path), 'utf8'))
-    const retiredServerId = ['gui', 'paper', 'radar'].join('_')
-    const retiredNodeEntry = ['paper', 'radar', 'mcp', 'node', 'entry'].join('-')
-    expect(sources.some((source) => source.includes(retiredServerId))).toBe(false)
-    expect(sources.some((source) => source.includes(retiredNodeEntry))).toBe(false)
-
-    const workerRoot = resolve(projectRoot, 'packages/workers/paper-radar')
-    const retiredWorkerFiles = [
-      ['mcp', 'server.ts'].join('-'),
-      ['mcp', 'server.test.ts'].join('-'),
-      'cli.ts',
-      'write-action.ts',
-      'write-safety.ts'
-    ].map((name) => join(workerRoot, 'src', name))
-    expect(retiredWorkerFiles.filter(existsSync)).toEqual([])
-
-    const workerPackage = JSON.parse(readFileSync(join(workerRoot, 'package.json'), 'utf8')) as {
-      bin?: Record<string, string>
-      exports: Record<string, string>
-      scripts: Record<string, string>
-      sciforge?: { mcpServer?: boolean }
-    }
-    expect(workerPackage.bin).toBeUndefined()
-    expect(workerPackage.exports).not.toHaveProperty('./mcp-server')
-    expect(workerPackage.scripts).not.toHaveProperty('start')
-    expect(workerPackage.sciforge?.mcpServer).toBe(false)
-
-    const workerSources = sourceFiles(relative(projectRoot, join(workerRoot, 'src')))
-      .map((path) => readFileSync(path, 'utf8'))
-      .join('\n')
-    const retiredToolPrefix = ['gui', 'paper'].join('_')
-    const retiredPackageProtocol = ['paper', 'radar', 'mcp'].join('-')
-    expect(workerSources).not.toContain(retiredToolPrefix)
-    expect(workerSources).not.toContain(retiredPackageProtocol)
-
-    const workerServiceContract = [
-      'packages/workers/paper-radar/src/contract.ts',
-      'packages/workers/paper-radar/src/service.ts'
-    ].map((path) => readFileSync(resolve(projectRoot, path), 'utf8')).join('\n')
-    const retiredConfirmationFields = ['confirmed', 'confirmation_id', 'dry_run']
-    for (const field of retiredConfirmationFields) {
-      expect(workerServiceContract).not.toContain(field)
-    }
-  })
 })

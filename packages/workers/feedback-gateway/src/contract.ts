@@ -5,7 +5,7 @@ import {
   productFeedbackPacketSchema,
   type FeedbackGatewayResult,
   type ProductFeedbackPacket
-} from '@sciforge/domain-anchored-comments/contract'
+} from '@sciforge/plugin-anchored-comments/contract'
 
 export const FEEDBACK_SCHEMA_VERSION = ANCHORED_COMMENT_SCHEMA_VERSION
 

@@ -1,10 +1,13 @@
+@import './research/ResearchView.css';
+
 /*
  * Collaboration workspace. Colors come only from the Host --ds-* tokens.
  * Type scale: page title 24 · drawer title 22 · section 15 · body 14 · meta 12.
- * Spacing is on a 4px grid; cards and containers use 12px corners.
+ * Spacing is on a 4px grid; concentric surfaces use shared control, card and panel radii.
  */
 
 .collaboration-workspace-page {
+  container: collaboration-workspace / inline-size;
   --collaboration-workspace-topbar-height: 60px;
   --collaboration-workspace-sidebar-width: 240px;
   --collaboration-workspace-tone-intake: var(--ds-text-faint);
@@ -109,7 +112,7 @@
   gap: 10px;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
   text-align: left;
@@ -159,7 +162,7 @@
   height: 18px;
   place-items: center;
   padding: 0 5px;
-  border-radius: 9px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-accent);
   color: var(--ds-bg-main);
   font-size: 11px;
@@ -183,7 +186,7 @@
   height: 24px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
 }
@@ -229,7 +232,7 @@
   height: 20px;
   flex: none;
   place-items: center;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-accent-soft);
   color: var(--ds-accent);
   font-size: 11px;
@@ -311,7 +314,7 @@
   flex: none;
   padding: 2px 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-accent);
   font-size: 12px;
@@ -333,7 +336,7 @@
   gap: 8px;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
   font-size: 12.5px;
@@ -436,7 +439,7 @@
   height: 28px;
   flex: none;
   place-items: center;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-accent-soft);
   color: var(--ds-accent);
   font-size: 13px;
@@ -514,7 +517,7 @@
   flex: none;
   gap: 2px;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
 }
 
@@ -522,7 +525,7 @@
   height: 28px;
   padding: 0 14px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
   font-size: 13.5px;
@@ -559,7 +562,7 @@
   gap: 6px;
   padding: 0 14px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   font-size: 13.5px;
   font-weight: 500;
   white-space: nowrap;
@@ -615,7 +618,7 @@
   height: 30px;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
 }
@@ -647,7 +650,7 @@
   height: 100%;
   padding: 0 30px 0 12px;
   border: 1px solid var(--ds-border);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   appearance: none;
   background: var(--ds-surface-elevated);
   font-size: 13px;
@@ -676,7 +679,7 @@
   height: 100%;
   padding: 0 12px 0 32px;
   border: 1px solid var(--ds-border);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-elevated);
   font-size: 13px;
 }
@@ -709,7 +712,7 @@
   margin-left: 8px;
   place-items: center;
   padding: 0 6px;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
   color: var(--ds-text-muted);
   font-size: 12px;
@@ -777,7 +780,7 @@
   min-height: 0;
   flex: 1 0 232px;
   flex-direction: column;
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-surface-subtle);
 }
 
@@ -832,7 +835,7 @@
   flex: none;
   place-items: center;
   border: 1px dashed var(--ds-border);
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   color: var(--ds-text-faint);
   font-size: 12.5px;
 }
@@ -843,7 +846,7 @@
   flex: none;
   padding: 0;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: none;
   text-align: left;
 }
@@ -854,7 +857,7 @@
   gap: 6px;
   padding: 12px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-surface-elevated);
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
@@ -930,7 +933,7 @@
   height: 20px;
   align-items: center;
   padding: 0 7px;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
   color: var(--ds-text-muted);
   font-size: 11.5px;
@@ -978,9 +981,11 @@
 .collaboration-workspace-task-drawer {
   position: absolute;
   z-index: 20;
-  inset: 0 0 0 auto;
+  inset: 8px 8px 8px auto;
   display: flex;
-  width: min(480px, 100%);
+  width: min(480px, calc(100% - 16px));
+  border-radius: var(--ds-radius-panel, 28px);
+  overflow: hidden;
   flex-direction: column;
   border-left: 1px solid var(--ds-border-muted);
   background: linear-gradient(var(--ds-surface-elevated), var(--ds-surface-elevated)), var(--ds-bg-main);
@@ -989,7 +994,7 @@
 }
 
 .collaboration-workspace-task-drawer.is-expanded {
-  width: 100%;
+  width: calc(100% - 16px);
 }
 
 .collaboration-workspace-task-drawer-header {
@@ -1034,7 +1039,7 @@
   height: 30px;
   place-items: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
 }
@@ -1121,7 +1126,7 @@
   gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-bg-main);
   font-size: 13px;
 }
@@ -1156,7 +1161,7 @@
   padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--ds-accent) 22%, transparent);
   border-left: 3px solid var(--ds-accent);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: color-mix(in srgb, var(--ds-accent-soft) 55%, var(--ds-surface-elevated));
 }
 
@@ -1199,7 +1204,7 @@
   flex: 1;
   padding: 0 12px;
   border: 1px solid var(--ds-border);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-elevated);
 }
 
@@ -1223,7 +1228,7 @@
   justify-content: space-between;
   gap: 12px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-elevated);
   font-size: 13px;
 }
@@ -1339,7 +1344,7 @@
   flex: 1;
   padding: 0 14px;
   border: 1px solid var(--ds-border);
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-bg-main);
 }
 
@@ -1349,7 +1354,7 @@
   height: 40px;
   place-items: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-accent);
   color: var(--ds-bg-main);
 }
@@ -1445,7 +1450,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-surface-elevated);
   list-style: none;
 }
@@ -1687,7 +1692,7 @@ button.collaboration-workspace-personal-row:hover {
   min-height: 120px;
   padding: 12px 14px;
   border: 1px solid var(--ds-border);
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-elevated);
   font-size: 14px;
   line-height: 1.65;
@@ -1705,7 +1710,7 @@ button.collaboration-workspace-personal-row:hover {
   margin: 0;
   padding: 14px 16px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-elevated);
   font-size: 14px;
   line-height: 1.7;
@@ -1726,7 +1731,7 @@ button.collaboration-workspace-personal-row:hover {
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-surface-elevated);
   list-style: none;
 }
@@ -1805,7 +1810,7 @@ button.collaboration-workspace-personal-row:hover {
   padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--ds-accent) 22%, transparent);
   border-left: 3px solid var(--ds-accent);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: color-mix(in srgb, var(--ds-accent-soft) 55%, var(--ds-surface-elevated));
 }
 
@@ -1843,7 +1848,7 @@ button.collaboration-workspace-personal-row:hover {
   justify-content: space-between;
   padding: 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: var(--ds-text-muted);
   text-align: left;
@@ -1876,7 +1881,7 @@ button.collaboration-workspace-personal-row:hover {
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-surface-elevated);
 }
 
@@ -1924,7 +1929,7 @@ button.collaboration-workspace-personal-row:hover {
   gap: 10px;
   padding: 16px;
   border: 1px solid var(--ds-border);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: linear-gradient(var(--ds-surface-elevated), var(--ds-surface-elevated)), var(--ds-bg-main);
   box-shadow: var(--ds-shadow-card-strong);
 }
@@ -1941,7 +1946,7 @@ button.collaboration-workspace-personal-row:hover {
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--ds-border);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-bg-main);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 13px;
@@ -1961,7 +1966,7 @@ button.collaboration-workspace-personal-row:hover {
 .collaboration-workspace-members-table {
   overflow: hidden;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-surface-elevated);
 }
 
@@ -2089,7 +2094,7 @@ button.collaboration-workspace-personal-row:hover {
 .collaboration-workspace-dialog :where(input, textarea) {
   padding: 8px 12px;
   border: 1px solid var(--ds-border);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-bg-main);
   color: var(--ds-text);
   font-size: 14px;
@@ -2107,7 +2112,7 @@ button.collaboration-workspace-personal-row:hover {
 .collaboration-workspace-dialog-error {
   margin: 0;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-danger-soft);
   color: var(--ds-danger);
   font-size: 13px;
@@ -2134,7 +2139,7 @@ button.collaboration-workspace-personal-row:hover {
   align-items: center;
   gap: 12px;
   padding: 10px 12px 10px 16px;
-  border-radius: 10px;
+  border-radius: var(--ds-radius-control, 12px);
   box-shadow: var(--ds-shadow-card-strong);
   font-size: 13px;
   transform: translateX(-50%);
@@ -2157,7 +2162,7 @@ button.collaboration-workspace-personal-row:hover {
   flex: none;
   padding: 4px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: transparent;
   color: inherit;
   font-weight: 500;
@@ -2171,7 +2176,7 @@ button.collaboration-workspace-personal-row:hover {
   display: block;
   width: 100%;
   height: 12px;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
   animation: collaboration-workspace-pulse 1.4s ease-in-out infinite;
 }
@@ -2217,7 +2222,7 @@ button.collaboration-workspace-personal-row:hover {
   }
 
   .collaboration-workspace-task-drawer {
-    width: 100%;
+    width: calc(100% - 16px);
   }
 
   .collaboration-workspace-project-header {
@@ -2237,7 +2242,7 @@ button.collaboration-workspace-personal-row:hover {
   padding: 10px;
   resize: vertical;
   border: 1px solid var(--ds-border);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
 }
 
 .collaboration-workspace-delivery-draft {
@@ -2246,7 +2251,7 @@ button.collaboration-workspace-personal-row:hover {
   margin-top: 20px;
   padding: 16px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-card, 20px);
   background: var(--ds-bg-main);
   font-size: inherit;
 }
@@ -2274,7 +2279,7 @@ button.collaboration-workspace-personal-row:hover {
 .collaboration-workspace-delivery-required {
   display: inline-flex;
   padding: 2px 8px;
-  border-radius: 6px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
   color: var(--ds-text-muted);
   font-size: inherit;
@@ -2337,7 +2342,7 @@ button.collaboration-workspace-personal-row:hover {
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--ds-warning);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-warning-soft);
 }
 
@@ -2414,7 +2419,7 @@ button.collaboration-workspace-personal-row:hover {
 .collaboration-workspace-delivery-revision-request {
   padding: 10px 12px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
 }
 
@@ -2489,7 +2494,7 @@ button.collaboration-workspace-personal-row:hover {
   margin: 0;
   padding: 8px 12px;
   border: 1px solid var(--ds-danger);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-danger-soft);
   color: var(--ds-danger);
   overflow-wrap: anywhere;
@@ -2515,7 +2520,7 @@ button.collaboration-workspace-personal-row:hover {
   margin-top: 12px;
   padding: 12px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
 }
 
 .collaboration-workspace-delivery-history-version[open] > summary {
@@ -2599,7 +2604,7 @@ button.collaboration-workspace-personal-row:hover {
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--ds-border-muted);
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   color: var(--ds-text);
   cursor: pointer;
 }
@@ -2625,7 +2630,7 @@ button.collaboration-workspace-personal-row:hover {
 .collaboration-workspace-delivery-confirm-summary p {
   max-height: 160px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--ds-radius-control, 12px);
   background: var(--ds-surface-subtle);
   overflow: auto;
   white-space: pre-wrap;
@@ -2694,4 +2699,44 @@ button.collaboration-workspace-personal-row:hover {
   .collaboration-workspace-delivery-dialog .collaboration-workspace-dialog-actions {
     flex-wrap: wrap;
   }
+}
+
+.collaboration-workspace-delivery-history select { max-width: 100%; padding: 8px 12px; margin-top: 8px; border: 1px solid var(--ds-border); border-radius: var(--ds-radius-control, 12px); background: var(--ds-surface-card); }
+
+/* Respond to the space left by the Host sidebar, not just the window width. */
+@container collaboration-workspace (max-width: 700px) {
+  .collaboration-workspace-structure { flex-direction: column; }
+  .collaboration-workspace-sidebar {
+    width: 100%;
+    max-height: 40%;
+    flex-shrink: 0;
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--ds-border-muted);
+    padding: 6px 8px;
+  }
+  .collaboration-workspace-sidebar-titlebar { display: none; }
+  .collaboration-workspace-sidebar-nav { flex-direction: row; }
+  .collaboration-workspace-sidebar-section-heading { margin: 4px 0; }
+  .collaboration-workspace-sidebar-projects { flex: none; overflow: visible; }
+  .collaboration-workspace-sidebar-project-group { flex-direction: row; align-items: center; overflow-x: auto; }
+  .collaboration-workspace-sidebar-project-group h2 { flex: none; margin: 4px; }
+  .collaboration-workspace-project-row { width: auto; max-width: 200px; flex: none; }
+  .collaboration-workspace-sidebar-footer { flex-direction: row; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .collaboration-workspace-sidebar-footer > * { flex: 1; min-width: 120px; }
+}
+.collaboration-workspace-main { container-type: inline-size; }
+.collaboration-workspace-project-header-title p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 760px) {
+  .collaboration-workspace-project-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; height: auto; gap: 12px; padding: 14px 16px; }
+  .collaboration-workspace-project-header-main { grid-area: 1 / 1; }
+  .collaboration-workspace-project-header-actions { grid-area: 1 / 2; }
+  .collaboration-workspace-project-header-tabs { grid-area: 2 / 1 / 3 / -1; max-width: 100%; overflow-x: auto; justify-self: start; }
+  .collaboration-workspace-personal-row { grid-template-columns: minmax(0, 1fr) 70px 65px 24px; gap: 8px; padding: 10px; }
+  .collaboration-workspace-personal-person { display: none; }
+  .collaboration-workspace-personal-action { font-size: 0; }
+  .research-view { padding: 24px 16px 40px; }
+}
+@supports (corner-shape: squircle) {
+  .research-composer, .research-composer textarea, .collaboration-workspace-task-drawer, .collaboration-workspace-delivery-dialog { corner-shape: squircle; }
 }

@@ -20,8 +20,6 @@ import {
 } from '../lib/skill-root-preference'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import type {
-  ScientificSkillsInstallRequest,
-  ScientificSkillsStatusResult,
   SkillListItem
 } from '@shared/sciforge-api'
 import { useChatStore } from '../store/chat-store'
@@ -61,15 +59,6 @@ type SkillRootOption = {
   label: string
   path: string
   available: boolean
-}
-
-type ScientificSkillsStatusOk = Extract<ScientificSkillsStatusResult, { ok: true }>
-type ScientificSkillsInstallBackend = NonNullable<ScientificSkillsInstallRequest['backend']>
-
-export function scientificSkillsInstallTargetForWorkspace(workspaceRoot: string): string {
-  return workspaceRoot
-    ? joinFsPath(workspaceRoot, '.agents/skills/scientific-agent-skills')
-    : ''
 }
 
 function normalizeSkillId(raw: string): string {
@@ -189,15 +178,6 @@ export function PluginMarketplaceView(): ReactElement {
   const [discoveredSkills, setDiscoveredSkills] = useState<SkillListItem[]>([])
   const [skillListLoading, setSkillListLoading] = useState(false)
   const [skillListError, setSkillListError] = useState('')
-  const [scientificSkillsStatus, setScientificSkillsStatus] = useState<ScientificSkillsStatusOk | null>(null)
-  const [scientificSkillsLoading, setScientificSkillsLoading] = useState(false)
-  const [scientificSkillsError, setScientificSkillsError] = useState('')
-  const [scientificSkillsInstallOpen, setScientificSkillsInstallOpen] = useState(false)
-  const [scientificSkillsInstallBackend, setScientificSkillsInstallBackend] =
-    useState<ScientificSkillsInstallBackend>('git')
-  const [scientificSkillsInstalling, setScientificSkillsInstalling] = useState(false)
-  const [scientificSkillsInstallError, setScientificSkillsInstallError] = useState('')
-
   const refreshExtensions = useCallback(async (): Promise<void> => {
     setExtensionsLoading(true)
     try {
@@ -374,75 +354,6 @@ export function PluginMarketplaceView(): ReactElement {
       setSkillRootId(fallback.id)
     }
   }, [skillRootId, skillRootOptions])
-
-  const refreshScientificSkillsStatus = useCallback(async (): Promise<void> => {
-    if (typeof window.sciforge?.getScientificSkillsStatus !== 'function') {
-      setScientificSkillsStatus(null)
-      setScientificSkillsError(t('pluginScientificSkillsUnavailable'))
-      return
-    }
-    setScientificSkillsLoading(true)
-    setScientificSkillsError('')
-    try {
-      const result = await window.sciforge.getScientificSkillsStatus(workspaceRoot || undefined)
-      if (!result.ok) {
-        setScientificSkillsStatus(null)
-        setScientificSkillsError(result.message)
-        return
-      }
-      setScientificSkillsStatus(result)
-    } catch (error) {
-      setScientificSkillsStatus(null)
-      setScientificSkillsError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setScientificSkillsLoading(false)
-    }
-  }, [t, workspaceRoot])
-
-  useEffect(() => {
-    void refreshScientificSkillsStatus()
-  }, [refreshScientificSkillsStatus])
-
-  const scientificSkillsInstallTarget = scientificSkillsInstallTargetForWorkspace(workspaceRoot)
-
-  const installScientificSkills = useCallback(async (): Promise<void> => {
-    if (!workspaceRoot) {
-      setScientificSkillsInstallError(t('pluginScientificSkillsInstallWorkspaceRequired'))
-      return
-    }
-    if (typeof window.sciforge?.installScientificSkills !== 'function') {
-      setScientificSkillsInstallError(t('pluginScientificSkillsInstallUnavailable'))
-      return
-    }
-    setScientificSkillsInstalling(true)
-    setScientificSkillsInstallError('')
-    try {
-      const result = await window.sciforge.installScientificSkills({
-        workspaceRoot,
-        backend: scientificSkillsInstallBackend,
-        ref: 'main'
-      })
-      if (!result.ok) {
-        setScientificSkillsInstallError(result.message)
-        return
-      }
-      setScientificSkillsInstallOpen(false)
-      setNotice({
-        tone: 'success',
-        message: t(
-          result.status === 'already_installed'
-            ? 'pluginScientificSkillsInstallAlready'
-            : 'pluginScientificSkillsInstallSuccess',
-          { path: result.targetPath }
-        )
-      })
-      await refreshScientificSkillsStatus()
-    } catch (error) {
-      setScientificSkillsInstallError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setScientificSkillsInstalling(false)
-    }
-  }, [refreshScientificSkillsStatus, scientificSkillsInstallBackend, t, workspaceRoot])
 
   const refreshSkillList = useCallback(async (): Promise<void> => {
     if (typeof window.sciforge?.listSkills !== 'function') {
@@ -782,20 +693,6 @@ export function PluginMarketplaceView(): ReactElement {
               )}
             </div>
 
-            <ScientificSkillsStatusPanel
-              status={scientificSkillsStatus}
-              loading={scientificSkillsLoading}
-              error={scientificSkillsError}
-              installTarget={scientificSkillsInstallTarget}
-              installDisabled={!workspaceRoot || scientificSkillsInstalling}
-              onRefresh={() => void refreshScientificSkillsStatus()}
-              onInstall={() => {
-                setScientificSkillsInstallError('')
-                setScientificSkillsInstallOpen(true)
-              }}
-              t={t}
-            />
-
             {customOpen ? (
               <CustomSkillPanel
                 customName={customName}
@@ -810,21 +707,6 @@ export function PluginMarketplaceView(): ReactElement {
             ) : null}
 
             {notice ? <NoticeView notice={notice} /> : null}
-
-            {scientificSkillsInstallOpen ? (
-              <ScientificSkillsInstallDialog
-                backend={scientificSkillsInstallBackend}
-                error={scientificSkillsInstallError}
-                installing={scientificSkillsInstalling}
-                targetPath={scientificSkillsInstallTarget}
-                onBackendChange={setScientificSkillsInstallBackend}
-                onCancel={() => {
-                  if (!scientificSkillsInstalling) setScientificSkillsInstallOpen(false)
-                }}
-                onConfirm={() => void installScientificSkills()}
-                t={t}
-              />
-            ) : null}
 
             <SkillSection
               title={t('pluginSkillTemplates')}
@@ -850,262 +732,6 @@ export function PluginMarketplaceView(): ReactElement {
       </div>
     </div>
   )
-}
-
-function ScientificSkillsStatusPanel({
-  status,
-  loading,
-  error,
-  installTarget,
-  installDisabled,
-  onRefresh,
-  onInstall,
-  t
-}: {
-  status: ScientificSkillsStatusOk | null
-  loading: boolean
-  error: string
-  installTarget: string
-  installDisabled: boolean
-  onRefresh: () => void
-  onInstall: () => void
-  t: (key: string, values?: Record<string, unknown>) => string
-}): ReactElement {
-  const installedRoots = status?.roots.filter((root) => root.exists && root.skillCount > 0) ?? []
-  const visibleRoots = installedRoots.length > 0
-    ? installedRoots
-    : status?.roots.filter((root) => root.exists).slice(0, 3) ?? []
-  const availablePack = status?.plottingPack.installed ?? 0
-  const totalPack = status?.plottingPack.total ?? 0
-  const statusTone = status?.installed
-    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
-    : 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-200'
-  const missingPlottingPack = (status?.plottingPack.missing ?? 0) > 0
-  const showInstallCta = !status?.installed || missingPlottingPack
-
-  return (
-    <section className="mt-4 rounded-lg border border-ds-border bg-ds-card px-4 py-3 shadow-sm">
-      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[13px] font-semibold text-ds-ink">{t('pluginScientificSkillsPanelTitle')}</span>
-            <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${statusTone}`}>
-              {status?.installed ? t('pluginScientificSkillsInstalled') : t('pluginScientificSkillsMissing')}
-            </span>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ds-muted">
-            <span>{t('pluginScientificSkillsCount', { count: status?.skillCount ?? 0 })}</span>
-            <span>{t('pluginScientificSkillsPlottingPackCount', { available: availablePack, total: totalPack })}</span>
-            {status?.fingerprint ? <span>{t('pluginScientificSkillsFingerprint', { fingerprint: status.fingerprint })}</span> : null}
-          </div>
-          {status?.plottingPack.items.length ? (
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {status.plottingPack.items.map((item) => (
-                <div
-                  key={item.skillId}
-                  className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-[12px] font-semibold text-ds-ink">{item.label}</div>
-                    <div className="truncate font-mono text-[11px] text-ds-faint">{item.skillId}</div>
-                  </div>
-                  <span className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-semibold ${
-                    item.installed
-                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
-                      : 'bg-ds-card text-ds-faint'
-                  }`}>
-                    {item.installed ? t('pluginScientificSkillsPackAvailable') : t('pluginScientificSkillsPackMissing')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {visibleRoots.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {visibleRoots.map((root) => (
-                <span
-                  key={`${root.source}:${root.path}`}
-                  className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-0.5 font-mono text-[11px] text-ds-muted"
-                  title={scientificSkillsRootSourceTitle(root.source, root.path, t)}
-                >
-                  {scientificSkillsRootSourceLabel(root.source, t)} · {root.skillCount}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {error || status?.validationErrors.length ? (
-            <div className="mt-2 truncate text-[12px] text-red-700 dark:text-red-300">
-              {error || status?.validationErrors[0]?.message}
-            </div>
-          ) : null}
-          {!status?.installed && status?.installHint ? (
-            <div className="mt-2 text-[12px] leading-5 text-ds-muted">
-              {status.installHint}
-            </div>
-          ) : null}
-          {showInstallCta ? (
-            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200">
-              {t('pluginScientificSkillsInstallSuggestion')}
-              {installTarget ? (
-                <span className="ml-1 font-mono text-[11px]">{installTarget}</span>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 flex-col gap-2 sm:flex-row md:flex-col">
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={loading}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-ds-border bg-ds-subtle px-3 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            {t('pluginScientificSkillsRefresh')}
-          </button>
-          {showInstallCta ? (
-            <button
-              type="button"
-              onClick={onInstall}
-              disabled={installDisabled}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[var(--ds-accent)] px-3 text-[12px] font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              {t(status?.installed ? 'pluginScientificSkillsRepair' : 'pluginScientificSkillsInstall')}
-            </button>
-          ) : null}
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function ScientificSkillsInstallDialog({
-  backend,
-  error,
-  installing,
-  targetPath,
-  onBackendChange,
-  onCancel,
-  onConfirm,
-  t
-}: {
-  backend: ScientificSkillsInstallBackend
-  error: string
-  installing: boolean
-  targetPath: string
-  onBackendChange: (backend: ScientificSkillsInstallBackend) => void
-  onCancel: () => void
-  onConfirm: () => void
-  t: (key: string, values?: Record<string, unknown>) => string
-}): ReactElement {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6">
-      <section className="w-full max-w-xl rounded-lg border border-ds-border bg-ds-card p-5 shadow-xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-[15px] font-semibold text-ds-ink">{t('pluginScientificSkillsInstallTitle')}</h3>
-            <p className="mt-1 text-[12px] leading-5 text-ds-muted">
-              {t(
-                backend === 'npx'
-                  ? 'pluginScientificSkillsInstallBodyNpx'
-                  : 'pluginScientificSkillsInstallBody'
-              )}
-            </p>
-          </div>
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-ds-faint" />
-        </div>
-        <div className="mt-4 grid gap-3 text-[12px]">
-          <div className="rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2">
-            <div className="font-semibold text-ds-ink">{t('pluginScientificSkillsInstallRepo')}</div>
-            <div className="mt-1 break-all font-mono text-[11px] text-ds-muted">
-              https://github.com/K-Dense-AI/scientific-agent-skills.git
-            </div>
-          </div>
-          <div className="rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2">
-            <div className="font-semibold text-ds-ink">
-              {t(
-                backend === 'npx'
-                  ? 'pluginScientificSkillsInstallDiscoveryTarget'
-                  : 'pluginScientificSkillsInstallTarget'
-              )}
-            </div>
-            <div className="mt-1 break-all font-mono text-[11px] text-ds-muted">
-              {targetPath || t('pluginScientificSkillsInstallWorkspaceRequired')}
-            </div>
-          </div>
-          <label className="grid gap-1">
-            <span className="font-semibold text-ds-ink">{t('pluginScientificSkillsInstallBackend')}</span>
-            <select
-              value={backend}
-              disabled={installing}
-              onChange={(event) => onBackendChange(event.target.value as ScientificSkillsInstallBackend)}
-              className="h-9 rounded-lg border border-ds-border bg-ds-card px-3 text-[12px] text-ds-ink outline-none transition focus:border-[var(--ds-accent)]"
-            >
-              <option value="git">{t('pluginScientificSkillsInstallBackendGit')}</option>
-              <option value="npx">{t('pluginScientificSkillsInstallBackendNpx')}</option>
-            </select>
-          </label>
-          <div className="rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2 text-ds-muted">
-            {t(
-              backend === 'npx'
-                ? 'pluginScientificSkillsInstallPolicyNpx'
-                : 'pluginScientificSkillsInstallPolicy'
-            )}
-          </div>
-          {error ? (
-            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
-              {error}
-            </div>
-          ) : null}
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={installing}
-            className="inline-flex h-9 items-center justify-center rounded-lg border border-ds-border bg-ds-card px-3 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {t('pluginScientificSkillsInstallCancel')}
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={installing || !targetPath}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[var(--ds-accent)] px-3 text-[12px] font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-            {t('pluginScientificSkillsInstallConfirm')}
-          </button>
-        </div>
-      </section>
-    </div>
-  )
-}
-
-export function scientificSkillsRootSourceLabel(
-  source: string,
-  t: (key: string, values?: Record<string, unknown>) => string
-): string {
-  switch (source) {
-    case 'env':
-      return t('pluginScientificSkillsRootEnv')
-    case 'workspace-agents':
-      return t('pluginScientificSkillsRootWorkspaceAgents')
-    case 'workspace-skills':
-      return t('pluginScientificSkillsRootWorkspaceSkills')
-    case 'global-agents':
-      return t('pluginScientificSkillsRootGlobalAgents')
-    default:
-      return source
-  }
-}
-
-export function scientificSkillsRootSourceTitle(
-  source: string,
-  path: string,
-  t: (key: string, values?: Record<string, unknown>) => string
-): string {
-  return path
 }
 
 function skillSourceTone(tone: SkillCatalogItem['statusTone']): string {

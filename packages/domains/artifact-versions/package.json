@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-artifact-versions",
-  "version": "1.1.2",
+  "version": "1.4.0",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -9,6 +9,7 @@
     "./contract": "./src/contract.ts",
     "./capability-eval": "./src/capability-eval.ts",
     "./definition": "./src/definition.ts",
+    "./host-services": "./src/host-services.ts",
     "./main": "./src/main.ts",
     "./renderer": "./src/renderer/index.tsx"
   },
@@ -23,7 +24,8 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.18",
+    "@sciforge/domain-sdk": "^0.2.29",
+    "@sciforge/plugin-sdk": "^0.1.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",

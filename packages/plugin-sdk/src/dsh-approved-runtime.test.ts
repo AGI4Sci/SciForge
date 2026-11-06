@@ -7,7 +7,7 @@ import Schema from '@deepseek-ai/schemastery'
 const require = createRequire(import.meta.url)
 
 test('approved runtime packages resolve at pinned versions with real Cordis scoped effects', async () => {
-  assert.equal(require('@deepseek-ai/cordis/package.json').version, '4.0.4')
+  assert.equal(require('@deepseek-ai/cordis/package.json').version, '4.0.5')
   assert.equal(require('@deepseek-ai/schemastery/package.json').version, '3.18.4')
   const root = new Context()
   const events: string[] = []

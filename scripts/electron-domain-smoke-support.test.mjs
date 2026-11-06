@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { access, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 import {
   CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
   COLLABORATION_SMOKE_CAPABILITY_IDS,
@@ -21,6 +22,7 @@ import {
   parseSmokeCliOptions,
   removeElectronSmokeTemporaryDirectory,
   runElectronDomainSmoke,
+  smokeRendererWorkflow,
   validateSmokeResult
 } from './electron-domain-smoke-support.mjs'
 import { providerCredentialSmokeLaunchArgs } from './electron-provider-credential-smoke-support.mjs'
@@ -228,6 +230,85 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
   }
 })
 
+test('fresh-profile domain smoke does not require uninstalled plugin contributions', async () => {
+  const manifest = JSON.parse(await readFile(
+    new URL('../plugins/scientific-plotting/sciforge.dsh.json', import.meta.url), 'utf8'
+  ))
+  assert.equal(manifest.packageName, '@sciforge/plugin-scientific-plotting')
+  const pluginIds = Object.values(manifest.tools).map(({ id }) => id)
+  assert.deepEqual(pluginIds, ['scientific-figures.operation'])
+  for (const capabilityId of pluginIds) {
+    assert.equal(REQUIRED_CAPABILITY_IDS.includes(capabilityId), false,
+      `${capabilityId} is owned by an independently installed plugin`)
+  }
+  const valid = validSmokeResult()
+  for (const installedPluginsVerified of [true, undefined]) {
+    assert.throws(() => validateSmokeResult({ ...valid, installedPluginsVerified }, {
+      expectedRendererUrl: valid.url
+    }), /must not claim installed plugin acceptance/u)
+  }
+})
+
+test('fresh-profile renderer executes only the static workflow without installed figure tools', async () => {
+  const workspaceDirectory = '/smoke/workspace'
+  const identityInvocationId = 'electron-smoke-identity-create-00000000-0000-4000-8000-000000000001'
+  const resource = { kind: 'workspace-preview', id: 'session-1' }
+  const editedResource = { kind: 'workspace-preview', id: 'session-1-edited' }
+  const calls = []
+  const expectedInvocations = [
+    [{ request: { actionId: 'identity.local.create-account', invocationId: identityInvocationId, input: { username: 'electron_smoke' } } }, { status: 'available', currentAccount: { username: 'electron_smoke' } }],
+    [{ request: { actionId: 'identity.cloud.inspect', input: {} } }, { snapshot: { identity: { state: 'signed-out' }, device: { state: 'signed-out' } } }],
+    [{ request: { actionId: 'content-space.list-provider-instances', input: {} } }, { ok: true, value: { items: [{ providerInstanceRef: 'installed-provider' }] } }],
+    [{ request: { actionId: 'collaboration.status.read', input: {} } }, { connection: { configured: false, state: 'unconfigured' } }],
+    [{ request: { actionId: 'collaboration.workspace.read', input: {} } }, { connection: { state: 'cloud_unavailable' }, projects: [] }],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'create-loop.read', input: {} } }, { settings: { workflows: [] } }],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'workspace-preview.list', input: {} } }, [{ id: 'markdown' }]],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'workspace-preview.open', input: { workspaceRoot: workspaceDirectory, path: 'notes.md', mode: 'edit' } } }, { ok: true, resource, session: { pluginId: 'markdown' } }],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'workspace-preview.apply-edit', invocationId: 'electron-smoke-text-edit', resource, expectedRevision: 'revision-1', input: { operation: { kind: 'text.replaceRange', path: 'notes.md', range: { start: { line: 2, column: 1 }, end: { line: 2, column: 6 } }, text: 'SciForge' } } } }, { ok: true }],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'workspace-preview.release', invocationId: 'electron-smoke-preview-release', resource: editedResource, input: {} } }, true],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'artifact-versions.list', input: { limit: 1 } } }, { ok: true, value: { items: [] } }],
+    [{ workspaceId: workspaceDirectory, request: { actionId: 'evidence-dag.view', input: {} } }, { status: 'available' }]
+  ]
+  let invocationIndex = 0
+  let observationIndex = 0
+  const plain = value => JSON.parse(JSON.stringify(value))
+  const result = plain(await runInNewContext(`(${smokeRendererWorkflow.toString()})(input)`, {
+    input: { expectedContractVersion: 'smoke-contract', expectCloudConfigured: false, identityInvocationId, requiredCapabilityIds: REQUIRED_CAPABILITY_IDS, workspaceDirectory },
+    document: { title: 'SciForge', documentElement: { dataset: { platform: 'darwin' } } },
+    location: { href: 'file:///electron-domain-smoke/index.html' },
+    sciforge: {
+      getAppVersion: async () => 'smoke-version',
+      capabilities: {
+        readiness: async input => {
+          assert.deepEqual(plain(input), { workspaceId: workspaceDirectory, expectedContractVersion: 'smoke-contract', requiredCapabilityIds: REQUIRED_CAPABILITY_IDS })
+          return { status: 'ready', availableCapabilityIds: REQUIRED_CAPABILITY_IDS }
+        },
+        invoke: async input => {
+          const expected = expectedInvocations[invocationIndex++]
+          assert.ok(expected, `Unexpected invocation: ${input.request.actionId}`)
+          assert.deepEqual(plain(input), expected[0])
+          calls.push(input.request.actionId)
+          return { actionId: input.request.actionId, output: expected[1], ...(input.request.actionId === 'workspace-preview.apply-edit' ? { changed: true, resource: editedResource } : {}) }
+        },
+        observe: async input => {
+          observationIndex += 1
+          assert.deepEqual(plain(input), { workspaceId: workspaceDirectory, request: { resource: observationIndex === 1 ? resource : editedResource } })
+          return { resource: observationIndex === 1 ? resource : editedResource, semanticRevision: 'revision-1', state: { observation: { visibleText: 'hello\nSciForge\n' } } }
+        }
+      }
+    }
+  }))
+  assert.deepEqual(calls, expectedInvocations.map(([input]) => input.request.actionId))
+  assert.equal(observationIndex, 2)
+  const { nativeVisual, codexPreToolUseHook, ...expectedRendererResult } = validSmokeResult()
+  assert.deepEqual(result, {
+    ...expectedRendererResult, title: 'SciForge', version: 'smoke-version', capabilityCount: REQUIRED_CAPABILITY_IDS.length
+  })
+  assert.doesNotThrow(() => validateSmokeResult({ ...result, nativeVisual, codexPreToolUseHook }, { expectedRendererUrl: result.url }))
+  assert.throws(() => validateSmokeResult({ ...result, codexPreToolUseHook }, { expectedRendererUrl: result.url }), { message: 'Native visual smoke returned no result.' })
+  assert.throws(() => validateSmokeResult({ ...result, nativeVisual: { ...nativeVisual, proofChainValidated: false }, codexPreToolUseHook }, { expectedRendererUrl: result.url }), { message: 'Native visual smoke did not validate capture, bindings, proofs, and failure behavior.' })
+})
+
 test('Identity smoke account creation receives a fresh bounded invocation identity', () => {
   const first = createIdentitySmokeInvocationId(() => '00000000-0000-4000-8000-000000000001')
   const second = createIdentitySmokeInvocationId(() => '00000000-0000-4000-8000-000000000002')
@@ -328,17 +409,14 @@ function validSmokeResult() {
     url: 'file:///electron-domain-smoke/index.html',
     platform: 'darwin',
     readiness: 'ready',
-    datasetLoopCreated: true,
-    datasetLoopWorkflowCount: 2,
-    paperRadarActionId: 'paper-radar.status',
+    createLoopReadable: true,
     workspacePreviewActionId: 'workspace-preview.list',
     previewPluginCount: 1,
     workspacePreviewPluginId: 'markdown',
     workspacePreviewReleased: true,
     artifactVersionsActionId: 'artifact-versions.list',
     evidenceDagActionId: 'evidence-dag.view',
-    scientificPlottingActionId: 'scientific-plotting.status',
-    visualReviewActionId: 'visual-review.open',
+    installedPluginsVerified: false,
     identityActionId: 'identity.local.create-account',
     identityAccountUsername: 'electron_smoke',
     cloudIdentityActionId: 'identity.cloud.inspect',
@@ -359,7 +437,6 @@ function validSmokeResult() {
       cropped: true,
       nativeImageBindingValidated: true,
       proofChainValidated: true,
-      datasetLoopCapabilitiesDiscoverable: true,
       unavailableRouteFailedVisibly: true
     },
     codexPreToolUseHook: {

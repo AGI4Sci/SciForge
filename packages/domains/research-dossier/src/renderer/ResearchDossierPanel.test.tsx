@@ -592,3 +592,27 @@ test('hides document namespaces and legacy ambient files from the researcher sum
   assert.match(reproduction, /data-research-checkpoint-technical-files/u)
   assert.match(reproduction, /\.codex-runtime/u)
 })
+
+
+test('browse groups exact current identity without inferring another session purpose', async () => {
+  const { groupBrowseArtifacts, browseArtifactTitle } = await import('./ResearchDossierPanel.js')
+  const item = (id: string, metadata: Record<string, unknown>) => ({ artifact: { kind: 'research-checkpoint', label: 'Research 01234567-89ab-cdef-0123-456789abcdef' }, version: { versionId: id, metadata } })
+  const current = item('current', { runtimeId: 'codex', threadId: 'main', researchRecordingId: 'recording-main', changeReason: '验证负例' })
+  const output = item('output', { researchRecordingId: 'recording-main' })
+  const other = item('other', { runtimeId: 'codex', threadId: 'other' })
+  const unknown = item('unknown', {})
+  const grouped = groupBrowseArtifacts([other, unknown, current, output] as never, { id: 'main', runtimeId: 'codex' })
+  assert.deepEqual(grouped.current, [current, output])
+  assert.deepEqual(grouped.other, [other, unknown])
+  assert.equal(browseArtifactTitle(current as never), '验证负例')
+  assert.equal(browseArtifactTitle(item('handoff', { changeReason: '侧聊讨论成果：批注\n\n# 独立验证的讨论结论\n\n正文' }) as never), '独立验证的讨论结论')
+  assert.equal(current.artifact.label, 'Research 01234567-89ab-cdef-0123-456789abcdef')
+})
+
+
+test('missing primary provider stays explicit and leaves archives reachable without owner calls', async () => {
+  const { ResearchWorkspacePanel } = await import('./ResearchWorkspacePanel.js')
+  const html = renderToStaticMarkup(<ResearchWorkspacePanel client={{} as never} session={{ id: 'main' }} active focused surfaceId="missing-view" onCollapse={() => undefined} researchViews={[]} />)
+  assert.match(html, /阶段视图当前不可用/)
+  assert.match(html, /查看档案与版本/)
+})

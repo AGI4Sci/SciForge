@@ -63,16 +63,16 @@ describe('capability evaluators', () => {
 
   it('fails on wrong action and missing required action', () => {
     const wrong = trace({
-      domain: 'scientific-compute',
+      domain: 'scientific-plotting',
       selectedActions: [{
-        actionId: 'scientific-compute.status',
+        actionId: 'scientific-plotting.status',
         args: {},
         success: true,
         retryCount: 0,
         latencyMs: 1
       }],
       invocations: [{
-        actionId: 'scientific-compute.status',
+        actionId: 'scientific-plotting.status',
         args: {},
         success: true,
         retryCount: 0,
@@ -297,8 +297,8 @@ describe('capability evaluators', () => {
       workflowType: 'multi-step',
       expected: {
         requiredActions: ['paper-radar.search', 'paper-radar.rank'],
-        allowedActions: ['paper-radar.search', 'paper-radar.rank', 'scientific-compute.status'],
-        unnecessaryActions: ['scientific-compute.status'],
+        allowedActions: ['paper-radar.search', 'paper-radar.rank', 'scientific-plotting.status'],
+        unnecessaryActions: ['scientific-plotting.status'],
         ordering: [{ before: 'paper-radar.search', after: 'paper-radar.rank' }],
         taskSuccess: true
       }
@@ -306,7 +306,7 @@ describe('capability evaluators', () => {
     const invocations = [
       { actionId: 'paper-radar.rank', args: {}, success: true, retryCount: 0, latencyMs: 1, sequence: 1 },
       { actionId: 'paper-radar.search', args: {}, success: true, retryCount: 0, latencyMs: 1, sequence: 2 },
-      { actionId: 'scientific-compute.status', args: {}, success: true, retryCount: 0, latencyMs: 1, sequence: 3 }
+      { actionId: 'scientific-plotting.status', args: {}, success: true, retryCount: 0, latencyMs: 1, sequence: 3 }
     ]
     const result = evaluateCase(workflow, { trace: trace({
       discoveredActions: [], selectedActions: invocations, invocations, taskSuccess: true

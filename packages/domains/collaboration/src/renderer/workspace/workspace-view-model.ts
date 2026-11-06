@@ -6,7 +6,7 @@ import { capabilityRequirementsSatisfied } from '../../capability-requirements.j
 import type { ProjectCoordinatorProject, ProjectCoordinatorRequirementsCompletion, ProjectCoordinatorWorkspace } from '../../coordinator/contract.js'
 import type { BoardColumnId, ProjectModel, ProjectStatus, TaskCardModel, WorkspaceMemberViewModel, WorkspaceStructureModel } from './workspace-types.js'
 
-export type WorkspaceRoute = 'my-work' | 'inbox' | 'board' | 'requirements' | 'files' | 'settings'
+export type WorkspaceRoute = 'my-work' | 'inbox' | 'research' | 'board' | 'requirements' | 'files' | 'settings'
 
 export type WorkspaceRequirementsViewModel = Readonly<{
   revision: number | null
@@ -128,6 +128,7 @@ function taskCard(task: DashboardTaskCard, options: Readonly<{
   offerAvailability?: CollaborationOfferAvailability
   offerExpiresAt?: string
   executionId?: string | null
+  humanRequest?: TaskCardModel['humanRequest']
   humanRequestId?: string
   question?: string
   assignableWorkerUserIds?: readonly string[]
@@ -141,7 +142,7 @@ function taskCard(task: DashboardTaskCard, options: Readonly<{
     executionFailure: options.executionFailure,
     unread: task.unread, priority: task.primaryAction === 'adopt_delivery' ? 'high' : undefined,
     offerId: options.offerId, offerAvailability: options.offerAvailability, assignment: options.assignment, offerExpiresAt: options.offerExpiresAt, executionId: options.executionId ?? task.executionId,
-    humanRequestId: options.humanRequestId, projectId: task.projectId,
+    humanRequest: options.humanRequest, executionState: task.contractExecution, humanRequestId: options.humanRequestId, projectId: task.projectId,
     canReturnExecution: Boolean(task.executionId && ['accepted_awaiting_runtime', 'running', 'needs_human'].includes(task.contractExecution)),
     assignableWorkerUserIds: options.assignableWorkerUserIds
   }
@@ -160,11 +161,7 @@ function deliveryForTask(task: DashboardTaskCard, currentUserId: string | null, 
  * needs_human execution is read from the canonical pending HumanNeeded fact
  * instead of guessing from the execution badge.
  */
-type AgentQuestion = Readonly<{
-  humanRequestId: string
-  prompt: string
-  targetUserId: string
-}>
+type AgentQuestion = NonNullable<TaskCardModel['humanRequest']>
 
 function agentQuestionForTask(project: ProjectCoordinatorProject | null | undefined, taskId: string, executionId: string | null | undefined): AgentQuestion | undefined {
   if (!project || !executionId) return undefined
@@ -175,7 +172,7 @@ function agentQuestionForTask(project: ProjectCoordinatorProject | null | undefi
     candidate.context.executionId === executionId
   ))
   if (!request) return undefined
-  return { humanRequestId: request.humanRequestId, prompt: request.prompt, targetUserId: request.targetUserId }
+  return request
 }
 
 /** Local Session failures are private and scoped to the exact current assigned execution. */
@@ -196,7 +193,7 @@ function taskStateLabel(task: DashboardTaskCard, delivery: WorkerDeliveryView | 
   if (delivery?.state === 'sealed') return '待负责人采纳'
   // A pending question for this exact Execution outranks the broad local
   // "executing" projection, which also covers a run waiting for its human.
-  if (question) return question.targetUserId === currentUserId ? '等待回答' : '等待成员回答'
+  if (question) return question.confirmableAction ? question.targetUserId === currentUserId ? '等待决定' : '等待成员决定' : question.targetUserId === currentUserId ? '等待回答' : '等待成员回答'
   if (delivery?.state === 'executing') return task.delivery === 'returned' ? '返修中' : '执行中'
   if (delivery?.state === 'waiting_confirmation' && delivery.draft) return '待提交交付'
   if (availability) return offerAvailabilityPresentation(availability).label
@@ -521,9 +518,9 @@ function inboxItems(workspace: ProjectCoordinatorWorkspace | undefined, snapshot
         ?? null
       if (!executionId || requestedExecutionId !== executionId) continue
       push({
-        id: `human:${request.humanRequestId}`, title: `Agent 需要你回答：${task?.title ?? '当前任务'}`,
-        projectId: entry.project.projectId, projectName: entry.project.displayName, state: '等待回答',
-        time: formatTime(request.updatedAt), action: '回答', taskId, kind: 'human'
+        id: `human:${request.humanRequestId}`, title: `Agent 需要你${request.confirmableAction ? '决定' : '回答'}：${task?.title ?? '当前任务'}`,
+        projectId: entry.project.projectId, projectName: entry.project.displayName, state: request.confirmableAction ? '等待决定' : '等待回答',
+        time: formatTime(request.updatedAt), action: request.confirmableAction ? '决定' : '回答', taskId, kind: 'human'
       }, 4)
     }
   }
@@ -614,7 +611,7 @@ export function createWorkspaceViewModel({ workspace, snapshot, selectedProjectI
     const requiredCapabilityTags = assignmentModule?.requiredCapabilityTags
       ?? project?.tasks.find((entry) => entry.task.taskId === task.taskId)?.task.requiredCapabilityTags
       ?? []
-    return taskCard(task, { blockedByLabel: index === undefined ? undefined : requirements?.workModules[index]?.blockedByLabel, executionFailure, stateLabel: taskStateLabel(task, delivery, question, currentUserId, localOffer.availability, executionFailure), question: question?.prompt, assignment, reference: index === undefined ? undefined : `#${index + 1}`, description: index === undefined ? undefined : modules[index]!.objective, offerId: localOffer.taskOfferId ?? offer?.taskOfferId, offerAvailability: localOffer.availability, offerExpiresAt: offer?.expiresAt, executionId: task.executionId, humanRequestId: question?.humanRequestId, assignableWorkerUserIds: assignment && requiredCapabilityTags.length > 0 ? assignableWorkerUserIds(project, requiredCapabilityTags) : undefined })
+    return taskCard(task, { blockedByLabel: index === undefined ? undefined : requirements?.workModules[index]?.blockedByLabel, executionFailure, stateLabel: taskStateLabel(task, delivery, question, currentUserId, localOffer.availability, executionFailure), question: question?.prompt, assignment, reference: index === undefined ? undefined : `#${index + 1}`, description: index === undefined ? undefined : modules[index]!.objective, offerId: localOffer.taskOfferId ?? offer?.taskOfferId, offerAvailability: localOffer.availability, offerExpiresAt: offer?.expiresAt, executionId: task.executionId, humanRequest: question, humanRequestId: question?.humanRequestId, assignableWorkerUserIds: assignment && requiredCapabilityTags.length > 0 ? assignableWorkerUserIds(project, requiredCapabilityTags) : undefined })
   }) ?? []
   const projectedModuleIds = new Set(dashboard?.tasks.map((task) => task.lineage.workItemId) ?? [])
   for (const [moduleIndex, module] of modules.entries()) {

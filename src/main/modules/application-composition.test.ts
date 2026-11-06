@@ -9,7 +9,7 @@ import {
 import { IDENTITY_ACCESS_DOMAIN_MODULE_ID } from '@sciforge/domain-identity-access/definition'
 import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import type { AppCapabilityDependencies } from '../capabilities/app-registry'
-import { BIOLOGY_ROOM_DOMAIN_MODULE_ID } from '@sciforge/domain-biology-room/definition'
+import { BIOLOGY_ROOM_DOMAIN_MODULE_ID } from '@sciforge/domain-biology-workbench/definition'
 import {
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog,
@@ -138,11 +138,11 @@ describe('application domain composition', () => {
         createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
       })
     }, {
-      excludedPackageNames: ['@sciforge/domain-biology-room']
+      excludedPackageNames: ['@sciforge/domain-biology-workbench']
     })
     try {
       const packageNames = catalog.listPackages().map((definition) => definition.packageName)
-      expect(packageNames).not.toContain('@sciforge/domain-biology-room')
+      expect(packageNames).not.toContain('@sciforge/domain-biology-workbench')
       expect(packageNames).toContain('@sciforge/domain-content-space')
       expect(catalog.listModules().map((module) => module.id)).not.toContain(BIOLOGY_ROOM_DOMAIN_MODULE_ID)
     } finally {
@@ -152,8 +152,8 @@ describe('application domain composition', () => {
 
   it('fails closed when an excluded package name is not installed', () => {
     expect(() => resolveExcludedPackageNames(['@sciforge/domain-does-not-exist'])).toThrow(/not installed/)
-    expect(resolveExcludedPackageNames(['  ', '@sciforge/domain-biology-room', '@sciforge/domain-biology-room']))
-      .toEqual(['@sciforge/domain-biology-room'])
+    expect(resolveExcludedPackageNames(['  ', '@sciforge/domain-biology-workbench', '@sciforge/domain-biology-workbench']))
+      .toEqual(['@sciforge/domain-biology-workbench'])
     expect(resolveExcludedPackageNames([])).toEqual([])
   })
 

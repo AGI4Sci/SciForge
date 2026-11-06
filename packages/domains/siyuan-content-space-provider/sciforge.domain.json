@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.siyuan-content-space-provider",
     "displayName": "SiYuan Content Space",
-    "version": "0.1.0",
+    "version": "0.3.1",
     "hostApi": {
       "minimum": "1.9.0",
       "maximumExclusive": "2.0.0"
@@ -33,7 +33,11 @@
       "location": "workbench.main-area",
       "contractVersion": "1.0.0",
       "label": "思源笔记",
-      "preferredHostSidebar": "expanded"
+      "preferredHostSidebar": "expanded",
+      "docking": {
+        "defaultPosition": "right",
+        "preferredWidth": 520
+      }
     },
     "siyuan-content-space.editor": {
       "location": "main.capability-factory"

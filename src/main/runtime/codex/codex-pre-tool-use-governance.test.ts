@@ -18,7 +18,7 @@ describe('CodexPreToolUseGovernanceBridge', () => {
   it.each([
     ['Bash', { command: 'python inspect.py' }],
     ['view_image', { path: '/tmp/render.png' }]
-  ])('denies %s before execution while native visual proof remains pending', async (toolName, toolInput) => {
+  ])('allows independent %s execution while native visual proof remains pending', async (toolName, toolInput) => {
     const bridge = await createBridge()
     await bridge.updateSnapshot({
       runtimeId: 'codex',
@@ -30,13 +30,7 @@ describe('CodexPreToolUseGovernanceBridge', () => {
       }
     })
 
-    await expect(bridge.evaluate(hookInput(toolName, toolInput))).resolves.toEqual({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
-      }
-    })
+    await expect(bridge.evaluate(hookInput(toolName, toolInput))).resolves.toEqual({})
   })
 
   it('uses the shared governor for owned visual shell policy without duplicating command matching', async () => {
@@ -127,14 +121,7 @@ describe('CodexPreToolUseGovernanceBridge', () => {
     })
     await expect(bridge.evaluate(hookInput('Bash', {
       command: 'python inspect.py'
-    }))).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining(
-          'native_visual_proof_chain_required'
-        )
-      }
-    })
+    }))).resolves.toEqual({})
 
     await bridge.seedSession('session-1', {
       ownedVisualToolsAvailable: false,
@@ -143,6 +130,20 @@ describe('CodexPreToolUseGovernanceBridge', () => {
     await expect(bridge.evaluate(hookInput('Bash', {
       command: 'pwd'
     }))).resolves.toEqual({})
+  })
+
+  it('denies every tool for an explicitly empty allowlist, including native shell and subagents', async () => {
+    const bridge = await createBridge()
+    await bridge.seedSession('tool-free', {
+      ownedVisualToolsAvailable: false, nativeVisualProofChainPending: false
+    }, [])
+    for (const name of ['Bash', 'exec_command', 'read_file', 'apply_patch', 'spawn_agent', 'sciforge_invoke']) {
+      await expect(bridge.evaluate({
+        ...hookInput(name, { command: 'pwd' }), session_id: 'tool-free', turn_id: 'pending-turn'
+      })).resolves.toMatchObject({
+        hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('tool_policy_denied') }
+      })
+    }
   })
 
   it('enforces the Host-bound allowlist for SciForge capability tools without blocking native tools', async () => {
@@ -212,14 +213,7 @@ describe('CodexPreToolUseGovernanceBridge', () => {
       ...hookInput('Bash', { command: 'python inspect.py' }),
       session_id: 'child-session',
       turn_id: 'child-not-materialized'
-    })).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining(
-          'native_visual_proof_chain_required'
-        )
-      }
-    })
+    })).resolves.toEqual({})
 
     await bridge.bindTurn({
       threadId: 'child-thread',
@@ -280,7 +274,7 @@ describe('CodexPreToolUseGovernanceBridge', () => {
     })
   })
 
-  it('blocks controls for an existing executor session when a snapshot becomes pending', async () => {
+  it('keeps executor controls available when completion validation becomes pending', async () => {
     const bridge = await createBridge()
     await bridge.updateSnapshot({
       runtimeId: 'codex',
@@ -320,14 +314,7 @@ describe('CodexPreToolUseGovernanceBridge', () => {
         chars: 'python3 inspect_pixels.py\n'
       })
     ]) {
-      await expect(bridge.evaluate(input)).resolves.toMatchObject({
-        hookSpecificOutput: {
-          permissionDecision: 'deny',
-          permissionDecisionReason: expect.stringContaining(
-            'native_visual_proof_chain_required'
-          )
-        }
-      })
+      await expect(bridge.evaluate(input)).resolves.toEqual({})
     }
 
     await expect(bridge.evaluate(hookInput('Bash', {

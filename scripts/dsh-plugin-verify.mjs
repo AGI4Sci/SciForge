@@ -14,10 +14,11 @@
  *
  * Usage:
  *   node --import tsx scripts/dsh-plugin-verify.mjs \
- *     --plugin tests/fixtures/dsh-plugins/text-stats \
+ *     --plugin <plugin-directory> \
  *     --key-dir <repo-external test keys> \
- *     --call text-stats.count --args '{"text":"hello world"}' --args '{"text":"你好"}' \
- *     --invalid-args '{}' [--expect-invalid-code invalid_request]
+ *     --call <capability-id> --args '<first-input-json>' --args '<second-input-json>' \
+ *     --invalid-args '{}' [--expect-invalid-code invalid_request] \
+ *     [--workspace <absolute caller workspace for workspace-scoped tools>]
  */
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
@@ -73,6 +74,7 @@ async function main() {
   const capabilityId = flag('call')
   const inputs = flagAll('args').map((value) => JSON.parse(value))
   const invalidInput = flag('invalid-args') === undefined ? undefined : JSON.parse(flag('invalid-args'))
+  const workspaceArgument = flag('workspace')
   if (!pluginDirectory) throw new Error('--plugin is required.')
   if (!keyDir) throw new Error('--key-dir is required: signing uses a repository-external test key.')
   if (!capabilityId) throw new Error('--call is required.')
@@ -87,7 +89,7 @@ async function main() {
   const { verifyDshPluginSignature, loadDshPublisherKeyring } = await import(
     pathToFileURL(resolve('src/main/extensions/dsh-plugin-signature.ts')).href
   )
-  const { emptyDshPluginPolicy, policyContracts, readDshPluginPolicy } = await import(
+  const { policyContracts, readDshPluginPolicy } = await import(
     pathToFileURL(resolve('src/main/extensions/dsh-plugin-policy.ts')).href
   )
   const {
@@ -185,7 +187,7 @@ async function main() {
   await service.initialize()
   const holder = { current: service }
   const installServicePort = {
-    installFromDirectory: (directory, contract) => holder.current.installFromDirectory(directory, contract),
+    installFromDirectory: (directory, contract, restoreInstallation) => holder.current.installFromDirectory(directory, contract, restoreInstallation),
     uninstall: (packageName) => holder.current.uninstall(packageName),
     refreshDiscoveredPlugins: () => holder.current.refreshDiscoveredPlugins()
   }
@@ -204,8 +206,14 @@ async function main() {
     artifactPath: packed.artifact,
     expectedSha256: packed.sha256,
     approvedToolNames,
+    // Explicit engineering review, not a human market approval.
+    expectedApproval: { packageName: artifact.manifest.packageName, version: artifact.manifest.version,
+      sha256: packed.sha256, publisher: trust.publisherId, entry: artifact.manifest.entry,
+      tools: Object.entries(artifact.manifest.tools).map(([name, grant]) => ({ name, ...grant })),
+      ports: artifact.manifest.ports ?? [], hostDependencies: artifact.manifest.hostDependencies },
+    approvedPorts: artifact.manifest.ports ?? [],
     source: 'plugin-verify'
-  }, emptyDshPluginPolicy())
+  })
   const listed = (await holder.current.list()).find((entry) => entry.packageName === packageJson.name)
   assert(listed?.enabled === true, 'the installer left the plugin disabled')
   step('install + activate', {
@@ -228,8 +236,15 @@ async function main() {
     approvedTools: Object.keys(approval?.tools ?? {})
   })
 
+  // Keep the approved grant shape: `scope`/`readResource` are what make the
+  // Host project and bind a workspace, so dropping them verifies a weaker plugin.
   const grants = Object.fromEntries(
-    Object.entries(artifact.manifest.tools).map(([name, grant]) => [name, { id: grant.id, effect: grant.effect }])
+    Object.entries(artifact.manifest.tools).map(([name, grant]) => [name, {
+      id: grant.id,
+      effect: grant.effect,
+      ...(grant.readResource !== undefined ? { readResource: grant.readResource } : {}),
+      ...(grant.scope !== undefined ? { scope: grant.scope } : {})
+    }])
   )
   const agentResolver = await ensureDshAgentResolverModule(root)
   const invokeOn = async (entryPath) => {
@@ -259,7 +274,9 @@ async function main() {
       context: {}
     })
     const invoke = async (input) => {
-      const result = await runtime.invoke(capabilityId, input, undefined, undefined, undefined, invocation)
+      // `--workspace` supplies the caller fact for workspace-scoped tools; the
+      // runtime binds it over any `workspaceRoot` the input carries.
+      const result = await runtime.invoke(capabilityId, input, undefined, undefined, undefined, invocation, undefined, workspaceArgument)
       return result.output
     }
     return { host, snapshot, invoke }
@@ -314,11 +331,7 @@ async function main() {
     })
   }
 
-  // Oversized inputs are built here rather than passed through argv: a megabyte
-  // of command-line argument is not portable, and it blew the process up once.
-  const boundaryInput = process.argv.includes('--boundary-oversized-text')
-    ? { text: 'a'.repeat(1_000_001) }
-    : flag('boundary-args') === undefined ? undefined : JSON.parse(flag('boundary-args'))
+  const boundaryInput = flag('boundary-args') === undefined ? undefined : JSON.parse(flag('boundary-args'))
   const expectedBoundaryCode = flag('expect-boundary-code') ?? 'invalid_request'
   if (boundaryInput !== undefined) {
     const boundary = await invokeOn(installedEntry)
@@ -386,7 +399,7 @@ async function main() {
   step('re-enable restores it', { registered: true, ok: reenabledOutput.ok })
 
   // 10. Uninstall removes the directory, the approval and the capability.
-  await uninstallDshPlugin(installDeps, packageJson.name, await readDshPluginPolicy(policyPath))
+  await uninstallDshPlugin(installDeps, packageJson.name)
   let directoryGone = false
   try {
     await stat(installed.installedDirectory)

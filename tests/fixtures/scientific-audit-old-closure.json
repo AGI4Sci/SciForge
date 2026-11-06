@@ -1,0 +1,184 @@
+{
+  "baseline": "cbaff179ea7e8dd012cccc27aa931b0ae7ba9804",
+  "records": [
+    {
+      "deltaDigest": "sha256:0cd53a6ff405d4432e58ca6e9e431b8eac9b90d92bdbeb0ebb2d95fdab6c803b",
+      "payloadDigest": "sha256:189543d86ad36f5ad20fe918ac2785d1ec36b81b2448cb7e19a9cc5d096e82a8",
+      "predecessorDigest": null,
+      "sequence": 1,
+      "scope": {
+        "runtimeId": "codex",
+        "threadId": "codex:historical",
+        "operationId": "claim:negative",
+        "kind": "manual",
+        "workspaceRoot": "/fixture"
+      },
+      "requestedWatermark": "1",
+      "committedWatermark": "1",
+      "schemaVersion": "evidence.delta.v1",
+      "extractorVersion": "old",
+      "verifierVersion": "old",
+      "idempotencyKey": "historical-claim:negative",
+      "sourceRefs": [],
+      "artifactRefs": [],
+      "runRefs": [],
+      "payload": {
+        "claims": [
+          {
+            "id": "claim:negative",
+            "text": "Negative result was recorded"
+          }
+        ]
+      },
+      "createdAt": "2026-11-05T00:00:00.000Z"
+    },
+    {
+      "deltaDigest": "sha256:76d0a2d77e489a3b385e0cf3876b7fed12e341cd3641dfcb9dcbfa14ef759aaa",
+      "payloadDigest": "sha256:87583f208aad905c4f0899c8435e674e53e91f6a52796d69f2101ce25bfd980a",
+      "predecessorDigest": "sha256:0cd53a6ff405d4432e58ca6e9e431b8eac9b90d92bdbeb0ebb2d95fdab6c803b",
+      "sequence": 2,
+      "scope": {
+        "runtimeId": "codex",
+        "threadId": "codex:historical",
+        "operationId": "claim:clean",
+        "kind": "manual",
+        "workspaceRoot": "/fixture"
+      },
+      "requestedWatermark": "2",
+      "committedWatermark": "2",
+      "schemaVersion": "evidence.delta.v1",
+      "extractorVersion": "old",
+      "verifierVersion": "old",
+      "idempotencyKey": "historical-claim:clean",
+      "sourceRefs": [],
+      "artifactRefs": [],
+      "runRefs": [],
+      "payload": {
+        "claims": [
+          {
+            "id": "claim:clean",
+            "text": "Conditional original claim"
+          }
+        ]
+      },
+      "createdAt": "2026-11-05T00:00:00.000Z"
+    }
+  ],
+  "closures": [
+    {
+      "threadId": "codex:historical",
+      "closureDigest": "sha256:4a385382f83ff7b675bcabce86bae805800021944942da793a22b1ab01ca47f8",
+      "headDigest": "sha256:0cd53a6ff405d4432e58ca6e9e431b8eac9b90d92bdbeb0ebb2d95fdab6c803b",
+      "policyDigest": "sha256:206592d2c29226924dcf934c2099ce6926c09d7735debc812b4b5db46cbf8879",
+      "policy": {
+        "version": "EvidenceClosurePolicyV1",
+        "targetClaimIds": [
+          "claim:negative"
+        ],
+        "expectedHeadDigest": "sha256:0cd53a6ff405d4432e58ca6e9e431b8eac9b90d92bdbeb0ebb2d95fdab6c803b",
+        "barrierWatermark": "1",
+        "edgeFamilies": [],
+        "directions": [
+          "inbound"
+        ],
+        "maxDepth": 0,
+        "termination": "depth",
+        "expandEquivalent": false,
+        "expandRefinement": false,
+        "cycleHandling": "allow",
+        "unknownEdgeHandling": "ignore",
+        "requiredRecords": [],
+        "requiredExternalRefs": []
+      },
+      "status": "incomplete",
+      "includedDeltaDigests": [
+        "sha256:0cd53a6ff405d4432e58ca6e9e431b8eac9b90d92bdbeb0ebb2d95fdab6c803b"
+      ],
+      "includedExternalRefs": [],
+      "gapCodes": [
+        "negative_result_missing"
+      ],
+      "sealedAt": "2026-11-05T08:18:15.878Z"
+    },
+    {
+      "threadId": "codex:historical",
+      "closureDigest": "sha256:7cc0419eb46d8df6108ae7b681b090a67faa08147e330bb25f86df1fd2595d75",
+      "headDigest": "sha256:76d0a2d77e489a3b385e0cf3876b7fed12e341cd3641dfcb9dcbfa14ef759aaa",
+      "policyDigest": "sha256:852b5db280a653529a2f8267dad7048cbefb3a7bfae4cf561d64ee0bfa6532ca",
+      "policy": {
+        "version": "EvidenceClosurePolicyV1",
+        "targetClaimIds": [
+          "claim:clean"
+        ],
+        "expectedHeadDigest": "sha256:76d0a2d77e489a3b385e0cf3876b7fed12e341cd3641dfcb9dcbfa14ef759aaa",
+        "barrierWatermark": "2",
+        "edgeFamilies": [],
+        "directions": [
+          "inbound"
+        ],
+        "maxDepth": 0,
+        "termination": "depth",
+        "expandEquivalent": false,
+        "expandRefinement": false,
+        "cycleHandling": "allow",
+        "unknownEdgeHandling": "ignore",
+        "requiredRecords": [],
+        "requiredExternalRefs": []
+      },
+      "status": "complete",
+      "includedDeltaDigests": [
+        "sha256:76d0a2d77e489a3b385e0cf3876b7fed12e341cd3641dfcb9dcbfa14ef759aaa"
+      ],
+      "includedExternalRefs": [],
+      "gapCodes": [],
+      "sealedAt": "2026-11-05T08:18:15.882Z"
+    }
+  ],
+  "sidechains": [
+    {
+      "recordDigest": "sha256:3d8416e6a6a9fc44f12ec2c03a4ff5ab2add2f1b1fec6e46d6d158fa0bf32f0b",
+      "threadId": "codex:historical",
+      "sequence": 1,
+      "recordId": "review:old",
+      "recordType": "review",
+      "closureDigest": "sha256:4a385382f83ff7b675bcabce86bae805800021944942da793a22b1ab01ca47f8",
+      "idempotencyKey": "historical-review",
+      "payload": {
+        "verdict": "incomplete"
+      },
+      "producerIdentity": "human:old",
+      "reviewerIdentity": null,
+      "createdAt": "2026-11-05T00:00:01.000Z"
+    },
+    {
+      "recordDigest": "sha256:e0b65dd3e81ec8fa3337993f9d934d15e51f3b2303cd9304e48c400585695030",
+      "threadId": "codex:historical",
+      "sequence": 2,
+      "recordId": "approval:old",
+      "recordType": "approval",
+      "closureDigest": "sha256:7cc0419eb46d8df6108ae7b681b090a67faa08147e330bb25f86df1fd2595d75",
+      "idempotencyKey": "historical-approval",
+      "payload": {
+        "verdict": "original-material-only"
+      },
+      "producerIdentity": "human:old",
+      "reviewerIdentity": "human:original-reviewer",
+      "createdAt": "2026-11-05T00:00:03.000Z"
+    }
+  ],
+  "committedSnapshot": {
+    "threadId": "codex:historical",
+    "version": 1,
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "inputWatermark": "2",
+    "schemaVersion": "evidence.v3",
+    "extractorVersion": "old",
+    "verifierVersion": "old",
+    "artifactDigests": [],
+    "createdAt": "2026-11-05T00:00:02.000Z"
+  },
+  "committedSnapshotClosureDigest": "sha256:7cc0419eb46d8df6108ae7b681b090a67faa08147e330bb25f86df1fd2595d75",
+  "committedSnapshotClosures": {
+    "sha256:7cc0419eb46d8df6108ae7b681b090a67faa08147e330bb25f86df1fd2595d75": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

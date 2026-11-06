@@ -32,7 +32,9 @@ async function fixture(packages: PackageFixture[], registry: CapabilityRegistry)
     const directory = join(root, 'plugins', pkg.name)
     await writePackage(directory, pkg)
   }
-  const service = new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: new Map(packages.map(pkg => [pkg.name, { hostApiRange: '^1.0.0', approved: true, permissions: [], ...(pkg.tools ? { dshAuthorization: { packageName: pkg.name, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', tools: pkg.tools } } : {}) }])) })
+  const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: new Map(packages.map(pkg => [pkg.name, { hostApiRange: '^1.0.0', approved: true, permissions: [], ...(pkg.tools ? { dshAuthorization: { packageName: pkg.name, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', tools: pkg.tools } } : {}) }])) })
   roots.set(service, join(root, 'plugins'))
   cleanups.push(() => service.dispose())
   await service.initialize()

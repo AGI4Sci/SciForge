@@ -163,34 +163,39 @@ function literalModuleSpecifier(node: ts.Node): ts.StringLiteralLike | undefined
   return undefined
 }
 
+function sourceTextImportViolations(path: string, sourceText: string): BoundaryViolation[] {
+  // Plain module literals cannot contain this package name when its bytes are
+  // absent. Any backslash still requires parsing: escaped characters and line
+  // continuations can hide the prefix in a valid static module specifier.
+  if (!sourceText.includes(privatePackagePrefix) && !sourceText.includes('\\')) return []
+  const sourceFile = ts.createSourceFile(
+    path,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  )
+  const violations: BoundaryViolation[] = []
+  const visit = (node: ts.Node): void => {
+    const specifier = literalModuleSpecifier(node)
+    if (specifier?.text.startsWith(privatePackagePrefix)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(specifier.getStart(sourceFile))
+      violations.push({
+        file: repositoryPath(path),
+        location: `${position.line + 1}:${position.character + 1}`,
+        specifier: specifier.text
+      })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return violations
+}
+
 function sourceImportViolations(paths: readonly string[]): BoundaryViolation[] {
   return paths
     .filter((path) => sourceExtensions.has(extname(path)))
-    .flatMap((path) => {
-      const sourceText = readFileSync(path, 'utf8')
-      const sourceFile = ts.createSourceFile(
-        path,
-        sourceText,
-        ts.ScriptTarget.Latest,
-        true,
-        path.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-      )
-      const violations: BoundaryViolation[] = []
-      const visit = (node: ts.Node): void => {
-        const specifier = literalModuleSpecifier(node)
-        if (specifier?.text.startsWith(privatePackagePrefix)) {
-          const position = sourceFile.getLineAndCharacterOfPosition(specifier.getStart(sourceFile))
-          violations.push({
-            file: repositoryPath(path),
-            location: `${position.line + 1}:${position.character + 1}`,
-            specifier: specifier.text
-          })
-        }
-        ts.forEachChild(node, visit)
-      }
-      visit(sourceFile)
-      return violations
-    })
+    .flatMap((path) => sourceTextImportViolations(path, readFileSync(path, 'utf8')))
 }
 
 function packageLockViolations(path: string): BoundaryViolation[] {
@@ -265,6 +270,33 @@ function formatViolations(violations: readonly BoundaryViolation[]): string {
 }
 
 describe('public source boundary', () => {
+  it('detects private literals in every supported import syntax, including escapes', () => {
+    const moduleName = privatePackagePrefix + 'fixture'
+    const sources = [
+      `import value from '${moduleName}'`,
+      `export { value } from '${moduleName}'`,
+      `const value = import('${moduleName}')`,
+      `const value = require('${moduleName}')`,
+      `import value = require('${moduleName}')`,
+      `createRequire(import.meta.url).resolve('${moduleName}')`,
+      `import value from '${moduleName.replace('@', '\\u0040')}'`,
+      `import value from '${moduleName.replace('s', '\\x73')}'`,
+      `import value from '${moduleName.slice(0, 3)}\\
+${moduleName.slice(3)}'`
+    ]
+    for (const source of sources) {
+      expect(sourceTextImportViolations(join(repositoryRoot, 'fixture.ts'), source)
+        .map((violation) => violation.specifier)).toEqual([moduleName])
+    }
+  })
+
+  it('ignores ordinary source and private names that are not import specifiers', () => {
+    expect(sourceTextImportViolations(join(repositoryRoot, 'fixture.ts'),
+      "import { value } from './public-module'; export const answer = value")).toEqual([])
+    expect(sourceTextImportViolations(join(repositoryRoot, 'fixture.ts'),
+      `const documentation = ${JSON.stringify(privatePackagePrefix + 'fixture')}`)).toEqual([])
+  })
+
   it('normalizes portable workspace paths before enforcing the internal boundary', () => {
     const internalVariants = [
       'internal',

@@ -73,7 +73,8 @@ transcript, workspace, tool scope, and Host execution context remain attached
 to the same child run. Recovery first resumes the saved provider conversation.
 A missing conversation can be replaced with the bounded saved progress and
 original objective; replacement does not reset the persisted recovery budget.
-The executor promise and parent wait cover all recovery attempts. No terminal
+The executor promise covers all recovery attempts; waits expose terminal status
+only after recovery and final event publication settle. No terminal
 notification is emitted for an intermediate attempt. Every attempt receives
 and releases its own exact child Principal lease.
 
@@ -88,3 +89,20 @@ retry loop. Parent reconciliation reads the canonical child store for the
 specific parent turn. Terminal notifications use the durable retry outbox;
 when the parent is idle and waiting for children, they trigger serialized work
 reconciliation and continuation without reviving cancelled parent work.
+
+## Observing a group
+
+`waitForChildren(parentThreadId, childIds, { timeoutMs, afterCursor, signal })`
+reads the canonical child store and initially waits for a completed child. With
+`afterCursor`, it wakes on a changed status, execution attempt, phase, or error. The returned `records`, `changedIds`, `cursor`, and
+`effectiveTimeoutMs` describe the snapshot. A cursor belongs to its parent;
+reusing it suppresses already-observed terminal results. Waits are bounded to
+60 seconds and do not impose an execution deadline. Heartbeat timestamps and
+transcript token updates do not wake a wait. Aborting an observation does not
+cancel child work. The existing `subagent_wait` tool accepts either `childId` or
+`childIds` and the same cursor; it returns one `children` collection for both.
+
+Heartbeat events still refresh the UI and durable lifecycle state. The Host
+only steers an active parent when meaningful coordination state changes. The
+parent receives full completion summaries once per observation cursor and can
+request the durable transcript explicitly when needed.

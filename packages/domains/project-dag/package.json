@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-project-dag",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -13,6 +13,7 @@
   },
   "files": [
     "src",
+    "scripts/python.mjs",
     "python/**/*.py",
     "ui",
     "pyproject.toml",
@@ -22,9 +23,9 @@
     "README.md"
   ],
   "scripts": {
-    "start": "python3 -c \"import sys; sys.path[:0] = ['python', '../evidence-dag/python']; from project_dag.server import main; main()\"",
+    "start": "node scripts/python.mjs -m project_dag.server",
     "serve": "npm run start",
-    "python:test": "PYTHONPATH=python:../evidence-dag/python python3 -m unittest discover -s tests -p 'test_*.py' -v",
+    "python:test": "node scripts/python.mjs -m unittest discover -s tests -p test_*.py -v",
     "desktop:test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm run desktop:test && npm run python:test"
@@ -33,7 +34,7 @@
     "python": ">=3.10"
   },
   "dependencies": {
-    "@sciforge/domain-evidence-dag": "^1.1.0",
+    "@sciforge/domain-evidence-dag": "^2.8.0",
     "@sciforge/domain-sdk": "^0.2.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

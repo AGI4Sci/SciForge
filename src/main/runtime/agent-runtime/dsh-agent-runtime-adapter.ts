@@ -1,4 +1,6 @@
+import { withTaskExecutionGuidance } from './task-execution-guidance'
 import { join } from 'node:path'
+import { workspaceReferencePrompt } from './workspace-reference-prompt'
 import { withDurableAgentRuntimeHistory } from './durable-runtime-history'
 import { createDshDeploymentTargetResolver } from './dsh-executable-discovery'
 import { createDshRuntimeAdapter, type DshRuntimeOptions, type DshMcpServer, type DshThread } from '@sciforge/dsh-runtime'
@@ -11,6 +13,7 @@ import { getModelRouterSettings, isModelRouterTextReasonerConfigured, resolveRun
 import { isDshCommandExecutionEnabled } from '../../../shared/app-settings-dsh'
 import { resolveModelAccessRuntimePolicy } from '../../../shared/model-access-runtime-policy'
 import { isModelRouterServiceHealthy } from '../../model-router-health'
+import { resolveDshModelRouterInputModalities } from './dsh-model-router'
 import { DshRuntimeError } from '@sciforge/dsh-runtime'
 
 export type DshHostRuntimeOptions = Omit<DshRuntimeOptions, 'getAuthorizedMcpServers'> & {
@@ -44,7 +47,7 @@ export function createProductionDshHostRuntimeAdapter(options: {
       try { route = resolveRuntimeModelRouterSettings(settings) } catch { throw new DshRuntimeError('runtime_model_route_invalid') }
       if (!route.apiKey || !route.model) throw new DshRuntimeError('runtime_model_route_missing')
       if (!await isModelRouterServiceHealthy(settings)) throw new DshRuntimeError('runtime_model_route_unavailable')
-      return route
+      return await resolveDshModelRouterInputModalities(route)
     },
     toolSurface: options.toolSurface
   })
@@ -52,7 +55,7 @@ export function createProductionDshHostRuntimeAdapter(options: {
 
 /** ACP implementation stays package-owned; this bridge owns Host attribution only. */
 export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): AgentRuntimeAdapter & { close(): Promise<void>; invalidateModelAccess(): Promise<void> } {
-  type Active = { context: AgentRuntimeAdapterContext; workspace: string; allowedTools?: readonly string[]; handle?: AgentRuntimeTurnHandle; lease?: AgentRuntimeMcpToolLease; revoked: boolean }
+  type Active = { threadId: string; context: AgentRuntimeAdapterContext; workspace: string; allowedTools?: readonly string[]; handle?: AgentRuntimeTurnHandle; lease?: AgentRuntimeMcpToolLease; revoked: boolean }
   let active: Active | undefined
   const endpoints = new Map<string, Awaited<ReturnType<typeof createAgentRuntimeMcpSessionEndpoint>>>()
   const revoke = async (turn = active): Promise<void> => {
@@ -88,7 +91,7 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
       }
       const lease = await createAgentRuntimeMcpToolLease({ surface: filtered,
         context: { requestId: identity.turnId, runtimeId: 'dsh', threadId: identity.threadId, turnId: identity.turnId, workspaceId: turn.workspace },
-        signal: identity.signal, assertCurrent })
+        signal: identity.signal, assertCurrent, imageInputAllowed: identity.toolImageInputAllowed })
       turn.lease = lease
       if (turn.revoked || identity.signal.aborted) { await lease.close(); throw new Error('runtime_turn_stale') }
       let endpoint = endpoints.get(identity.threadId)
@@ -104,12 +107,12 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
   const threads = new Map<string, AgentRuntimeThread>()
   const project = (thread: DshThread): AgentRuntimeThread => {
     const previous = threads.get(thread.id)
-    const result: AgentRuntimeThread = { ...previous, id: thread.id, runtimeId: 'dsh', title: thread.title ?? previous?.title ?? 'DSH', updatedAt: new Date().toISOString(), workspace: thread.workspace, status: thread.state }
+    const result: AgentRuntimeThread = { ...previous, id: thread.id, runtimeId: 'dsh', title: thread.title || previous?.title || 'DSH', updatedAt: thread.updatedAt, workspace: thread.workspace, status: thread.state }
     threads.set(result.id, result)
     return result
   }
   const unsupported = async (): Promise<never> => { throw new Error('runtime_unsupported') }
-  return withDurableAgentRuntimeHistory({
+  const runtime: AgentRuntimeAdapter & { close(): Promise<void>; invalidateModelAccess(): Promise<void> } = withDurableAgentRuntimeHistory({
     id: 'dsh', transport: 'jsonrpc_stdio',
     invalidateModelAccess: async () => {
       await revoke()
@@ -149,13 +152,29 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
     readThreadStatus: (context, input) => core.readThreadStatus(context, input),
     readThreadPage: unsupported, readToolArtifact: unsupported,
     startTurn: async (context, input) => {
-      if (active) throw new Error('runtime_busy')
-      const workspace = threads.get(input.threadId ?? '')?.workspace
-      if (!workspace) throw new Error('runtime_workspace_required')
-      const turn: Active = { context: { ...context }, workspace, allowedTools: input.allowedTools ? [...input.allowedTools] : undefined, revoked: false }
+      if (active) throw new DshRuntimeError('runtime_busy')
+      // Reserve startup before the asynchronous durable lookup/resume so a
+      // second submission cannot replace the first turn's tool authority.
+      const turn: Active = { threadId: input.threadId, context: { ...context }, workspace: '', allowedTools: input.allowedTools ? [...input.allowedTools] : undefined, revoked: false }
       active = turn
       try {
-        return await core.startTurn({ ...context, onTurnAccepted: handle => accept(turn, handle) }, input)
+        const thread = threads.get(input.threadId) ?? (await runtime.listThreads(context, {
+          runtimeId: 'dsh', threadId: input.threadId
+        })).find(thread => thread.id === input.threadId)
+        const workspace = thread?.workspace
+        if (!workspace) throw new DshRuntimeError('runtime_workspace_required')
+        turn.workspace = workspace
+        try {
+          await core.readThreadStatus(context, { runtimeId: 'dsh', threadId: input.threadId })
+        } catch (error) {
+          if (!(error instanceof DshRuntimeError) || error.code !== 'runtime_thread_not_found') throw error
+          await core.resumeSession(context, { runtimeId: 'dsh', sessionId: input.threadId, workspace })
+          threads.set(input.threadId, thread!)
+        }
+        if (turn.revoked || active !== turn) throw new Error('runtime_turn_stale')
+        const { fileReferences, ...runtimeInput } = input
+        const text = workspaceReferencePrompt(withTaskExecutionGuidance(input).text, fileReferences)
+        return await core.startTurn({ ...context, onTurnAccepted: handle => accept(turn, handle) }, { ...runtimeInput, text })
       } catch (error) { await revoke(turn); throw error }
     },
     interruptTurn: async (context, input) => {
@@ -163,10 +182,14 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
       await core.interruptTurn(context, input)
     },
     steerTurn: unsupported, renameThread: unsupported,
-    deleteThread: async (_context, input) => {
-      if (active?.handle?.threadId === input.threadId) await revoke()
-      // ACP has no supported delete operation; do not pretend local eviction deletes it.
-      return unsupported()
+    deleteThread: async (context, input) => {
+      if (active?.threadId === input.threadId) await revoke()
+      // The durable Host owner removes the SciForge conversation; ACP history
+      // belongs to the provider and has no delete RPC.
+      await core.releaseThread(context, input)
+      await endpoints.get(input.threadId)?.close()
+      endpoints.delete(input.threadId)
+      threads.delete(input.threadId)
     },
     subscribeEvents: (context, input) => {
       // Subscribe eagerly: ACP is live-only and may emit before iteration begins.
@@ -186,4 +209,5 @@ export function createDshHostRuntimeAdapter(options: DshHostRuntimeOptions): Age
     usage: (context, input) => core.usage(context, input),
     close: async () => { await revoke(); await core.close(); await Promise.all([...endpoints.values()].map(endpoint => endpoint.close())); endpoints.clear() }
   }, join(options.stateDirectory, 'host-history'))
+  return runtime
 }

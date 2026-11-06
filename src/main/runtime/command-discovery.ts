@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, lstat, readdir, stat } from 'node:fs/promises'
 import { userInfo } from 'node:os'
-import { join, posix, win32 } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 export function splitCommandSearchPath(pathValue: string, platform: NodeJS.Platform): string[] {
   return pathValue
@@ -125,25 +125,25 @@ export async function macOSCommandSearchDirectories(
 ): Promise<string[]> {
   const expandEnvDir = (value: string | undefined): string | undefined => {
     const trimmed = value?.trim()
-    return trimmed ? expandHomeFrom(trimmed, homeDir) : undefined
+    return trimmed ? expandHomeFrom(trimmed, homeDir, 'darwin') : undefined
   }
-  const nvmDir = expandEnvDir(env.NVM_DIR) ?? join(homeDir, '.nvm')
-  const asdfDir = expandEnvDir(env.ASDF_DATA_DIR) ?? join(homeDir, '.asdf')
-  const voltaDir = expandEnvDir(env.VOLTA_HOME) ?? join(homeDir, '.volta')
-  const bunDir = expandEnvDir(env.BUN_INSTALL) ?? join(homeDir, '.bun')
-  const nvmVersionBins = await versionManagerBinDirectories(join(nvmDir, 'versions', 'node'))
+  const nvmDir = expandEnvDir(env.NVM_DIR) ?? posix.join(homeDir, '.nvm')
+  const asdfDir = expandEnvDir(env.ASDF_DATA_DIR) ?? posix.join(homeDir, '.asdf')
+  const voltaDir = expandEnvDir(env.VOLTA_HOME) ?? posix.join(homeDir, '.volta')
+  const bunDir = expandEnvDir(env.BUN_INSTALL) ?? posix.join(homeDir, '.bun')
+  const nvmVersionBins = await versionManagerBinDirectories(posix.join(nvmDir, 'versions', 'node'))
 
   return [
     expandEnvDir(env.NVM_BIN),
     expandEnvDir(env.PNPM_HOME),
-    join(homeDir, '.local', 'bin'),
-    join(asdfDir, 'shims'),
-    join(asdfDir, 'bin'),
-    join(voltaDir, 'bin'),
-    join(homeDir, 'Library', 'pnpm'),
-    join(homeDir, '.local', 'share', 'pnpm'),
-    join(bunDir, 'bin'),
-    join(homeDir, '.npm-global', 'bin'),
+    posix.join(homeDir, '.local', 'bin'),
+    posix.join(asdfDir, 'shims'),
+    posix.join(asdfDir, 'bin'),
+    posix.join(voltaDir, 'bin'),
+    posix.join(homeDir, 'Library', 'pnpm'),
+    posix.join(homeDir, '.local', 'share', 'pnpm'),
+    posix.join(bunDir, 'bin'),
+    posix.join(homeDir, '.npm-global', 'bin'),
     ...nvmVersionBins,
     '/opt/homebrew/bin',
     '/usr/local/bin',
@@ -158,7 +158,7 @@ async function versionManagerBinDirectories(versionsDir: string): Promise<string
       .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
       .map((entry) => entry.name)
       .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
-      .map((version) => join(versionsDir, version, 'bin'))
+      .map((version) => posix.join(versionsDir, version, 'bin'))
   } catch {
     return []
   }
@@ -170,14 +170,14 @@ export function windowsCommandSearchDirectories(env: NodeJS.ProcessEnv, homeDir:
   const directories: string[] = []
   const appData = env.APPDATA
   const localAppData = env.LOCALAPPDATA
-  if (appData) directories.push(join(appData, 'npm'))
+  if (appData) directories.push(win32.join(appData, 'npm'))
   if (localAppData) {
-    directories.push(join(localAppData, 'Programs'), join(localAppData, 'Microsoft', 'WinGet', 'Packages'))
+    directories.push(win32.join(localAppData, 'Programs'), win32.join(localAppData, 'Microsoft', 'WinGet', 'Packages'))
   }
-  directories.push(join(homeDir, '.local', 'bin'), join(homeDir, '.cargo', 'bin'))
+  directories.push(win32.join(homeDir, '.local', 'bin'), win32.join(homeDir, '.cargo', 'bin'))
   return directories
 }
 
 export function unixCommandSearchDirectories(homeDir: string): string[] {
-  return [join(homeDir, '.local', 'bin'), '/usr/local/bin', '/usr/bin']
+  return [posix.join(homeDir, '.local', 'bin'), '/usr/local/bin', '/usr/bin']
 }

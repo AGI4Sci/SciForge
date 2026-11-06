@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import type { DomainRendererCommandInvocation } from '@sciforge/domain-sdk/renderer'
 import type { EditorInfo } from '@shared/editor'
 import type { GuiUpdateState } from '@shared/gui-update'
+import type { WorkbenchToolbarSettingsV1 } from '@shared/app-settings'
 import {
   ArrowUpCircle,
   Bot,
@@ -66,6 +67,38 @@ export type WorkbenchTopBarProps = {
   onOpenChildAgents?: () => void
 }
 
+function contributedToolbarItems(
+  actions: readonly RegisteredWorkbenchToolbarActionContribution[],
+  preferences: WorkbenchToolbarSettingsV1,
+  context: DomainRendererCommandInvocation,
+  onExecute: ((commandId: string) => void) | undefined,
+  label: (key: string) => string
+): ToolbarAction[] {
+  return visibleWorkbenchToolbarActions(actions, preferences)
+    .filter(({ contribution }) => contribution.isAvailable(context))
+    .map(({ id, contribution }) => ({
+      id, label: label(contribution.label),
+      icon: <contribution.icon className="h-4 w-4" strokeWidth={1.75} />,
+      onClick: () => onExecute?.(contribution.commandId), disabled: !onExecute,
+      active: contribution.isActive(context),
+      attention: Boolean(typeof contribution.attention === 'function' ? contribution.attention() : contribution.attention)
+    }))
+}
+
+/** The same installed actions remain accessible above a workspace canvas. */
+export function WorkbenchToolbarMenu({ toolbarActions = [], toolbarCommandInvocation = {}, onExecuteToolbarCommand }: Pick<
+  WorkbenchTopBarProps, 'toolbarActions' | 'toolbarCommandInvocation' | 'onExecuteToolbarCommand'
+>): ReactElement {
+  const { t } = useTranslation('common')
+  const { preferences, saveState, saveError, savePreferences } = useWorkbenchToolbarSettings()
+  const actions = contributedToolbarItems(toolbarActions, preferences, toolbarCommandInvocation, onExecuteToolbarCommand, t)
+  return <div className="w-11 shrink-0">
+    <WorkbenchToolbarCustomizer actions={toolbarActions} preferences={preferences}
+      saving={saveState === 'saving'} error={saveError} onChange={next => { void savePreferences(next) }}
+      renderTrigger={trigger => <AdaptiveToolbar actions={actions} customization={trigger} presentation="menu" preserveTextSelection />} />
+  </div>
+}
+
 export function WorkbenchTopBar({
   focusedRightPanelMode,
   onToggleFocusedRightPanelMode,
@@ -104,21 +137,7 @@ export function WorkbenchTopBar({
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
   const toolbarContext: DomainRendererCommandInvocation =
     toolbarCommandInvocation ?? (workspaceRoot ? { workspaceRoot } : {})
-  const contributedItems = visibleWorkbenchToolbarActions(
-    toolbarActions,
-    toolbarPreferences
-  )
-    .filter(({ contribution }) => contribution.isAvailable(toolbarContext))
-    .map(({ id, contribution }) => ({
-      id,
-      commandId: contribution.commandId,
-      label: t(contribution.label),
-      icon: contribution.icon,
-      active: contribution.isActive(toolbarContext),
-      attention: typeof contribution.attention === 'function'
-        ? contribution.attention()
-        : contribution.attention
-    }))
+  const contributedItems = contributedToolbarItems(toolbarActions, toolbarPreferences, toolbarContext, onExecuteToolbarCommand, t)
   const items = [
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen }
@@ -454,11 +473,7 @@ export function WorkbenchTopBar({
       onClick: onOpenSideChat, active: sideChatOpen, attention: sideChatRunningCount > 0,
       badge: sideChatCount > 0 ? <span className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">{Math.min(sideChatCount, 9)}</span> : undefined
     }] : []),
-    ...contributedItems.map((item) => ({
-      id: item.id, label: item.label, icon: <item.icon className="h-4 w-4" strokeWidth={1.75} />,
-      onClick: () => onExecuteToolbarCommand?.(item.commandId), disabled: !onExecuteToolbarCommand,
-      active: item.active, attention: Boolean(item.attention)
-    })),
+    ...contributedItems,
     ...items.map((item) => ({
       id: item.mode, label: item.label, icon: <item.icon className="h-4 w-4" strokeWidth={1.75} />,
       onClick: () => onToggleFocusedRightPanelMode(item.mode), active: focusedRightPanelMode === item.mode

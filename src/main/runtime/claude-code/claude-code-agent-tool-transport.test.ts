@@ -98,11 +98,7 @@ describe('Claude Code agent tool transport', () => {
       content: [{
         type: 'text',
         text: 'exact bounded model output'
-      }],
-      structuredContent: {
-        tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
-        value: [{ operationRef: 'op_test', title: 'Search' }]
-      }
+      }]
     })
   })
 

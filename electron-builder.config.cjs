@@ -127,7 +127,10 @@ const packageMetadata = JSON.parse(
 const packageAppVersion = String(packageMetadata.version || '').trim()
 const applicationVersion = releaseAppVersion || packageAppVersion
 const officialExtensionKeysFile = (
-  process.env.SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE || ''
+  process.env.SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE
+  || (existsSync(join(__dirname, 'resources/extensions/official-keys.json'))
+    ? join(__dirname, 'resources/extensions/official-keys.json')
+    : '')
 ).trim()
 
 if (officialExtensionKeysFile && !existsSync(officialExtensionKeysFile)) {
@@ -218,7 +221,18 @@ module.exports = {
           from: officialExtensionKeysFile,
           to: 'extensions/official-keys.json'
         }]
-      : [])
+      : []),
+    { from: 'resources/extensions/plugin-contract-pins.json', to: 'extensions/plugin-contract-pins.json' },
+    // A plugin child is a plain Node process and cannot import from app.asar.
+    // The generic Host service client is therefore copied next to the extensions.
+    {
+      from: 'packages/plugin-sdk/src/host-service-client.mjs',
+      to: 'extensions/host-service-client.mjs'
+    },
+    {
+      from: 'packages/plugin-sdk/src/native-execution-client.mjs',
+      to: 'extensions/native-execution-client.mjs'
+    }
   ],
   artifactName: `SciForge-${applicationVersion}-\${os}-\${arch}.\${ext}`,
   publish: [

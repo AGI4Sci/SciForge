@@ -139,6 +139,21 @@ resolver 在同一条读取链路上执行 fail-closed 访问策略继承：Proj
 
 ## 验证
 
+### 人工审阅写入与重试
+
+审阅决定仍走同一个 `record_review_result` / review decision 入口，并绑定当前
+committed snapshot。`deferred` 可以继续批准、拒绝或要求补证据；后续 Decision
+引用前一次 Decision，历史不会被覆盖。新快照使未完成的旧包过期。
+
+调用者可发送非空 `idempotencyKey`：同一 project、packet、key 和相同请求内容
+返回原始响应；同 key 不同内容拒绝。Decision、Approval、审阅状态、事件及 receipt
+在同一事务提交，失败一起回滚。UI 在网络失败后的同一次操作重试中复用 key；
+没有 key 的调用不承诺幂等。禁止在不确认原结果的情况下自动重试外部写入。
+
+刷新读模型保留 `humanResult`；已有缺失投影只从同 project、packet、snapshot
+的已持久化 Decision/Approval 恢复。`pendingCount` 是待处理数量；实际阻断集合
+包含 blocking 的 pending、deferred、rejected，与 release gate 使用同一规则。
+
 ```bash
 npm --workspace @sciforge/domain-project-dag run python:test
 npm --workspace @sciforge/domain-project-dag test

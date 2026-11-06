@@ -125,7 +125,7 @@ test('does not expose exact navigation without an installed resource owner', () 
     ({ id }) => id === RESEARCH_CHECKPOINTS_CHAT_RESULT_PANEL_CONTRIBUTION.id
   )
   assert.ok(timeline && 'render' in timeline.value)
-  const element = timeline.value.render({ sessionId: 'thread-1', blocks: [] }) as unknown as {
+  const element = timeline.value.render({ anchor: { kind: 'turn-end' }, sessionId: 'thread-1', blocks: [] }) as unknown as {
     props: { onOpenExact?: unknown }
   }
   assert.equal(element.props.onOpenExact, undefined)

@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'

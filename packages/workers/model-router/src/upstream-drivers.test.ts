@@ -25,6 +25,84 @@ const request = {
   max_tokens: 128,
 };
 
+test('empty-tool automatic choices are omitted on the actual Chat wire without losing structured output', async () => {
+  const calls: CapturedCall[] = [];
+  const outputSchema = { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false };
+  for (const tool_choice of ['auto', 'none']) for (const tools of [[], [{ type: 'custom', name: 'apply_patch' }]]) {
+    await new UpstreamProtocolNegotiator().request({
+      request: { input: 'Return an answer.', tools, tool_choice, outputSchema },
+      baseUrl: 'https://models.example/v1', apiKey: 'secret', model: 'configured-model',
+      compatibility: { preferredProtocol: 'chat-completions', allowedProtocols: ['chat-completions'] },
+      fetchImpl: captureFetch(calls, [chatResult('{"answer":"ok"}')]),
+      preferredProtocol: 'responses',
+    });
+  }
+  assert.equal(calls.length, 4);
+  for (const call of calls) {
+    assert.equal(call.url, 'https://models.example/v1/chat/completions');
+    assert.equal(Object.hasOwn(call.body, 'tools'), false);
+    assert.equal(Object.hasOwn(call.body, 'tool_choice'), false);
+    assert.equal((call.body.response_format as { type: string }).type, 'json_schema');
+  }
+});
+
+test('unsatisfiable empty-tool choices fail before dispatch on a declared Chat-only provider', async () => {
+  for (const tool_choice of ['required', { type: 'function', name: 'lookup' }]) {
+    let calls = 0;
+    await assert.rejects(new UpstreamProtocolNegotiator().request({
+      request: { input: 'hello', tools: [], tool_choice },
+      baseUrl: 'https://models.example/v1', apiKey: 'secret', model: 'configured-model',
+      compatibility: { preferredProtocol: 'chat-completions', allowedProtocols: ['chat-completions'] },
+      fetchImpl: async () => { calls += 1; return chatResult('must-not-send'); },
+      preferredProtocol: 'responses',
+    }), (error: unknown) => error instanceof UpstreamRequestError && error.code === 'upstream_protocol_capability_unsupported');
+    assert.equal(calls, 0);
+  }
+});
+
+test('declared thinking-type Chat providers receive explicit disable/enable controls and retain trace evidence', async () => {
+  const calls: CapturedCall[] = [];
+  const starts: UpstreamTraceAttemptStart[] = [];
+  for (const effort of ['none', 'off', 'disabled', 'low', 'high', undefined]) {
+    await new UpstreamProtocolNegotiator().request({
+      request: { input: 'Return JSON.', tools: [], tool_choice: 'auto',
+        ...(effort ? { reasoning: { effort } } : {}),
+        outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false } },
+      baseUrl: 'https://neutral.example/v1', apiKey: 'synthetic-test-key', model: 'neutral-model',
+      compatibility: { preferredProtocol: 'chat-completions', allowedProtocols: ['chat-completions'], chatReasoningControl: 'thinking-type' },
+      fetchImpl: captureFetch(calls, [chatResult('{"ok":true}')]), preferredProtocol: 'responses',
+      traceAttempt: (start) => { starts.push(start); return {}; },
+    });
+    const body = calls.at(-1)!.body;
+    const disabled = effort !== undefined && ['none', 'off', 'disabled'].includes(effort);
+    assert.deepEqual(body.thinking, effort ? { type: disabled ? 'disabled' : 'enabled' } : undefined);
+    assert.equal(body.reasoning_effort, disabled ? undefined : effort);
+    assert.equal(Object.hasOwn(body, 'tool_choice'), false);
+    assert.equal((body.response_format as { type: string }).type, 'json_schema');
+    assert.equal(starts.at(-1)?.reasoning?.requested, effort ?? null);
+    assert.equal(starts.at(-1)?.reasoning?.forwarded, disabled ? 'off' : effort ?? null);
+    assert.equal(starts.at(-1)?.reasoning?.disposition, disabled ? 'converted' : effort ? 'forwarded' : 'not-requested');
+  }
+});
+
+test('thinking-type declaration does not alter Responses reasoning or undeclared Chat providers', async () => {
+  const calls: CapturedCall[] = [];
+  for (const protocol of ['responses', 'chat-completions'] as const) {
+    await new UpstreamProtocolNegotiator().request({
+      request: { input: 'hello', reasoning: { effort: 'none' } },
+      baseUrl: 'https://neutral.example/v1', apiKey: 'synthetic-test-key', model: 'neutral-model',
+      compatibility: { preferredProtocol: protocol, allowedProtocols: [protocol],
+        ...(protocol === 'responses' ? { chatReasoningControl: 'thinking-type' as const } : {}) },
+      fetchImpl: captureFetch(calls, [protocol === 'responses' ? responsesResult('ok') : chatResult('ok')]),
+      preferredProtocol: protocol,
+    });
+  }
+  assert.deepEqual(calls[0]?.body.reasoning, { effort: 'none' });
+  assert.equal(Object.hasOwn(calls[0]!.body, 'thinking'), false);
+  assert.equal(calls[1]?.body.reasoning_effort, 'none');
+  assert.equal(Object.hasOwn(calls[1]!.body, 'thinking'), false);
+});
+
 test('prefers the incoming Responses wire and caches it by base URL plus model', async () => {
   const calls: CapturedCall[] = [];
   const negotiator = new UpstreamProtocolNegotiator();
@@ -1026,7 +1104,7 @@ test('Anthropic explicit plain-text defaults remain native and can fall back to 
   assert.equal(calls[2]?.body.output_config, undefined);
 });
 
-test('Anthropic output_config controls never disappear into an OpenAI fallback', async () => {
+test('unknown Anthropic output_config controls never disappear into an OpenAI fallback', async () => {
   const calls: CapturedCall[] = [];
   const negotiator = new UpstreamProtocolNegotiator();
   const outputSchema = {
@@ -1036,12 +1114,12 @@ test('Anthropic output_config controls never disappear into an OpenAI fallback',
 
   for (const outputConfig of [
     {
-      effort: 'high',
+      unsupported_control: true,
       format: { type: 'json_schema', schema: outputSchema },
     },
     {
       type: 'text',
-      effort: 'high',
+      unsupported_control: true,
     },
   ]) {
     await assert.rejects(
@@ -1458,7 +1536,7 @@ test('Anthropic thinking and stop sequences roundtrip directly without synthetic
   assert.deepEqual(calls[0]?.body.stop_sequences, ['END']);
 });
 
-test('native adaptive Anthropic thinking passes through unchanged only to the Messages driver', async () => {
+test('native adaptive Anthropic thinking passes through unchanged to the Messages driver', async () => {
   const calls: CapturedCall[] = [];
   const negotiator = new UpstreamProtocolNegotiator();
   const attempts: Array<{ protocol: string; status: string }> = [];
@@ -1471,16 +1549,12 @@ test('native adaptive Anthropic thinking passes through unchanged only to the Me
     apiKey: 'secret',
     model: 'configured-model',
     fetchImpl: captureFetch(calls, [anthropicResult('done')]),
-    preferredProtocol: 'responses',
+    preferredProtocol: 'anthropic-messages',
     onAttempt(attempt) {
       attempts.push({ protocol: attempt.protocol, status: attempt.status });
     },
   });
 
-  assert.deepEqual(attempts.slice(0, 2), [
-    { protocol: 'responses', status: 'incompatible' },
-    { protocol: 'chat-completions', status: 'incompatible' },
-  ]);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.url, 'https://models.example/v1/messages');
   assert.deepEqual(calls[0]?.body.thinking, { type: 'adaptive', display: 'summarized' });
@@ -1686,6 +1760,7 @@ test('schema-valid empty and usage-only terminal responses remain valid for ever
     'anthropic-messages': () => sse([
       ['message_start', { type: 'message_start', message: { id: 'msg_empty', type: 'message', role: 'assistant', content: [], usage: { input_tokens: 1, output_tokens: 0 } } }],
       ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } }],
+      ['message_stop', { type: 'message_stop' }],
     ]),
   };
   for (const protocol of ['responses', 'chat-completions', 'anthropic-messages'] as const) {
@@ -1827,6 +1902,7 @@ function streamingResult(protocol: UpstreamWireProtocol): Response {
     ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hel' } }],
     ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'lo' } }],
     ['message_delta', { type: 'message_delta', delta: { stop_reason: 'stop_sequence', stop_sequence: 'END' }, usage: { output_tokens: 2 } }],
+    ['message_stop', { type: 'message_stop' }],
   ]);
 }
 
@@ -2030,5 +2106,46 @@ test('does not retry a stream failure after delivering public reasoning', async 
     onReasoningDelta: text => deltas.push(text),
   }), (error: unknown) => error instanceof UpstreamRequestError && !error.definitiveRejection);
   assert.deepEqual(deltas, ['Read the selected report.']);
+  assert.equal(calls.length, 1);
+});
+
+
+test('Claude adaptive effort reaches both OpenAI wires without dropping structured output', async () => {
+  for (const protocol of ['responses', 'chat-completions'] as const) {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      const calls: CapturedCall[] = [];
+      const original = { ...request, thinking: { type: 'adaptive', display: 'summarized' },
+        output_config: { effort, format: { type: 'json_schema', schema: {
+          type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false,
+        } } } };
+      const before = structuredClone(original);
+      await new UpstreamProtocolNegotiator().request({ request: original,
+        baseUrl: 'https://models.example/v1', apiKey: 'secret', model: 'configured-model',
+        compatibility: { preferredProtocol: protocol, allowedProtocols: [protocol] },
+        preferredProtocol: protocol, fetchImpl: captureFetch(calls, [protocol === 'responses'
+          ? responsesResult('{"answer":"ok"}') : chatResult('{"answer":"ok"}')]) });
+      const body = calls[0]!.body;
+      assert.equal(protocol === 'responses' ? (body.reasoning as { effort: string }).effort : body.reasoning_effort, effort);
+      assert.equal(body.thinking, undefined);
+      assert.equal(body.output_config, undefined);
+      assert.ok(protocol === 'responses' ? body.text : body.response_format);
+      assert.deepEqual(original, before);
+    }
+  }
+});
+
+test('adaptive default invents no effort and unsupported budgets still fail before dispatch', async () => {
+  const calls: CapturedCall[] = [];
+  const run = (thinking: unknown, output_config?: unknown) => new UpstreamProtocolNegotiator().request({
+    request: { ...request, thinking, output_config }, baseUrl: 'https://models.example/v1',
+    apiKey: 'secret', model: 'configured-model', preferredProtocol: 'responses',
+    compatibility: { allowedProtocols: ['responses'] }, fetchImpl: captureFetch(calls, [responsesResult('ok')]),
+  });
+  await run({ type: 'adaptive' });
+  assert.equal(calls[0]!.body.reasoning, undefined);
+  for (const thinking of [{ type: 'enabled', budget_tokens: 2048 }, { type: 'adaptive', unknown: true }]) {
+    await assert.rejects(run(thinking), /thinking controls/);
+  }
+  await assert.rejects(run({ type: 'adaptive' }, { effort: 'turbo' }), /effort/);
   assert.equal(calls.length, 1);
 });

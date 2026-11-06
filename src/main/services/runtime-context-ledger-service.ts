@@ -290,7 +290,7 @@ export class RuntimeContextLedgerService {
             (Array.isArray(existing.queuePayload.fileReferences) && existing.queuePayload.fileReferences.length))) {
             throw new SessionAdmissionError('input_immutable', 'Only plain queued text can be steered into an active turn.')
           }
-          for (const key of input.mode === 'steer' ? [] : ['mode', 'model', 'reasoningEffort', 'serviceTier', 'permissionLevel', 'governanceProfile', 'workspaceLocator', 'attachmentIds', 'fileReferences']) {
+          for (const key of input.mode === 'steer' ? [] : ['mode', 'model', 'reasoningEffort', 'serviceTier', 'permissionLevel', 'allowedTools', 'governanceProfile', 'workspaceLocator', 'attachmentIds', 'fileReferences']) {
             const expected = existing.queuePayload[key]
             if (expected !== undefined && canonicalizeJson(expected) !== canonicalizeJson(input.deliveryPayload?.[key] ?? null)) {
               throw new SessionAdmissionError('input_immutable', `Queued ${key} changed before dispatch.`)
@@ -464,7 +464,7 @@ export class RuntimeContextLedgerService {
         runtimeId: event.runtimeId,
         threadId: event.threadId,
         patch: {
-          summary: event.summary,
+          ...(event.contextSummary?.trim() ? { summary: event.contextSummary } : {}),
           compactionDigest: event.sourceDigest,
           sourceMarker: event.digestMarker,
           evidence: [{

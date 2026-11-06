@@ -2329,6 +2329,59 @@ describe('CapabilityBroker', () => {
     }
   })
 
+  it('retains only a fixed-size digest for large invocation inputs', async () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability()]))
+    const resource = issueDocument(broker)
+    const setSpy = vi.spyOn(Map.prototype, 'set')
+    try {
+      await broker.invoke(agent, {
+        actionId: 'document.read-section', resource, invocationId: 'large-input',
+        input: { section: 'large-input-marker'.repeat(4096) }
+      })
+      const entries = setSpy.mock.calls.flatMap(([, value]) => (
+        value && typeof value === 'object' && Reflect.get(value, 'promise') instanceof Promise
+          && typeof Reflect.get(value, 'fingerprint') === 'string' ? [value] : []
+      ))
+      expect(entries).toHaveLength(1)
+      expect(Reflect.get(entries[0]!, 'fingerprint')).toMatch(/^[a-f0-9]{64}$/u)
+    } finally {
+      setSpy.mockRestore()
+    }
+  })
+
+  it('bounds retained large results by bytes before the entry limit is reached', async () => {
+    const handler = vi.fn(async () => ({ output: { text: 'x'.repeat(4096) } }))
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(handler)]), {
+      maxIdempotencyEntries: 2000,
+      maxIdempotencyResultBytes: 7000
+    })
+    const resource = issueDocument(broker)
+    const request = (invocationId: string): CapabilityInvocationRequest => ({
+      actionId: 'document.read-section', resource, invocationId, input: { section: 'body' }
+    })
+    await broker.invoke(agent, request('first'))
+    expect((await broker.invoke(agent, request('first'))).replayed).toBe(true)
+    await broker.invoke(agent, request('second'))
+    expect((await broker.invoke(agent, request('second'))).replayed).toBe(true)
+    expect(handler).toHaveBeenCalledTimes(2)
+    expect((await broker.invoke(agent, request('first'))).output).toEqual({ text: 'x'.repeat(4096) })
+    expect(handler).toHaveBeenCalledTimes(3)
+  })
+
+  it('delivers a result larger than the replay budget without retaining it', async () => {
+    const handler = vi.fn(async () => ({ output: { text: 'x'.repeat(4096) } }))
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(handler)]), {
+      maxIdempotencyResultBytes: 1024
+    })
+    const request: CapabilityInvocationRequest = {
+      actionId: 'document.read-section', resource: issueDocument(broker),
+      invocationId: 'oversized', input: { section: 'body' }
+    }
+    expect((await broker.invoke(agent, request)).output).toEqual({ text: 'x'.repeat(4096) })
+    await broker.invoke(agent, request)
+    expect(handler).toHaveBeenCalledTimes(2)
+  })
+
   it('never evicts pending idempotency work or redispatches a failed write', async () => {
     let release: (() => void) | undefined
     let markStarted: (() => void) | undefined
@@ -2797,5 +2850,47 @@ describe('CapabilityBroker', () => {
     expect(dispose).toHaveBeenCalledOnce()
     await expect(broker.observe(agent, { resource: issued! }))
       .rejects.toSatisfy((error) => expectBrokerCode(error, 'invalid_resource_handle'))
+  })
+})
+
+
+describe('exact registration leases', () => {
+  function fixture() {
+    const handler = vi.fn(async () => ({ output: { ok: true } }))
+    const definition = defineCapability({ id: 'lease.delete', version: 'same', title: 'Delete', description: 'Delete one item.',
+      audiences: ['agent'], scope: 'workspace', effect: 'workspace-write', approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' }, inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(), handler })
+    const registry = new CapabilityRegistry([definition])
+    const caller = { ...agent, approvals: [{ actionId: 'lease.delete', invocationId: 'lease-call', mode: 'confirmation' as const }] }
+    return { registry, handler, definition, caller, request: { actionId: 'lease.delete', invocationId: 'lease-call', input: {} } }
+  }
+
+  it('rejects captured approval identity after same-version registration replacement', async () => {
+    const f = fixture(); const broker = new CapabilityBroker(f.registry)
+    const expectedDescriptor = f.registry.require('lease.delete').descriptor
+    f.registry.unregister('lease.delete'); f.registry.register(f.definition)
+    await expect(broker.invoke(f.caller, f.request, { expectedDescriptor })).rejects.toMatchObject({ code: 'stale_capability_definition' })
+    expect(f.handler).not.toHaveBeenCalled()
+  })
+
+  it('does not replay an old registration result into a new registration', async () => {
+    const f = fixture(); const broker = new CapabilityBroker(f.registry)
+    await broker.invoke(f.caller, f.request)
+    f.registry.unregister('lease.delete'); f.registry.register(f.definition)
+    await expect(broker.invoke(f.caller, f.request)).rejects.toMatchObject({ code: 'stale_capability_definition' })
+    expect(f.handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a registration changed during input parsing before either handler dispatches', async () => {
+    const f = fixture(); const replacement = vi.fn(async () => ({ output: { ok: true } }))
+    const inputSchema = z.object({}).superRefine(() => {
+      f.registry.unregister('lease.delete'); f.registry.register({ ...f.definition, handler: replacement });
+    })
+    f.registry.unregister('lease.delete'); f.registry.register(defineCapability({ ...f.definition.descriptor,
+      inputSchema, outputSchema: f.definition.outputSchema, handler: f.handler }))
+    const broker = new CapabilityBroker(f.registry)
+    await expect(broker.invoke(f.caller, f.request)).rejects.toMatchObject({ code: 'stale_capability_definition' })
+    expect(f.handler).not.toHaveBeenCalled(); expect(replacement).not.toHaveBeenCalled()
   })
 })

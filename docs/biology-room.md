@@ -5,6 +5,10 @@ and macromolecular-structure work. Viewer state and scientific annotations are
 versioned separately from source files; the service never rewrites FASTA,
 GenBank, PDB/mmCIF, GFF, BED, or VCF bytes.
 
+It is the built-in workbench submodule of `@sciforge/domain-biology-workbench`,
+versioned and shipped together with the Life Science Preview submodule. Neither
+requires runtime-plugin installation or takeover; see the [built-in design](<./operations/biology-workbench-built-in.zh-CN.md>).
+
 There is no dedicated Biology Room renderer, preload namespace, IPC facade, or
 MCP business path. Supported files enter the canonical Workspace Preview
 manifest/provider chain. Callers that need persistent room state discover and
@@ -82,16 +86,16 @@ by the runtime rather than trusted from model arguments.
 
 ## Main implementation areas
 
-- Domain manifest and definition: `packages/domains/biology-room/sciforge.domain.json`, `src/definition.ts`
-- Public contract: `packages/domains/biology-room/src/contract.ts`
-- Persistent service and Broker contribution: `packages/domains/biology-room/src/service.ts`, `src/main.ts`
+- Domain manifest and definition: `packages/domains/biology-workbench/sciforge.domain.json`, `src/definition.ts`
+- Public contract: `packages/domains/biology-workbench/src/workbench/contract.ts`
+- Persistent service and Broker contribution: `packages/domains/biology-workbench/src/workbench/service.ts`, `src/workbench/capabilities.ts`
 - Generic main composition: `src/main/modules/application-composition.ts`
 - Generic renderer viewers: `src/renderer/src/workspace-preview/`
 
 Focused validation:
 
 ```bash
-npm --prefix packages/domains/biology-room test
+npm run test -w @sciforge/domain-biology-workbench
 npx vitest run \
   src/main/capabilities/app-registry.test.ts \
   src/renderer/src/workspace-preview/registry.test.ts

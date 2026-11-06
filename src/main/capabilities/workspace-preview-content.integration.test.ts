@@ -1,5 +1,7 @@
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, realpath, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { workspaceMutationReceipt } from '../services/workspace-mutation-receipt'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
@@ -171,6 +173,15 @@ describe('Workspace Preview capability content transport integration', () => {
           range: { start: { line: 303, column: 1 }, end: { line: 303, column: 1 } }, text: caption } }
       })
       expect(edited.changed).toBe(true)
+      expect(workspaceMutationReceipt(edited)?.patchText).toContain(`+${caption}`)
+      const replayed = await broker.invoke(caller, {
+        actionId: APP_CAPABILITY_IDS.workspacePreviewApplyEdit, resource: observed.resource,
+        invocationId: 'caption-edit', expectedRevision: observed.semanticRevision,
+        input: { operation: { kind: 'text.replaceRange', path: filePath,
+          range: { start: { line: 303, column: 1 }, end: { line: 303, column: 1 } }, text: caption } }
+      })
+      expect(replayed.replayed).toBe(true)
+      expect(workspaceMutationReceipt(replayed)).toBeUndefined()
       expect(await readFile(filePath, 'utf8')).toBe(`${prefix}## 图示\n![plot](figure.png)\n${caption}后续结论😀\n`)
       const refreshed = await broker.observe(caller, { resource: handle })
       const verified = await broker.invoke(caller, {
@@ -181,4 +192,52 @@ describe('Workspace Preview capability content transport integration', () => {
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
+  it.skipIf(process.platform === 'win32')('round-trips a real POSIX special filename mutation receipt through Git after a broker edit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-preview-path-'))
+    const filePath = join(await realpath(root), '正文😀 space\nCR\r\nTab\tquote"control\x01.md')
+    const before = 'before\r\n'
+    const after = 'after\r\n'
+    try {
+      await writeFile(filePath, before)
+      const catalog = createApplicationDomainCatalog({
+        getUserDataDir: () => root,
+        getDeviceId: () => 'device-workspace-preview-content-test',
+        portableResourcesFor: createUnavailablePortableResourcesForTest(),
+        packageStorageFor: createNonSecretPackageStorageForTest(),
+        capabilityInvokerFor: () => ({
+          invoke: async () => { throw new Error('Domain system capabilities are unavailable in this test.') },
+          createApprovedBatch: () => { throw new Error('Domain system capabilities are unavailable in this test.') }
+        })
+      })
+      const broker = new CapabilityBroker(createApplicationCapabilityRegistry(catalog, {
+        controlledProcessService: new ControlledProcessService(),
+        workspacePreviewHost: new WorkspacePreviewHost(),
+        versionControlWorkspaceService: new VersionControlWorkspaceService()
+      }))
+      const caller = { audience: 'agent' as const, callerId: 'dsh:special-path', workspaceId: root }
+      const opened = await broker.invoke(caller, {
+        actionId: APP_CAPABILITY_IDS.workspacePreviewOpen, input: { path: filePath, workspaceRoot: root }
+      })
+      expect(outputRecord(opened.output).ok, JSON.stringify(opened.output)).not.toBe(false)
+      const handle = capabilityResourceHandleSchema.parse(outputRecord(opened.output).resource)
+      const observed = await broker.observe(caller, { resource: handle })
+      const edited = await broker.invoke(caller, {
+        actionId: APP_CAPABILITY_IDS.workspacePreviewApplyEdit, resource: observed.resource,
+        invocationId: 'special-path-edit', expectedRevision: observed.semanticRevision,
+        input: { operation: { kind: 'text.replaceRange', path: filePath,
+          range: { start: { line: 1, column: 1 }, end: { line: 1, column: 7 } }, text: 'after' } }
+      })
+      expect(edited.changed).toBe(true)
+      const receipt = workspaceMutationReceipt(edited)!
+      expect(receipt.path).toBe(filePath)
+      expect(await readFile(filePath, 'utf8')).toBe(after)
+      const apply = (reverse: boolean): void => {
+        execFileSync('git', ['apply', '-p0', '--unsafe-paths', ...(reverse ? ['--reverse'] : []), '-'], { cwd: root, input: receipt.patchText })
+      }
+      apply(true)
+      expect(await readFile(filePath, 'utf8')).toBe(before)
+      apply(false)
+      expect(await readFile(filePath, 'utf8')).toBe(after)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
 })

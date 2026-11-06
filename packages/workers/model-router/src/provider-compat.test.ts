@@ -60,6 +60,9 @@ test('provider compatibility is capability-driven and independent of provider id
   assert.equal(explicit.probeBeforeUse, true);
   assert.equal(explicit.chatMaxTokensField, 'max_completion_tokens');
   assert.equal(explicit.chatStructuredOutputMode, 'json_schema');
+  assert.equal(explicit.chatReasoningControl, 'effort');
+  assert.equal(resolveProviderCompatibility({ chatReasoningControl: 'thinking-type' }).chatReasoningControl, 'thinking-type');
+  assert.throws(() => resolveProviderCompatibility({ chatReasoningControl: 'automatic' as never }), /chatReasoningControl is invalid/);
   assert.equal(
     resolveProviderCompatibility({ chatStructuredOutputMode: 'json_object' }).chatStructuredOutputMode,
     'json_object',
@@ -96,6 +99,31 @@ test('provider compatibility is capability-driven and independent of provider id
     () => resolveProviderCompatibility({ probeBeforeUse: 'yes' } as never),
     /probeBeforeUse must be a boolean/u,
   );
+});
+
+test('explicit thinking-type Chat control maps only requested efforts without mutating the body', () => {
+  const profile = resolveProviderCompatibility({ chatReasoningControl: 'thinking-type' }, 'chat-completions');
+  for (const effort of ['none', 'off', 'disabled', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    const body = { messages: [{ role: 'user', content: 'hello' }], reasoning_effort: effort,
+      response_format: { type: 'json_object' } };
+    const before = structuredClone(body);
+    const result = normalizeProviderChatCompletionsBody(body, profile);
+    const disabled = ['none', 'off', 'disabled'].includes(effort);
+    assert.deepEqual(result.thinking, { type: disabled ? 'disabled' : 'enabled' });
+    assert.equal(result.reasoning_effort, disabled ? undefined : effort);
+    assert.deepEqual(result.response_format, { type: 'json_object' });
+    assert.deepEqual(body, before);
+  }
+  const implicit = normalizeProviderChatCompletionsBody({ messages: [], model: 'neutral-model' }, profile);
+  assert.equal(Object.hasOwn(implicit, 'thinking'), false);
+  assert.equal(Object.hasOwn(implicit, 'reasoning_effort'), false);
+});
+
+test('default Chat reasoning control preserves effort semantics and does not inject thinking', () => {
+  for (const effort of ['none', 'low', 'high']) {
+    const body = { messages: [], reasoning_effort: effort };
+    assert.deepEqual(normalizeProviderChatCompletionsBody(body, resolveProviderCompatibility()), body);
+  }
 });
 
 test('non-Responses conversion ignores opaque continuation items without adding empty messages', () => {

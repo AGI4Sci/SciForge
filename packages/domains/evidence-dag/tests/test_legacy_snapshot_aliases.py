@@ -1,8 +1,8 @@
 """Real fixed-HEAD publisher compatibility, not a hand-built hardlink layout."""
 import json
+import hashlib
 import os
 from pathlib import Path
-import hashlib
 import tempfile
 import types
 import unittest
@@ -15,9 +15,11 @@ BASELINE = '376fc34e301b05a3abf5846d9196795ef15c191d'
 
 
 def old_publisher():
-    source = (Path(__file__).parent / 'fixtures' / 'legacy_snapshot_storage.py').read_bytes()
-    if hashlib.sha256(source).hexdigest() != '40e2ca4992850333a4f6acebf89446de98c273d5cdc1b71b00350659ef940e23':
-        raise ValueError('Fixed publisher fixture integrity mismatch')
+    fixture = Path(__file__).resolve().parent / 'fixtures' / 'legacy_snapshot_storage.py'
+    source = fixture.read_bytes()
+    provenance = json.loads(fixture.with_suffix('.source.json').read_text())
+    if provenance['sourceCommit'] != BASELINE or hashlib.sha256(source).hexdigest() != provenance['sha256']:
+        raise RuntimeError('Independent legacy publisher fixture integrity failed')
     module = types.ModuleType('fixed_head_snapshot_storage')
     exec(compile(source, BASELINE + '/snapshot_storage.py', 'exec'), module.__dict__)
     return module.atomic_publish_latest
@@ -88,7 +90,12 @@ class LegacySnapshotAliases(unittest.TestCase):
                     os.link(immutable, Path(root) / 'outside')
                 if kind == 'symlink':
                     immutable.unlink()
-                    immutable.symlink_to(latest)
+                    try:
+                        immutable.symlink_to(latest)
+                    except OSError as exc:
+                        if getattr(exc, 'winerror', None) == 1314:
+                            raise RuntimeError('Environment preflight failed: Windows file symlinks require Developer Mode or symbolic-link privilege') from exc
+                        raise
                     os.link(latest, storage / 'unknown')
                 if kind == 'wrong_history':
                     immutable.rename(immutable.with_name('wrong.prov.json'))

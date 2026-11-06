@@ -28,7 +28,7 @@ import {
 import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { getActiveAgentApiKey } from '@shared/app-settings'
-import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
+import type { ChatState, ChatStoreGet, ChatStoreSet, ChatStreamRef } from './chat-store-types'
 import {
   compactCodeWorkspaceRoots,
   forgetCodeWorkspaceRoot,
@@ -100,7 +100,7 @@ function patchApprovalBlock(
   }
 }
 
-type SseAbortRef = { current: AbortController | null }
+type SseAbortRef = ChatStreamRef
 
 type StoreActionContext = {
   set: ChatStoreSet
@@ -561,6 +561,9 @@ export function createMaintenanceActions(
       return false
     }
     try {
+      const readOnlyThreadIds = { ...get().readOnlyThreadIds }
+      delete readOnlyThreadIds[threadId]
+      set({ readOnlyThreadIds, conversationSourceNavigation: null })
       await provider.resumeIncompleteWork(workId)
       set((current) => ({
         deliveryStateByThread: {
@@ -757,8 +760,10 @@ export function createMaintenanceActions(
 
   resolveUserInput: async (blockId, action) => {
     const { blocks } = get()
-    const block = blocks.find((b) => b.id === blockId)
-    if (!block || block.kind !== 'user_input' || block.status !== 'pending') return
+    const block = blocks.find((b) => b.id === blockId && b.kind === 'user_input')
+    if (!block || block.kind !== 'user_input' || (block.status !== 'pending' && block.status !== 'error')) {
+      throw new Error(i18n.t('common:userInputUnavailable'))
+    }
     const p = getProvider()
     try {
       if (action.kind === 'submit') {
@@ -770,7 +775,7 @@ export function createMaintenanceActions(
         set((s) => ({
           blocks: s.blocks.map((b) =>
             b.id === blockId && b.kind === 'user_input'
-              ? { ...b, status: 'submitted' as const, answers: action.answers }
+              ? { ...b, status: 'submitted' as const, answers: action.answers, errorMessage: undefined }
               : b
           )
         }))
@@ -784,7 +789,7 @@ export function createMaintenanceActions(
       set((s) => ({
         blocks: s.blocks.map((b) =>
           b.id === blockId && b.kind === 'user_input'
-            ? { ...b, status: 'cancelled' as const }
+            ? { ...b, status: 'cancelled' as const, errorMessage: undefined }
             : b
         )
       }))
@@ -801,18 +806,33 @@ export function createMaintenanceActions(
           : {}),
         blocks: s.blocks.map((b) =>
           b.id === blockId && b.kind === 'user_input'
-            ? { ...b, status: 'error' as const, errorMessage: msg }
+            ? { ...b, status: 'pending' as const, errorMessage: msg }
             : b
         )
       }))
+      throw e
     }
   },
 
   interrupt: async (options) => {
     const { activeThreadId, busy, currentTurnId } = get()
     if (!activeThreadId) return
+    const startsForThread = [...(sseAbortRef.pendingTurnStarts?.values() ?? [])]
+      .filter((start) => start.threadId === activeThreadId)
+    const pendingStart = sseAbortRef.pendingTurnStarts?.get(get().currentTurnUserId ?? '') ??
+      (startsForThread.length === 1 ? startsForThread[0] : undefined)
+    if (pendingStart?.threadId === activeThreadId) {
+      pendingStart.cancelRequested = true
+      pendingStart.discard = pendingStart.discard === true || options?.discard === true
+        ? true : options?.discard
+      return
+    }
     if (!currentTurnId) {
       if (!busy) return
+      if (startsForThread.length > 1) {
+        set({ error: 'Multiple turns are starting. Wait for a turn handle before retrying Stop.' })
+        return
+      }
       sseAbortRef.current?.abort()
       sseAbortRef.current = null
       settleInterruptedTurn(set, get)
@@ -820,18 +840,22 @@ export function createMaintenanceActions(
       return
     }
     const p = getProvider()
+    const interruptedStream = sseAbortRef.current
     try {
       const interruptOptions = options?.discard === undefined
         ? undefined
         : { discard: options.discard === true }
       rememberActionThreadRuntime(p, get, activeThreadId)
-      sseAbortRef.current?.abort()
-      sseAbortRef.current = null
-      settleInterruptedTurn(set, get)
       await p.interruptTurn(activeThreadId, currentTurnId, interruptOptions)
+      // An interrupt acknowledgement is not a terminal turn event. Preserve
+      // the subscription and busy state until the runtime settles or recovers.
       void get().refreshThreads()
     } catch (e) {
+      if (get().activeThreadId !== activeThreadId || get().currentTurnId !== currentTurnId) return
       if (getRuntimeErrorCode(e) === 'turn_not_running') {
+        if (sseAbortRef.current !== interruptedStream) return
+        interruptedStream?.abort()
+        sseAbortRef.current = null
         settleInterruptedTurn(set, get)
         void get().refreshThreads()
         return

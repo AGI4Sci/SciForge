@@ -1,0 +1,41 @@
+.research-view { width: min(100%, 852px); margin: 0 auto; padding: 40px 36px 64px; box-sizing: border-box; user-select: text; }
+.research-greeting { display: flex; align-items: center; gap: 10px; color: var(--ds-text-muted); font-size: 13px; }
+.research-greeting svg { width: 22px; height: 22px; color: var(--ds-accent); stroke-width: 1.5; }
+.research-view h2 { margin: 14px 0; color: var(--ds-text); font: 400 clamp(25px, 2.5vw, 34px)/1.45 Georgia, 'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', 'SimSun', serif; letter-spacing: -.5px; }
+.research-intro { color: var(--ds-text-muted); line-height: 1.8; margin: 0 0 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.research-composer { border: 1px solid var(--ds-border); border-radius: var(--ds-radius-panel, 28px); padding: 8px; background: var(--ds-surface-card); box-shadow: var(--ds-shadow-composer); transition: border-color 140ms ease; }
+.research-composer:focus-within { border-color: var(--ds-border-strong); }
+.research-composer textarea { display: block; width: 100%; min-height: 114px; max-height: 300px; padding: 14px 14px 8px; box-sizing: border-box; resize: vertical; border: 0; outline: 0 !important; background: transparent; border-radius: var(--ds-radius-card, 20px); color: var(--ds-text); line-height: 1.7; }
+.research-composer textarea::placeholder { color: var(--ds-text-faint); }
+.research-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 2px 14px; color: var(--ds-text-muted); font-size: 12px; }
+.research-composer-footer button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: var(--ds-radius-card, 20px); background: var(--ds-accent); color: var(--ds-bg-main); }
+.research-composer-footer button:disabled { opacity: .4; }
+.research-composer-footer svg { width: 20px; height: 20px; }
+.research-suggestions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 36px; }
+.research-suggestions button { display: flex; align-items: center; gap: 8px; background: transparent; border: 1px solid var(--ds-border-muted); padding: 8px 12px; border-radius: var(--ds-radius-control, 12px); font-size: 12px; color: var(--ds-text-muted); }
+.research-suggestions svg, .research-section header svg { width: 13px; height: 13px; }
+.research-suggestions button:hover, .research-work-list button:hover { background: var(--ds-surface-hover); }
+.research-section { margin-top: 32px; }
+.research-section header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--ds-border-muted); }
+.research-section h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.research-section header > span { color: var(--ds-text-faint); font-size: 12px; }
+.research-section header button { display: inline-flex; align-items: center; gap: 5px; padding: 4px; background: transparent; border: 0; color: var(--ds-text-muted); font-size: 12px; border-radius: 6px; }
+.research-work-list, .research-results { list-style: none; margin: 0; padding: 0; }
+.research-work-list li + li, .research-results li + li { border-top: 1px solid var(--ds-border-muted); }
+.research-work-list button { display: flex; width: 100%; gap: 14px; align-items: center; border: 0; background: transparent; padding: 16px 10px; text-align: left; border-radius: var(--ds-radius-control, 12px); }
+.research-work-list button > span:nth-child(2) { flex: 1; min-width: 0; }
+.research-work-list button > svg { width: 15px; height: 15px; color: var(--ds-text-faint); }
+.research-work-list strong, .research-results strong { display: block; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.research-work-list small, .research-results small { display: block; margin-top: 4px; color: var(--ds-text-muted); font-size: 12px; }
+.research-state { width: 7px; height: 7px; border-radius: 50%; background: var(--ds-text-faint); }
+.research-state.state-in-progress { background: var(--ds-warning); }
+.research-state.state-review { background: var(--ds-accent); }
+.research-state.state-completed { background: var(--ds-success); }
+.research-results label { display: flex; align-items: center; gap: 14px; padding: 14px 10px; cursor: pointer; }
+.research-results input { width: 17px; height: 17px; accent-color: var(--ds-accent); }
+.research-empty { padding: 12px 0; color: var(--ds-text-muted); font-size: 13px; line-height: 1.8; }
+@media (max-width: 800px) {
+  .research-view { padding: 28px 18px 48px; }
+  .research-section header { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) { .research-composer { transition: none; } }

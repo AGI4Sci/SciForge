@@ -30,7 +30,7 @@ export type ResearchCheckpointsRendererContribution =
   | ResearchCheckpointsI18nResourceContribution
 
 export function canOpenCommittedResearchCheckpoint(
-  host: DomainRendererHost,
+  host: Pick<DomainRendererHost, 'workbench'>,
   sessionId: string | undefined
 ): boolean {
   return Boolean(
@@ -41,7 +41,7 @@ export function canOpenCommittedResearchCheckpoint(
 }
 
 export function openCommittedResearchCheckpoint(
-  host: DomainRendererHost,
+  host: Pick<DomainRendererHost, 'workbench'>,
   sessionId: string | undefined,
   status: ResearchCheckpointCommittedTurnStatusV1
 ): boolean {
@@ -71,6 +71,7 @@ export function createDomainRendererEntry(
   const client = createResearchCheckpointsRendererClient(host.capabilityInvoker)
   const timeline = Object.freeze({
     id: 'research-checkpoints.timeline-status',
+    placement: 'turn-end',
     render: (context: DomainRendererChatResultPanelRenderContext) => createElement(
       ResearchCheckpointTimelinePanel,
       {

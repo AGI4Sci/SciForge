@@ -1,20 +1,14 @@
+import { auditSnapshot, artifactIdentityKey } from './audit-index.js'
 import { resolve } from 'node:path'
 import type {
   EvidenceDagAuditQueryOutput,
   EvidenceDagAuditQuerySubject,
-  EvidenceDagSealedClosure,
   EvidenceDagSidechainRecordV1
 } from '../contract.js'
 import type { EvidenceDeltaChain } from './evidence-delta.js'
 
-/**
- * Hard budget for the cross-thread audit scan. One unit is consumed per
- * closure examined (including its membership/policy object), per member-delta
- * payload examined, and per sidechain record examined. When the budget is
- * exhausted the scan stops, everything not yet examined is dropped, and the
- * result carries the 'scan_bounded' gap code instead of pretending the scan
- * was exhaustive.
- */
+/** Result examination budget after exact indexing. Unrelated history spends
+ * no query units. Truncated results carry scan_bounded and are never complete. */
 export const EVIDENCE_DAG_AUDIT_SCAN_LIMIT = 1000
 
 const AUDIT_FRESHNESS_ORDER = ['failed', 'stale', 'fresh', 'pending', 'unknown'] as const
@@ -38,6 +32,7 @@ export type EvidenceDagAuditQueryEvaluation = Readonly<{
   complete: boolean
   gapCodes: readonly string[]
   freshness: EvidenceDagAuditFreshness
+  totalRecords?: number
 }>
 
 type ArtifactVersionIdentity = Readonly<{
@@ -48,11 +43,12 @@ type ArtifactVersionIdentity = Readonly<{
 
 type ScanBudget = {
   remaining: number
+  projectionRemaining: number
   truncated: boolean
 }
 
 function createScanBudget(): ScanBudget {
-  return { remaining: EVIDENCE_DAG_AUDIT_SCAN_LIMIT, truncated: false }
+  return { remaining: EVIDENCE_DAG_AUDIT_SCAN_LIMIT, projectionRemaining: 10000, truncated: false }
 }
 
 /** Consume one scan unit; false means the budget is exhausted. */
@@ -66,10 +62,17 @@ function consumeScan(budget: ScanBudget): boolean {
   return true
 }
 
+function consumeRecord(budget: ScanBudget, chain: EvidenceDeltaChain, record: EvidenceDagSidechainRecordV1): boolean {
+  if (!consumeScan(budget)) return false
+  const cost = auditSnapshot(chain).recordCosts.get(record.recordDigest) ?? 10001
+  if (cost > budget.projectionRemaining) { budget.truncated = true; return false }
+  budget.projectionRemaining -= cost; return true
+}
+
 /**
  * Evidence-side evaluation of one audit query subject over read-only chain
  * views. Pure: callers must supply chains obtained from a read path (for
- * example `EvidenceDagDeltaStore.chain()` / `auditChains()`); this function
+ * example the canonical store-owned audit index); this function
  * never mutates and never persists.
  */
 export function evidenceDagAuditQueryOverChains(input: Readonly<{
@@ -79,12 +82,30 @@ export function evidenceDagAuditQueryOverChains(input: Readonly<{
 }>): EvidenceDagAuditQueryEvaluation {
   const subject = input.subject
   const scopedChains = input.chains.filter((chain) => chainInWorkspace(chain, input.workspaceRoot))
-  if ('threadId' in subject) return evaluateThreadSubject(scopedChains, subject)
+  const scopeUnknown = Boolean(input.workspaceRoot && input.chains.some(chain => !chain.workspaceRoot))
+  const uncertain = scopedChains.some(chain => { const index = auditSnapshot(chain); return index.pending || index.extractionBounded })
+  const metadataConflict = 'artifactVersionRef' in subject && scopedChains.some(chain => {
+    const ref = subject.artifactVersionRef, index = auditSnapshot(chain), key = artifactIdentityKey(ref)
+    const fingerprint = JSON.stringify([ref.byteLength, ref.accessPolicy.visibility, [...ref.accessPolicy.principals].sort(), ref.accessPolicy.allowExport])
+    const known = index.metadataByIdentity.get(key)
+    return index.identityConflicts.has(key) || Boolean(known?.size && !known.has(fingerprint))
+  })
+  const totalRecords = scopedChains.reduce((sum, chain) => {
+    const index = auditSnapshot(chain)
+    if ('threadId' in subject) return sum + (chain.head.threadId === subject.threadId ? index.records.length : 0)
+    if ('closureDigest' in subject) return sum + (index.recordsByClosure.get(subject.closureDigest)?.length ?? 0)
+    return sum + (index.recordsByArtifact.get(artifactIdentityKey(subject.artifactVersionRef))?.length ?? 0)
+  }, 0)
+  const finish = (result: EvidenceDagAuditQueryEvaluation): EvidenceDagAuditQueryEvaluation => {
+    const gapCodes = [...new Set([...result.gapCodes, ...(uncertain ? ['scan_bounded'] : []), ...(metadataConflict ? ['identity_metadata_conflict'] : []), ...(scopeUnknown ? ['workspace_scope_unknown'] : [])])]
+    return { ...result, totalRecords, complete: result.complete && !uncertain && !metadataConflict && !scopeUnknown, gapCodes }
+  }
+  if ('threadId' in subject) return finish(evaluateThreadSubject(scopedChains, subject))
   const budget = createScanBudget()
   if ('closureDigest' in subject) {
-    return evaluateClosureSubject(scopedChains, subject.closureDigest, budget)
+    return finish(evaluateClosureSubject(scopedChains, subject.closureDigest, budget))
   }
-  return evaluateArtifactVersionSubject(scopedChains, subject.artifactVersionRef, budget)
+  return finish(evaluateArtifactVersionSubject(scopedChains, subject.artifactVersionRef, budget))
 }
 
 function evaluateThreadSubject(
@@ -95,10 +116,12 @@ function evaluateThreadSubject(
   if (!chain) {
     return { records: [], freshness: 'unknown', ...facetCompleteness('threadId', false) }
   }
+  const budget = createScanBudget(), selected: EvidenceDagSidechainRecordV1[] = []
+  for (const record of auditSnapshot(chain).records) { if (!consumeRecord(budget, chain, record)) break; selected.push(record) }
   return {
-    records: sortAuditRecords(chain.sidechainRecords()),
+    records: sortAuditRecords(selected),
     freshness: deriveFreshness(chain, subject.headDigest ?? null),
-    ...facetCompleteness('threadId', false)
+    ...facetCompleteness('threadId', budget.truncated)
   }
 }
 
@@ -111,18 +134,13 @@ function evaluateClosureSubject(
   let freshness: EvidenceDagAuditFreshness = 'unknown'
   for (const chain of chains) {
     if (budget.truncated) break
-    let closure: EvidenceDagSealedClosure | undefined
-    for (const candidate of chain.closures()) {
-      if (!consumeScan(budget)) break
-      if (candidate.closureDigest === closureDigest) {
-        closure = candidate
-        break
-      }
-    }
+    if (!consumeScan(budget)) break
+    const closure = auditSnapshot(chain).closuresByDigest.get(closureDigest)
     if (!closure) continue
-    records = sortAuditRecords(chain.sidechainRecords().filter(
-      (record) => record.closureDigest === closureDigest
-    ))
+    const candidates = auditSnapshot(chain).recordsByClosure.get(closureDigest) ?? []
+    const selected: EvidenceDagSidechainRecordV1[] = []
+    for (const record of candidates) { if (!consumeRecord(budget, chain, record)) break; selected.push(record) }
+    records = sortAuditRecords(selected)
     freshness = deriveFreshness(chain, closure.headDigest)
     break
   }
@@ -142,27 +160,10 @@ function evaluateArtifactVersionSubject(
   const contributingChains = new Set<EvidenceDeltaChain>()
   for (const chain of chains) {
     if (budget.truncated) break
-    const deltas = new Map(chain.list().map((record) => [record.deltaDigest, record]))
     let chainContributed = false
-    for (const closure of chain.closures()) {
-      if (!consumeScan(budget)) break
-      const closureReferences = closureReferencesArtifactVersion(closure, ref) ||
-        closure.includedDeltaDigests.some((deltaDigest) => {
-          if (!consumeScan(budget)) return false
-          const record = deltas.get(deltaDigest)
-          return Boolean(record && valueReferencesArtifactVersion(record.payload, ref))
-        })
-      if (!closureReferences) continue
-      for (const record of chain.sidechainRecords()) {
-        if (!consumeScan(budget)) break
-        if (record.closureDigest !== closure.closureDigest) continue
-        recordsByDigest.set(record.recordDigest, record)
-        chainContributed = true
-      }
-    }
-    for (const record of chain.sidechainRecords()) {
-      if (!consumeScan(budget)) break
-      if (!valueReferencesArtifactVersion(record.payload, ref)) continue
+    for (const record of auditSnapshot(chain).recordsByArtifact.get(artifactIdentityKey(ref)) ?? []) {
+      if (recordsByDigest.has(record.recordDigest)) continue
+      if (!consumeRecord(budget, chain, record)) break
       recordsByDigest.set(record.recordDigest, record)
       chainContributed = true
     }
@@ -196,7 +197,7 @@ function deriveFreshness(
 ): EvidenceDagAuditFreshness {
   const head = chain.head
   if (expectedHeadDigest && expectedHeadDigest !== head.headDigest) return 'stale'
-  return chain.provisionalView?.summary.freshness ?? (head.headDigest ? 'pending' : 'unknown')
+  return chain.auditFreshness ?? (head.headDigest ? 'pending' : 'unknown')
 }
 
 function rollupFreshness(values: readonly EvidenceDagAuditFreshness[]): EvidenceDagAuditFreshness {
@@ -209,11 +210,11 @@ function rollupFreshness(values: readonly EvidenceDagAuditFreshness[]): Evidence
 
 function chainInWorkspace(chain: EvidenceDeltaChain, workspaceRoot?: string): boolean {
   if (!workspaceRoot) return true
-  const first = chain.list()[0]
+  const workspace = chain.workspaceRoot
   // Legacy-only chains bind no delta workspace scope; their workspace is
   // unknown, so a workspace filter must not silently claim their records.
-  if (!first) return true
-  return resolve(first.scope.workspaceRoot) === resolve(workspaceRoot)
+  if (!workspace) return false
+  return resolve(workspace) === resolve(workspaceRoot)
 }
 
 function sortAuditRecords(
@@ -226,43 +227,4 @@ function sortAuditRecords(
     left.sequence - right.sequence ||
     left.recordDigest.localeCompare(right.recordDigest)
   )
-}
-
-/**
- * A closure references an Artifact Version when its own structures carry the
- * exact identity: a structured ref object must match the full artifactId +
- * versionId + contentDigest triple, while a bare identity string in the
- * closure's declared membership/policy ref arrays matches on the version
- * identity — the only pin those index structures carry.
- */
-function closureReferencesArtifactVersion(
-  closure: EvidenceDagSealedClosure,
-  ref: ArtifactVersionIdentity
-): boolean {
-  if (valueReferencesArtifactVersion(closure, ref)) return true
-  const identities = [ref.artifactId, ref.versionId, ref.contentDigest]
-  return [...closure.includedExternalRefs, ...closure.policy.requiredExternalRefs]
-    .some((entry) => identities.includes(entry))
-}
-
-/**
- * Exact Artifact Version identity match over arbitrary JSON: a payload value
- * matches only when it contains an object carrying the exact artifactId +
- * versionId + contentDigest triple. No prefix, fuzzy, or per-field guess —
- * an honest scan, not a fabricated index. Closure-level string references are
- * matched separately, by exact membership of the ref identity in the
- * closure's declared ref arrays.
- */
-function valueReferencesArtifactVersion(value: unknown, ref: ArtifactVersionIdentity): boolean {
-  if (Array.isArray(value)) return value.some((item) => valueReferencesArtifactVersion(item, ref))
-  if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>
-    if (
-      record['artifactId'] === ref.artifactId &&
-      record['versionId'] === ref.versionId &&
-      record['contentDigest'] === ref.contentDigest
-    ) return true
-    return Object.values(record).some((item) => valueReferencesArtifactVersion(item, ref))
-  }
-  return false
 }

@@ -141,6 +141,8 @@ export type RuntimeDisclosureMetadata = {
 }
 
 export type UserInputOption = {
+  id?: string
+  recommended?: boolean
   label: string
   description: string
 }
@@ -249,6 +251,7 @@ export type ThreadListOptions = {
 }
 
 export type ThreadCreateInput = {
+  runtimeId?: AgentRuntimeId
   workspace?: string
   workspaceLocator?: WorkspaceLocator
   title?: string
@@ -647,6 +650,8 @@ export interface AgentProvider {
     threadId: string,
     text: string,
     options?: {
+      /** Bind a background/side send to its original runtime instead of the active composer. */
+      runtimeId?: AgentRuntimeId
       mode?: string
       workspace?: string
       title?: string
@@ -654,6 +659,7 @@ export interface AgentProvider {
       reasoningEffort?: string
       serviceTier?: string
       permissionLevel?: AgentPermissionLevel
+      allowedTools?: string[]
       workspaceLocator?: WorkspaceLocator
       executionIntent?: AgentRuntimeExecutionIntent
       governanceProfile?: 'default' | 'write'

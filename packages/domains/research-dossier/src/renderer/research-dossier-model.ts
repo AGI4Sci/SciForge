@@ -123,12 +123,13 @@ export function isResearchSourceUri(uri: string): boolean {
 
 export function artifactHistoryInput(
   artifactId: string,
-  beforeSequence?: number
+  beforeSequence?: number,
+  cursor?: string
 ): ArtifactVersionListInputV2 {
   return {
     artifactId,
     limit: RESEARCH_DOSSIER_HISTORY_PAGE_SIZE,
-    ...(beforeSequence ? { beforeSequence } : {})
+    ...(cursor ? { cursor } : beforeSequence ? { beforeSequence } : {})
   }
 }
 
@@ -143,6 +144,7 @@ export function mergeArtifactHistory(
       seen.add(item.version.versionId)
       return true
     }),
+    ...(next.nextCursor ? { nextCursor: next.nextCursor } : {}),
     ...(next.nextBeforeSequence
       ? { nextBeforeSequence: next.nextBeforeSequence }
       : {})

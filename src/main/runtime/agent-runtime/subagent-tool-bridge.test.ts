@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { SUBAGENT_CONTEXT_MAX_BYTES } from './subagent-context'
 import {
   FileMultiAgentStore,
   InMemoryMultiAgentStore,
@@ -82,6 +83,47 @@ function childId(response: Awaited<ReturnType<ReturnType<typeof bridgeWith>['cal
 }
 
 describe('AgentRuntime subagent tool bridge', () => {
+  it.each(['codex', 'claude', 'dsh', 'pi'] as const)(
+    'keeps %s automatic context bounded and exact results recoverable after restart', async (runtimeId) => {
+      const root = await mkdtemp(join(tmpdir(), 'subagent-context-'))
+      const store = new FileMultiAgentStore(join(root, runtimeId))
+      const summary = '完整研究结果🧪'.repeat(5000)
+      await store.upsert(MultiAgentChildRunRecord.parse({
+        id: 'report', parentThreadId: 'parent', parentTurnId: 'old-turn', prompt: 'Research',
+        label: 'Report', status: 'completed', summary,
+        threadRef: { runtime: runtimeId, threadId: 'child-thread' },
+        transcript: [{ id: 'evidence', kind: 'assistant_message', text: 'exact evidence' }],
+        createdAt: '2026-11-05T00:00:00Z', updatedAt: '2026-11-05T00:00:01Z'
+      }))
+      const makeBridge = () => createAgentRuntimeSubagentToolBridge({
+        storeRoot: root,
+        resolveBinding: async () => ({ adapter: completedAdapter(runtimeId), context: context(), enabled: true, maxParallel: 2 })
+      })
+      let bridge = makeBridge()
+      try {
+        const before = await bridge.parentContext(runtimeId, 'parent')
+        expect(Buffer.byteLength(before)).toBeLessThanOrEqual(SUBAGENT_CONTEXT_MAX_BYTES)
+        expect(before).toContain('report')
+        expect(before).not.toContain('完整研究结果')
+        expect(await bridge.parentContext(runtimeId, 'parent')).toBe(before)
+        bridge.dispose()
+        bridge = makeBridge()
+        expect(await bridge.parentContext(runtimeId, 'parent')).toBe(before)
+        expect(await bridge.parentContext(runtimeId, 'other-parent')).toBe('')
+        const recovered = await bridge.callTool({
+          runtimeId, threadId: 'parent', turnId: 'new-turn', requestId: 'recover',
+          tool: AGENT_RUNTIME_SUBAGENT_STATUS_TOOL_NAME,
+          arguments: { childId: 'report', includeTranscript: true }
+        })
+        expect(recovered).toMatchObject({ success: true, structuredContent: { childId: 'report', summary } })
+        expect(JSON.stringify(recovered.structuredContent)).toContain('exact evidence')
+      } finally {
+        bridge.dispose()
+        await rm(root, { recursive: true, force: true })
+      }
+    }
+  )
+
   it('reuses an existing child when a stable taskKey is delegated again', async () => {
     const adapter = completedAdapter('codex')
     const bridge = bridgeWith(adapter)
@@ -139,7 +181,7 @@ describe('AgentRuntime subagent tool bridge', () => {
       const resumed = await bridge.callTool({ ...base, requestId: 'resume', tool: AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME, arguments: { childId: 'interrupted' } })
       expect(resumed.success).toBe(true)
       const finished = await bridge.callTool({ ...base, requestId: 'wait', tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME, arguments: { childId: 'interrupted', timeoutMs: 1000 } })
-      expect(finished.structuredContent).toMatchObject({ childId: 'interrupted', status: 'completed', attempt: 2 })
+      expect(finished.structuredContent).toMatchObject({ children: [{ childId: 'interrupted', status: 'completed', attempt: 2 }] })
       expect(adapter.spawn).not.toHaveBeenCalled()
       expect(adapter.resume).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         threadRef: expect.objectContaining({ threadId: 'interrupted-provider-thread' })
@@ -213,6 +255,22 @@ describe('AgentRuntime subagent tool bridge', () => {
 
     expect(bound.size).toBe(0)
     expect(released.sort()).toEqual(['alpha-thread:alpha-turn', 'beta-thread:beta-turn'])
+  })
+
+  it('returns one collection and omits previously observed completion summaries', async () => {
+    const bridge = bridgeWith(completedAdapter('codex'))
+    const base = { runtimeId: 'codex' as const, threadId: 'parent', turnId: 'turn' }
+    const started = await bridge.callTool({ ...base, requestId: 'spawn', tool: AGENT_RUNTIME_SUBAGENT_SPAWN_TOOL_NAME, arguments: { prompt: 'Work' } })
+    const id = childId(started)
+    const first = await bridge.callTool({ ...base, requestId: 'wait-1', tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME, arguments: { childIds: [id], timeoutMs: 1000 } })
+    expect(first.structuredContent).toMatchObject({ children: [{ childId: id, terminal: true, changed: true, summary: 'codex: Work' }] })
+    const cursor = (first.structuredContent as { cursor: string }).cursor
+    const repeated = await bridge.callTool({ ...base, requestId: 'wait-2', tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME, arguments: { childId: id, afterCursor: cursor, timeoutMs: 0 } })
+    const observed = (repeated.structuredContent as { children: Record<string, unknown>[] }).children[0]!
+    expect(observed).toMatchObject({ childId: id, terminal: true, changed: false })
+    expect(observed).not.toHaveProperty('summary')
+    expect(observed).not.toHaveProperty('recentProgress')
+    bridge.dispose()
   })
 
   it('owns one provider-neutral tool contract', () => {
@@ -442,7 +500,7 @@ describe('AgentRuntime subagent tool bridge', () => {
         arguments: { childId: id, timeoutMs: 1_000 }
       })).resolves.toMatchObject({
         success: true,
-        structuredContent: { status: 'completed' }
+        structuredContent: { children: [{ status: 'completed' }] }
       })
       expect(adapter.spawn).toHaveBeenCalledOnce()
     }
@@ -528,7 +586,7 @@ describe('AgentRuntime subagent tool bridge', () => {
       threadId: 'parent-thread',
       tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
       arguments: { childId: id, timeoutMs: 1_000 }
-    })).resolves.toMatchObject({ success: true, structuredContent: { status: 'completed' } })
+    })).resolves.toMatchObject({ success: true, structuredContent: { children: [{ status: 'completed' }] } })
     await expect(bridge.callTool({
       requestId: 'delete',
       runtimeId: 'claude',
@@ -710,11 +768,11 @@ describe('AgentRuntime subagent tool bridge', () => {
       tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
       arguments: { childId: childId(started), timeoutMs: 1_000 }
     })
-    expect(finished.structuredContent).toMatchObject({
+    expect(finished.structuredContent).toMatchObject({ children: [{
       status: 'completed',
       resumable: true,
       resumeTool: AGENT_RUNTIME_SUBAGENT_RESUME_TOOL_NAME
-    })
+    }] })
     const resumed = await bridge.callTool({
       requestId: 'resume-completed',
       runtimeId: 'codex',
@@ -736,7 +794,7 @@ describe('AgentRuntime subagent tool bridge', () => {
       arguments: { childId: childId(started), timeoutMs: 1_000 }
     })).resolves.toMatchObject({
       success: true,
-      structuredContent: { status: 'completed', attempt: 2 }
+      structuredContent: { children: [{ status: 'completed', attempt: 2 }] }
     })
   })
 
@@ -826,7 +884,7 @@ describe('AgentRuntime subagent tool bridge', () => {
       tool: AGENT_RUNTIME_SUBAGENT_WAIT_TOOL_NAME,
       arguments: { childId: childId(started), timeoutMs: 1_000 }
     })
-    expect(waited.structuredContent).toMatchObject({ status: 'aborted' })
+    expect(waited.structuredContent).toMatchObject({ children: [{ status: 'aborted' }] })
     expect(bridge.resumeChildExecutionDeadline('codex', 'codex-waiting-child', 'approval-1')).toBe(false)
   })
 })

@@ -1,0 +1,76 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-user-decisions",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.user-decisions",
+    "displayName": "User Decisions",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 180
+  },
+  "contributionContracts": {
+    "user-decisions.presentation": {
+      "location": "chat.user-input",
+      "contractVersion": 1
+    },
+    "user-decisions.agent-routing": {
+      "intent": "user-decisions",
+      "title": "Collect user decisions",
+      "summary": "When a missing user preference or requirement blocks the next step, use the user-decisions.request capability to show a structured questionnaire. This works through the Host on every runtime. Prefer choices and always allow free text.",
+      "triggerHints": [
+        "missing requirement",
+        "ask the user",
+        "clarification",
+        "\u7528\u6237\u51b3\u7b56",
+        "\u9700\u8981\u7528\u6237\u9009\u62e9"
+      ],
+      "allowedRoutes": [
+        "structured-input"
+      ],
+      "workflow": [
+        {
+          "id": "ask",
+          "description": "Discover user-decisions.request, inspect its schema, and invoke it with 1\u20133 concise questions. Wait for the tool result; do not assume an answer.",
+          "capabilityId": "user-decisions.request"
+        }
+      ],
+      "reproducibilityRequirements": [
+        "Use the returned answers as the user decision. Cancellation is not approval. Do not use questionnaires to authorize external writes."
+      ]
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "user-decisions.capabilities"
+        },
+        {
+          "kind": "main.agent-routing",
+          "id": "user-decisions.agent-routing"
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.extension",
+          "id": "user-decisions.presentation"
+        }
+      ]
+    }
+  ]
+}

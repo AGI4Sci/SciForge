@@ -1,97 +1,67 @@
-/**
- * DSH tool wiring tested without the official runtime packages: a fake
- * `defineTool`/register pair verifies the tool name, grant mapping,
- * delegation to the core, argument handling and error behaviour. This is not
- * evidence of compatibility with the official runtime; host-loading.test.ts
- * covers that.
- */
+/** Unit wiring tests, not official runtime or real-Session acceptance evidence. */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { CHANGE_INSPECTOR_CAPABILITY_IDS } from '../src/contract.js'
 import { ChangeInspectorService } from '../src/core/service.js'
-import {
-  changeInspectorTools,
-  EXPECTED_HOST_GRANTS,
-  registerChangeInspectorTools
-} from '../src/dsh-adapter/tools.js'
-import { corpusSessions, WORKSPACE } from './cases.js'
+import { changeInspectorTools, EXPECTED_HOST_GRANTS, registerChangeInspectorTools } from '../src/dsh-adapter/tools.js'
+import { corpusSessions } from './cases.js'
 import { fakeAgentThreads } from './runner.js'
 
-function serviceFor(): ChangeInspectorService {
-  return new ChangeInspectorService({ agentThreads: fakeAgentThreads(corpusSessions()) })
-}
+const serviceFor = () => new ChangeInspectorService({ agentThreads: fakeAgentThreads(corpusSessions()) })
 
-test('registers exactly the two granted tools with the matching capability id', () => {
+test('registers only public non-plugin-prefixed read capabilities', () => {
   const service = serviceFor()
   const registered: unknown[] = []
-  registerChangeInspectorTools(
-    (tool) => { registered.push(tool) },
-    (definition) => definition,
-    () => service
-  )
+  registerChangeInspectorTools(tool => registered.push(tool), definition => definition, () => service)
   assert.equal(registered.length, 2)
-
-  const tools = changeInspectorTools(() => service)
-  assert.deepEqual(tools.map((tool) => tool.name), ['open_session', 'list_changes'])
-  assert.deepEqual(
-    Object.fromEntries(Object.entries(EXPECTED_HOST_GRANTS).map(([name, grant]) => [name, grant.id])),
-    { open_session: CHANGE_INSPECTOR_CAPABILITY_IDS.openSession, list_changes: CHANGE_INSPECTOR_CAPABILITY_IDS.listChanges }
-  )
-  for (const grant of Object.values(EXPECTED_HOST_GRANTS)) {
-    assert.match(grant.id, /^[a-z][a-z0-9]*([._-][a-z0-9]+)+$/)
-  }
-  assert.equal(EXPECTED_HOST_GRANTS.open_session.effect, 'read')
+  assert.deepEqual(changeInspectorTools(() => service).map(tool => tool.name), ['open_session', 'list_changes'])
+  assert.deepEqual(EXPECTED_HOST_GRANTS, {
+    open_session: { id: CHANGE_INSPECTOR_CAPABILITY_IDS.openSession, effect: 'read' },
+    list_changes: { id: CHANGE_INSPECTOR_CAPABILITY_IDS.listChanges, effect: 'read' }
+  })
+  for (const grant of Object.values(EXPECTED_HOST_GRANTS)) assert.equal(grant.id.includes('plugin-'), false)
 })
 
-test('tool execution delegates to the core with the workspace argument split out', async () => {
-  const service = serviceFor()
-  const [tool] = changeInspectorTools(() => service)
-  const result = await tool!.execute({
-    sessionId: 'thread-plain-diff',
-    runtimeId: 'codex',
-    workspaceRoot: WORKSPACE
-  }) as { sessionId: string; resourceId: string; snapshot: { changes: readonly unknown[] } }
-  assert.equal(result.sessionId, 'thread-plain-diff')
-  assert.match(result.resourceId, /^session-changes:[a-f0-9]{64}$/u)
+test('open_session defaults to the current authenticated port session', async () => {
+  const [tool] = changeInspectorTools(serviceFor)
+  assert.deepEqual(Object.keys(tool!.parameters).sort(), ['runtimeId', 'sessionId'])
+  const result = await tool!.execute({}) as { snapshot: { sessionId: string; revision: string; changes: unknown[] } }
+  assert.equal(result.snapshot.sessionId, 'thread-plain-diff')
+  assert.match(result.snapshot.revision, /^changes-[a-f0-9]{64}$/)
   assert.equal(result.snapshot.changes.length, 1)
 })
 
-test('tool execution rejects invalid arguments exactly like the core', async () => {
-  const service = serviceFor()
-  const [tool] = changeInspectorTools(() => service)
-  // Missing required workspaceRoot argument.
-  await assert.rejects(
-    tool!.execute({ sessionId: 'thread-plain-diff', runtimeId: 'codex' }),
-    /workspaceRoot|invalid/i
-  )
-  // Extra keys survive the workspace split and fail the strict contract schema.
-  await assert.rejects(
-    tool!.execute({
-      sessionId: 'thread-plain-diff',
-      runtimeId: 'codex',
-      workspaceRoot: WORKSPACE,
-      extra: 1
-    }),
-    /unrecognized|extra/i
-  )
-  // Cross-workspace policy is enforced at the operation layer.
-  await assert.rejects(
-    tool!.execute({
-      sessionId: 'thread-foreign-workspace',
-      runtimeId: 'codex',
-      workspaceRoot: WORKSPACE
-    }),
-    /belongs to another workspace/u
-  )
+test('list_changes pages canonical summaries with hash-bound cursors', async () => {
+  const tool = changeInspectorTools(serviceFor)[1]!
+  const input = { sessionId: 'thread-json-keys', limit: 1 }
+  const first = await tool.execute(input) as { changes: { id: string; patchBytes: number; patchTruncated: boolean }[]; nextCursor: string; revision: string }
+  assert.equal(first.changes[0]!.id, 'k-diff')
+  assert.equal(first.changes[0]!.patchBytes > 0, true)
+  assert.equal(first.changes[0]!.patchTruncated, false)
+  assert.match(first.nextCursor, /^ci1:[a-f0-9]{64}:1$/)
+  const second = await tool.execute({ ...input, cursor: first.nextCursor }) as { changes: { id: string }[]; revision: string }
+  assert.equal(second.changes[0]!.id, 'k-patch')
+  assert.equal(second.revision, first.revision)
+  await assert.rejects(tool.execute({ sessionId: 'thread-plain-diff', cursor: first.nextCursor }), /cursor does not match/)
+  await assert.rejects(tool.execute({ ...input, cursor: 'nope' }), /cursor does not match/)
 })
 
-test('the tool declares a plain JSON Schema output and a text render projection', () => {
-  const service = serviceFor()
+test('both tools reject arbitrary workspace/detail authority instead of stripping it', async () => {
+  let reads = 0
+  const service = new ChangeInspectorService({ agentThreads: { read: async () => { reads++; throw new Error('unexpected read') } } })
   for (const tool of changeInspectorTools(() => service)) {
+    assert.equal('workspaceRoot' in tool.parameters, false)
+    assert.equal('sessionDetail' in tool.parameters, false)
+    for (const input of [{ workspaceRoot: '/forged' }, { sessionDetail: { artifacts: [] } }, { extra: true }]) {
+      await assert.rejects(tool.execute(input), /unrecognized/i)
+    }
+  }
+  assert.equal(reads, 0)
+})
+
+test('plain JSON output schema renders the returned value as text', () => {
+  for (const tool of changeInspectorTools(serviceFor)) {
     assert.deepEqual(tool.output.schema, { type: 'object', additionalProperties: true })
-    const rendered = tool.output.render({}, { sessionId: 's' })
-    assert.equal(rendered.length, 1)
-    assert.equal(rendered[0]?.type, 'text')
-    assert.equal(typeof rendered[0]?.text, 'string')
+    assert.deepEqual(tool.output.render({}, { sessionId: 's' }), [{ type: 'text', text: '{"sessionId":"s"}' }])
   }
 })

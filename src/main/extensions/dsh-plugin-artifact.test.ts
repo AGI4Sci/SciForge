@@ -8,7 +8,8 @@ import {
   DSH_PLUGIN_ARTIFACT_MANIFEST_PATH,
   readDshPluginArtifact,
   readDshPluginArtifactBytes,
-  sha256Hex
+  sha256Hex,
+  dshPluginArtifactManifestSchema
 } from './dsh-plugin-artifact'
 
 const roots: string[] = []
@@ -40,7 +41,7 @@ const PAYLOAD = Object.freeze({
 
 const TOOLS = Object.freeze({
   status: { id: 'fixture.status', effect: 'read' as const },
-  render: { id: 'fixture.render', effect: 'workspace-write' as const }
+  render: { id: 'fixture.render', effect: 'workspace-write' as const, scope: 'workspace' as const }
 })
 
 function buildManifest(
@@ -96,6 +97,15 @@ describe('DSH plugin artifact validation', () => {
       'package.json'
     ])
     expect(artifact.artifactSha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('accepts optional bounded port declarations while rejecting malformed signed intent', async () => {
+    const payload = { ...PAYLOAD, 'sciforge.dsh.json': Buffer.from(JSON.stringify({ schemaVersion: 1, packageName: PACKAGE.name, ports: ['agent-threads.read'] })) }
+    const artifact = await readDshPluginArtifactBytes(await buildArtifact({ payload, manifest: buildManifest({ ports: ['agent-threads.read'] }, payload) }))
+    expect(artifact.manifest.ports).toEqual(['agent-threads.read'])
+    for (const ports of [null, 'agent-threads.read', [' agent-threads.read'], ['unknown'], ['agent-threads.read', 'agent-threads.read'], Array.from({ length: 65 }, (_, n) => `service.read-${n}`)]) {
+      await expect(readDshPluginArtifactBytes(await buildArtifact({ manifest: buildManifest({ ports }) }))).rejects.toThrow(/manifest is invalid/)
+    }
   })
 
   it('rejects a payload byte change as a digest mismatch', async () => {
@@ -174,5 +184,119 @@ describe('DSH plugin artifact validation', () => {
     expect(artifact.manifest.packageName).toBe(PACKAGE.name)
     expect(artifact.artifactSha256).toBe('')
     expect(await readFile(join(root, 'dist', 'main.js'), 'utf8')).toContain('apply')
+  })
+})
+describe('explicit host service declarations', () => {
+  it('keeps SDK, artifact, policy and packer validation in agreement', async () => {
+    const { pluginHostServicesSchema } = await import('@sciforge/plugin-sdk')
+    const { dshPluginArtifactManifestSchema } = await import('./dsh-plugin-artifact')
+    const { dshPluginPolicyEntrySchema } = await import('./dsh-plugin-policy')
+    // @ts-expect-error The repository packaging CLI is JavaScript without declarations.
+    const { normalizeDeclaration } = await import('../../../scripts/dsh-plugin-package.mjs')
+    const identity = { packageName: PACKAGE.name, entry: 'dist/main.js' }
+    const normalize = (hostServices: unknown) => normalizeDeclaration({ schemaVersion: 1, packageName: PACKAGE.name, hostServices }, identity)
+    const artifactSchema = dshPluginArtifactManifestSchema.shape.hostServices
+    const policySchema = dshPluginPolicyEntrySchema.shape.hostServices
+    for (const value of [undefined, 'none', ['service.alpha', 'service.beta'], [' service.alpha ']]) {
+      const expected = value === undefined ? undefined : pluginHostServicesSchema.parse(value)
+      expect(artifactSchema.parse(value)).toEqual(expected)
+      expect(policySchema.parse(value)).toEqual(expected)
+      expect(normalize(value).hostServices).toEqual(expected)
+    }
+    for (const value of ['all', true, null, {}, [], [''], ['  '], [1], ['service.alpha', ' service.alpha '], ['x'.repeat(129)], Array.from({ length: 33 }, (_, index) => `service.${index}`)]) {
+      expect(pluginHostServicesSchema.safeParse(value).success).toBe(false)
+      expect(artifactSchema.safeParse(value).success).toBe(false)
+      expect(policySchema.safeParse(value).success).toBe(false)
+      expect(() => normalize(value)).toThrow(/hostServices/)
+      await expect(readDshPluginArtifactBytes(await buildArtifact({ manifest: buildManifest({ hostServices: value }) }))).rejects.toThrow(/hostServices/)
+    }
+  })
+})
+
+describe('workspace-scoped tool grants', () => {
+  it('accepts a workspace binding on read and write grants, and rejects conflicting shapes', async () => {
+    const { dshPluginToolGrantSchema } = await import('./dsh-plugin-artifact')
+    const grant = { id: 'workspace-note.write', effect: 'workspace-write' as const }
+    expect(dshPluginToolGrantSchema.safeParse({ ...grant, scope: 'workspace' }).success).toBe(true)
+    // A write grant without a workspace binding would run unbound; refuse it.
+    expect(dshPluginToolGrantSchema.safeParse(grant).success).toBe(false)
+    expect(dshPluginToolGrantSchema.safeParse({ ...grant, effect: 'destructive' }).success).toBe(false)
+    // Read tools may bind the caller's root through scope as well (they do not need a
+    // Host-issued resource handle); combining it with readResource stays invalid.
+    expect(dshPluginToolGrantSchema.safeParse({ id: 'x.read', effect: 'read', scope: 'workspace' }).success).toBe(true)
+    expect(dshPluginToolGrantSchema.safeParse({
+      id: 'x.read', effect: 'read', readResource: 'workspace', scope: 'workspace'
+    }).success).toBe(false)
+    expect(dshPluginToolGrantSchema.safeParse({ ...grant, scope: 'global' }).success).toBe(false)
+  })
+
+  it('keeps the declaration and the packer in agreement', async () => {
+    // The packer and the installer enforce the same rule; a declaration the
+    // packer accepts must not be rejected at install time.
+    // @ts-expect-error The repository packaging CLI is JavaScript without declarations.
+    const { normalizeDeclaration } = await import('../../../scripts/dsh-plugin-package.mjs')
+    const identity = { packageName: '@example/note', entry: 'dist/main.js' }
+    const declaration = (scope: unknown) => ({
+      schemaVersion: 1,
+      packageName: identity.packageName,
+      tools: { write: { id: 'note.write', effect: 'workspace-write', scope } }
+    })
+    expect(normalizeDeclaration(declaration('workspace'), identity).tools.write.scope).toBe('workspace')
+    expect(() => normalizeDeclaration(declaration('global'), identity)).toThrow()
+    expect(() => normalizeDeclaration(declaration(undefined), identity)).toThrow()
+    // Read tools may declare workspace scope too: the Host still binds the caller's
+    // root, and the plugin's own strict schema validates the payload.
+    expect(normalizeDeclaration({
+      schemaVersion: 1,
+      packageName: identity.packageName,
+      tools: { read: { id: 'note.read', effect: 'read', scope: 'workspace' } }
+    }, identity).tools.read.scope).toBe('workspace')
+  })
+})
+
+
+describe('digest-covered port requests', () => {
+  it('rejects duplicate, excessive, malformed, unknown and conflicting declarations', () => {
+    for (const extra of [
+      { ports: ['view.list', ' view.list '] }, { ports: [''] }, { ports: [42] },
+      { ports: Array.from({ length: 65 }, (_, i) => `op.${i}`) },
+      { ports: ['view.list'], hostServices: 'none' }, { ports: [], unknown: true }
+    ]) expect(dshPluginArtifactManifestSchema.safeParse(buildManifest(extra)).success).toBe(false)
+    expect(dshPluginArtifactManifestSchema.safeParse(buildManifest({ ports: [' view.list '] })).success).toBe(false)
+  })
+
+  it('packs requested ports and independently rechecks declaration consistency from disk', async () => {
+    // @ts-expect-error The packaging CLI is JavaScript without declarations.
+    const { normalizeDeclaration, packDshPlugin } = await import('../../../scripts/dsh-plugin-package.mjs')
+    const declaration = { schemaVersion: 1, packageName: PACKAGE.name, entry: 'dist/main.js', ports: ['view.list'], tools: {} }
+    const root = await tempRoot('dsh-ports-pack-')
+    for (const [path, bytes] of Object.entries(PAYLOAD)) {
+      await mkdir(dirname(join(root, path)), { recursive: true })
+      await writeFile(join(root, path), bytes)
+    }
+    await writeFile(join(root, 'sciforge.dsh.json'), JSON.stringify(declaration))
+    const packed = await packDshPlugin({ source: root, output: join(root, 'plugin.zip') })
+    const artifact = await readDshPluginArtifact(packed.artifact)
+    expect(artifact.manifest.ports).toEqual(['view.list'])
+    expect(artifact.manifest.files['sciforge.dsh.json']).toBeDefined()
+    const directory = await tempRoot('dsh-ports-installed-')
+    for (const [path, bytes] of artifact.files) {
+      await mkdir(dirname(join(directory, path)), { recursive: true })
+      await writeFile(join(directory, path), bytes)
+    }
+    expect((await readDshPluginArtifact(directory)).manifest.ports).toEqual(['view.list'])
+    await writeFile(join(directory, 'sciforge.dsh.json'), JSON.stringify({ ...declaration, ports: ['view.capture'] }))
+    await expect(readDshPluginArtifact(directory)).rejects.toThrow(/digest mismatch/)
+    for (const ports of [[' view.list '], ['x', ' x '], [''], [42], 'x', Array.from({ length: 65 }, (_, i) => `op.${i}`)]) {
+      expect(() => normalizeDeclaration({ ...declaration, ports }, { packageName: PACKAGE.name, entry: 'dist/main.js' })).toThrow()
+    }
+    expect(() => normalizeDeclaration({ ...declaration, hostServices: 'none' }, { packageName: PACKAGE.name, entry: 'dist/main.js' })).toThrow(/conflicts/)
+  })
+
+  it('refuses divergent manifest requests even if all payload digests are recomputed', async () => {
+    const declaration = { schemaVersion: 1, packageName: PACKAGE.name, ports: ['view.list'] }
+    const payload = { ...PAYLOAD, 'sciforge.dsh.json': Buffer.from(JSON.stringify(declaration)) }
+    await expect(readDshPluginArtifactBytes(await buildArtifact({ payload, manifest: buildManifest({ ports: ['view.capture'] }, payload) }))).rejects.toThrow(/do not match/)
+    await expect(readDshPluginArtifactBytes(await buildArtifact({ manifest: buildManifest({ ports: ['view.list'] }) }))).rejects.toThrow(/digest-covered/)
   })
 })

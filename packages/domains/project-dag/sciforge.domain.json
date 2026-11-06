@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.project-dag",
     "displayName": "Project DAG",
-    "version": "1.0.7",
+    "version": "1.0.9",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -41,11 +41,21 @@
       "slot": "goal",
       "label": "Goal and scope",
       "order": 10,
-      "scopeKinds": ["workspace"],
-      "resourceKinds": ["project-dag", "project-goal", "project-snapshot"]
+      "scopeKinds": [
+        "workspace"
+      ],
+      "resourceKinds": [
+        "project-dag",
+        "project-goal",
+        "project-snapshot"
+      ]
     },
     "project-dag.resource-navigation": {
-      "resourceKinds": ["project-dag", "project-goal", "project-snapshot"],
+      "resourceKinds": [
+        "project-dag",
+        "project-goal",
+        "project-snapshot"
+      ],
       "target": {
         "surface": "right-panel",
         "contributionId": "project-dag.workbench-right-panel"

@@ -61,8 +61,8 @@ export function measureSiYuanViewport(element: HTMLElement, active: boolean): Si
 
 /**
  * Keeps the package-owned native editor synchronized with its slot. The Host
- * keeps every visited main-area page mounted, so an inactive page must detach
- * rather than merely hide behind HTML.
+ * keeps every visited page mounted, so inactive pages hide their native view
+ * without discarding the editor's draft, selection or navigation state.
  */
 export function useNativeSiYuanPresentation(options: Readonly<{
   active: boolean
@@ -75,6 +75,10 @@ export function useNativeSiYuanPresentation(options: Readonly<{
   const { active, url, viewportRef, present, onReady, onError } = options
   const settled = useRef('')
   const report = useCallback((message: string) => { onError(message) }, [onError])
+  useEffect(() => () => {
+    void Promise.resolve(present({ url: null, viewport: { x: 0, y: 0, width: 0, height: 0, visible: false } }))
+      .catch(() => undefined)
+  }, [present])
   useEffect(() => {
     const element = viewportRef.current
     if (!element) return
@@ -119,8 +123,6 @@ export function useNativeSiYuanPresentation(options: Readonly<{
       document.removeEventListener('transitionend', schedule, true)
       document.removeEventListener('animationend', schedule, true)
       settled.current = ''
-      void Promise.resolve(present({ url: null, viewport: { x: 0, y: 0, width: 0, height: 0, visible: false } }))
-        .catch(() => undefined)
     }
   }, [active, url, viewportRef, present, onReady, report])
 }

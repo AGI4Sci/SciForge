@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
+import { spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import {
   copyPlainTree, ensureManifest, inside, loadScienceAgentBenchRows, positiveInteger,
@@ -15,6 +16,9 @@ import { summarizeScienceAgentBench } from './summarize-scienceagentbench-verifi
 import { runResearchClawBench } from './researchclawbench-run.mjs'
 
 async function fixture(t) {
+  const python = process.env.SAB_PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+  const probe = spawnSync(python, ['-c', 'import sys; assert sys.version_info >= (3, 10); print(sys.version)'], { encoding: 'utf8', timeout: 10000 })
+  assert.equal(probe.status, 0, `Python environment preflight failed (${python}): ${probe.error ?? probe.stderr}`)
   const root = await mkdtemp(join(tmpdir(), 'scientific-benchmark-test-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const benchmarkRoot = join(root, 'benchmark'), outputRoot = join(root, 'output')
@@ -32,7 +36,7 @@ assert Path('benchmark/eval_programs/gold_results/reference.txt').read_text() ==
 print('diagnostic')
 print((int(Path('pred_results/result.txt').read_text() == 'correct'), 'artifact comparison'))
 `)
-  const env = { SAB_ROWS: rowsPath, SAB_BENCHMARK: benchmarkRoot, SAB_OUTPUT: outputRoot, SAB_MODEL: 'test-model', SAB_PYTHON: process.env.SAB_PYTHON || 'python3' }
+  const env = { SAB_ROWS: rowsPath, SAB_BENCHMARK: benchmarkRoot, SAB_OUTPUT: outputRoot, SAB_MODEL: 'test-model', SAB_PYTHON: python }
   return { root, benchmarkRoot, outputRoot, row, rowsPath, env }
 }
 
@@ -83,12 +87,12 @@ test('validates numeric budgets and path traversal without resolving empty input
   for (const invalid of ['0', '-1', 'NaN', '1.5', '', 'Infinity', '9007199254740992']) assert.throws(() => positiveInteger(invalid, 'budget', 100), /positive safe integer/)
   assert.equal(positiveInteger(undefined, 'budget', 100), 100)
   for (const invalid of ['../secret', '/tmp/file', 'a/../../file', 'a\\file', 'a//file']) assert.throws(() => inside('/workspace', invalid), /path|Path/)
-  assert.equal(inside('/workspace', 'a/file'), '/workspace/a/file')
+  assert.equal(inside(resolve('/workspace'), 'a/file'), join(resolve('/workspace'), 'a/file'))
 })
 
 test('rejects nested roots including aliases through symlinked parents', async t => {
   const f = await fixture(t)
-  await symlink(f.benchmarkRoot, join(f.root, 'alias'))
+  await symlink(f.benchmarkRoot, join(f.root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir')
   await assert.rejects(separateRoots(f.benchmarkRoot, join(f.root, 'alias/new')), /separate/)
   await separateRoots(f.benchmarkRoot, f.outputRoot)
 })
@@ -110,7 +114,7 @@ test('keeps copied data independent and never puts grader/gold into Agent worksp
   assert.deepEqual(await readdir(join(workspace, 'benchmark')), ['datasets'])
   await writeFile(join(workspace, 'benchmark/datasets/input/data.csv'), 'changed')
   assert.equal(await readFile(join(f.benchmarkRoot, 'datasets/input/data.csv'), 'utf8'), 'a\n1\n')
-  await symlink(join(f.benchmarkRoot, 'datasets/input'), join(f.root, 'linked'))
+  await symlink(join(f.benchmarkRoot, 'datasets/input'), join(f.root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
   await assert.rejects(copyPlainTree(join(f.root, 'linked'), join(f.root, 'copy')), /Symlinks/)
 })
 
@@ -163,7 +167,7 @@ test('bounds grader execution and retains failure logs', async t => {
 test('rejects output symlinks, including links hidden in parent directories', async t => {
   const f = await fixture(t), workspace = await readyWorkspace(f)
   await rm(join(workspace, 'pred_results'), { recursive: true })
-  await symlink(join(f.benchmarkRoot, 'eval_programs/gold_results'), join(workspace, 'pred_results'))
+  await symlink(join(f.benchmarkRoot, 'eval_programs/gold_results'), join(workspace, 'pred_results'), process.platform === 'win32' ? 'junction' : 'dir')
   const result = await score(f, workspace)
   assert.equal(result.executionStatus, 'failed')
   assert.match(await readFile(result.stderrLog, 'utf8'), /Symlinks/)

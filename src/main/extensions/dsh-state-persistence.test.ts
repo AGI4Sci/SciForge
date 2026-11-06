@@ -28,7 +28,9 @@ async function fixture() {
     await writeFile(join(directory, 'patch.yml'), '[]')
     await writeFile(join(directory, 'main.js'), 'export async function activate() {}')
   }
-  const service = new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, 'data'), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2',
+  const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, 'data'), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2',
     adapterContracts: new Map(['one', 'two'].map((packageName) => [packageName, { approved: true, permissions: [], hostApiRange: '^1.0.0',
       dshAuthorization: { packageName, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2' } }])) })
   await service.initialize()

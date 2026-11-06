@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
+import { ownedPythonLaunch } from '@sciforge/domain-sdk/host'
 import type {
   DomainMainRuntimeLifecycleContext,
   DomainMainTextReasoner
@@ -145,9 +146,10 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
     context.log({ level: 'info', message: 'Starting package-owned Evidence DAG sidecar.' })
     const spawnImpl = this.options.spawnImpl ?? ((command, args, options) =>
       spawn(command, args, options))
-    const child = spawnImpl(python, ['-m', 'evidence_dag.server'], {
+    const launch = ownedPythonLaunch(['-m', 'evidence_dag.server'], environment)
+    const child = spawnImpl(python, launch.args, {
       cwd: packageRoot,
-      env: environment,
+      env: launch.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     })

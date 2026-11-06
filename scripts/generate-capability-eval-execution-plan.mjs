@@ -3,10 +3,12 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createWorkflowDefinitions } from './generate-capability-eval-workflow-expansion.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const checkOnly = process.argv.includes('--check')
 const paths = {
+  actionPlans: path.join(root, 'eval-cases/capability/action-directed-plan.jsonl'),
   actions: path.join(root, 'eval-cases/capability/action-directed-planned.jsonl'),
   workflows: path.join(root, 'eval-cases/capability/workflow-expansion-plan.jsonl'),
   workflowCases: path.join(root, 'eval-cases/capability/workflow-expansion-cases.jsonl'),
@@ -17,98 +19,128 @@ const paths = {
   markdown: path.join(root, 'docs/generated/capability-full-execution-plan.md')
 }
 
-const actionCases = await readJsonl(paths.actions)
-const workflowCases = await readJsonl(paths.workflows)
-const executableWorkflowCases = await readJsonl(paths.workflowCases)
-const confirmationRows = await readJsonl(paths.confirmations)
-const sourceIndex = JSON.parse(await readFile(paths.sourceIndex, 'utf8'))
-const liveIndex = await readJsonl(paths.liveIndex)
+async function main() {
+  const canonicalWorkflows = createWorkflowDefinitions(await readJsonl(paths.actionPlans)).entries
+  const actionCases = await readJsonl(paths.actions)
+  const workflowCases = await readJsonl(paths.workflows)
+  const executableWorkflowCases = await readJsonl(paths.workflowCases)
+  const confirmationRows = await readJsonl(paths.confirmations)
+  const sourceIndex = JSON.parse(await readFile(paths.sourceIndex, 'utf8'))
+  const liveIndex = await readJsonl(paths.liveIndex)
 
-assertUnique(actionCases.map((entry) => entry.expected?.requiredActions?.[0]), 'action target')
-assertUnique(actionCases.map((entry) => entry.id), 'action case')
-assertUnique(workflowCases.map((entry) => entry.id), 'workflow case')
-assertUnique(executableWorkflowCases.map((entry) => entry.id), 'executable workflow case')
-assertUnique(confirmationRows.map((entry) => entry.actionId), 'confirmation action')
-const agentActionCount = actionCases.length
-const confirmationActionCount = confirmationRows.length
-assertEqual(workflowCases.length, 42, 'workflow expansion case count')
-assertEqual(executableWorkflowCases.length, workflowCases.length, 'executable workflow case count')
-const plannedWorkflowIds = new Set(workflowCases.map((entry) => entry.id))
-for (const entry of executableWorkflowCases) {
-  if (!plannedWorkflowIds.has(entry.id)) throw new Error(`Executable workflow ${entry.id} has no plan entry.`)
-  if (typeof entry.query !== 'string' || !entry.query.trim()) throw new Error(`Executable workflow ${entry.id} is missing query.`)
-  if (!entry.expected || !Array.isArray(entry.expected.requiredActions)) {
-    throw new Error(`Executable workflow ${entry.id} is missing expected.requiredActions.`)
+  assertUnique(actionCases.map((entry) => entry.expected?.requiredActions?.[0]), 'action target')
+  assertUnique(actionCases.map((entry) => entry.id), 'action case')
+  assertUnique(confirmationRows.map((entry) => entry.actionId), 'confirmation action')
+  const agentActionCount = actionCases.length
+  const confirmationActionCount = confirmationRows.length
+  const workflowCounts = validateWorkflowMapping(workflowCases, executableWorkflowCases, canonicalWorkflows)
+  const workflowReadinessByCategory = summarizeWorkflowReadiness(workflowCases)
+  const liveCounts = countBy(liveIndex, (entry) => entry.status)
+  const designReadyActionCount = liveIndex.filter((entry) => (
+    entry.designStatus.fixture === 'ready' && entry.designStatus.oracle === 'ready'
+  )).length
+  const workflowReadiness = countBy(workflowCases, (entry) => entry.readiness)
+
+  const manifest = {
+    schemaVersion: 'sciforge.capability-eval.full-execution-plan.v1',
+    generatedAt: new Date().toISOString(),
+    denominator: {
+      agentVisibleActions: actionCases.length,
+      workflowDesignCases: workflowCases.length,
+      confirmationDeniedScenarios: confirmationRows.length,
+      plannedLiveScenarioUnits: actionCases.length + workflowCases.length + confirmationRows.length,
+      note: `Confirmation branches are scenario executions and do not add action IDs to the ${agentActionCount}-action denominator.`
+    },
+    actionAnchors: {
+      caseFile: 'eval-cases/capability/action-directed-planned.jsonl',
+      count: actionCases.length,
+      uniqueActions: actionCases.map((entry) => entry.expected.requiredActions[0]).sort()
+    },
+    workflows: {
+      caseFile: 'eval-cases/capability/workflow-expansion-plan.jsonl',
+      executableCaseFile: 'eval-cases/capability/workflow-expansion-cases.jsonl',
+      count: workflowCases.length,
+      byCategory: workflowCounts,
+      readiness: workflowReadiness,
+      readinessByCategory: workflowReadinessByCategory
+    },
+    confirmations: {
+      caseFile: 'eval-cases/capability/confirmation-action-matrix.jsonl',
+      count: confirmationRows.length,
+      deniedCaseIds: confirmationRows.map((entry) => entry.deniedScenario.caseId).sort(),
+      allCaseScoped: confirmationRows.every((entry) => entry.executionPolicy.caseScopedApproval === true)
+    },
+    caseSources: {
+      index: 'eval-cases/capability/case-source-index.json',
+      totalDeterministicCases: sourceIndex.totalCases,
+      canonicalSourceCount: sourceIndex.sources.length,
+      duplicateFree: true
+    },
+    currentEvidence: {
+      liveIndex: 'eval-cases/capability/live-evidence-index.jsonl',
+      designReadyActionCount,
+      liveStatusCounts: liveCounts,
+      outcomeVerifiedActions: liveIndex.filter((entry) => entry.status === 'outcome-verified').map((entry) => entry.actionId).sort()
+    },
+    runPolicy: {
+      live: 'isolated-live-agent per case, bounded timeout and case-scoped approval/fault policy',
+      replay: 'replay the persisted raw trace with the same oracle and compare coverage/outcome/failure type',
+      evidence: ['run-manifest', 'raw-trace', 'normalized-sidecar', 'workspace-snapshot', 'oracle-evidence'],
+      blockedItemsStayInDenominator: true
+    }
   }
+  manifest.generatedAt = 'generated'
+  const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`
+  const markdownContent = renderMarkdown(manifest)
+  await writeOrCheck(paths.manifest, manifestContent)
+  await writeOrCheck(paths.markdown, markdownContent)
+
+  if (checkOnly) console.log(`Verified full capability evaluation execution plan: ${agentActionCount} actions, ${workflowCases.length} workflows, ${confirmationActionCount} confirmation denials.`)
+  else console.log(`Generated full capability evaluation execution plan: ${agentActionCount} actions, ${workflowCases.length} workflows, ${confirmationActionCount} confirmation denials.`)
 }
 
-const workflowCounts = countBy(workflowCases, (entry) => entry.category)
-const workflowReadinessByCategory = summarizeWorkflowReadiness(workflowCases)
-for (const [category, expected] of [['same-domain', 18], ['cross-domain', 12], ['recovery-boundary', 12]]) {
-  assertEqual(workflowCounts[category] ?? 0, expected, `${category} workflow count`)
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main()
 }
-const liveCounts = countBy(liveIndex, (entry) => entry.status)
-const designReadyActionCount = liveIndex.filter((entry) => (
-  entry.designStatus.fixture === 'ready' && entry.designStatus.oracle === 'ready'
-)).length
-const workflowReadiness = countBy(workflowCases, (entry) => entry.readiness)
 
-const manifest = {
-  schemaVersion: 'sciforge.capability-eval.full-execution-plan.v1',
-  generatedAt: new Date().toISOString(),
-  denominator: {
-    agentVisibleActions: actionCases.length,
-    workflowDesignCases: workflowCases.length,
-    confirmationDeniedScenarios: confirmationRows.length,
-    plannedLiveScenarioUnits: actionCases.length + workflowCases.length + confirmationRows.length,
-    note: `Confirmation branches are scenario executions and do not add action IDs to the ${agentActionCount}-action denominator.`
-  },
-  actionAnchors: {
-    caseFile: 'eval-cases/capability/action-directed-planned.jsonl',
-    count: actionCases.length,
-    uniqueActions: actionCases.map((entry) => entry.expected.requiredActions[0]).sort()
-  },
-  workflows: {
-    caseFile: 'eval-cases/capability/workflow-expansion-plan.jsonl',
-    executableCaseFile: 'eval-cases/capability/workflow-expansion-cases.jsonl',
-    count: workflowCases.length,
-    byCategory: workflowCounts,
-    readiness: workflowReadiness,
-    readinessByCategory: workflowReadinessByCategory
-  },
-  confirmations: {
-    caseFile: 'eval-cases/capability/confirmation-action-matrix.jsonl',
-    count: confirmationRows.length,
-    deniedCaseIds: confirmationRows.map((entry) => entry.deniedScenario.caseId).sort(),
-    allCaseScoped: confirmationRows.every((entry) => entry.executionPolicy.caseScopedApproval === true)
-  },
-  caseSources: {
-    index: 'eval-cases/capability/case-source-index.json',
-    totalDeterministicCases: sourceIndex.totalCases,
-    canonicalSourceCount: sourceIndex.sources.length,
-    duplicateFree: true
-  },
-  currentEvidence: {
-    liveIndex: 'eval-cases/capability/live-evidence-index.jsonl',
-    designReadyActionCount,
-    liveStatusCounts: liveCounts,
-    outcomeVerifiedActions: liveIndex.filter((entry) => entry.status === 'outcome-verified').map((entry) => entry.actionId).sort()
-  },
-  runPolicy: {
-    live: 'isolated-live-agent per case, bounded timeout and case-scoped approval/fault policy',
-    replay: 'replay the persisted raw trace with the same oracle and compare coverage/outcome/failure type',
-    evidence: ['run-manifest', 'raw-trace', 'normalized-sidecar', 'workspace-snapshot', 'oracle-evidence'],
-    blockedItemsStayInDenominator: true
+// Compare both generated projections with an independently regenerated canonical denominator.
+export function validateWorkflowMapping(workflows, executableCases, canonicalWorkflows) {
+  const categories = ['same-domain', 'cross-domain', 'recovery-boundary']
+  for (const [entries, label] of [[canonicalWorkflows, 'canonical workflow'], [workflows, 'workflow case'], [executableCases, 'executable workflow case']]) {
+    assertUnique(entries.map((entry) => entry.id), label)
   }
+  if (canonicalWorkflows.length === 0) throw new Error('Canonical workflow definitions must not be empty.')
+  for (const entry of [...canonicalWorkflows, ...workflows]) {
+    if (!categories.includes(entry.category)) throw new Error(`Unknown workflow category: ${entry.category}.`)
+  }
+  const counts = countBy(workflows, (entry) => entry.category)
+  for (const category of categories) {
+    if (!(counts[category] > 0)) throw new Error(`Missing ${category} workflow cases.`)
+  }
+  assertEqual(workflows.length, canonicalWorkflows.length, 'canonical workflow case count')
+  assertEqual(executableCases.length, canonicalWorkflows.length, 'executable workflow case count')
+  const canonicalById = new Map(canonicalWorkflows.map((entry) => [entry.id, entry]))
+  for (const entry of workflows) {
+    const canonical = canonicalById.get(entry.id)
+    if (!canonical) throw new Error(`Workflow ${entry.id} has no canonical definition.`)
+    assertEqual(entry.category, canonical.category, `workflow ${entry.id} category`)
+    assertRequiredActions(entry.requiredActions, canonical.requiredActions, entry.id)
+  }
+  for (const entry of executableCases) {
+    const canonical = canonicalById.get(entry.id)
+    if (!canonical) throw new Error(`Executable workflow ${entry.id} has no canonical definition.`)
+    if (typeof entry.query !== 'string' || !entry.query.trim()) throw new Error(`Executable workflow ${entry.id} is missing query.`)
+    assertRequiredActions(entry.expected?.requiredActions, canonical.requiredActions, entry.id)
+  }
+  return counts
 }
-manifest.generatedAt = 'generated'
-const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`
-const markdownContent = renderMarkdown(manifest)
-await writeOrCheck(paths.manifest, manifestContent)
-await writeOrCheck(paths.markdown, markdownContent)
 
-if (checkOnly) console.log(`Verified full capability evaluation execution plan: ${agentActionCount} actions, 42 workflows, ${confirmationActionCount} confirmation denials.`)
-else console.log(`Generated full capability evaluation execution plan: ${agentActionCount} actions, 42 workflows, ${confirmationActionCount} confirmation denials.`)
+function assertRequiredActions(actual, expected, id) {
+  if (!Array.isArray(actual) || !Array.isArray(expected)) throw new Error(`Workflow ${id} is missing requiredActions.`)
+  assertUnique(actual, `workflow ${id} required action`)
+  assertUnique(expected, `canonical workflow ${id} required action`)
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`Workflow ${id} requiredActions do not match canonical definition.`)
+}
 
 function renderMarkdown(value) {
   const counts = value.currentEvidence.liveStatusCounts
@@ -131,7 +163,7 @@ function renderMarkdown(value) {
     'Canonical inputs:',
     '',
     '- `action-directed-planned.jsonl`: one positive natural-language anchor per Agent-visible action.',
-    '- `workflow-expansion-plan.jsonl`: 18 same-domain, 12 cross-domain, and 12 recovery/boundary workflow designs.',
+    `- \`workflow-expansion-plan.jsonl\`: ${value.workflows.byCategory['same-domain'] ?? 0} same-domain, ${value.workflows.byCategory['cross-domain'] ?? 0} cross-domain, and ${value.workflows.byCategory['recovery-boundary'] ?? 0} recovery/boundary workflow designs.`,
     '- `workflow-expansion-cases.jsonl`: runner-compatible cases generated from the workflow plan.',
     '- `confirmation-action-matrix.jsonl`: one approved and one denied configuration per confirmation action.',
     '- `case-source-index.json`: package-owned versus integration-owned deterministic case sources.',
@@ -155,8 +187,8 @@ async function writeOrCheck(filePath, content) {
 }
 
 function assertUnique(values, label) {
-  const filtered = values.filter(Boolean)
-  if (new Set(filtered).size !== filtered.length) throw new Error(`Duplicate ${label} detected.`)
+  if (values.some((value) => typeof value !== 'string' || !value.trim())) throw new Error(`Empty ${label} ID detected.`)
+  if (new Set(values).size !== values.length) throw new Error(`Duplicate ${label} detected.`)
 }
 
 function assertEqual(actual, expected, label) {

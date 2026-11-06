@@ -1,12 +1,15 @@
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { PluginAdapterContract } from '@sciforge/plugin-sdk'
+import { normalizeDshMarketApproval, type DshMarketApprovalSnapshot } from '../../shared/dsh-market'
 import type { DomainExtensionSummary } from '../../shared/domain-extensions'
 import type { ExtensionArtifactLimits } from './types'
 import {
   readDshPluginArtifact,
   readDshPluginArtifactBytes,
   sha256Hex,
+  dshPluginPortOperationsSchema,
   type DshPluginArtifactManifest
 } from './dsh-plugin-artifact'
 import { canonicalJson, type CanonicalJsonValue } from './canonical-json'
@@ -16,6 +19,7 @@ import {
 } from './dsh-plugin-signature'
 import {
   policyEntryFor,
+  readDshPluginPolicy,
   removePolicyEntry,
   upsertPolicyEntry,
   writeDshPluginPolicy,
@@ -28,13 +32,14 @@ import {
  *
  * Everything granted to the plugin comes from host policy: the artifact's
  * digest-verified manifest only *requests* tool grants, and the caller must pass
- * the user-approved tool list explicitly. A failure at any step leaves no
- * half-installed directory and no policy entry, and an existing working install
- * is never destroyed by a failed one.
+ * the user-approved tool list explicitly. Recoverable failures restore the old
+ * installation and policy. If runtime/filesystem recovery also fails, the error
+ * reports incomplete recovery and retains prior directory/version data for
+ * recovery; this is not a crash-atomic installation journal.
  */
 
 export type DshPluginInstallPort = Readonly<{
-  installFromDirectory: (directory: string, contract: PluginAdapterContract) => Promise<DomainExtensionSummary>
+  installFromDirectory: (directory: string, contract: PluginAdapterContract, restoreInstallation: () => Promise<void>) => Promise<DomainExtensionSummary>
   uninstall: (packageName: string) => Promise<void>
   /** Re-runs discovery after the installer changed the plugin root. */
   refreshDiscoveredPlugins: () => Promise<void>
@@ -50,6 +55,8 @@ export type DshPluginInstallDeps = Readonly<{
   hostApiRange: string
   /** Host packages the plugin is allowed to require at runtime. */
   hostProvidedDependencies: ReadonlySet<string>
+  /** Optional Host operation allowlist; unknown requested operations fail before writing. */
+  supportedPortOperations?: ReadonlySet<string>
   /**
    * Trusted publishers for DSH artifacts. Host configuration, never artifact
    * input. An empty keyring means nothing is installable — that is the intended
@@ -72,8 +79,12 @@ export type DshPluginInstallRequest = Readonly<{
   artifactBytes?: Uint8Array
   /** Digest published by the catalog; a mismatch is rejected before parsing. */
   expectedSha256?: string
+  /** Required by the market path; compare with actual verified identity before writes. */
+  expectedApproval: DshMarketApprovalSnapshot
   /** Tool names the user approved. Must cover every requested tool exactly. */
   approvedToolNames: readonly string[]
+  /** Host-approved operations, separate from the artifact declaration. */
+  approvedPorts?: readonly string[]
   source: string
 }>
 
@@ -118,8 +129,19 @@ export function assertHostDependenciesSatisfied(
 
 export function assertToolGrantsApproved(
   manifest: DshPluginArtifactManifest,
-  approvedToolNames: readonly string[]
+  approvedGrants: DshMarketApprovalSnapshot['tools']
 ): readonly string[] {
+  const normalize = (tools: DshMarketApprovalSnapshot['tools']) => normalizeDshMarketApproval({
+    packageName: manifest.packageName, version: manifest.version, sha256: '0'.repeat(64), publisher: null,
+    entry: manifest.entry, tools, ports: [], hostDependencies: []
+  }).tools
+  if (canonicalJson(normalize(approvedGrants) as unknown as CanonicalJsonValue) !== canonicalJson(normalize(Object.entries(manifest.tools).map(([name, grant]) => ({ name, ...grant }))) as unknown as CanonicalJsonValue)) {
+    throw new Error('Approved complete tool grants differ from artifact declarations.')
+  }
+  return Object.keys(manifest.tools).sort()
+}
+
+function assertSelectedToolNames(manifest: DshPluginArtifactManifest, approvedToolNames: readonly string[]): readonly string[] {
   const requested = Object.keys(manifest.tools).sort()
   const approved = [...new Set(approvedToolNames)].sort()
   const unapproved = requested.filter((name) => !approved.includes(name))
@@ -133,6 +155,24 @@ export function assertToolGrantsApproved(
     throw new Error(`Approved tool grants are not declared by the artifact: ${unknown.join(', ')}`)
   }
   return requested
+}
+
+export function assertPortOperationsApproved(
+  manifest: DshPluginArtifactManifest,
+  approvedPortOperations: readonly string[] = [],
+  supportedPortOperations?: ReadonlySet<string>
+): readonly string[] {
+  const requested = [...(manifest.ports ?? [])].sort()
+  const approved = dshPluginPortOperationsSchema.parse(approvedPortOperations).sort()
+  const unapproved = requested.filter((operation) => !approved.includes(operation))
+  if (unapproved.length > 0) {
+    throw new Error(`Plugin ${manifest.packageName}@${manifest.version} requests unapproved Host port operations: ${unapproved.join(', ')}`)
+  }
+  const undeclared = approved.filter((operation) => !requested.includes(operation))
+  if (undeclared.length > 0) throw new Error(`Approved Host port operations are not declared by the artifact: ${undeclared.join(', ')}`)
+  const unsupported = supportedPortOperations === undefined ? [] : requested.filter((operation) => !supportedPortOperations.has(operation))
+  if (unsupported.length > 0) throw new Error(`This Host does not support requested port operations: ${unsupported.join(', ')}`)
+  return Object.freeze(requested)
 }
 
 export function installedDirectoryName(packageName: string): string {
@@ -151,7 +191,25 @@ async function writePayload(root: string, files: ReadonlyMap<string, Buffer>): P
   }
 }
 
-export async function installDshPluginArtifact(
+// Policy and installation rollback share this process-local writer queue. Read
+// policy only after acquiring it, so rolling back one package cannot lose a
+// concurrent approval for another package. This is not a crash journal.
+const policyWriters = new Map<string, Promise<unknown>>()
+function withPolicyWriter<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const key = resolve(path)
+  const result = (policyWriters.get(key) ?? Promise.resolve()).catch(() => undefined).then(operation)
+  policyWriters.set(key, result)
+  return result.finally(() => { if (policyWriters.get(key) === result) policyWriters.delete(key) })
+}
+
+export function installDshPluginArtifact(
+  deps: DshPluginInstallDeps,
+  request: DshPluginInstallRequest
+): Promise<DshPluginInstallResult> {
+  return withPolicyWriter(deps.policyPath, async () => installApprovedArtifact(deps, request, await readDshPluginPolicy(deps.policyPath)))
+}
+
+async function installApprovedArtifact(
   deps: DshPluginInstallDeps,
   request: DshPluginInstallRequest,
   policy: DshPluginPolicy
@@ -179,9 +237,23 @@ export async function installDshPluginArtifact(
         signatureBytes: artifact.signatureBytes,
         keyring: deps.publisherKeyring
       })
+  {
+    const expected = normalizeDshMarketApproval(request.expectedApproval)
+    const actual = normalizeDshMarketApproval({
+      packageName: manifest.packageName, version: manifest.version, sha256: artifactSha256,
+      publisher: trust?.publisherId ?? null, entry: manifest.entry,
+      tools: Object.entries(manifest.tools).map(([name, grant]) => ({ name, ...grant })),
+      ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies
+    })
+    if (canonicalJson(expected as unknown as CanonicalJsonValue) !== canonicalJson(actual as unknown as CanonicalJsonValue)) {
+      throw new Error('Verified artifact identity or complete grants differ from approval; refresh and confirm again.')
+    }
+  }
   assertDshPluginPublisherAllowed(manifest, deps.officialPackagePattern)
   assertHostDependenciesSatisfied(manifest, deps.hostProvidedDependencies)
-  const approvedTools = assertToolGrantsApproved(manifest, request.approvedToolNames)
+  const approvedTools = assertToolGrantsApproved(manifest, request.expectedApproval.tools)
+  assertSelectedToolNames(manifest, request.approvedToolNames)
+  const approvedPorts = assertPortOperationsApproved(manifest, request.approvedPorts, deps.supportedPortOperations)
 
   const alreadyApproved = policyEntryFor(policy, manifest.packageName, manifest.version)
   if (alreadyApproved && alreadyApproved.artifactSha256 !== artifactSha256) {
@@ -216,7 +288,11 @@ export async function installDshPluginArtifact(
       previousDirectory = await renameAside(target)
       await rename(replacement, target)
     } catch (error) {
-      if (previousDirectory) await rename(previousDirectory, target).catch(() => undefined)
+      await rm(replacement, { recursive: true, force: true }).catch(() => undefined)
+      if (previousDirectory) {
+        try { await rename(previousDirectory, target); previousDirectory = undefined }
+        catch (restoreError) { throw new AggregateError([error, restoreError], 'Plugin directory replacement and recovery failed; previous installation is retained.') }
+      }
       throw error
     }
 
@@ -227,6 +303,8 @@ export async function installDshPluginArtifact(
       hostApiRange: deps.hostApiRange,
       integrity: sha256Hex(Buffer.from(artifactSha256)),
       artifactSha256,
+      ...(manifest.hostServices !== undefined ? { hostServices: manifest.hostServices } : {}),
+      ...(manifest.ports !== undefined ? { declaredPorts: [...manifest.ports], ports: [...approvedPorts] } : {}),
       tools: manifest.tools,
       hostDependencies: [...manifest.hostDependencies],
       publisherId: trust?.publisherId ?? null,
@@ -241,24 +319,47 @@ export async function installDshPluginArtifact(
         packageName: manifest.packageName,
         packageVersion: manifest.version,
         dshRuntimeVersion: deps.dshRuntimeVersion,
+        ...(manifest.hostServices !== undefined ? { hostServices: manifest.hostServices } : {}),
+        ...(manifest.ports !== undefined ? { ports: approvedPorts } : {}),
         tools: manifest.tools
       })
     })
 
+    let restored = false
+    let filesRestored = false
+    const restoreInstallation = async (): Promise<void> => {
+      if (restored) return
+      // Do not delete the backup in finally: if any recovery step fails, it is
+      // the remaining recoverable installation, not disposable staging data.
+      if (!filesRestored) {
+        await rm(target, { recursive: true, force: true })
+        if (previousDirectory) {
+          await rename(previousDirectory, target)
+          previousDirectory = undefined
+        }
+        filesRestored = true
+      }
+      await writeDshPluginPolicy(deps.policyPath, policy)
+      restored = true
+    }
     let summary: DomainExtensionSummary
+    let serviceStarted = false
     try {
-      summary = await deps.service.installFromDirectory(target, contract)
+      // Runtime activation may resolve policy-owned host services immediately.
+      await writeDshPluginPolicy(deps.policyPath, upsertPolicyEntry(policy, entry))
+      serviceStarted = true
+      summary = await deps.service.installFromDirectory(target, contract, restoreInstallation)
     } catch (error) {
-      await rm(target, { recursive: true, force: true }).catch(() => undefined)
-      if (previousDirectory) await rename(previousDirectory, target).catch(() => undefined)
-      previousDirectory = undefined
+      if (!serviceStarted) {
+        try { await restoreInstallation() }
+        catch (restoreError) { throw new AggregateError([error, restoreError], 'Plugin installation and file/policy recovery failed.') }
+      }
       throw error
     }
     if (previousDirectory) {
       await rm(previousDirectory, { recursive: true, force: true }).catch(() => undefined)
       previousDirectory = undefined
     }
-    await writeDshPluginPolicy(deps.policyPath, upsertPolicyEntry(policy, entry))
 
     return Object.freeze({
       packageName: manifest.packageName,
@@ -270,31 +371,34 @@ export async function installDshPluginArtifact(
     })
   } finally {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined)
-    if (previousDirectory) await rm(previousDirectory, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
-export async function uninstallDshPlugin(
+export function uninstallDshPlugin(
   deps: DshPluginInstallDeps,
-  packageName: string,
-  policy: DshPluginPolicy
+  packageName: string
 ): Promise<void> {
-  await deps.service.uninstall(packageName)
-  await rm(installedPluginPathFor(deps.installedRoot, packageName), { recursive: true, force: true })
-  await writeDshPluginPolicy(deps.policyPath, removePolicyEntry(policy, packageName))
-  // The directory is gone now, so discovery must run again for the listing to
-  // stop showing the plugin.
-  await deps.service.refreshDiscoveredPlugins()
+  return withPolicyWriter(deps.policyPath, async () => {
+    const policy = await readDshPluginPolicy(deps.policyPath)
+    if (!policy.approved.some((entry) => entry.packageName === packageName)) {
+      throw new Error(`Plugin ${packageName} has no recorded approval, so it was not installed by the market.`)
+    }
+    await deps.service.uninstall(packageName)
+    await rm(installedPluginPathFor(deps.installedRoot, packageName), { recursive: true, force: true })
+    await writeDshPluginPolicy(deps.policyPath, removePolicyEntry(policy, packageName))
+    await deps.service.refreshDiscoveredPlugins()
+  })
 }
 
 /** Moves an existing install aside so a replacement can be swapped in atomically. */
 async function renameAside(target: string): Promise<string | undefined> {
   try {
     await readFile(join(target, 'package.json'))
-  } catch {
-    return undefined
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
   }
-  const aside = `${target}.previous-${Date.now()}`
+  const aside = join(dirname(target), `.${basename(target)}.previous-${randomUUID()}`)
   await rename(target, aside)
   return aside
 }

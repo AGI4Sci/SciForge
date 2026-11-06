@@ -86,7 +86,6 @@ export type VisualGenerateRequest = {
 export type VisualProductionExecutionTool =
   | 'sciforge_discover'
   | 'sciforge_invoke'
-  | 'scientific_plotting_composite'
   | 'image_generation_prepare'
   | 'image_generation_render'
   | 'image_generation_edit_from_visual_review_packet'
@@ -98,7 +97,7 @@ export type VisualProductionExecutionStage = {
   purpose: string
   consumes: string[]
   produces: string[]
-  capabilityId?: 'scientific-plotting.map-data' | 'scientific-plotting.render'
+  capabilityId?: 'scientific-plotting.map-data' | 'scientific-plotting.render' | 'scientific-plotting.composite'
   locked: boolean
 }
 
@@ -407,7 +406,8 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
     stage('render_truth', 'sciforge_invoke', 'Render and version the code-owned truth layer through the capability broker, reusing the same operationId on transport retries.', ['renderOperation', 'operationId', 'controlledRenderRequest', 'handoff'], ['truthArtifact', 'truthManifest', 'artifactVersionRefs', 'evidenceLineage', 'evidenceDelivery'], 'scientific-plotting.render'),
     stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer around controlled artifacts.', ['task', 'truthArtifact', 'truthManifest', 'handoff'], ['imageRenderRecipe']),
     stage('render_visual', 'image_generation_render', 'Render only the model-owned visual layer around controlled artifacts.', ['imageRenderRecipe', 'truthArtifact', 'truthManifest', 'handoff'], ['visualLayerArtifact', 'visualLayerManifest']),
-    stage('deterministic_composite', 'scientific_plotting_composite', 'Composite the code-owned truth layer over the model-owned visual layer without redrawing locked elements.', ['truthArtifact', 'truthManifest', 'visualLayerArtifact', 'visualLayerManifest', 'handoff'], ['compositeArtifact', 'compositeManifest']),
+    stage('discover_composite', 'sciforge_discover', 'Discover the governed scientific plotting deterministic composition capability.', ['truthArtifact', 'truthManifest', 'visualLayerArtifact', 'visualLayerManifest', 'handoff'], ['compositeOperation'], 'scientific-plotting.composite'),
+    stage('deterministic_composite', 'sciforge_invoke', 'Composite the code-owned truth layer over the model-owned visual layer without redrawing locked elements, using the discovered operation and a caller-persisted operationId.', ['compositeOperation', 'operationId', 'truthArtifact', 'truthManifest', 'visualLayerArtifact', 'visualLayerManifest', 'handoff'], ['compositeArtifact', 'compositeManifest'], 'scientific-plotting.composite'),
     stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['compositeArtifact', 'compositeManifest', 'handoff'], ['reviewResult'])
   ]
 }

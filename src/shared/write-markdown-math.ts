@@ -7,10 +7,16 @@ export const MARKDOWN_MATH_KATEX_OPTIONS = {
 } as const
 
 export function normalizeMarkdownMathDelimiters(markdown: string): string {
+  return normalizeMarkdownMathWithSourceLines(markdown).content
+}
+
+export function normalizeMarkdownMathWithSourceLines(markdown: string): { content: string; sourceLines: number[] } {
+  const sourceLines: number[] = []
   const lines = String(markdown ?? '').replace(/\r\n?/g, '\n').split('\n')
   let fence: string | null = null
 
-  return lines.map((line) => {
+  const content = lines.map((line, index) => {
+    sourceLines.push(index + 1)
     const fenceMatch = line.match(FENCE_PATTERN)
     if (fenceMatch) {
       const marker = fenceMatch[1]
@@ -33,8 +39,10 @@ export function normalizeMarkdownMathDelimiters(markdown: string): string {
     const singleLineDisplay = normalizedLine.trim().match(/^\$\$([^\n]+)\$\$$/)
     if (singleLineDisplay) {
       const indentation = normalizedLine.match(/^\s*/)?.[0] ?? ''
+      sourceLines.push(index + 1, index + 1)
       return `${indentation}$$\n${singleLineDisplay[1].trim()}\n${indentation}$$`
     }
     return normalizedLine
   }).join('\n')
+  return { content, sourceLines }
 }

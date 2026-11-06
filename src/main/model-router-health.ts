@@ -34,6 +34,8 @@ export async function isModelRouterServiceHealthy(
   settings: AppSettingsV1,
   options: {
     fetchImpl?: typeof fetch
+    expectedInstanceId?: string
+    timeoutMs?: number
   } = {}
 ): Promise<boolean> {
   const router = getModelRouterSettings(settings)
@@ -46,12 +48,16 @@ export async function isModelRouterServiceHealthy(
       headers: {
         Accept: 'application/json'
       },
-      signal: AbortSignal.timeout(2_000)
+      signal: AbortSignal.timeout(options.timeoutMs ?? 2_000)
     })
     if (!response.ok) return false
     const text = await safeResponseText(response)
-    if (!text.trim()) return true
+    if (!text.trim()) return !options.expectedInstanceId
     const body = JSON.parse(text) as Record<string, unknown>
+    if (options.expectedInstanceId) {
+      return body.ok === true && body.service === 'sciforge.model-router' &&
+        body.instanceId === options.expectedInstanceId
+    }
     return body.ok !== false
   } catch {
     return false

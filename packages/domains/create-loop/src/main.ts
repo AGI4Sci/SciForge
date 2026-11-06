@@ -12,8 +12,6 @@ import {
 import type { z } from 'zod'
 import {
   CREATE_LOOP_CAPABILITY_IDS,
-  createDatasetLoopInputSchema,
-  createDatasetLoopOutputSchema,
   createLoopApprovalInputSchema,
   createLoopApprovalOutputSchema,
   createLoopCheckCodeInputSchema,
@@ -38,7 +36,6 @@ import {
   type WorkflowRunComparatorV1,
   type WorkflowSettingsV1
 } from './contract.js'
-import { buildDatasetGenerationLoop } from './dataset-loop-builder.js'
 import { collectCreateLoopResourceExecutors } from './resource-executor.js'
 import {
   WORKFLOW_AUTOMATION_CAPABILITY_FACTORY_CONTRIBUTION,
@@ -272,72 +269,6 @@ export function createCreateLoopCapabilityFactory<CapabilityDefinition>(
           }
         },
         { revision: 'none', idempotency: 'required' }
-      ),
-      capability(
-        CREATE_LOOP_CAPABILITY_IDS.buildDataset,
-        'Build and run a dataset generation loop',
-        'Compiles confirmed conversational data requirements into editable Create Loop workflows that use Dataset API grounding, candidate generation, quality evaluation, retry, materialization, validation, and versioned publication. This dynamically builds workflows and does not use a preset or a separate feature module.',
-        'external-write',
-        createDatasetLoopInputSchema,
-        createDatasetLoopOutputSchema,
-        async (raw, context) => {
-          const input = createDatasetLoopInputSchema.parse(raw)
-          const runtime = options.getRuntime()
-          const snapshot = await runtime.read()
-          const built = buildDatasetGenerationLoop(input, {
-            defaultModel: snapshot.settings.model
-          })
-          const generatedWorkflows = built.workflows.map((workflow) =>
-            createLoopWorkflowSchema.parse(workflow)
-          )
-          const rootWorkflow = generatedWorkflows.find(
-            (workflow) => workflow.id === built.rootWorkflowId
-          )
-          if (!rootWorkflow) throw new Error('Generated workflow template has no root workflow.')
-          const nestedWorkflow = generatedWorkflows.find(
-            (workflow) => workflow.id !== built.rootWorkflowId
-          )
-          if (!nestedWorkflow) throw new Error('Generated dataset template requires an iteration workflow.')
-          const existingCoordinator = snapshot.settings.workflows.find(
-            (workflow) => workflow.id === rootWorkflow.id
-          )
-          const existingIteration = snapshot.settings.workflows.find(
-            (workflow) => workflow.id === nestedWorkflow.id
-          )
-          const created = !existingCoordinator || !existingIteration
-          let revision = snapshot.revision
-          if (created || !snapshot.settings.enabled) {
-            const generatedIds = new Set(generatedWorkflows.map((workflow) => workflow.id))
-            const saved = await runtime.save({
-              ...snapshot.settings,
-              enabled: true,
-              workflows: [
-                ...snapshot.settings.workflows.filter((workflow) => !generatedIds.has(workflow.id)),
-                existingIteration ?? nestedWorkflow,
-                existingCoordinator ?? rootWorkflow
-              ]
-            }, snapshot.revision)
-            revision = saved.revision
-          }
-          const run = input.run
-            ? await runtime.runWorkflow(
-                rootWorkflow.id,
-                built.initialInput,
-                context.caller.workspaceId?.trim() ?? ''
-              )
-            : null
-          return {
-            output: {
-              workflowId: rootWorkflow.id,
-              iterationWorkflowId: nestedWorkflow.id,
-              created,
-              revision,
-              run
-            }
-          }
-        },
-        undefined,
-        ['workflow', 'automation', 'loop', 'dataset', 'generation']
       ),
       capability(
         CREATE_LOOP_CAPABILITY_IDS.run,

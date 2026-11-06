@@ -53,6 +53,7 @@ import { runtimeErrorToError } from '../../../shared/runtime-error'
 export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): AgentRuntimeAdapter {
   return {
     id: 'codex',
+    contextProfiles: ['minimal'],
     transport: 'jsonrpc_stdio',
     probe: async (_context, input) => service.probeRuntime(input?.command),
     subagents: {
@@ -96,6 +97,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
 
     async startThread(_context, input) {
       const result = await service.startThread({
+        ...(input.contextProfile ? { contextProfile: input.contextProfile } : {}),
         threadId: input.threadId,
         workspace: input.workspace,
         workspaceDisplayName: input.workspaceDisplayName,
@@ -153,10 +155,13 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
 
     async startTurn(context, input) {
       const result = await service.startTurn({
+        ...(input.contextProfile ? { contextProfile: input.contextProfile } : {}),
         threadId: input.threadId,
         text: input.text,
         displayText: input.displayText,
-        metadata: codexUserMessageMetadata(input.metadata),
+        metadata: input.contextProfile
+          ? { ...codexUserMessageMetadata(input.metadata), contextProfile: input.contextProfile }
+          : codexUserMessageMetadata(input.metadata),
         workspace: input.workspace,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
@@ -1622,7 +1627,12 @@ function mapCodexRequestBlock(
   if (!requestKind) return null
 
   const requestId = codexRequestId(meta, block.id)
-  const status = requestItemStatus(block.status, requestId, options)
+  // Only native requests belong to the app-server registry. Host-owned
+  // interactions are reconciled by the runtime-neutral interaction service.
+  const status = requestItemStatus(block.status, requestId, {
+    ...options,
+    activePendingRequestIds: meta.codexRequestId === undefined ? undefined : options.activePendingRequestIds
+  })
   if (requestKind === 'approval') {
     const toolName = approvalToolName(meta.codexRequestMethod, block.toolKind)
     return {
@@ -1681,6 +1691,12 @@ function mapCodexRequestEvent(
     }
   }
 
+  if (meta.userInputStatus === 'submitted' || meta.userInputStatus === 'cancelled') {
+    return { ...common, kind: 'user_input_resolved', itemId: tool.itemId, requestId,
+      status: meta.userInputStatus,
+      answers: Array.isArray(meta.answers) ? meta.answers.filter((answer): answer is { id: string; label: string; value: string } =>
+        !!answer && typeof answer === 'object' && typeof answer.id === 'string' && typeof answer.label === 'string' && typeof answer.value === 'string') : [] }
+  }
   return {
     ...common,
     kind: 'user_input_requested',
@@ -1770,7 +1786,9 @@ function normalizeQuestionOption(value: unknown): AgentRuntimeInputQuestion['opt
   if (!label) return null
   return {
     label,
-    ...(stringValue(record.description) ? { description: stringValue(record.description) } : {})
+    ...(stringValue(record.description) ? { description: stringValue(record.description) } : {}),
+    ...(typeof record.id === 'string' ? { id: record.id } : {}),
+    ...(typeof record.recommended === 'boolean' ? { recommended: record.recommended } : {})
   }
 }
 
@@ -1818,6 +1836,18 @@ function transientRuntimeErrorPhase(
 }
 
 function inferTurnStatus(items: AgentRuntimeItem[]): AgentRuntimeTurn['status'] {
+  // Historical turns lack the latest-thread status. Preserve their explicit
+  // terminal event, including a stop after a partial assistant response.
+  for (const item of [...items].reverse()) {
+    if (item.kind !== 'system') continue
+    const terminalState = codexRuntimeErrorTerminalState({
+      itemId: item.id,
+      message: item.text ?? '',
+      code: stringValue(item.meta?.code),
+      severity: item.status === 'error' ? 'error' : 'info'
+    })
+    if (terminalState) return terminalState
+  }
   if (items.some((item) => item.kind === 'assistant_message')) return 'completed'
   if (items.some((item) => item.status === 'running')) return 'running'
   if (items.some((item) => item.status === 'error' || item.status === 'failed')) return 'failed'

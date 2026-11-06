@@ -1980,7 +1980,9 @@ test('a paused Worker result resumes submission without repeating the Agent turn
   assert.equal(cloud.commands.filter((type) => type.startsWith('delivery.') || type === 'object.stage').length, 0)
 })
 
-test('Worker HumanNeeded targets its Worker User and resumes the same execution and Runtime Session', async () => {
+for (const decision of [null, 'approve', 'reject'] as const) {
+test(`Worker HumanNeeded ${decision ?? 'answer'} targets its Worker User and resumes the same execution and Runtime Session`, async () => {
+  const receivedAnswer = { ...humanAnswerFixture, decision, confirmationId: decision ? 'cfm_HumanDecision00001' : null }
   const cloud = new FakeWorkerCloud()
   const initial = emptyState()
   const runtimeRequests: Array<Readonly<{
@@ -2006,7 +2008,9 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
       assert.equal(request.runtimeId, 'codex')
       assert.equal(request.threadId, 'worker-human-thread')
       assert.match(request.prompt, /authenticated Worker User/u)
-      assert.match(request.prompt, new RegExp(humanAnswerFixture.answer, 'u'))
+      assert.ok(request.prompt.includes(`Explicit action decision: ${decision ?? 'none (information only)'}`))
+      if (decision === 'reject') assert.match(request.prompt, /Do not execute it/u)
+      assert.match(request.prompt, new RegExp(receivedAnswer.answer, 'u'))
       return {
         runtimeId: 'codex',
         threadId: 'worker-human-thread',
@@ -2094,7 +2098,7 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
     payload: {
       protocolVersion: '1.0',
       type: 'human.answer.received',
-      answer: humanAnswerFixture
+      answer: receivedAnswer
     }
   })
   await created.adapter.handleInbox(answerMessage)
@@ -2140,6 +2144,8 @@ test('Worker HumanNeeded targets its Worker User and resumes the same execution 
   assert.equal(runtimeRequests.length, 2)
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'waiting-result-confirm')
 })
+
+}
 
 test('Worker HumanNeeded preserves an answer received while its Cloud revisions are refreshing', async () => {
   const cloud = new FakeWorkerCloud()

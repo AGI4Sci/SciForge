@@ -1,10 +1,9 @@
-import { createHash } from 'node:crypto'
-import { isDeepStrictEqual } from 'node:util'
+import { evidenceDagRerunSpecInputSchema, evidenceDagRerunCompareInputSchema, type EvidenceDagRerunSpecInput, type EvidenceDagRerunCompareInput } from '../contract.js'
+import { verifyProducerArtifactRefs } from './producer-artifact-refs.js'
 import { join, resolve } from 'node:path'
 import type {
   ArtifactVersionCommitPortV1,
   ArtifactVersionEventListPortV1,
-  ArtifactVersionRefV1,
   ArtifactVersionReadPortV1
 } from '@sciforge/domain-artifact-versions/contract'
 import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk'
@@ -83,7 +82,6 @@ import {
   EvidenceDagSidecar,
   type EvidenceDagSidecarPort
 } from './sidecar.js'
-import { evidenceDagAuditQueryOverChains } from './audit-query.js'
 import {
   EvidenceDagDeltaStore,
   evidenceDagDeltaInputFromTrace,
@@ -97,8 +95,10 @@ import {
   type EvidenceProducerReceipt
 } from './producer-provenance-consumer.js'
 import { scientificPlottingReceiptAdapter } from './scientific-plotting-receipt-adapter.js'
+import { ResearchRecordRuntime } from './research-record.js'
 
 export type EvidenceDagRuntimePort = Readonly<{
+  records: Pick<ResearchRecordRuntime, 'view' | 'edit' | 'review' | 'audit'>
   activate(context: DomainMainRuntimeLifecycleContext): Promise<DomainMainRuntimeDisposer>
   consume(event: DomainArtifactEvent): Promise<void>
   view(input: EvidenceDagViewInput): Promise<EvidenceDagViewOutput>
@@ -114,11 +114,14 @@ export type EvidenceDagRuntimePort = Readonly<{
   auditQuery(
     input: EvidenceDagAuditQueryInput & Readonly<{ workspaceRoot?: string }>
   ): Promise<EvidenceDagAuditQueryOutput>
+  rerunSpec(input: EvidenceDagRerunSpecInput): ReturnType<EvidenceDagServiceClient['rerunSpec']>
+  rerunCompare(input: EvidenceDagRerunCompareInput): ReturnType<EvidenceDagServiceClient['rerunCompare']>
   guardWriteExport(payload: unknown): Promise<DomainMainActionGuardResult>
   close(): Promise<void>
 }>
 
 export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
+  readonly records: ResearchRecordRuntime
   private context: DomainMainRuntimeLifecycleContext | undefined
   private enabled = false
   private closed = false
@@ -138,6 +141,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
 
   constructor(options: Readonly<{
     userDataDir: string
+    sanitizeText?: (text: string) => string
     sidecar?: EvidenceDagSidecarPort
     client?: EvidenceDagServiceClient
     fetchImpl?: typeof fetch
@@ -150,6 +154,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     producerProvenancePollIntervalMs?: number
     deltaStore?: EvidenceDagDeltaStore
   }>) {
+    this.records = new ResearchRecordRuntime(options)
     this.now = options.now ?? (() => new Date())
     this.sidecar = options.sidecar ?? new EvidenceDagSidecar({ fetchImpl: options.fetchImpl })
     this.client = options.client ?? new EvidenceDagServiceClient({
@@ -242,11 +247,13 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
       now: this.now().toISOString()
     })
     this.enabled = await context.enablement.isEnabled()
+    this.records.start(context, this.enabled)
     await this.artifactVersionLifecycle.start(this.enabled)
     await this.producerProvenance.start(this.enabled)
     if (this.enabled) this.ensureSidecarInBackground()
     this.enablementDisposer = context.enablement.subscribe((enabled) => {
       this.enabled = enabled
+      this.records.setEnabled(enabled)
       void this.artifactVersionLifecycle.setEnabled(enabled)
       void this.producerProvenance.setEnabled(enabled)
       if (enabled) this.ensureSidecarInBackground()
@@ -515,6 +522,39 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     )
   }
 
+  async rerunSpec(raw: EvidenceDagRerunSpecInput) {
+    const input = evidenceDagRerunSpecInputSchema.parse(raw)
+    const workspaceRoot = await this.authorizeRerunRead(input)
+    if ('snapshotDigest' in input) return this.client.rerunSpec(input)
+    const chain = await this.deltaStore.chain(evidenceDagThreadId(input.runtimeId, input.threadId))
+    const first = chain.list()[0]
+    if (first) {
+      if (first.scope.runtimeId !== input.runtimeId) throw new Error('Rerun closure runtime mismatch.')
+      evidenceDagWorkspaceRoot(workspaceRoot, first.scope.workspaceRoot)
+    }
+    const snapshotDigest = chain.committedSnapshotClosureEntries().find(([closure]) => closure === input.closureDigest)?.[1]
+    if (!snapshotDigest) throw new Error('Exact closure has no retained committed Snapshot binding; rerun unavailable.')
+    return this.client.rerunSpec({ runtimeId: input.runtimeId, threadId: input.threadId, workspaceRoot: input.workspaceRoot,
+      snapshotDigest, conclusionId: input.conclusionId })
+  }
+
+  async rerunCompare(raw: EvidenceDagRerunCompareInput) {
+    const input = evidenceDagRerunCompareInputSchema.parse(raw)
+    await this.authorizeRerunRead(input)
+    return this.client.rerunCompare(input)
+  }
+
+  private async authorizeRerunRead(input: { runtimeId: string; threadId: string; workspaceRoot?: string }) {
+    const context = await this.requireEnabled()
+    const thread = await context.agentThreads.read({ runtimeId: input.runtimeId, threadId: input.threadId })
+    if (thread.id !== input.threadId || thread.runtimeId !== input.runtimeId) throw new Error('Rerun thread identity mismatch.')
+    if (!thread.workspaceRoot) throw new Error('Rerun read requires a captured thread workspace.')
+    const workspaceRoot = evidenceDagWorkspaceRoot(input.workspaceRoot, thread.workspaceRoot)
+    await this.sidecar.ensureReady()
+    await this.requireEnabled()
+    return workspaceRoot
+  }
+
   async preview(raw: EvidenceDagPreviewInput): Promise<EvidenceDagPreviewOutput> {
     const input = evidenceDagPreviewInputSchema.parse(raw)
     const context = await this.requireEnabled()
@@ -585,20 +625,14 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
     const input = evidenceDagAuditQueryInputSchema.parse({ subject: raw.subject })
     await this.requireEnabled()
     // The Evidence-side read port of `research-audit.query`: sidechain records
-    // come only from this domain's own store, through read-only chain views.
+    // come only from this domain's own store and revision-bound exact index.
     // Cross-domain facets stay reported as gap codes; no aggregate is built
     // here and no write path is reachable.
-    const chains = 'threadId' in input.subject
-      ? [await this.deltaStore.chain(input.subject.threadId)]
-      : await this.deltaStore.auditChains()
-    const evaluation = evidenceDagAuditQueryOverChains({
-      chains,
-      subject: input.subject,
-      workspaceRoot: raw.workspaceRoot
-    })
+    const { evaluation, review } = await this.deltaStore.queryAudit(input.subject, raw.workspaceRoot)
     return evidenceDagAuditQueryOutputSchema.parse({
       subject: input.subject,
       records: evaluation.records,
+      scientificReview: review,
       completeness: { complete: evaluation.complete, gapCodes: [...evaluation.gapCodes] },
       freshness: evaluation.freshness,
       source: 'evidence-dag'
@@ -670,6 +704,7 @@ export class EvidenceDagRuntime implements EvidenceDagRuntimePort {
 
   private async closeOnce(): Promise<void> {
     this.closed = true
+    await this.records.close()
     await this.enablementDisposer?.()
     this.enablementDisposer = undefined
     await this.producerProvenance.close()
@@ -969,38 +1004,5 @@ function genericGuardDecision(decision: ReturnType<typeof evaluateEvidenceDagHig
     allowed: decision.allowed,
     ...(!decision.allowed || decision.metadata.advisory ? { message: decision.message } : {}),
     metadata: domainPackageJsonValueSchema.parse(decision.metadata)
-  }
-}
-
-async function verifyProducerArtifactRefs(
-  refs: readonly ArtifactVersionRefV1[],
-  readPort: ArtifactVersionReadPortV1
-): Promise<void> {
-  if (refs.length > 1_024) {
-    throw new Error('Producer provenance exceeds the exact version-ref limit.')
-  }
-  const declaredBytes = refs.reduce((total, ref) => total + ref.byteLength, 0)
-  if (declaredBytes > 256 * 1024 * 1024) {
-    throw new Error('Producer provenance exceeds the exact byte-validation budget.')
-  }
-  for (const expected of refs) {
-    const result = await readPort.read({ versionId: expected.versionId })
-    if (!result.ok) {
-      throw new Error(
-        `Producer ArtifactVersion ${expected.versionId} is unavailable: ${result.issue.message}`
-      )
-    }
-    if (!isDeepStrictEqual(result.value.ref, expected)) {
-      throw new Error(
-        `Producer ArtifactVersion ${expected.versionId} does not match its exact ref.`
-      )
-    }
-    const bytes = Buffer.from(result.value.dataBase64, 'base64')
-    const digest = createHash('sha256').update(bytes).digest('hex')
-    if (bytes.byteLength !== expected.byteLength || digest !== expected.contentDigest) {
-      throw new Error(
-        `Producer ArtifactVersion ${expected.versionId} failed byte integrity validation.`
-      )
-    }
   }
 }

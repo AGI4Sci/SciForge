@@ -29,7 +29,9 @@ export async function apply(ctx) {
 `)
     contracts.set(name, { approved: true, permissions: [], hostApiRange: '^1.0.0', dshAuthorization: { packageName: name, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', storage: 'plugin-private' } } as PluginAdapterContract)
   }
-  const create = (profile = 'profile-a') => new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, profile), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
+  const create = (profile = 'profile-a') => new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, profile), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
   const medium = (name: string, profile = 'profile-a') => join(root, profile, 'extensions', 'dsh-storage', encodeURIComponent(name), 'private_state.json')
   const read = async (name: string, profile = 'profile-a') => JSON.parse(await readFile(medium(name, profile), 'utf8'))
   return { root, contracts, create, medium, read }
@@ -84,7 +86,9 @@ it('host reconciliation revokes a live private storage runtime and restart canno
 })
 
 it('host refuses a relative profile directory rather than resolving storage against cwd', () => {
-  expect(() => new DevelopmentExternalPluginService({root:join(tmpdir(),'synthetic-plugins'),userDataPath:'relative-profile',hostApiVersion:'1.0.0'})).toThrow(/profile.*absolute|user.*absolute/i)
+  expect(() => new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,root:join(tmpdir(),'synthetic-plugins'),userDataPath:'relative-profile',hostApiVersion:'1.0.0'})).toThrow(/profile.*absolute|user.*absolute/i)
 })
 
 // Additional official-contract regressions; first-pass green is not a new RED cycle.

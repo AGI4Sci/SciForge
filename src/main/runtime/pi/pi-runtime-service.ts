@@ -1080,6 +1080,14 @@ export class PiRuntimeService {
     }
   }
 
+  async publishSyntheticEvent(event: AgentRuntimeEvent): Promise<AgentRuntimeEvent> {
+    const thread = await this.threadFor(event.threadId)
+    this.append(thread, event)
+    const stored = thread.log[thread.log.length - 1]
+    await thread.writeQueue
+    return stored
+  }
+
   async readThreadStatus(threadId: string): Promise<AgentRuntimeThreadStatus> {
     const thread = await this.threadFor(threadId)
     const latestTurnId = thread.turnOrder[thread.turnOrder.length - 1]
@@ -1106,6 +1114,9 @@ export class PiRuntimeService {
         startedAt: turn.startedAt,
         completedAt: completed ? thread.updatedAt : undefined,
         items: [
+          ...[...new Map(thread.log.flatMap((event) => event.kind === 'item_snapshot' &&
+            event.item.kind === 'user_input' && event.item.turnId === turnId
+            ? [[event.item.id, event.item] as const] : [])).values()],
           {
             id: turn.userItemId,
             turnId,

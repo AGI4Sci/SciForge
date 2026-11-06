@@ -128,6 +128,40 @@ export type ResearchAuditEvidenceSidechainRecordV1 = z.infer<
   typeof researchAuditEvidenceSidechainRecordV1Schema
 >
 
+/** Evidence-owned read projection; recorded links are partial, never a validity score.
+ * scannedDeltas/extractionNodes count suffix-index work performed by this call
+ * Bootstrap admits at most 2048 new items per query, with 10000 payload visits
+ * per item and a separate 10000 membership-visit cap per new closure.
+ * indexedDeltas/totalRelevantDeltas describe candidate coverage; their difference
+ * is unindexed history. queryNodes shares 10000 graph/condition visits across all
+ * records, separate from the fixed 10000-unit record output projection budget.
+ * omittedRecords counts known indexed candidate records not projected/reviewed;
+ * unindexed/uncertain identity membership is explained by reasons, never absence.
+ */
+export const researchAuditScientificReviewSchema = z.object({
+  coverage: z.literal('recorded-links-only'), bounded: z.boolean(),
+  coverageDetails: z.object({
+    indexRevision: z.number().int().nonnegative(), indexedChains: z.number().int().nonnegative(),
+    indexedDeltas: z.number().int().nonnegative(), scannedDeltas: z.number().int().nonnegative(),
+    totalRelevantDeltas: z.number().int().nonnegative(),
+    queryNodes: z.number().int().nonnegative().max(10000), extractionNodes: z.number().int().nonnegative(),
+    omittedRecords: z.number().int().nonnegative(),
+    reasons: z.array(z.string().max(256)).max(64)
+  }).strict().optional(),
+  impacts: z.array(z.object({
+    recordDigest: sha256DigestSchema, closureDigest: sha256DigestSchema,
+    status: z.enum(['requires-review', 'no-recorded-impact', 'unknown']),
+    affectedIds: z.array(boundedIdSchema).max(100),
+    affected: z.array(z.object({ id: boundedIdSchema, title: z.string().max(300) }).strict()).max(100),
+    changes: z.array(z.object({ digest: sha256DigestSchema, reason: z.string().max(4000), sourceId: boundedIdSchema }).strict()).max(100)
+  }).strict()).max(100),
+  conditions: z.array(z.object({
+    axis: z.enum(['independence', 'controls', 'negative-results', 'reproduction', 'scope']),
+    status: z.enum(['recorded', 'unknown']),
+    observations: z.array(z.object({ targetId: boundedIdSchema, recordDigest: sha256DigestSchema, closureDigest: sha256DigestSchema, digest: sha256DigestSchema, field: z.string().max(256), text: z.string().max(2000) }).strict()).max(20)
+  }).strict()).length(5)
+}).strict()
+
 /** Output of the `evidence-dag.audit-query` read port. */
 export const researchAuditEvidenceAuditQueryOutputSchema = z.object({
   subject: researchAuditSubjectSchema,
@@ -137,6 +171,7 @@ export const researchAuditEvidenceAuditQueryOutputSchema = z.object({
     gapCodes: z.array(z.string().trim().min(1).max(256)).max(64)
   }).strict(),
   freshness: researchAuditFreshnessSchema,
+  scientificReview: researchAuditScientificReviewSchema.optional(),
   source: z.literal('evidence-dag')
 }).strict()
 export type ResearchAuditEvidenceAuditQueryOutput = z.infer<
@@ -155,7 +190,10 @@ export const researchAuditSessionChangeSummarySchema = z.object({
   id: z.string().trim().min(1).max(512),
   status: researchAuditSessionChangeStatusSchema,
   filePath: z.string().trim().min(1).max(4_096).optional(),
-  patch: z.string().max(RESEARCH_AUDIT_SESSION_CHANGE_MAX_SUMMARY_PATCH_BYTES),
+  patch: z.string().refine(
+    value => new TextEncoder().encode(value).byteLength <= RESEARCH_AUDIT_SESSION_CHANGE_MAX_SUMMARY_PATCH_BYTES,
+    { message: 'Summary patch exceeds UTF-8 byte budget' }
+  ),
   patchBytes: z.number().int().nonnegative(),
   patchTruncated: z.boolean(),
   occurredAt: timestampSchema.optional()
@@ -171,7 +209,8 @@ export const researchAuditSessionChangeListChangesOutputSchema = z.object({
   ),
   nextCursor: z.string().trim().min(1).max(512).nullable(),
   revision: z.string().trim().min(1).max(256),
-  truncated: z.boolean()
+  truncated: z.boolean(),
+  truncationReasons: z.array(z.enum(['patch-byte-limit', 'snapshot-byte-limit', 'change-count-limit'])).optional()
 }).strict()
 export type ResearchAuditSessionChangeListChangesOutput = z.infer<
   typeof researchAuditSessionChangeListChangesOutputSchema

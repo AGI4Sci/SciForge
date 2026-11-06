@@ -12,7 +12,7 @@ import { SiYuanClient, SiYuanError } from './client.js'
 
 /** First phase: notebook discovery only. No unproven file or collaboration claims. */
 export function createSiYuanProvider(input: {
-  providerInstanceRef: string; client: () => SiYuanClient
+  providerInstanceRef: string; client: () => SiYuanClient | Promise<SiYuanClient>
 }): ContentSpaceProvider {
   const providerInstanceRef = providerInstanceRefSchema.parse(input.providerInstanceRef)
   function fail(code: 'blocked_by_contract' | 'invalid_input' | 'unauthorized' |
@@ -56,7 +56,7 @@ export function createSiYuanProvider(input: {
         await guard(context)
         const deadline = AbortSignal.timeout(Math.max(1, Date.parse(context.deadlineAt) - Date.now()))
         const signal = context.signal ? AbortSignal.any([context.signal, deadline]) : deadline
-        notebooks = (await input.client().listNotebooks(signal))
+        notebooks = (await (await input.client()).listNotebooks(signal))
           .filter((notebook) => !notebook.closed)
           .sort((a, b) => a.id.localeCompare(b.id))
         await guard(context)

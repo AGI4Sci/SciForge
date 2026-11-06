@@ -9,7 +9,7 @@ const reference = parseCapabilityReferenceMarkdown([
   '| --- | --- | --- | --- | --- | --- |',
   '| `paper-radar.search` | 1.0.0 | agent | read | none | global |',
   '| `paper-radar.sync-arxiv` | 1.0.0 | agent | external-write | confirmation | global |',
-  '| `scientific-compute.status` | 1.0.0 | agent | read | none | global |'
+  '| `scientific-plotting.status` | 1.0.0 | agent | read | none | global |'
 ].join('\n'))
 
 describe('capability coverage', () => {
@@ -60,7 +60,7 @@ describe('capability coverage', () => {
         tags: ['no-call'],
         expected: {
           domain: 'paper-radar',
-          forbiddenActions: ['scientific-compute.status'],
+          forbiddenActions: ['scientific-plotting.status'],
           noCapabilityCalls: true,
           taskSuccess: true
         },
@@ -87,9 +87,9 @@ describe('capability coverage', () => {
     expect(report.caseTypeCounts.happyPath).toBe(1)
     expect(report.confirmationWithoutAuthorizationCoverage).toEqual([])
     expect(report.unreferencedActions).toEqual([])
-    expect(report.noPositiveTaskActions).toEqual(['scientific-compute.status'])
-    expect(report.actions.find((action) => action.actionId === 'scientific-compute.status')?.referencedCaseCount).toBe(1)
-    expect(report.actions.find((action) => action.actionId === 'scientific-compute.status')?.positiveDesignedCaseCount).toBe(0)
+    expect(report.noPositiveTaskActions).toEqual(['scientific-plotting.status'])
+    expect(report.actions.find((action) => action.actionId === 'scientific-plotting.status')?.referencedCaseCount).toBe(1)
+    expect(report.actions.find((action) => action.actionId === 'scientific-plotting.status')?.positiveDesignedCaseCount).toBe(0)
     expect(report.actions.find((action) => action.actionId === 'paper-radar.sync-arxiv')?.dimensions.authorization).toBe(true)
   })
 

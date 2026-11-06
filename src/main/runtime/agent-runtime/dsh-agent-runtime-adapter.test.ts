@@ -39,8 +39,100 @@ vi.mock('./agent-runtime-mcp-tool-lease', async importOriginal => {
 })
 
 describe('DSH Host bridge with a real ACP fixture child', () => {
+  it('discovers the held session through public Host lists after consecutive real ACP turns and a cold reopen', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-held-discovery-'))
+    const settings = createDefaultSettings()
+    settings.activeAgentRuntime = 'dsh'
+    const makeAdapter = () => createDshHostRuntimeAdapter({ executable: process.execPath,
+      // This ACP child returns sessions: [] from session/list, without a mock.
+      executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url)), '--history-updates'],
+      stateDirectory: root, verifyDeployment: async () => {}, requestTimeoutMs: 2000,
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    let adapter = makeAdapter()
+    let host = createAgentRuntimeHost({ settings: () => settings, adapters: [adapter] })
+    try {
+      const thread = await host.startThread({ runtimeId: 'dsh', workspace: root, title: 'Persisted conversation' })
+      for (const text of ['first', 'second']) {
+        const turn = await host.startTurn({ runtimeId: 'dsh', threadId: thread.id, text })
+        await vi.waitFor(async () => expect((await adapter.readThreadPage({ settings }, { runtimeId: 'dsh', threadId: thread.id })).turns)
+          .toContainEqual(expect.objectContaining({ id: turn.turnId, status: 'completed' })))
+        expect(await host.listThreads({ runtimeId: 'dsh', limit: 1 })).toEqual([thread])
+        expect(await host.listThreads({ limit: 1 })).toEqual([thread])
+      }
+      host.dispose(); await adapter.close()
+      adapter = makeAdapter()
+      host = createAgentRuntimeHost({ settings: () => settings, adapters: [adapter] })
+      expect(await host.listThreads({ runtimeId: 'dsh' })).toEqual([thread])
+      expect((await adapter.readThreadPage({ settings }, { runtimeId: 'dsh', threadId: thread.id })).turns).toHaveLength(2)
+    } finally { host.dispose(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it.each([false, true])('deletes a Host conversation and keeps it deleted after restart (active=%s)', async active => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-delete-'))
+    const settings = createDefaultSettings()
+    const makeAdapter = () => createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url))],
+      stateDirectory: root, verifyDeployment: async () => {}, requestTimeoutMs: 2000, cancelTimeoutMs: 50,
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    let adapter = makeAdapter()
+    let host = createAgentRuntimeHost({ settings: () => settings, adapters: [adapter] })
+    try {
+      const thread = await host.startThread({ runtimeId: 'dsh', workspace: root })
+      const input = { runtimeId: 'dsh' as const, threadId: thread.id }
+      if (active) await host.startTurn({ ...input, text: 'hang' })
+      await expect(host.deleteThread(input)).resolves.toBeUndefined()
+      await expect(adapter.listThreads({ settings }, input)).resolves.toEqual([])
+      await expect(host.listThreads({ runtimeId: 'dsh' })).resolves.toEqual([])
+      await expect(adapter.readThreadPage({ settings }, input)).rejects.toThrow('runtime_thread_not_found')
+      host.dispose(); await adapter.close()
+      adapter = makeAdapter()
+      host = createAgentRuntimeHost({ settings: () => settings, adapters: [adapter] })
+      await expect(adapter.listThreads({ settings }, input)).resolves.toEqual([])
+      await expect(host.listThreads({ runtimeId: 'dsh' })).resolves.toEqual([])
+      await expect(adapter.startTurn({ settings }, { ...input, text: 'must not resurrect' })).rejects.toThrow('runtime_thread_not_found')
+      await expect(host.deleteThread(input)).resolves.toBeUndefined()
+    } finally { host.dispose(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it('passes workspace references through ACP and lets a rejected turn be retried', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-retry-references-'))
+    const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
+      executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url)), '--echo-prompt'],
+      stateDirectory: root, verifyDeployment: async () => {}, requestTimeoutMs: 2000,
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    const handoff = new TurnArtifactHandoffService({ outbox: new TurnArtifactOutbox(root), consumers: [],
+      materialize: intent => host.materializeCompletedTurnArtifact(intent) })
+    const host = createAgentRuntimeHost({ settings: () => createDefaultSettings(), adapters: [adapter], turnArtifacts: handoff })
+    try {
+      const thread = await host.startThread({ runtimeId: 'dsh', workspace: root })
+      await expect(host.startTurn({ runtimeId: 'dsh', threadId: thread.id, text: 'invalid mode', mode: 'plan' })).rejects.toThrow('runtime_unsupported')
+      expect(await handoff.pendingStarts()).toEqual([])
+      await expect(handoff.flushThread('dsh', thread.id)).resolves.toBeUndefined()
+      const handle = await host.startTurn({ runtimeId: 'dsh', threadId: thread.id, text: 'Read the paper',
+        fileReferences: [{ path: 'papers/article.pdf', relativePath: 'papers/article.pdf', name: 'article.pdf' }] })
+      await vi.waitFor(async () => {
+        const snapshot = await host.readThreadSnapshot({ runtimeId: 'dsh', threadId: thread.id })
+        const turn = snapshot.turns?.find(turn => turn.id === handle.turnId)
+        expect(turn?.status).toBe('completed')
+        expect(turn?.items?.find(item => item.kind === 'assistant_message')?.text).toContain('"path":"papers/article.pdf"')
+      })
+    } finally { host.dispose(); handoff.close(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
+
+  it.runIf(process.platform === 'win32')('probes and connects through a real command shim in a path with spaces', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh cmd shim '))
+    const executable = join(root, 'dsh.cmd')
+    const fixture = fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url))
+    await writeFile(executable, `@"${process.execPath}" "${fixture}" %*\r\n`)
+    const adapter = createDshHostRuntimeAdapter({ executable, stateDirectory: root,
+      verifyDeployment: async () => {}, requestTimeoutMs: 2000,
+      toolSurface: { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() } })
+    try {
+      const context = { settings: createDefaultSettings() }
+      expect(await adapter.probe(context)).toMatchObject({ available: true })
+      expect(await adapter.startThread(context, { runtimeId: 'dsh', workspace: root })).toMatchObject({ runtimeId: 'dsh' })
+    } finally { await adapter.close(); await rm(root, { recursive: true, force: true }) }
+  })
   it('runs the required before-turn read under the durable owner and never bypasses its rejection', async () => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-before-turn-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-before-turn-'))
     const settings = createDefaultSettings()
     const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
       executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url))],
@@ -63,7 +155,7 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
     } finally { host.dispose(); handoff.close(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
   })
   it('reads a genuinely enrolled empty thread before turn and preserves accepted history across cold Host readback', async () => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-history-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-history-'))
     const context = { settings: createDefaultSettings() }
     const makeAdapter = () => createDshHostRuntimeAdapter({ executable: process.execPath,
       executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url)), '--history-updates'],
@@ -101,6 +193,11 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
       host.dispose(); await adapter.close()
       adapter = makeAdapter()
       host = createAgentRuntimeHost({ settings: () => context.settings, adapters: [adapter] })
+      // The fixture's ACP list is empty. Canonical ordinary discovery still
+      // restores the persisted conversation before any exact-id history read.
+      await expect(host.listThreads({ runtimeId: 'dsh' })).resolves.toEqual([
+        expect.objectContaining({ id: thread.id, title: thread.title, workspace: root })
+      ])
       const after = await host.readThreadSnapshot({ runtimeId: 'dsh', threadId: thread.id })
       expect(after).toMatchObject({ id: thread.id, workspace: root, latestSeq: before.latestSeq,
         turns: [expect.objectContaining({ id: handle.turnId, status: 'completed', items: expect.arrayContaining([
@@ -109,6 +206,11 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
       expect(await adapter.readThreadPage(context, { runtimeId: 'dsh', threadId: thread.id })).toEqual(before)
       await expect(host.readThreadSnapshot({ runtimeId: 'dsh', threadId: 'not-enrolled' })).rejects.toThrow()
       await expect(adapter.readThreadPage(context, { runtimeId: 'codex', threadId: thread.id })).rejects.toThrow()
+      const resumed = await host.startTurn({ runtimeId: 'dsh', threadId: thread.id, text: 'continue after restart' })
+      await vi.waitFor(async () => {
+        const snapshot = await host.readThreadSnapshot({ runtimeId: 'dsh', threadId: thread.id })
+        expect(snapshot.turns?.find(turn => turn.id === resumed.turnId)?.status).toBe('completed')
+      })
       const journals = await readdir(join(root, 'host-history'))
       expect(journals).toHaveLength(1)
       await appendFile(join(root, 'host-history', journals[0]!), '{truncated-record\n')
@@ -117,7 +219,7 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
     } finally { host.dispose(); await adapter.close(); await rm(root, { recursive: true, force: true }) }
   })
   it('runs consecutive turns with Host trace capture and replays a nonzero cursor without duplicate delivery', async () => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-trace-roundtrip-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-trace-roundtrip-'))
     const context = { settings: createDefaultSettings() }
     const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
       executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url)), '--history-updates'],
@@ -166,7 +268,7 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
   })
 
   it('forwards native ACP approval through the package neutral resolveApproval contract', async () => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-native-approval-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-native-approval-'))
     const context = { settings: createDefaultSettings() }
     const adapter = createDshHostRuntimeAdapter({ executable: process.execPath,
       executableArgs: [fileURLToPath(new URL('./fixtures/dsh-acp.mjs', import.meta.url))],
@@ -188,7 +290,7 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
     } finally { await adapter.close(); await rm(root, { recursive: true, force: true }) }
   })
   it('reports the negotiated resume capability and fails closed instead of inventing resume support', async () => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-no-resume-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-no-resume-'))
     const surface: AgentRuntimeToolSurface = { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: identity => { host.principalForToolRequest(identity as never) } }
     const adapter = createDshHostRuntimeAdapter({ executable: process.execPath, executableArgs: [fileURLToPath(new URL('./fixtures/dsh-persistent-acp.mjs', import.meta.url)), '--no-resume'], stateDirectory: root, verifyDeployment: async () => {}, toolSurface: surface })
     const host = createAgentRuntimeHost({ settings: async () => createDefaultSettings(), adapters: [adapter] })
@@ -211,7 +313,7 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
   })
 
   it.each([false, true])('preserves one persistent session across complete, rebind, cancel and new exact-turn authority (consume=%s)', async consume => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-persistent-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-persistent-'))
     let host: ReturnType<typeof createAgentRuntimeHost>
     const calls: string[] = []
     const identities: { turnId?: string }[] = []
@@ -295,7 +397,7 @@ describe('DSH Host bridge with a real ACP fixture child', () => {
   }, 15000)
 
   it.each(['interrupt', 'close'] as const)('uses Host accepted identity and revokes the MCP endpoint on %s', async lifecycle => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-host-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-host-'))
     let host: ReturnType<typeof createAgentRuntimeHost>
     const surface: AgentRuntimeToolSurface = {
       tools: () => [{ type: 'function', name: 'sciforge_discover', description: 'Host discovery', inputSchema: { type: 'object' } }],

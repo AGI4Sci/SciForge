@@ -207,6 +207,20 @@ function writeExportPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe('registerAppIpcHandlers', () => {
+  it('preserves light-chat tool restrictions through native turn and queue IPC', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const startTurn = vi.fn(async () => ({ threadId: 'side-1', turnId: 'turn-1' }))
+    const acceptQueuedInput = vi.fn(async () => ({ accepted: true }))
+    registerAppIpcHandlers(registerOptions({ agentRuntime: { startTurn, acceptQueuedInput } as never }))
+    const sender = createSender(7)
+    const turn = { runtimeId: 'codex', threadId: 'side-1', text: 'Light question', allowedTools: [] }
+    await expect(handlers.get('agentRuntime:startTurn')?.({ sender }, turn)).resolves.toEqual({ threadId: 'side-1', turnId: 'turn-1' })
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining(turn))
+    const queued = { runtimeId: 'codex', threadId: 'side-1', clientDirectiveId: 'light-queue-1', text: 'Follow up', payload: { chatMode: 'light', allowedTools: [] } }
+    await expect(handlers.get('agentRuntime:acceptQueuedInput')?.({ sender }, queued)).resolves.toEqual({ accepted: true })
+    expect(acceptQueuedInput).toHaveBeenCalledWith(queued)
+  })
+
   beforeEach(() => {
     handlers.clear()
     vi.clearAllMocks()
@@ -224,6 +238,24 @@ describe('registerAppIpcHandlers', () => {
 
     await expect(handlers.get('modelAccess:status')?.({})).rejects.toThrow('untrusted renderer frame')
     expect(getModelAccessStatus).not.toHaveBeenCalled()
+  })
+
+  it('validates and forwards only explicit bounded unique market Host operation approvals', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const install = vi.fn(async () => ({ packageName: '@example/view', version: '1.0.0', sha256: 'a'.repeat(64), tools: [] }))
+    registerAppIpcHandlers(registerOptions({ dshMarket: { install } as never }))
+    const handler = handlers.get('market:install')!
+    const request = { packageName: '@example/view', approvalSnapshot: { packageName: '@example/view', version: '1.0.0', sha256: 'a'.repeat(64), publisher: null, entry: 'dist/main.js', tools: [], ports: [], hostDependencies: [] }, approvedToolNames: [] }
+    await expect(handler({}, { packageName: request.packageName, approvedToolNames: [] })).rejects.toThrow()
+    for (const approvedPorts of [['view.list', ' view.list '], Array.from({ length: 33 }, (_, i) => `view.${i}`), [''], ['x'.repeat(257)]]) {
+      await expect(handler({}, { ...request, approvedPorts })).rejects.toThrow()
+    }
+    expect(install).not.toHaveBeenCalled()
+    await handler({}, { ...request, approvedPorts: [' view.list ', 'view.capture'] })
+    expect(install).toHaveBeenCalledWith({ ...request, approvedPorts: ['view.list', 'view.capture'] })
+    install.mockClear()
+    await handler({}, request)
+    expect(install).toHaveBeenCalledWith(request)
   })
 
   it('dispatches the evaluation preflight through the existing app bridge', async () => {
@@ -1100,6 +1132,16 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('settings:set')).toBeTypeOf('function')
   })
 
+  it('keeps retired scientific skills and plotting IPC channels unregistered', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions())
+
+    expect(handlers.has('mcp:scientific-plotting-config')).toBe(false)
+    expect(handlers.has('mcp:scientific-skills-config')).toBe(false)
+    expect(handlers.has('mcp:scientific-skills-status')).toBe(false)
+    expect(handlers.has('scientific-skills:install')).toBe(false)
+  })
+
   it('does not register retired workspace surface business channels', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
@@ -1487,7 +1529,7 @@ describe('registerAppIpcHandlers', () => {
           steer: true,
           approval: 'fail_closed',
           userInput: 'fail_closed',
-          compact: 'noop',
+          compact: 'unsupported',
           fork: false,
           review: false,
           goals: false,

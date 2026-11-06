@@ -11,8 +11,12 @@ import {
   domainRendererNavigationHost,
   sendDomainWorkbenchMessage,
   resolveDomainWorkbenchSession,
+  selectDomainWorkbenchSession,
+  openDomainWorkbenchSideConversation,
+  setDomainWorkbenchSideConversationOpener,
   setDomainWorkbenchSessionNavigator,
-  setDomainWorkbenchResourceNavigationProvider
+  setDomainWorkbenchResourceNavigationProvider,
+  setDevelopmentWorkbenchResourceNavigationProvider
 } from './domain-renderer-navigation'
 import type { ChatState } from '../store/chat-store-types'
 
@@ -143,6 +147,44 @@ describe('domain renderer navigation host', () => {
   })
 })
 
+it('falls back to a development plugin panel for an unowned resource kind', () => {
+  const targetWindow = new EventTarget()
+  vi.stubGlobal('window', targetWindow)
+  const panels: DomainWorkbenchOpenRightPanelInput[] = []
+  targetWindow.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, (event) => {
+    panels.push((event as CustomEvent<DomainWorkbenchOpenRightPanelInput>).detail)
+  })
+  const dispose = setDevelopmentWorkbenchResourceNavigationProvider({
+    canOpen: (resourceKind) => resourceKind === 'scientific-plot',
+    resolve: (input) => ({
+      contributionId: 'development:@example/ui:panel',
+      sessionId: input.sessionId,
+      activation: {
+        contributionId: 'development:@example/ui:panel',
+        revision: 1,
+        payload: { resource: input.resource }
+      }
+    })
+  })
+  const resource = {
+    resourceKind: 'scientific-plot',
+    resourceId: 'artifact-version:figure:9'
+  } as const
+  expect(domainRendererNavigationHost.workbench.canOpenResource?.('scientific-plot')).toBe(true)
+  expect(domainRendererNavigationHost.workbench.openResource?.({ sessionId: 'session-1', resource })).toBe(true)
+  expect(panels).toEqual([{
+    contributionId: 'development:@example/ui:panel',
+    sessionId: 'session-1',
+    activation: {
+      contributionId: 'development:@example/ui:panel',
+      revision: 1,
+      payload: { resource }
+    }
+  }])
+  dispose()
+  expect(domainRendererNavigationHost.workbench.canOpenResource?.('scientific-plot')).toBe(false)
+})
+
 
 it('routes a failed-input source to the same canonical reexecution action without falling back to another Session', async () => {
   const state = { reexecuteFailedInput: vi.fn(async () => true), sendMessage: vi.fn(), activeThreadId: 'different-session', threads: [] }
@@ -170,4 +212,57 @@ it('opens only an exact owned runtime and thread through the standard Session na
   expect(navigate).toHaveBeenCalledWith(request)
   dispose()
   expect(await domainRendererNavigationHost.workbench.openSession!(request)).toBe(false)
+})
+
+it('rejects a missing ordinary Session instead of sending research context to the active Session', async () => {
+  const state = { reexecuteFailedInput: vi.fn(), sendMessage: vi.fn(), activeThreadId: 'unrelated-session', threads: [] }
+  expect(await sendDomainWorkbenchMessage({ sessionId: 'missing-project-session', text: 'scoped research context' }, state)).toMatchObject({ ok: false, error: { code: 'session-unavailable' } })
+  expect(state.sendMessage).not.toHaveBeenCalled()
+})
+
+it('opens a scoped side conversation on its exact parent and reuses its discussion without switching Sessions', async () => {
+  const input = { runtimeId: 'codex', parentThreadId: 'research-parent', workspaceRoot: 'f:/PROJECT/',
+    context: { id: 'phase-1', title: 'Phase one', text: 'Evidence summary' } }
+  const state = { threads: [{ id: 'research-parent', runtimeId: 'codex', workspace: 'F:\\Project' }] as ChatState['threads'],
+    sideConversations: {} as ChatState['sideConversations'], spawnSideConversation: vi.fn(async () => 'side-1'),
+    selectSideConversation: vi.fn(), sendSideMessage: vi.fn(async () => true) }
+  expect(await openDomainWorkbenchSideConversation(input, state)).toBe('side-1')
+  expect(state.spawnSideConversation).toHaveBeenCalledWith(undefined, expect.objectContaining({
+    parentThreadId: 'research-parent', runtimeId: 'codex', chatMode: 'light', context: input.context
+  }))
+  expect(await openDomainWorkbenchSideConversation({ ...input, runtimeId: 'claude' }, state)).toBeNull()
+  expect(await openDomainWorkbenchSideConversation({ ...input, workspaceRoot: '/different' }, state)).toBeNull()
+  state.sideConversations['side-1'] = { threadId: 'side-1', runtimeId: 'codex', parentThreadId: input.parentThreadId,
+    context: input.context } as ChatState['sideConversations'][string]
+  expect(await openDomainWorkbenchSideConversation({ ...input, question: 'Follow up' }, state)).toBe('side-1')
+  expect(state.spawnSideConversation).toHaveBeenCalledTimes(1)
+  expect(state.selectSideConversation).toHaveBeenCalledWith('side-1')
+  expect(state.sendSideMessage).toHaveBeenCalledWith('side-1', 'Follow up')
+  const dispose = setDomainWorkbenchSideConversationOpener(request => openDomainWorkbenchSideConversation(request, state))
+  expect(await domainRendererNavigationHost.workbench.openSideConversation!(input)).toBe('side-1')
+  dispose()
+  expect(await domainRendererNavigationHost.workbench.openSideConversation!(input)).toBeNull()
+})
+
+
+describe('source session selection', () => {
+  it('routes cross-runtime coordinates through read-only selection without sending', async () => {
+    const request = { runtimeId: 'codex', threadId: 'source', turnId: 'turn-1', itemId: 'item-1', workspaceRoot: '/science' }
+    const state = { threads: [{ id: 'source', runtimeId: 'codex', workspace: '/science' }], activeThreadId: 'other', error: null,
+      selectThread: vi.fn(async (id: string) => { state.activeThreadId = id }), sendMessage: vi.fn() }
+    const get = () => state as unknown as ChatState
+    expect(await selectDomainWorkbenchSession(request, get)).toBe(true)
+    expect(state.selectThread).toHaveBeenCalledWith('source', { readOnly: true })
+    expect(state.sendMessage).not.toHaveBeenCalled()
+    expect(await selectDomainWorkbenchSession({ ...request, runtimeId: 'other' }, get)).toBe(false)
+    expect(await selectDomainWorkbenchSession({ ...request, workspaceRoot: '/wrong' }, get)).toBe(false)
+    expect(state.selectThread).toHaveBeenCalledTimes(1)
+  })
+  it('rejects failed and superseded selections even when the ID remains active', async () => {
+    const state = { threads: [{ id: 'source', runtimeId: 'codex' }], activeThreadId: 'source', error: null as string | null,
+      selectThread: vi.fn(async () => { state.error = 'missing transcript' }) }
+    expect(await selectDomainWorkbenchSession({ runtimeId: 'codex', threadId: 'source' }, () => state as unknown as ChatState)).toBe(false)
+    state.selectThread.mockImplementation(async () => { state.error = null; state.activeThreadId = 'another' })
+    expect(await selectDomainWorkbenchSession({ runtimeId: 'codex', threadId: 'source' }, () => state as unknown as ChatState)).toBe(false)
+  })
 })

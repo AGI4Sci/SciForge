@@ -77,18 +77,3 @@ SHA-256 digest; use `requestBodyCapture: 'full'` when replayable request evidenc
 is required. `store.metrics()` derives input/output token, cached-token, input
 byte, repeated-input-byte, compaction, and event counters from the same events,
 so metrics do not create a second capture path.
-
-## Scientific semantics
-
-`ScientificTraceCollector` adds a domain-neutral scientific envelope on top of
-the same durable store. It records one rooted causal graph with input,
-Artifact, Evidence, Human Review, and exactly one completed, failed, or
-cancelled terminal event. Domain packages may add lowercase namespaced event
-types such as `scientific-compute.job-started`; the trace core does not own a
-central domain-event list.
-
-`validateScientificTraceClosure` rejects mixed trace IDs, duplicate event IDs,
-multiple roots or terminals, cross-trace parents, cycles, orphan nodes, and a
-terminal event that cannot reach the required scientific evidence chain.
-Scientific Trace sanitization reuses the store credential filter and also
-redacts common PII and Luhn-valid payment-card values before persistence.

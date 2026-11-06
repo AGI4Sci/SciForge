@@ -1,3 +1,4 @@
+import { sciforgeReproSpecSchema } from '@sciforge/domain-sdk/reproducibility'
 import { z } from 'zod'
 import {
   artifactV1Schema,
@@ -19,6 +20,7 @@ import {
 } from '@sciforge/domain-sdk/research-audit'
 
 export * from './producer-receipt.js'
+export * from './research-record-contract.js'
 
 export {
   compareEvidenceDagWatermarks,
@@ -43,7 +45,9 @@ export const EVIDENCE_DAG_CAPABILITY_IDS = Object.freeze({
   priority: 'evidence-dag.priority',
   resolvePreview: 'evidence-dag.resolve-evidence-preview',
   exportSnapshotProducts: 'evidence-dag.export-snapshot-products',
-  auditQuery: 'evidence-dag.audit-query'
+  auditQuery: 'evidence-dag.audit-query',
+  rerunSpec: 'evidence-dag.rerun-spec',
+  rerunCompare: 'evidence-dag.rerun-compare'
 } as const)
 
 export const evidenceDagErrorCodeSchema = z.enum([
@@ -221,6 +225,8 @@ export const evidenceDagLegacyCheckpointRootSchema = z.object({
 
 export const evidenceDagClosurePolicyV1Schema = z.object({
   version: z.literal('EvidenceClosurePolicyV1'),
+  // Absent on historical policies: reproduce immutable keyword semantics.
+  semanticGapPolicy: z.enum(['keyword-v1', 'explicit-v2']).optional(),
   targetClaimIds: z.array(boundedIdSchema).min(1).max(10_000),
   expectedHeadDigest: sha256DigestSchema,
   barrierWatermark: watermarkSchema,
@@ -650,12 +656,15 @@ export const evidenceDagAuditQueryInputSchema = z.object({
  * explicitly activate a different known Evidence thread.
  */
 export const evidenceDagActivationPayloadSchema = z.object({
-  view: z.enum(['graph', 'attention']).default('graph'),
+  view: z.enum(['graph', 'attention', 'closure']).default('graph'),
+  closureDigest: sha256DigestSchema.optional(),
   runtimeId: runtimeIdSchema.optional(),
   threadId: boundedIdSchema.optional(),
   snapshotDigest: sha256DigestSchema.optional(),
   nodeId: boundedIdSchema.optional()
 }).strict().superRefine((value, context) => {
+  if (value.view === 'closure' && !value.closureDigest) context.addIssue({ code: 'custom', message: 'An exact closure view requires its closure digest.' })
+  if (value.view !== 'closure' && value.closureDigest) context.addIssue({ code: 'custom', message: 'A closure digest must use the exact closure view.' })
   if (Boolean(value.runtimeId) === Boolean(value.threadId)) return
   context.addIssue({
     code: 'custom',
@@ -725,3 +734,46 @@ export type EvidenceDagExportSnapshotProductsOutput = z.infer<
 >
 export type EvidenceDagAuditQueryInput = z.input<typeof evidenceDagAuditQueryInputSchema>
 export type EvidenceDagActivationPayload = z.input<typeof evidenceDagActivationPayloadSchema>
+
+/** Read-only bridges to the existing Python reproducibility owner. */
+export const evidenceDagRerunSnapshotInputSchema = z.object({
+  runtimeId: runtimeIdSchema, threadId: boundedIdSchema,
+  workspaceRoot: z.string().min(1).max(4096).optional(),
+  snapshotDigest: sha256DigestSchema, conclusionId: boundedIdSchema
+}).strict()
+export const evidenceDagRerunSpecInputSchema = z.union([
+  evidenceDagRerunSnapshotInputSchema,
+  evidenceDagRerunSnapshotInputSchema.omit({ snapshotDigest: true }).extend({ closureDigest: sha256DigestSchema }).strict()
+])
+export const evidenceDagRerunCompareInputSchema = evidenceDagRerunSnapshotInputSchema.omit({ snapshotDigest: true, conclusionId: true }).extend({
+  baselineDigest: sha256DigestSchema, baselineConclusionId: boundedIdSchema,
+  candidateDigest: sha256DigestSchema, candidateConclusionId: boundedIdSchema
+}).strict()
+export const evidenceDagRerunSpecOutputSchema = sciforgeReproSpecSchema
+export const evidenceDagRerunCompareOutputSchema = z.object({
+  baseline: sciforgeReproSpecSchema, candidate: sciforgeReproSpecSchema,
+  comparison: z.object({
+    schemaVersion: z.literal('sciforge.rerun-comparison.v1'),
+    baselineSpecDigest: sha256DigestSchema, candidateSpecDigest: sha256DigestSchema,
+    sameInput: z.boolean(), sameSpec: z.boolean(), sameExecutionContext: z.boolean(),
+    resultMatch: z.boolean(), comparisonVerifiable: z.boolean(),
+    classification: z.enum(['input_changed', 'context_changed', 'spec_changed', 'unverifiable', 'component_changed', 'output_changed', 'uncontrolled_output_changed', 'match']),
+    replicationStatus: z.enum(['matched', 'failed', 'inconclusive']),
+    replicationRelation: z.enum(['replicates', 'fails_to_replicate']).nullable(),
+    differences: z.array(z.object({
+      component: z.enum(['input', 'spec', 'context', 'dependency', 'approval', 'output']),
+      baselineDigest: sha256DigestSchema.nullable(), candidateDigest: sha256DigestSchema.nullable(),
+      baselineValueDigest: sha256DigestSchema.optional(), candidateValueDigest: sha256DigestSchema.optional(),
+      baselineOutputId: boundedIdSchema.nullable().optional(), candidateOutputId: boundedIdSchema.nullable().optional(),
+      reasonCode: z.string().min(1).max(256)
+    }).strict()).max(20000), reasonCodes: z.array(z.string().min(1).max(256)).max(256)
+  }).strict()
+}).strict().superRefine((value, context) => {
+  if (value.comparison.baselineSpecDigest !== value.baseline.specDigest || value.comparison.candidateSpecDigest !== value.candidate.specDigest) {
+    context.addIssue({ code: 'custom', message: 'Comparison spec identities do not match.' })
+  }
+})
+export type EvidenceDagRerunSnapshotInput = z.infer<typeof evidenceDagRerunSnapshotInputSchema>
+export type EvidenceDagRerunSpecInput = z.infer<typeof evidenceDagRerunSpecInputSchema>
+export type EvidenceDagRerunCompareInput = z.infer<typeof evidenceDagRerunCompareInputSchema>
+export type EvidenceDagRerunCompareOutput = z.infer<typeof evidenceDagRerunCompareOutputSchema>

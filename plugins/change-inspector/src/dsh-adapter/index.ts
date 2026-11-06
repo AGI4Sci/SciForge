@@ -1,32 +1,24 @@
-/**
- * DSH entrypoint for Change Inspector.
- *
- * Entry shape (from the main-branch DSH tests): `export const inject = ['tools']`
- * and `export function apply(ctx, config)` registering tools with `defineTool`.
- *
- * Configuration is host-provided (`dshConfig`): `sessions` carries recorded
- * session details for the config-driven agent-threads fixture, used until the
- * host capability bridge for plugins exists (plugins/GAPS.md, G1).
- */
-import { z } from 'zod'
+/** Official DSH entry: no recorded sessions, static providers or Host-specific business injection. */
 import { Context } from '@deepseek-ai/cordis'
 import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { ChangeInspectorService } from '../core/service.js'
-import {
-  changeInspectorFixtureConfigSchema,
-  createConfigAgentThreads
-} from '../fixture/config-agent-threads.js'
+import type { ChangeInspectorSessionDetail } from '../ports/agent-threads.js'
 import { registerChangeInspectorTools, type DshToolDefinition } from './tools.js'
 
-export const inject = ['tools']
+export const inject = ['tools', 'agentThreads']
+type AgentThreadsClient = Readonly<{ invoke: (operation: string, input: unknown) => Promise<unknown> }>
 
-export function apply(ctx: Context & { tools: ToolRuntime }, config?: unknown): void {
-  const fixtureConfig = changeInspectorFixtureConfigSchema.parse(config ?? {})
+export function apply(ctx: Context & { tools: ToolRuntime; agentThreads: AgentThreadsClient }): void {
   const service = new ChangeInspectorService({
-    agentThreads: createConfigAgentThreads(fixtureConfig)
+    agentThreads: {
+      read: async ({ runtimeId, threadId }) => await ctx.agentThreads.invoke('read', {
+        ...(runtimeId ? { runtimeId } : {}),
+        ...(threadId ? { sessionId: threadId } : {})
+      }) as ChangeInspectorSessionDetail
+    }
   })
   registerChangeInspectorTools(
-    (tool) => ctx.tools.register(tool as never),
+    tool => ctx.tools.register(tool as never),
     (definition: DshToolDefinition) => defineTool(definition as never),
     () => service
   )

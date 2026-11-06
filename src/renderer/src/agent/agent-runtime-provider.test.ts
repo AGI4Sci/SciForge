@@ -151,7 +151,7 @@ function capabilities(runtimeId: AgentRuntimeId): AgentRuntimeCapabilities {
       steer: !isDsh,
       approval: isDsh ? 'async' : 'fail_closed',
       userInput: isDsh ? 'unsupported' : 'fail_closed',
-      compact: isDsh ? 'unsupported' : 'noop',
+      compact: isDsh ? 'unsupported' : 'native',
       fork: false,
       review: false,
       goals: false,
@@ -1727,6 +1727,25 @@ describe('AgentRuntimeProvider', () => {
       permissionLevel: 'request-approval', displayText: 'hello' })
     await provider.sendUserMessage('dsh-thread', 'plan', { mode: 'plan' })
     expect(startTurn).toHaveBeenLastCalledWith({ runtimeId: 'dsh', threadId: 'dsh-thread', text: 'plan', mode: 'plan' })
+  })
+
+  it('keeps a side turn on its exact runtime and forwards an empty tools policy after the main runtime changes', async () => {
+    const startTurn = vi.fn(async () => ({ threadId: 'side-thread', turnId: 'turn-side' }))
+    const auxiliary = vi.fn()
+    vi.stubGlobal('window', { sciforge: {
+      getSettings: vi.fn(async () => settings('claude')), setSettings: vi.fn(),
+      agentRuntime: { capabilities: vi.fn(async () => capabilities('codex')), startTurn, auxiliary }
+    } })
+    const provider = new AgentRuntimeProvider()
+    provider.rememberThreadRuntime('side-thread', 'codex')
+    await provider.sendUserMessage('side-thread', 'Explain the project context.', {
+      runtimeId: 'codex', allowedTools: [], workspace: '/project'
+    })
+    expect(startTurn).toHaveBeenCalledWith({ runtimeId: 'codex', threadId: 'side-thread',
+      text: 'Explain the project context.', allowedTools: [], workspace: '/project' })
+    expect(auxiliary).not.toHaveBeenCalled()
+    await expect(provider.sendUserMessage('side-thread', 'Wrong runtime', { runtimeId: 'claude' })).rejects.toThrow()
+    expect(startTurn).toHaveBeenCalledTimes(1)
   })
 
   it('forwards neutral turn model hints to Codex adapter calls', async () => {

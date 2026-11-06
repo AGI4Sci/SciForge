@@ -1,12 +1,16 @@
 import { cp, mkdir, readFile, realpath, rename, writeFile, stat } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { DshSessionEnvelopeCache } from './dsh-session-envelope.js'
 import { promisify } from 'node:util'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { logInfo, logWarn } from '../logger'
 import { developmentPluginUiUrl, type DevelopmentPluginUiAsset } from './development-plugin-ui-protocol'
 import { HOST_BUSINESS_INVOKE_TIMEOUT_MS } from './invocation-budgets'
 import { z } from 'zod'
 import {
+  bindWorkspaceArgument,
+  declaresWorkspaceArgument,
   PluginHost,
   ContributionHost,
   ProcessExtensionHost,
@@ -37,7 +41,8 @@ import {
   type ManagedRuntimeContribution,
   type WorkflowLifecycleContribution,
   type WorkflowLifecycleOperation,
-  type ManagedRuntimeOperationConfig
+  type ManagedRuntimeOperationConfig,
+  type DshInvocationContext
 } from '@sciforge/plugin-sdk'
 import { defineCapability } from '../capabilities/registry'
 import { CapabilityBrokerError } from '../capabilities/broker'
@@ -192,6 +197,14 @@ type PersistedState = Readonly<{
  * Development-only bridge used to exercise PR-1 end to end. It requires an
  * explicit absolute root and is never constructed in packaged builds.
  */
+/** Host grant and remote contract must agree before and during every call. */
+function validDshWorkspaceScope(grant: { scope?: string }, remote: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (!remote) return false
+  return grant.scope === 'workspace'
+    ? remote.scope === 'workspace' && declaresWorkspaceArgument(remote)
+    : remote.scope !== 'workspace'
+}
+
 export class DevelopmentExternalPluginService {
   readonly #root: string
   readonly #versionRoot: string
@@ -200,8 +213,19 @@ export class DevelopmentExternalPluginService {
   readonly #host: PluginHost
   /** Single owner of every plugin runtime (lifecycle + hot-update). */
   readonly #extensionHost: ProcessExtensionHost
+  /** G9: per (plugin, generation, runtime, thread) synthetic DSH session ids. */
+  readonly #dshSessions: DshSessionEnvelopeCache
   readonly #enabled = new Set<string>()
   readonly #dshConfigs = new Map<string, Readonly<Record<string, unknown>>>()
+  readonly #authorizeWorkspace?: (input: Readonly<{ caller: Record<string, unknown>; workspaceId: string }>) => boolean | Promise<boolean>
+  /** Packages whose DSH configuration is pinned by their Host contract. */
+  readonly #pinnedDshConfigs = new Set<string>()
+  readonly #pinnedContracts: Readonly<Record<string, Readonly<{
+    hostServices?: readonly string[]
+    dshConfig?: Readonly<Record<string, unknown>>
+    uiCapabilities?: readonly string[]
+    uiResourceKinds?: readonly string[]
+  }>>>
   #stateWriteTail: Promise<void> = Promise.resolve()
   #capabilitySyncTail: Promise<void> = Promise.resolve()
   #capabilityRegistry: CapabilityRegistry | undefined
@@ -243,6 +267,7 @@ export class DevelopmentExternalPluginService {
    * approval never changes how the development seam behaves.
    */
   readonly #installedAdapterContracts = new Map<string, PluginAdapterContract>()
+  readonly #pluginMutations = new Map<string, Promise<unknown>>()
   /**
    * The exact options object handed to `PluginHost`. The host re-reads
    * `adapterContracts` from it on every `discover()`, so refreshing the property
@@ -250,12 +275,6 @@ export class DevelopmentExternalPluginService {
    * host.
    */
   #hostOptions: { adapterContracts?: ReadonlyMap<string, PluginAdapterContract> }
-  /**
-   * Contracts for plugins installed through the market, keyed by `package@version`
-   * (with a package-name fallback). Kept apart from the development seam: an
-   * installed approval never changes how the development seam behaves.
-   */
-
   readonly #allowedPermissionIds: ReadonlySet<string>
   readonly #runAgentCommand: AgentCommandRunner
   /** Host-owned executor for approved ports operations; effects stay in the Host. */
@@ -271,6 +290,22 @@ export class DevelopmentExternalPluginService {
     hostApiVersion: string
     dshRuntimeVersion?: string
     adapterContracts?: ReadonlyMap<string, PluginAdapterContract>
+    /**
+     * Host-owned activation configuration, keyed by package name. A pinned
+     * package's persisted/user configuration never replaces it.
+     */
+    dshConfigs?: Readonly<Record<string, Readonly<Record<string, unknown>>>>
+    /**
+     * Host-owned contract data for exact package versions, keyed `name@version`.
+     * An install may declare its tools, but it can never grant itself Host
+     * services, DSH activation config or UI authority: those come from this pin.
+     */
+    pinnedContracts?: Readonly<Record<string, Readonly<{
+      hostServices?: readonly string[]
+      dshConfig?: Readonly<Record<string, unknown>>
+      uiCapabilities?: readonly string[]
+      uiResourceKinds?: readonly string[]
+    }>>>
     allowedPermissionIds?: ReadonlySet<string>
     /**
      * Host-vendored dependencies for installed plugins. The SDK resolves these
@@ -297,6 +332,13 @@ export class DevelopmentExternalPluginService {
     hostServiceIds?: readonly string[]
     hostServiceClients?: ReadonlyMap<string, readonly HostServiceClientFactory[]>
     resolveHostServiceClients?: (packageName: string, version: string, generation: number) => readonly HostServiceClientFactory[]
+    /**
+     * Host-owned workspace access decision for the tool lane. The caller's
+     * `workspaceId` is renderer-declared, so the Host must confirm the directory
+     * is one it actually has open before a workspace-bound tool may touch it.
+     * Returning `false` (or omitting the option) fails closed.
+     */
+    authorizeWorkspace?: (input: Readonly<{ caller: Record<string, unknown>; workspaceId: string }>) => boolean | Promise<boolean>
     invokeTimeoutMs?: number
   }>) {
     if (!isAbsolute(options.root)) throw new Error('Development plugin root must be absolute.')
@@ -310,6 +352,18 @@ export class DevelopmentExternalPluginService {
     this.#hostApiVersion = options.hostApiVersion
     this.#dshRuntimeVersion = options.dshRuntimeVersion
     this.#devAdapterContracts = options.adapterContracts
+    this.#authorizeWorkspace = options.authorizeWorkspace
+    this.#pinnedContracts = Object.freeze({ ...(options.pinnedContracts ?? {}) })
+    for (const [key, pin] of Object.entries(this.#pinnedContracts)) {
+      if (pin.dshConfig === undefined) continue
+      const packageName = key.slice(0, key.lastIndexOf('@'))
+      this.#dshConfigs.set(packageName, z.record(z.string(), z.json()).parse(pin.dshConfig))
+      this.#pinnedDshConfigs.add(packageName)
+    }
+    for (const [packageName, config] of Object.entries(options.dshConfigs ?? {})) {
+      this.#dshConfigs.set(packageName, z.record(z.string(), z.json()).parse(config))
+      this.#pinnedDshConfigs.add(packageName)
+    }
     this.#allowedPermissionIds = options.allowedPermissionIds ?? new Set()
     this.#runAgentCommand = options.runAgentCommand ?? defaultAgentCommandRunner
     this.#portsExecutor = options.portsExecutor
@@ -322,7 +376,25 @@ export class DevelopmentExternalPluginService {
           const providers = options.resolveHostServiceProviders!(packageName, version, generation)
           return providers ? new HostServiceProviderRegistry(providers) : undefined
         }
-      : undefined, onCapabilitiesChanged: (runtime: ProcessExtensionRuntime) => {
+      : undefined,
+      onInvocationTrace: trace => logInfo('plugin-invocation', JSON.stringify(trace)),
+      // G9: every invocation that carries an ordinary Session envelope is
+      // re-authorized here against the live generation and exact-version grant.
+      authorizeDshTool: (request) => {
+        const runtime = this.#extensionHost.runtime(request.packageName)
+        if (!runtime || runtime.snapshot.state !== 'active' || runtime.snapshot.generation !== request.generation) {
+          throw new Error(`DSH tool ${request.capabilityId} host authorization is stale.`)
+        }
+        const contract = this.#contract(request.packageName, request.version)
+        const authorization = contract?.dshAuthorization
+        const grant = Object.values(authorization?.tools ?? {}).find((candidate) => candidate.id === request.capabilityId)
+        if (contract?.approved !== true || authorization?.packageName !== request.packageName ||
+          authorization.packageVersion !== request.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
+          !grant || grant.effect !== request.effect || !validDshWorkspaceScope(grant, runtime.capabilityDescriptors.find(descriptor => descriptor.id === request.capabilityId))) {
+          throw new Error(`DSH tool ${request.capabilityId} host authorization is no longer valid.`)
+        }
+      },
+      onCapabilitiesChanged: (runtime: ProcessExtensionRuntime) => {
       const packageName = runtime.snapshot.packageName
       void this.#queueCapabilitySync(async () => {
         if (!this.#enabled.has(packageName) || this.#extensionHost.runtime(packageName) !== runtime) return
@@ -353,6 +425,21 @@ export class DevelopmentExternalPluginService {
       pluginRuntimeDeps: options.pluginRuntimeDeps,
       pluginRuntimeEnv: options.pluginRuntimeEnv,
       dshAgentResolver: options.dshAgentResolver })
+    this.#dshSessions = new DshSessionEnvelopeCache(async ({ packageName, generation, runtimeId, threadId }) => {
+      const runtime = this.#extensionHost.runtime(packageName)
+      if (!runtime) throw new Error(`Plugin ${packageName} has no active DSH runtime for this invocation.`)
+      const id = `host-${createHash('sha256').update([packageName, String(generation), runtimeId, threadId].join('\u0000')).digest('hex').slice(0, 32)}`
+      const created = await runtime.syntheticSession({
+        id,
+        createdAt: Date.now(),
+        events: 0
+      }, generation) as { id?: unknown }
+      if (typeof created?.id !== 'string' || created.id.length === 0) {
+        throw new Error('Host synthetic DSH session returned no session id.')
+      }
+      return created.id
+    })
+
     this.#updateCoordinator = new PluginUpdateCoordinator(this.#versionStore, this.#extensionHost,
       ({ packageName, version }) => ({
         onPortsRequest: (request, boundWorkspace) => this.#authorizeHostPort(packageName, version, request, boundWorkspace),
@@ -417,8 +504,89 @@ export class DevelopmentExternalPluginService {
     }
   }
 
+  /** Live Host-owned grants; declarations and plugin-specific pins never authorize ports. */
+  approvedHostServicePorts(packageName: string, version: string): readonly string[] | undefined {
+    const contract = this.#contract(packageName, version)
+    const authorization = contract?.dshAuthorization
+    if (contract?.approved !== true || authorization?.packageName !== packageName ||
+      authorization.packageVersion !== version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion) return undefined
+    return authorization.ports === undefined ? undefined : Object.freeze([...authorization.ports])
+  }
+
   has(packageName: string): boolean {
     return this.#host.plugins.some((plugin) => plugin.manifest.name === packageName)
+  }
+
+  /**
+   * Exact identity of an active plugin runtime.
+   *
+   * Host thin layers bind their resources to this identity instead of the
+   * package name: a disabled plugin returns undefined here, and a hot update
+   * changes the generation, so a binding made against the old runtime retires.
+   */
+  activePluginIdentity(packageName: string): Readonly<{ version: string; generation: number }> | undefined {
+    if (!this.#enabled.has(packageName)) return undefined
+    const runtime = this.#extensionHost.runtime(packageName)
+    if (!runtime || runtime.snapshot.state !== 'active') return undefined
+    return Object.freeze({ version: runtime.snapshot.version, generation: runtime.snapshot.generation })
+  }
+
+  /**
+   * Calls one of an active plugin's DSH tools directly, on behalf of a Host
+   * thin layer.
+   *
+   * This is not a Broker path on purpose: the plugin's own descriptors are
+   * resource-scoped, so routing a Host capability back through the Broker would
+   * dead-loop. Everything is still fail-closed here — the plugin must be
+   * enabled and active, the exact running version must be the approved one, and
+   * the tool must be one the runtime actually exposes with a DSH tool tag.
+   *
+   * The caller supplies the Session identity; the Host opens (and caches) the
+   * real synthetic DSH session for it, exactly as the G9 capability path does.
+   */
+  async invokeTool(
+    packageName: string,
+    toolName: string,
+    input: unknown,
+    invocation: DshInvocationContext
+  ): Promise<unknown> {
+    if (!this.#enabled.has(packageName)) throw new Error(`Plugin ${packageName} is not active.`)
+    const runtime = this.#extensionHost.runtime(packageName)
+    if (!runtime || runtime.snapshot.state !== 'active') throw new Error(`Plugin ${packageName} is not active.`)
+    const version = runtime.snapshot.version
+    const contract = this.#contract(packageName, version)
+    const authorization = contract?.dshAuthorization
+    if (contract?.approved !== true || authorization?.packageName !== packageName ||
+      authorization.packageVersion !== version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion) {
+      throw new Error(`Plugin ${packageName}@${version} is not approved for this Host.`)
+    }
+    const descriptor = runtime.capabilityDescriptors.find((candidate) =>
+      candidate.title === toolName && Array.isArray(candidate.tags) && candidate.tags.includes('dsh-tool'))
+    if (!descriptor) throw new Error(`Plugin ${packageName} does not provide tool ${toolName}.`)
+    const envelope = await this.#dshSessions.envelopeFor({
+      packageName,
+      generation: runtime.snapshot.generation,
+      caller: invocation.caller,
+      ordinarySession: {
+        runtimeId: invocation.ordinarySession.runtimeId,
+        threadId: invocation.ordinarySession.threadId
+      },
+      context: invocation.context
+    })
+    const result = await runtime.invoke(
+      descriptor.id,
+      input,
+      runtime.snapshot.generation,
+      undefined,
+      descriptor.runtimeRevision as number | undefined,
+      envelope
+    )
+    // The runtime answers in the capability-handler envelope `{ output }`; the
+    // Host thin layer wants the tool's own value.
+    if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'output')) {
+      throw new Error(`Plugin ${packageName} tool ${toolName} returned no output.`)
+    }
+    return (result as { output: unknown }).output
   }
 
   inventoryAdmission(input: Readonly<{ pluginId: string; contributionId: string; generation: number; version: string }>): Readonly<{
@@ -448,14 +616,27 @@ export class DevelopmentExternalPluginService {
   async rendererContributionDescriptors(): Promise<DomainExtensionRendererContribution[]> {
     const descriptors: DomainExtensionRendererContribution[] = []
     for (const plugin of this.#host.plugins) {
-      if (plugin.adapter?.kind !== 'renderer' || !this.#enabled.has(plugin.manifest.name)) continue
+      // A renderer surface is any plugin that declares `ui.entry` — an adapter
+      // `kind: 'renderer'` declaration or a formal DSH `sciforge.dsh.json`.
+      if (!this.#enabled.has(plugin.manifest.name) || !plugin.layout.rendererEntry) continue
       const runtime = this.#extensionHost.runtime(plugin.manifest.name)
-      if (!runtime || runtime.snapshot.state !== 'active' || !plugin.layout.rendererEntry) continue
+      if (!runtime || runtime.snapshot.state !== 'active') continue
       const active = await this.#versionStore.active(plugin.manifest.name)
       const directory = active?.directory ?? plugin.directory
       const entryPath = resolve(directory, plugin.layout.rendererEntry)
       const escaped = relative(directory, entryPath)
       if (escaped.startsWith(`..${sep}`) || escaped === '..' || isAbsolute(escaped)) continue
+      // The frame may only call the capabilities this exact contract granted, plus
+      // plain UI capabilities the Host explicitly admitted for this package.
+      const contract = this.#contract(plugin.manifest.name, runtime.snapshot.version)
+      const authorization = contract?.dshAuthorization
+      const capabilityIds = Object.freeze([...new Set([
+        ...Object.values(authorization?.tools ?? {}).map((grant) => grant.id),
+        ...(contract?.uiCapabilities ?? [])
+      ])].sort())
+      const resourceKinds = contract?.uiResourceKinds?.length
+        ? Object.freeze([...contract.uiResourceKinds])
+        : undefined
       for (const contribution of this.#rendererContributions.list(plugin.manifest.name)) {
         descriptors.push({
           pluginId: plugin.manifest.name,
@@ -465,7 +646,9 @@ export class DevelopmentExternalPluginService {
           generation: runtime.snapshot.generation,
           version: runtime.snapshot.version,
           entryUrl: developmentPluginUiUrl({ pluginId: plugin.manifest.name, generation: runtime.snapshot.generation, path: plugin.layout.rendererEntry }),
-          stateVersion: plugin.adapter.ui?.stateVersion ?? 1
+          stateVersion: plugin.adapter?.ui?.stateVersion ?? 1,
+          capabilityIds,
+          ...(resourceKinds === undefined ? {} : { resourceKinds })
         })
       }
     }
@@ -476,7 +659,7 @@ export class DevelopmentExternalPluginService {
   async rendererAssetPath(asset: DevelopmentPluginUiAsset): Promise<string | undefined> {
     const plugin = this.#host.plugins.find(({ manifest }) => manifest.name === asset.pluginId)
     const runtime = this.#extensionHost.runtime(asset.pluginId)
-    if (!plugin || plugin.adapter?.kind !== 'renderer' || !plugin.layout.rendererEntry ||
+    if (!plugin || !plugin.layout.rendererEntry ||
       !this.#enabled.has(asset.pluginId) || runtime?.snapshot.state !== 'active' ||
       runtime.snapshot.generation !== asset.generation || isAbsolute(asset.path)) return undefined
     try {
@@ -502,7 +685,17 @@ export class DevelopmentExternalPluginService {
   managedRuntimeContributions() { return this.#managedRuntimes.list() }
   workflowContributions() { return this.#workflowContributions.list() }
 
-  async setEnabled(packageName: string, enabled: boolean): Promise<DomainExtensionSummary> {
+  #queuePluginMutation<T>(packageName: string, operation: () => Promise<T>): Promise<T> {
+    const result = (this.#pluginMutations.get(packageName) ?? Promise.resolve()).catch(() => undefined).then(operation)
+    this.#pluginMutations.set(packageName, result)
+    return result.finally(() => { if (this.#pluginMutations.get(packageName) === result) this.#pluginMutations.delete(packageName) })
+  }
+
+  setEnabled(packageName: string, enabled: boolean): Promise<DomainExtensionSummary> {
+    return this.#queuePluginMutation(packageName, () => this.#setEnabled(packageName, enabled))
+  }
+
+  async #setEnabled(packageName: string, enabled: boolean): Promise<DomainExtensionSummary> {
     const plugin = this.#findPlugin(packageName)
     if (!plugin.compatibility.compatible) throw new Error(plugin.compatibility.reason)
     if (!plugin.permissions.allowed) throw new Error(plugin.permissions.reason)
@@ -519,6 +712,7 @@ export class DevelopmentExternalPluginService {
       await this.#recordInitialVersion(plugin)
     } else {
       this.#enabled.delete(packageName)
+      this.#dshSessions.dropPackage(packageName)
       await this.#host.registry.deactivate(packageName)
       await this.#host.registry.dispose(packageName)
       await this.#persistState()
@@ -531,8 +725,15 @@ export class DevelopmentExternalPluginService {
    * a stopped plugin. A persistence failure rejects but retains the validated
    * desired config in memory; a subsequent save retries it, without rollback.
    */
-  async setDshConfig(packageName: string, config: Readonly<Record<string, unknown>>): Promise<void> {
+  setDshConfig(packageName: string, config: Readonly<Record<string, unknown>>): Promise<void> {
+    return this.#queuePluginMutation(packageName, () => this.#setDshConfig(packageName, config))
+  }
+
+  async #setDshConfig(packageName: string, config: Readonly<Record<string, unknown>>): Promise<void> {
     this.#findPlugin(packageName)
+    if (this.#pinnedDshConfigs.has(packageName)) {
+      throw new Error('This plugin configuration is pinned by its Host contract.')
+    }
     if (this.#enabled.has(packageName) || this.#extensionHost.runtime(packageName) || this.#extensionHost.pending(packageName)) {
       throw new Error('Stop the plugin before changing its DSH configuration.')
     }
@@ -542,10 +743,17 @@ export class DevelopmentExternalPluginService {
   }
 
   async dispose(): Promise<void> {
-    await Promise.all(this.#host.registry.snapshots().map(({ packageName }) =>
-      this.#host.registry.dispose(packageName).catch(() => undefined)
-    ))
-    await this.#extensionHost.disposeAll()
+    this.#dshSessions.clear()
+    try {
+      await Promise.all(this.#host.registry.snapshots().map(({ packageName }) =>
+        this.#host.registry.dispose(packageName).catch(() => undefined)
+      ))
+      await this.#extensionHost.disposeAll()
+    } finally {
+      // An already admitted caller may reach the cache while teardown awaits.
+      // Fence those entries too, including when runtime disposal fails.
+      this.#dshSessions.clear()
+    }
     if (this.#agentCapabilityRegistry) {
       for (const id of DEVELOPMENT_PLUGIN_AGENT_CAPABILITY_IDS) {
         this.#agentCapabilityRegistry.unregister(id)
@@ -626,7 +834,11 @@ export class DevelopmentExternalPluginService {
    * with a diagnostic. No Agent context, model stream, mailbox or multi-agent
    * state migration is performed.
    */
-  async replacePlugin(packageName: string, sourceDirectory: string): Promise<DomainExtensionSummary> {
+  replacePlugin(packageName: string, sourceDirectory: string): Promise<DomainExtensionSummary> {
+    return this.#queuePluginMutation(packageName, () => this.#replacePlugin(packageName, sourceDirectory))
+  }
+
+  async #replacePlugin(packageName: string, sourceDirectory: string): Promise<DomainExtensionSummary> {
     const plugin = this.#findPlugin(packageName)
     if (!this.#enabled.has(packageName) || this.#host.registry.get(packageName)?.snapshot?.state !== 'active') {
       throw new Error(`Plugin ${packageName} is not enabled and active; cannot hot-replace.`)
@@ -687,7 +899,11 @@ export class DevelopmentExternalPluginService {
   }
 
   /** Host-controlled candidate check: stage + verify, do NOT apply yet. */
-  async checkCandidate(packageName: string, sourceDirectory: string): Promise<DomainExtensionSummary> {
+  checkCandidate(packageName: string, sourceDirectory: string): Promise<DomainExtensionSummary> {
+    return this.#queuePluginMutation(packageName, () => this.#checkCandidate(packageName, sourceDirectory))
+  }
+
+  async #checkCandidate(packageName: string, sourceDirectory: string): Promise<DomainExtensionSummary> {
     const plugin = this.#findPlugin(packageName)
     if (!this.#enabled.has(packageName) || this.#host.registry.get(packageName)?.snapshot?.state !== 'active') {
       throw new Error(`Plugin ${packageName} is not enabled and active; cannot check a candidate.`)
@@ -843,7 +1059,11 @@ export class DevelopmentExternalPluginService {
   requestUpdate(candidateId: string) { return this.requestAgentUpdate(candidateId) }
 
   /** Host-controlled apply: use a checked candidate; P1 hot-swaps, P2/P3/P4 stay restart-required. */
-  async applyCandidate(packageName: string): Promise<DomainExtensionSummary> {
+  applyCandidate(packageName: string): Promise<DomainExtensionSummary> {
+    return this.#queuePluginMutation(packageName, () => this.#applyCandidate(packageName))
+  }
+
+  async #applyCandidate(packageName: string): Promise<DomainExtensionSummary> {
     const candidate = this.#candidates.get(packageName)
     if (!candidate) throw new Error(`No checked candidate for ${packageName}; call checkCandidate first.`)
     if (!this.#enabled.has(packageName) || this.#host.registry.get(packageName)?.snapshot?.state !== 'active') {
@@ -875,7 +1095,11 @@ export class DevelopmentExternalPluginService {
   }
 
   /** Host-controlled cancel of a checked candidate / pending restart. */
-  async cancelCandidate(packageName: string): Promise<DomainExtensionSummary> {
+  cancelCandidate(packageName: string): Promise<DomainExtensionSummary> {
+    return this.#queuePluginMutation(packageName, () => this.#cancelCandidate(packageName))
+  }
+
+  async #cancelCandidate(packageName: string): Promise<DomainExtensionSummary> {
     this.#candidates.delete(packageName)
     this.#pendingRestart.delete(packageName)
     for (const record of this.#agentCandidates.values()) {
@@ -909,7 +1133,16 @@ export class DevelopmentExternalPluginService {
     }
     this.#installedAdapterContracts.set(
       `${authorization.packageName}@${authorization.packageVersion}`,
-      Object.freeze(contract)
+      (() => {
+        const key = `${authorization.packageName}@${authorization.packageVersion}`
+        const pin = this.#pinnedContracts[key]
+        if (pin === undefined) return Object.freeze(contract)
+        if (pin.dshConfig !== undefined) {
+          this.#dshConfigs.set(authorization.packageName, z.record(z.string(), z.json()).parse(pin.dshConfig))
+          this.#pinnedDshConfigs.add(authorization.packageName)
+        }
+        return Object.freeze({ ...contract, ...pin })
+      })()
     )
     this.#refreshHostAdapterContracts()
   }
@@ -919,23 +1152,84 @@ export class DevelopmentExternalPluginService {
    * discovery root. Discovery, approval, activation and version recording all
    * run through the existing canonical paths; nothing here bypasses policy.
    */
-  async installFromDirectory(
+  installFromDirectory(
     sourceDirectory: string,
-    contract: PluginAdapterContract
+    contract: PluginAdapterContract,
+    restoreInstallation: () => Promise<void>
   ): Promise<DomainExtensionSummary> {
-    const absolute = resolve(sourceDirectory)
-    const relativeToRoot = relative(this.#root, absolute)
-    if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
-      throw new Error(`Installed plugin directory must live under the plugin root: ${absolute}`)
+    return this.#queuePluginMutation(contract.dshAuthorization?.packageName ?? sourceDirectory,
+      () => this.#installFromDirectory(sourceDirectory, contract, restoreInstallation))
+  }
+
+  async #installFromDirectory(
+    sourceDirectory: string,
+    contract: PluginAdapterContract,
+    restoreInstallation: () => Promise<void>
+  ): Promise<DomainExtensionSummary> {
+    const previous = await (async () => {
+      const absolute = resolve(sourceDirectory)
+      const relativeToRoot = relative(this.#root, absolute)
+      if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
+        throw new Error(`Installed plugin directory must live under the plugin root: ${absolute}`)
+      }
+      const authorization = contract.dshAuthorization
+      if (!authorization) throw new Error('An installed plugin contract must carry a DSH authorization.')
+      return {
+        authorization,
+        previousPointer: await this.#versionStore.active(authorization.packageName),
+        previousVersions: await this.#versionStore.versions(authorization.packageName)
+      }
+    })().catch(async (error: unknown) => {
+      try { await restoreInstallation() }
+      catch (restoreError) { throw new AggregateError([error, restoreError], 'Installation validation and file recovery failed.') }
+      throw error
+    })
+    const { authorization, previousPointer, previousVersions } = previous
+    const packageName = authorization.packageName
+    const key = `${packageName}@${authorization.packageVersion}`
+    const previousContract = this.#installedAdapterContracts.get(key)
+    // Persisted enabled intent can outlive an uninstalled or rejected package.
+    // Recovery may resume only an installation that existed before this attempt.
+    const wasEnabled = this.#enabled.has(packageName) && this.#host.plugins.some(plugin => plugin.manifest.name === packageName)
+    const retire = async (): Promise<void> => {
+      this.#enabled.delete(packageName)
+      this.#dshSessions.dropPackage(packageName)
+      await this.#host.registry.dispose(packageName)
+      await this.#extensionHost.dispose(packageName)
+      this.#host.registry.remove(packageName)
     }
-    await this.registerInstalledContract(contract)
-    await this.#host.discover()
-    const packageName = contract.dshAuthorization!.packageName
-    const plugin = this.#host.plugins.find((candidate) => candidate.manifest.name === packageName)
-    if (!plugin) {
-      throw new Error(`Installed plugin ${packageName} was not discovered under ${this.#root}.`)
+    try {
+      await retire()
+      // Discovery otherwise resolves the old active snapshot instead of the
+      // newly approved installed directory and silently "upgrades" to itself.
+      await this.#versionStore.clearActive(packageName)
+      await this.registerInstalledContract(contract)
+      await this.#host.discover()
+      const plugin = this.#findPlugin(packageName)
+      if (plugin.manifest.version !== authorization.packageVersion) throw new Error('Installed plugin version does not match its approval.')
+      return await this.#setEnabled(packageName, true)
+    } catch (error) {
+      try {
+        // Stop only this attempt; uninstall would destroy all prior snapshots
+        // and approvals. No old generation is resumed until cleanup succeeds.
+        await retire()
+        await this.#versionStore.clearActive(packageName)
+        await restoreInstallation()
+        if (previousContract) this.#installedAdapterContracts.set(key, previousContract)
+        else this.#installedAdapterContracts.delete(key)
+        this.#refreshHostAdapterContracts()
+        if (previousPointer) await this.#versionStore.restore(packageName, previousPointer)
+        if (!previousVersions.includes(authorization.packageVersion)) {
+          await this.#versionStore.removeVersion(packageName, authorization.packageVersion)
+        }
+        await this.#host.discover()
+        if (wasEnabled) await this.#setEnabled(packageName, true)
+        else await this.#persistState()
+      } catch (restoreError) {
+        throw new AggregateError([error, restoreError], 'Plugin installation failed and recovery is incomplete; retained installation data requires recovery.')
+      }
+      throw error
     }
-    return await this.setEnabled(packageName, true)
   }
 
   /**
@@ -943,10 +1237,14 @@ export class DevelopmentExternalPluginService {
    * caller removes the plugin directory itself; this method owns the version
    * store, the runtime and the approval contract.
    */
-  async uninstall(packageName: string): Promise<void> {
+  uninstall(packageName: string): Promise<void> {
+    return this.#queuePluginMutation(packageName, () => this.#uninstall(packageName))
+  }
+
+  async #uninstall(packageName: string): Promise<void> {
     const plugin = this.#host.plugins.find((candidate) => candidate.manifest.name === packageName)
     if (!plugin) throw new Error(`Installed plugin ${packageName} was not found.`)
-    if (this.#enabled.has(packageName)) await this.setEnabled(packageName, false)
+    if (this.#enabled.has(packageName)) await this.#setEnabled(packageName, false)
     this.#host.registry.remove(packageName)
     // The store refuses to remove the active version, so drop the pointer first:
     // the runtime is already deactivated above, and the directory is removed by
@@ -978,9 +1276,28 @@ export class DevelopmentExternalPluginService {
     await this.#host.discover()
   }
 
+  /** Stable host-derived Session identity for renderer callers (no agent thread). */
+  #uiOrdinarySession(caller: CapabilityHandlerContext['caller']): { runtimeId: string; threadId: string } | undefined {
+    if (!caller?.callerId) return undefined
+    return {
+      runtimeId: 'sciforge-ui',
+      threadId: `ui-${createHash('sha256').update(`${caller.callerId}\u0000${caller.workspaceId ?? ''}`).digest('hex').slice(0, 16)}`
+    }
+  }
+
+  /** Live Host-approved exact-version view, including installs in this process. */
+  approvedContractFor(key: string): PluginAdapterContract | undefined {
+    const separator = key.lastIndexOf('@')
+    if (separator <= 0) return undefined
+    return this.#contract(key.slice(0, separator), key.slice(separator + 1))
+  }
+
   #contract(packageName: string, version: string): PluginAdapterContract | undefined {
-    return resolvePluginAdapterContract(this.#installedAdapterContracts, packageName, version) ??
+    const contract = resolvePluginAdapterContract(this.#installedAdapterContracts, packageName, version) ??
       resolvePluginAdapterContract(this.#devAdapterContracts, packageName, version)
+    if (contract === undefined) return undefined
+    const pin = this.#pinnedContracts[`${packageName}@${version}`]
+    return pin === undefined ? contract : Object.freeze({ ...contract, ...pin })
   }
 
   /**
@@ -1165,7 +1482,11 @@ export class DevelopmentExternalPluginService {
    * (never the SignedExtensionStore.rollback path). Only succeeds if a real previous
    * version exists (the original discovered version, or another staged non-active version).
    */
-  async rollback(packageName: string): Promise<DomainExtensionSummary> {
+  rollback(packageName: string): Promise<DomainExtensionSummary> {
+    return this.#queuePluginMutation(packageName, () => this.#rollback(packageName))
+  }
+
+  async #rollback(packageName: string): Promise<DomainExtensionSummary> {
     const plugin = this.#findPlugin(packageName)
     if (!this.#enabled.has(packageName)) throw new Error(`Plugin ${packageName} is not enabled; cannot roll back.`)
     const previous = this.#previousActive.get(packageName)
@@ -1222,6 +1543,7 @@ export class DevelopmentExternalPluginService {
       typeof client.serviceId === 'string' && client.serviceId.length > 0 && client.serviceId === client.serviceId.trim() &&
       typeof client.modulePath === 'string' && isAbsolute(client.modulePath) &&
       typeof client.exportName === 'string' && client.exportName.trim().length > 0 &&
+      (client.provides === undefined || (Array.isArray(client.provides) && client.provides.length > 0 && client.provides.length <= 32 && new Set(client.provides).size === client.provides.length && client.provides.every((name: unknown) => typeof name === 'string' && name.length > 0 && name === name.trim()))) &&
       client.config !== null && typeof client.config === 'object' && !Array.isArray(client.config))) return []
     return clients
   }
@@ -1245,13 +1567,25 @@ export class DevelopmentExternalPluginService {
       : undefined
     // Resolve once per snapshot, not once per remote descriptor. Do not cache
     // across invocations: the current exact-version composition may be revoked.
-    let hasHostServiceClients: boolean | undefined
     const workspaceResourceId = (actionId: string, caller: CapabilityHandlerContext['caller']) =>
       `dsh-workspace:${JSON.stringify([plugin.manifest.name, runtime.snapshot.version, generation, actionId, caller.audience, caller.callerId, caller.workspaceId])}`
     const hasResourceKind = (remote: (typeof definitions)[number], kind: string) => Array.isArray(remote.resourceKinds) && remote.resourceKinds.includes(kind)
+    // Capability ids must be canonical (`@scope/name` is not). Scoped package
+    // names therefore get a deterministic, canonical prefix for derived ids;
+    // unscoped names keep their historical id.
+    const canonicalIdPrefix = (name: string): string => /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/.test(name)
+      ? name
+      : name.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '')
     const validReadResource = (grant: { effect: string; readResource?: string }, remote: (typeof definitions)[number]) =>
       grant.readResource === undefined ? !hasResourceKind(remote, 'dsh-workspace') :
         grant.readResource === 'workspace' && grant.effect === 'read' && Array.isArray(remote.resourceKinds) && remote.resourceKinds.length === 1 && remote.resourceKinds[0] === 'dsh-workspace'
+    const authorizeWorkspace = async (caller: CapabilityHandlerContext['caller'], capabilityId: string) => {
+      if (!caller?.workspaceId) throw new Error(`Extension capability ${capabilityId} requires a workspace-scoped caller.`)
+      if (!this.#authorizeWorkspace) throw new Error(`Extension capability ${capabilityId} requires a Host workspace authorizer.`)
+      if (!await this.#authorizeWorkspace({ caller: { ...caller }, workspaceId: caller.workspaceId })) {
+        throw new Error(`Extension capability ${capabilityId} is not authorized for workspace ${caller.workspaceId}.`)
+      }
+    }
     for (const remote of definitions) {
       if (ids.has(remote.id)) throw new Error(`Duplicate capability ID: ${remote.id}`)
       ids.add(remote.id)
@@ -1266,12 +1600,36 @@ export class DevelopmentExternalPluginService {
         const contract = this.#contract(plugin.manifest.name, runtime.snapshot.version)
         const authorization = contract?.dshAuthorization
         const grant = namedTool !== undefined ? authorization?.tools?.[namedTool] : undefined
-        if (contract?.approved !== true || authorization?.packageName !== plugin.manifest.name ||
-          authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
-          !grant || grant.id !== remote.id || grant.effect !== remote.effect || !validReadResource(grant, remote) || (grant.effect !== 'compute' && !(hasHostServiceClients ??= this.#serviceClientsFor(plugin.manifest.name, runtime.snapshot.version, generation).length > 0))) continue
+        const grantIssue = contract?.approved !== true ? 'contract is not approved'
+          : authorization?.packageName !== plugin.manifest.name ? 'authorization packageName mismatch'
+            : authorization?.packageVersion !== runtime.snapshot.version ? 'authorization packageVersion mismatch'
+              : authorization?.dshRuntimeVersion !== this.#dshRuntimeVersion ? 'authorization dshRuntimeVersion mismatch'
+                : !grant ? 'no matching tool grant'
+                  : grant.id !== remote.id ? 'grant id mismatch'
+                    : grant.effect !== remote.effect ? 'grant effect mismatch'
+                      : !validDshWorkspaceScope(grant, remote) ? 'grant scope mismatch'
+                      : !validReadResource(grant, remote) ? 'grant readResource mismatch'
+                        : undefined
+        if (grantIssue !== undefined) {
+          logWarn('extensions', `DSH tool ${remote.id} from ${plugin.manifest.name} was not registered: ${grantIssue}.`)
+          continue
+        }
       }
       if (Array.isArray(remote.tags) && remote.tags.includes('dsh-tool') && hasResourceKind(remote, 'dsh-session') && remote.effect === 'read' && firstReadDshTool === undefined) firstReadDshTool = remote
       const { runtimeRevision, ...brokerDescriptor } = remote
+      const assertToolGrant = async () => {
+        if (!Array.isArray(remote.tags) || !remote.tags.includes('dsh-tool')) return
+        const effective = await this.#entryFor(plugin)
+        await this.#assertCandidateIdentity(plugin.manifest.name, effective.directory)
+        const authorization = this.#contract(plugin.manifest.name, runtime.snapshot.version)?.dshAuthorization
+        const grant = namedTool !== undefined ? authorization?.tools?.[namedTool] : undefined
+        if (this.#extensionHost.runtime(plugin.manifest.name) !== runtime || runtime.snapshot.state !== 'active' || runtime.snapshot.generation !== generation ||
+          this.#contract(plugin.manifest.name, runtime.snapshot.version)?.approved !== true || authorization?.packageName !== plugin.manifest.name ||
+          authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
+          !grant || grant.id !== remote.id || grant.effect !== remote.effect || !validDshWorkspaceScope(grant, remote) || !validReadResource(grant, remote)) {
+          throw new Error(`DSH tool ${remote.id} host grant is no longer authorized.`)
+        }
+      }
       const definition = {
         descriptor: { ...brokerDescriptor,
           inputSchema: z.toJSONSchema(inputSchema, { target: 'draft-07', unrepresentable: 'throw' }),
@@ -1279,18 +1637,7 @@ export class DevelopmentExternalPluginService {
         inputSchema,
         outputSchema,
         handler: async (input: unknown, context: CapabilityHandlerContext) => {
-          if (Array.isArray(remote.tags) && remote.tags.includes('dsh-tool')) {
-            const effective = await this.#entryFor(plugin)
-            await this.#assertCandidateIdentity(plugin.manifest.name, effective.directory)
-            const contract = this.#contract(plugin.manifest.name, runtime.snapshot.version)
-            const authorization = contract?.dshAuthorization
-            const grant = namedTool !== undefined ? authorization?.tools?.[namedTool] : undefined
-            if (contract?.approved !== true || authorization?.packageName !== plugin.manifest.name ||
-              authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
-              !grant || grant.id !== remote.id || grant.effect !== remote.effect || !validReadResource(grant, remote) || (grant.effect !== 'compute' && this.#serviceClientsFor(plugin.manifest.name, runtime.snapshot.version, generation).length === 0)) {
-              throw new Error(`DSH tool ${remote.id} host grant is no longer authorized.`)
-            }
-          }
+          await assertToolGrant()
           try {
             // Workspace-scoped extension capabilities bind the caller's
             // workspace into the input, mirroring the static adapter path
@@ -1305,28 +1652,52 @@ export class DevelopmentExternalPluginService {
                 throw new Error(`DSH read capability ${remote.id} requires its authenticated dsh-session resource.`)
               }
             }
-            if (remote.scope === 'workspace' && !callerWorkspace) {
-              throw new Error(`Extension capability ${remote.id} requires a workspace-scoped caller.`)
+            if (remote.scope === 'workspace' || hasResourceKind(remote, 'dsh-workspace')) {
+              await authorizeWorkspace(context.caller, remote.id)
+              await assertToolGrant()
+              context.assertPrincipalCurrent?.()
             }
-            const effectiveInput = remote.scope === 'workspace'
-              ? { ...(input as Record<string, unknown> | null | undefined), workspaceRoot: callerWorkspace }
-              : input
-            const hostServices = this.#hostServiceIds.length ? {
+            const effectiveInput = bindWorkspaceArgument(remote, input, callerWorkspace)
+            // G9: the runner requires a complete ordinary Session envelope for
+            // every non-compute DSH tool. The Broker only knows runtimeId and
+            // threadId, so the Host opens/reuses one synthetic DSH session per
+            // thread and fails closed if it cannot.
+            const invocationSession = context.ordinarySession ?? this.#uiOrdinarySession(context.caller)
+            // A `hostServices: 'none'` plugin never uses the service lane, even
+            // when the app has Host services for other plugins (G7).
+            const dshAuthorization = this.#contract(plugin.manifest.name, runtime.snapshot.version)?.dshAuthorization
+            const requestedServices = dshAuthorization?.hostServices
+            const serviceIds = Array.isArray(requestedServices) ? requestedServices : requestedServices === 'none' ? [] : this.#hostServiceIds
+            if (serviceIds.some(id => !this.#hostServiceIds.includes(id))) throw new Error('An authorized Host service is unavailable.')
+            const serviceLane = serviceIds.length > 0
+            // Only DSH tools carry a runner-required envelope; legacy named-runner
+            // capabilities keep their ports lane and must not open a session.
+            const isDshTool = Array.isArray(remote.tags) && remote.tags.includes('dsh-tool')
+            const dshInvocation = isDshTool && (!serviceLane || Array.isArray(requestedServices)) && remote.effect !== 'compute' && invocationSession
+              ? await this.#dshSessions.envelopeFor({
+                  packageName: plugin.manifest.name,
+                  generation,
+                  caller: context.caller as unknown as Readonly<Record<string, unknown>>,
+                  ordinarySession: invocationSession,
+                  context: (context.originalContext ?? {}) as Readonly<Record<string, unknown>>
+                })
+              : undefined
+            const hostServices = serviceLane || remote.scope === 'workspace' ? {
               authority: {
                 caller: context.caller,
                 capabilityId: remote.id,
                 effect: remote.effect,
                 ...(context.resource && hasResourceKind(remote, 'dsh-workspace') ? { resource: { resourceId: context.resource.resourceId, resourceKind: context.resource.resourceKind } } : {}),
                 ...(context.invocationId ? { invocationId: context.invocationId } : {}),
-                ...(context.ordinarySession ? { ordinarySession: context.ordinarySession } : {}),
+                ...(invocationSession ? { ordinarySession: invocationSession } : {}),
+                ...(dshInvocation ? { sessionId: dshInvocation.ordinarySession.sessionId } : {}),
                 ...(context.originalContext ? { originalContext: context.originalContext } : {}),
               },
-              services: this.#hostServiceIds,
+              services: serviceIds,
               assertCurrent: context.assertPrincipalCurrent,
             } : undefined
-            // The generic service lane retains the actual Host Session facts.
-            // It does not invent a DSH native sessionId or child-local Agent.
-            return await runtime.invoke(remote.id, effectiveInput, generation, context.signal, runtimeRevision as number | undefined, undefined, hostServices)
+            // Existing service contracts retain their Session lane; explicit native clients also receive the authenticated child session.
+            return await runtime.invoke(remote.id, effectiveInput, generation, context.signal, runtimeRevision as number | undefined, dshInvocation, hostServices)
           } catch (error) {
             if (error instanceof Error && 'code' in error && error.code === 'request_cancelled') {
               throw new CapabilityBrokerError('invocation_cancelled', 'Extension invocation was explicitly cancelled.', { cause: error })
@@ -1342,15 +1713,10 @@ export class DevelopmentExternalPluginService {
         if (ids.has(openerId) || definitions.some(candidate => candidate.id === openerId)) throw new Error(`Duplicate capability ID: ${openerId}`)
         ids.add(openerId)
         const registrations = new Map<string, Parameters<CapabilityHandlerContext['issueResource']>[0]>()
-        const assertReadGrant = async () => {
-          const effective = await this.#entryFor(plugin)
-          await this.#assertCandidateIdentity(plugin.manifest.name, effective.directory)
-          const contract = this.#contract(plugin.manifest.name, runtime.snapshot.version)
-          const authorization = contract?.dshAuthorization
-          const grant = namedTool ? authorization?.tools?.[namedTool] : undefined
-          if (this.#extensionHost.runtime(plugin.manifest.name) !== runtime || runtime.snapshot.state !== 'active' || runtime.snapshot.generation !== generation ||
-            contract?.approved !== true || authorization?.packageName !== plugin.manifest.name || authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
-            !grant || grant.id !== remote.id || grant.effect !== 'read' || !validReadResource(grant, remote) || this.#serviceClientsFor(plugin.manifest.name, runtime.snapshot.version, generation).length === 0 || !this.#capabilityRegistry?.get(remote.id)) throw new Error('DSH workspace read grant is no longer authorized.')
+        const assertReadAccess = async (caller: CapabilityHandlerContext['caller']) => {
+          await authorizeWorkspace(caller, remote.id)
+          await assertToolGrant()
+          if (!this.#capabilityRegistry?.get(remote.id)) throw new Error('DSH workspace read grant is no longer authorized.')
         }
         const openerInput = z.object({}), openerOutput = z.object({ token: z.string(), semanticRevision: z.string(), expiresAt: z.string() })
         const openerRemote = { contractVersion: 3, id: openerId, version: remote.version, title: 'Open authenticated DSH workspace read', description: 'Issue a caller-bound workspace resource for one approved read operation.',
@@ -1359,7 +1725,7 @@ export class DevelopmentExternalPluginService {
         const openerDefinition = { descriptor: openerRemote, inputSchema: openerInput, outputSchema: openerOutput,
           handler: async (_input: unknown, context: CapabilityHandlerContext) => {
             if (!context.caller.workspaceId || !context.caller.callerId) throw new Error('Authenticated workspace and caller are required.')
-            await assertReadGrant(); context.assertPrincipalCurrent()
+            await assertReadAccess(context.caller); context.assertPrincipalCurrent()
             const resourceId = workspaceResourceId(remote.id, context.caller)
             let registration = registrations.get(resourceId)
             if (!registration) {
@@ -1367,7 +1733,7 @@ export class DevelopmentExternalPluginService {
               registration = { resourceId, resourceKind: 'dsh-workspace', workspaceId: caller.workspaceId, semanticRevision: String(generation), retireAfterLastHandleExpires: true,
                 observe: async observedCaller => {
                   if (observedCaller.callerId !== caller.callerId || observedCaller.audience !== caller.audience || observedCaller.workspaceId !== caller.workspaceId) throw new Error('DSH workspace caller mismatch.')
-                  await assertReadGrant()
+                  await assertReadAccess(observedCaller)
                   return { state: {}, semanticRevision: String(generation), operationIds: [remote.id] }
                 } }
               registrations.set(resourceId, registration)
@@ -1410,8 +1776,7 @@ export class DevelopmentExternalPluginService {
         const authorization = contract?.dshAuthorization
         if (active !== runtime || runtime.snapshot.state !== 'active' || runtime.snapshot.generation !== generation ||
           contract?.approved !== true || authorization?.packageName !== plugin.manifest.name ||
-          authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
-          this.#serviceClientsFor(plugin.manifest.name, runtime.snapshot.version, generation).length === 0) {
+          authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion) {
           throw new Error('DSH Session opener host grant is no longer authorized.')
         }
         const operationIds = prepared.filter(({ remote }) => remote.scope === 'resource' && remote.effect === 'read' && hasResourceKind(remote, 'dsh-session') &&
@@ -1428,7 +1793,9 @@ export class DevelopmentExternalPluginService {
         handler: async (_input: unknown, context: CapabilityHandlerContext) => {
           const session = context.ordinarySession
           const workspaceId = context.caller.workspaceId
-          if (!session || !workspaceId || context.caller.audience !== 'agent' || !context.caller.callerId) throw new Error('An authenticated ordinary Session with a workspace and caller is required.')
+          if (!session || !workspaceId || context.caller.audience !== 'agent' || !context.caller.callerId) {
+            throw new Error('An authenticated ordinary Session with a workspace and caller is required.')
+          }
           await currentReadOperations()
           context.assertPrincipalCurrent()
           const resourceId = sessionResourceId(context)!
@@ -1494,8 +1861,10 @@ export class DevelopmentExternalPluginService {
   async #registerTypedContributions(plugin: DiscoveredPlugin, runtime: ProcessExtensionRuntime): Promise<void> {
     const packageName = plugin.manifest.name
     const generation = runtime.snapshot.generation
+    // Renderer contributions come from any plugin that declares a UI entry —
+    // adapter `kind: 'renderer'` or a formal DSH `sciforge.dsh.json` ui.entry.
     const adapterKind = plugin.adapter?.kind
-    if (adapterKind === 'renderer') {
+    if (adapterKind === 'renderer' || plugin.layout.rendererEntry !== undefined) {
       try {
         // A new runtime generation owns a fresh descriptor set. Removing the
         // previous generation first prevents stale panels from surviving a UI

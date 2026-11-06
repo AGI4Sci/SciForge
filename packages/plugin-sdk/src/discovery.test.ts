@@ -88,3 +88,39 @@ test('dummy host discovers and drives a plugin without static composition', asyn
   await host.registry.dispose('@example/dummy-plugin')
   assert.deepEqual(events, ['activate', 'deactivate', 'dispose'])
 })
+
+test('a formal DSH plugin declares its renderer surface in sciforge.dsh.json', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-plugin-ui-'))
+  try {
+    const plugin = join(root, 'with-ui')
+    await mkdir(join(plugin, 'dist', 'ui'), { recursive: true })
+    await writeFile(join(plugin, 'package.json'), JSON.stringify({ name: '@example/ui-plugin', version: '0.1.0', engines: { dsh: '^1.0.0' }, exports: { '.': './dist/main.js' }, dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+    await writeFile(join(plugin, 'cordis.patch.yml'), '[{"insert":[{"id":"example.ui","name":"./dist/main.js"}]}]')
+    await writeFile(join(plugin, 'dist', 'main.js'), 'export {}')
+    await writeFile(join(plugin, 'dist', 'ui', 'index.html'), '<!doctype html><div id="root"></div>')
+    await writeFile(join(plugin, 'sciforge.dsh.json'), JSON.stringify({
+      schemaVersion: 1, packageName: '@example/ui-plugin', entry: 'dist/main.js',
+      ui: { entry: 'dist/ui/index.html', stateVersion: 1 }
+    }))
+    const discovered = await discoverPlugins(root, {
+      root, hostApiVersion: '1.11.0', dshRuntimeVersion: '1.0.0',
+      adapterContracts: new Map([['@example/ui-plugin', { hostApiRange: '^1.0.0', permissions: [], approved: true }]])
+    })
+    assert.equal(discovered[0]?.layout.rendererEntry, 'dist/ui/index.html')
+    assert.deepEqual(discovered[0]?.layout.contributionKinds.includes('renderer'), true)
+
+    await writeFile(join(plugin, 'sciforge.dsh.json'), JSON.stringify({
+      schemaVersion: 1, packageName: '@example/ui-plugin', entry: 'dist/main.js',
+      ui: { entry: '../outside.html' }
+    }))
+    // An escaping UI entry fails structure validation, so discovery drops the
+    // plugin instead of exposing a frame outside its own directory.
+    const rejected = await discoverPlugins(root, {
+      root, hostApiVersion: '1.11.0', dshRuntimeVersion: '1.0.0',
+      adapterContracts: new Map([['@example/ui-plugin', { hostApiRange: '^1.0.0', permissions: [], approved: true }]])
+    })
+    assert.equal(rejected.length, 0)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

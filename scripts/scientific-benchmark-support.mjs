@@ -91,7 +91,7 @@ export function validateRecord(record, manifest, outputRoot, id) {
   if (record.schemaVersion !== 1 || record.instance_id !== id || record.datasetDigest !== manifest.datasetDigest ||
     record.model !== manifest.model || record.runtimeId !== manifest.runtimeId) throw new Error(`Result ${id} does not match this run manifest.`)
   if (typeof record.workspace !== 'string' || !isAbsolute(record.workspace)) throw new Error('Invalid record workspace.')
-  inside(join(outputRoot, 'workspaces'), relative(join(outputRoot, 'workspaces'), record.workspace))
+  inside(join(outputRoot, 'workspaces'), relative(join(outputRoot, 'workspaces'), record.workspace).split(sep).join('/'))
   inside(record.workspace, record.output_fname)
   inside(record.workspace, record.eval_script_name)
 }
@@ -233,7 +233,7 @@ with open(result_path, "w") as handle:
 
 export async function scoreScienceAgentBenchWorkspace({ row, workspace, benchmarkRoot, outputRoot, python, visualJudge, timeoutMs, env = process.env }) {
   const id = safeId(row.instance_id)
-  await plainPath(outputRoot, relative(outputRoot, workspace))
+  await plainPath(outputRoot, relative(outputRoot, workspace).split(sep).join('/'))
   const logs = join(outputRoot, 'scorer-logs')
   await mkdir(logs, { recursive: true })
   await separateRoots(benchmarkRoot, workspace)

@@ -9,6 +9,8 @@ export type ProviderWireProtocol = 'responses' | 'chat-completions' | 'anthropic
 export type ProviderSchemaPatternPolicy = 'preserve' | 'reject';
 /** Strongest Chat Completions `response_format` the upstream accepts. */
 export type ProviderChatStructuredOutputMode = 'json_schema' | 'json_object';
+/** Whether Chat uses effort alone or also requires an explicit thinking toggle. */
+export type ProviderChatReasoningControl = 'effort' | 'thinking-type';
 
 export type ProviderCompatibilityConfig = {
   preferredProtocol?: ProviderWireProtocol;
@@ -20,6 +22,7 @@ export type ProviderCompatibilityConfig = {
   /** `json_object` carries JSON Schema contracts in the system prompt and
    * validates the output locally instead of sending `json_schema`. */
   chatStructuredOutputMode?: ProviderChatStructuredOutputMode;
+  chatReasoningControl?: ProviderChatReasoningControl;
   schemaPatternPolicy?: ProviderSchemaPatternPolicy;
   /** Ordered reasoning-effort tokens the upstream accepts; unsupported
    * requested efforts are mapped to the nearest supported one. */
@@ -34,6 +37,7 @@ export type ProviderCompatibilityProfile = {
   preserveChatReasoningContent: boolean;
   chatMaxTokensField: 'max_tokens' | 'max_completion_tokens';
   chatStructuredOutputMode: ProviderChatStructuredOutputMode;
+  chatReasoningControl: ProviderChatReasoningControl;
   schemaPatternPolicy: ProviderSchemaPatternPolicy;
   reasoningEfforts: readonly string[] | undefined;
 };
@@ -64,6 +68,7 @@ const PROVIDER_COMPATIBILITY_KEYS = new Set<string>([
   'preserveChatReasoningContent',
   'chatMaxTokensField',
   'chatStructuredOutputMode',
+  'chatReasoningControl',
   'schemaPatternPolicy',
   'reasoningEfforts',
 ]);
@@ -139,6 +144,10 @@ export function providerCompatibilityConfigurationIssue(
   ) {
     return 'chatStructuredOutputMode is invalid';
   }
+  if (value.chatReasoningControl !== undefined && value.chatReasoningControl !== 'effort'
+    && value.chatReasoningControl !== 'thinking-type') {
+    return 'chatReasoningControl is invalid';
+  }
   if (
     value.preserveResponsesReasoningContent !== undefined
     && typeof value.preserveResponsesReasoningContent !== 'boolean'
@@ -184,6 +193,7 @@ export function resolveProviderCompatibility(
     preserveChatReasoningContent: configured?.preserveChatReasoningContent ?? true,
     chatMaxTokensField: configured?.chatMaxTokensField ?? 'max_tokens',
     chatStructuredOutputMode: configured?.chatStructuredOutputMode ?? 'json_schema',
+    chatReasoningControl: configured?.chatReasoningControl ?? 'effort',
     schemaPatternPolicy: configured?.schemaPatternPolicy ?? 'preserve',
     reasoningEfforts: normalizeReasoningEfforts(configured?.reasoningEfforts),
   };
@@ -239,13 +249,17 @@ export function nearestReasoningEffort(requested: string, supported: readonly st
 export function explicitReasoningEffort(request: {
   reasoning_effort?: unknown;
   reasoning?: unknown;
+  output_config?: unknown;
 }): string {
   const reasoning = request.reasoning;
   const legacyEffort = typeof request.reasoning_effort === 'string' ? request.reasoning_effort.trim() : '';
   const nestedEffort = reasoning && typeof reasoning === 'object' && typeof (reasoning as { effort?: unknown }).effort === 'string'
     ? (reasoning as { effort: string }).effort.trim()
     : '';
-  return legacyEffort || nestedEffort;
+  const outputConfig = request.output_config;
+  const anthropicEffort = isRecord(outputConfig) && typeof outputConfig.effort === 'string'
+    ? outputConfig.effort.trim() : '';
+  return legacyEffort || nestedEffort || anthropicEffort;
 }
 
 /**
@@ -325,6 +339,15 @@ export function normalizeProviderChatCompletionsBody(
   profile: ProviderCompatibilityProfile,
 ): JsonObject {
   const normalized: Record<string, JsonValue> = { ...body };
+  const effort = nonEmptyString(body.reasoning_effort);
+  if (profile.chatReasoningControl === 'thinking-type' && effort) {
+    if (['none', 'off', 'disabled'].includes(effort)) {
+      normalized.thinking = { type: 'disabled' };
+      delete normalized.reasoning_effort;
+    } else {
+      normalized.thinking = { type: 'enabled' };
+    }
+  }
   const localContract = profile.chatStructuredOutputMode === 'json_object'
     ? chatLocalStructuredOutputContract(body)
     : undefined;

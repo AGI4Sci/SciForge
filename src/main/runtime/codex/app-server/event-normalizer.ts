@@ -46,6 +46,7 @@ export function normalizeCodexEvent(
       compaction: {
         status: 'success',
         summary: stringValue(params.summary) || 'Codex native context compaction',
+        ...(stringValue(params.summary) ? { contextSummary: stringValue(params.summary) } : {}),
         ...(stringValue(params.detail) ? { detail: stringValue(params.detail) } : {})
       }
     }
@@ -449,6 +450,7 @@ function normalizeThreadItem(
       compaction: {
         status: lifecycle === 'completed' ? 'success' : 'running',
         summary: stringValue(item.summary) || 'Codex native context compaction',
+        ...(stringValue(item.summary) ? { contextSummary: stringValue(item.summary) } : {}),
         ...(stringValue(item.detail) ? { detail: stringValue(item.detail) } : {})
       }
     }

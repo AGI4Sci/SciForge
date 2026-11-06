@@ -50,6 +50,11 @@ export const IDENTITY_AGENT_CLOUD_RUNTIME_CONTRACT =
   domainPackageDefinition.contributionContracts[
     IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION.id
   ]!
+export const IDENTITY_CURRENT_USER_PROFILE_CONTRIBUTION = contributionFor(
+  'main', 'main.extension', 'identity-access.current-user-profile'
+)
+export const IDENTITY_CURRENT_USER_PROFILE_CONTRACT =
+  domainPackageDefinition.contributionContracts[IDENTITY_CURRENT_USER_PROFILE_CONTRIBUTION.id]!
 export const IDENTITY_RENDERER_COMMAND_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.command'

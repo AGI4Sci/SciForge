@@ -35,6 +35,7 @@ export function withVisualExecutionRequirement(
     'Runtime-enforced visual completion gate:',
     captureInstruction,
     referenceInstruction,
+    '- Independent commands and child tasks may proceed while evidence is pending. Inspect the requested source or derived artifact; an unrelated current surface cannot complete its proof chain.',
     '- Only runtime-issued typed completion receipts count. If a required native visual capability is unavailable, report the blocker instead of claiming completion.'
   ].filter(Boolean).join('\n')
   return {

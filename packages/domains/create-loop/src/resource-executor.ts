@@ -1,3 +1,5 @@
+import type { WorkflowNodeV1, WorkflowV1 } from './contract.js'
+import { workflowCallTrigger, workflowReachableNodeIds } from './workflow-execution-graph.js'
 import { z } from 'zod'
 import {
   domainPackageJsonValueSchema,
@@ -43,6 +45,52 @@ export type CreateLoopResourceExecutor = Readonly<{
     input: CreateLoopResourceExecutionInput
   ) => Promise<CreateLoopResourceExecutionResult>
 }>
+
+export function missingCreateLoopResourceProvider(
+  nodes: readonly WorkflowNodeV1[],
+  executors: ReadonlyMap<string, CreateLoopResourceExecutor>
+): string | undefined {
+  for (const node of nodes) {
+    if (node.disabled || node.type !== 'resource') continue
+    const providerId = node.config.providerId.trim()
+    if (!executors.has(providerId)) {
+      return `Resource provider '${providerId}' is not installed.`
+    }
+  }
+  return undefined
+}
+
+export function missingCreateLoopWorkflowResourceProvider(
+  workflow: WorkflowV1,
+  triggerNodeId: string,
+  workflows: readonly WorkflowV1[],
+  executors: ReadonlyMap<string, CreateLoopResourceExecutor>
+): string | undefined {
+  const byId = new Map(workflows.map((candidate) => [candidate.id, candidate]))
+  const visited = new Map<WorkflowV1, Set<string>>()
+  const visit = (current: WorkflowV1, entryId: string): string | undefined => {
+    const entries = visited.get(current) ?? new Set<string>()
+    if (entries.has(entryId)) return undefined
+    entries.add(entryId)
+    visited.set(current, entries)
+    const reachable = workflowReachableNodeIds(current, entryId)
+    const nodes = current.nodes.filter((node) => reachable.has(node.id) && !node.disabled)
+    const missing = missingCreateLoopResourceProvider(nodes, executors)
+    if (missing) return missing
+    for (const node of nodes) {
+      if (node.type !== 'subworkflow' && node.type !== 'loop') continue
+      const target = byId.get(node.config.workflowId)
+      // Match nested execution: workflow.enabled only controls automatic triggers.
+      if (!target || target.id === current.id) continue
+      const trigger = workflowCallTrigger(target)
+      if (!trigger) continue
+      const nestedMissing = visit(target, trigger.id)
+      if (nestedMissing) return nestedMissing
+    }
+    return undefined
+  }
+  return visit(workflow, triggerNodeId)
+}
 
 export function isCreateLoopResourceExecutor(
   value: unknown

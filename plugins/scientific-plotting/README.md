@@ -1,97 +1,72 @@
-# @sciforge/plugin-scientific-plotting
+# Scientific Figures — standalone DSH MVP
 
-Scientific Plotting 域模块的运行时插件化改造（阶段一，版本化组第四个模块，含 G4 原生依赖验证与 MCP 形态对照）。
-静态对照实现位于 `packages/domains/scientific-plotting/`；真实绘图引擎来自已发布工作包 `@sciforge/scientific-plotting`（`packages/workers/scientific-plotting`），本插件将其内联打包，把原生 `@napi-rs/canvas` 保持 external。
+One native DSH bundle owns reproducible scientific plotting. It uses the live caller's `workingDirectory`, DSH sandbox policy and managed subprocess service. It does not require SciForge, Artifact Versions, Evidence DAG, Git Checkpoints or another review plugin. Existing unrelated domain packages and historical data are untouched.
 
-## 盘点记录（方案 4.1）
+## Build and artifact
 
-| 项 | 内容 |
-| --- | --- |
-| 原功能 | 5 个能力：`status`（global read）/ `map-data`（workspace compute）/ `render`（workspace-write，版本化 PNG + recipe/manifest/log）/ `rerun`（workspace-write，钉住 recipe 的精确重跑）/ `compare`（workspace read，版本对比）。域包 main 是薄壳：能力编排 + 按 workspace 缓存的 service 工厂，委托 `@sciforge/scientific-plotting/service` |
-| 必须保留的行为 | 能力 id 与 zod 契约不变；caller 工作区覆盖 input 里的 spoof `workspaceRoot`（`requireWorkspace` 同文案 `'Scientific Plotting requires a workspace-scoped caller.'`）；`statusService` 全局共享、`serviceFor` 按 workspace 懒创建并缓存；engine 降级语义（无 artifact ports 时 render 降级为 unversioned + warning，rerun/compare 报 engine 自带能力错误） |
-| 静态入口 | `packages/domains/scientific-plotting/src/main.ts`（capability factory + capability-eval + agent-routing 贡献），经生成文件组合；renderer 三件（右侧面板/资源导航/i18n）保留静态 |
-| 宿主依赖 | `capabilities.invoke`（artifact-versions commitV1/readV1 ports）——**唯一**宿主接缝；无 agentThreads/turnEvents/enablement 依赖 |
-| 现有测试 | 静态域包 1 个 main 测试文件（132 行，scripted service）；本插件扩展为 18 项测试，含真实引擎与真实宿主加载 |
+From this directory, run `npm run typecheck`, `npm test`, `npm run build`, then `npm pack --ignore-scripts`. Install development dependencies first using your ordinary package manager when building a separate checkout; the build reads only package-owned configuration, and never searches upward for a SciForge Tailwind config. DSH public packages are supplied by the host. `zod`, React canvas UI helpers and rendering JS are bundled. React itself comes from the DSH browser module table.
 
-## 分层
+The artifact includes `dist/main.js`, `dist/figure-worker.cjs`, `dist/client.js`, CSS, and exact `@napi-rs/canvas@0.1.100` JS plus the native package actually loaded by that Canvas instance. The build verifies its declared optional dependency, exact version, platform/architecture and binding real path, and copies physical packages under `dist/node_modules`. `dist/native-runtime.json` retains platform/architecture, Canvas version and native package identity. Rebuild for another platform/architecture or Linux libc; the artifact never relies on the host having Canvas installed. Install the packed tarball, not a source-directory link, to verify source independence. Pure Node selection fixtures run with `node --test scripts/canvas-runtime.test.mjs`; they do not establish that a real native binary loads in an installed artifact.
+
+This MVP targets native DSH >=0.2.1-rc.4 <0.3.0. The plugin registers the `scientific_figures` tool and `/scientific-figures` session command. Its native Client module adds a collapsible Figures panel to the session composer dock. The same package also ships the generic SciForge iframe adapter, without depending on other domain packages.
+
+## Runtime
+
+Configure `pythonCommand` in the plugin's Cordis row to the actual executable you have verified contains Matplotlib. The default is `python3`; it is diagnostic fallback, not a claim that Matplotlib is installed. The plugin never installs Python or Python packages. Use tool action `status`, input `{}` to inspect the configured renderer. Missing Python/Matplotlib produces an explicit diagnostic and no substituted figure.
+
+In the SciForge adapter, a plain executable name is resolved once during Host plan preparation using only absolute directories in the Host's own PATH, then bound as a canonical executable path. Relative paths, cwd search and plugin-supplied child PATH do not select that executable. An explicit absolute interpreter path is preferable when multiple installations exist. Electron's executable is never substituted for Python; the Host's separate approved Node configuration applies only to explicit Electron executable requests.
+
+Artifact build portability is separate from execution support. The current SciForge Host rejects native process groups on Windows and confined operations on Linux (and other non-macOS platforms). On macOS it must successfully probe the actual sandbox backend; presence of `sandbox-exec` alone is insufficient. A successful `status` diagnostic or Canvas package build does not establish that an operation can execute under the required confinement. These failures do not downgrade policy or switch execution lanes.
+
+Open the intended authorized workspace in DSH before using the plugin. All automatic data is derived from that current workspace as `.scientific-figures`, never an absolute development path. Relative source-image paths are restricted to that workspace; symlinks are rejected. Each operation resolves the calling session's actual current directory and file policy; binary and atomic IO run in a DSH-confined managed child. The immutable sandbox writable boundary remains the original session workspace, even if the current directory changes. Denial or unavailable confinement fails explicitly with no alternate data directory.
+
+Start from data (AI writes Python) or existing data plus Python code. A provided image is optional comparison material, never a substitute for data/code. Every code revision freezes complete source files, parameters and selected data bytes. `saveCode` with omitted `inputPaths` inherits verified frozen parent inputs into independent child paths; explicit paths refresh data, and `[]` clears inputs. Transformed datasets must be persisted and explicitly snapshotted for the next step. Generated figures link the exact code/run/output. Optional `importBaseline` links a provided original image to a saved code revision as supplied/unverified provenance, without fabricating a historical execution.
+
+The chat and file controls start live agent operations. Historical code, input, run and all image revisions remain available; a new run ID reruns the selected frozen code/input snapshot. Graphical annotation tools have been deleted.
+
+Only Python + Matplotlib is implemented. `SnapshotExecutionAdapter` is the extension boundary; there is no R/MATLAB runtime, UI or dependency. Scripts save PNG figures and UTF-8 CSV/TSV/JSON/TXT analysis artifacts into `SCIENTIFIC_FIGURES_OUTPUT_DIR`, read explicit input snapshots from `SCIENTIFIC_FIGURES_INPUT_DIR`, and receive JSON parameters via `SCIENTIFIC_FIGURES_PARAMETERS_JSON`. The host directly manages Python with `-I`, bounded logs, deadline and cancellation; it narrows file-write confinement to a fresh staging directory even under full-access sessions, and refuses read-only/partial confinement. DSH also grants platform temporary writes and global reads/network; this is not a hostile-code security sandbox. Workspaces under platform temporary roots are refused to protect stored revisions. Run trusted scripts. After process-range termination, a trusted worker validates outputs and persists run records; failures/cancellations cannot publish.
+
+Each selected input is snapshotted (64 MiB aggregate cap), rather than copying the entire data workspace. Frozen code is not re-read from the editing location during execution. Same run ID returns its original terminal result; an interrupted reservation is not automatically rerun. Use a new run ID only after inspecting the interrupted process. New environment records include Python/Matplotlib versions, implementation, executable, platform/architecture and installed distribution versions. This inventory is not a packaged environment, dependency binary lock or deterministic-reproduction guarantee. Logs are bounded. Successful runs retain PNG plus UTF-8 CSV/TSV/JSON/TXT, rejecting malformed JSON/text rather than silently dropping it. PNG limits remain 16 files, 20 MiB/file, 64 MiB aggregate; analysis artifacts have separate limits of 32 files, 8 MiB/file, 32 MiB aggregate. `_environment` is reserved: successful collection generates `requirements.txt` with exact installed version pins, `environment.json`, and `REBUILD.md`. These are not hash-locked packages or bundled binaries; installing is an explicit user action. Failed runs expose no publishable outputs.
+
+**Formal acceptance requires an active agent tool call.** The panel’s “申请接受” sends a live conversation request through the generic host composer service. The actual tool call triggers one-time host human approval. Only `allowed-once` advances the pointer; denial/cancellation/unavailable approval preserves the current image. No browser approval substitutes for host authority.
+
+## Tool input
+
+Every call is `{action,input}`. The host derives workspace and confirmation authority; callers cannot supply `workspaceRoot` or `approvalGranted`. `list` uses `{}`; `read` uses `{documentId}`; `image` uses `{documentId,revisionId}`. Mutations include `{documentId,operationId,expectedDocumentRevision}`. `importOriginal` adds `path` and requires revision zero. `importBaseline` additionally takes a saved `codeRevisionId` and records supplied/unverified data/code provenance. `addCandidate` adds `path,baselineRevisionId,baselineHash`. Legacy annotation records remain readable; no graphical annotation interface is shipped. `acceptCandidate`/`rejectCandidate` add `revisionId`. `render` adds `request:{template,data,...}` and, for a candidate, baseline ID/hash. New document and operation IDs must match `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`.
+
+Code operations: `saveCode` takes `{codeRevisionId,parentCodeRevisionId?,entrypoint,files:[{path,content}],parameters,inputPaths}`; inputs are explicit workspace-relative files; omitted `inputPaths` inherits frozen parent bytes. `executePython` takes `{runId,codeRevisionId}`. `listCodes/listRuns` take `{limit?:1..50,cursor?:string}` and return compact `{items,nextCursor,errors}` pages (default 20, descending ID order). They do not load source bytes, output bytes or full logs; `readCode/readRun` perform complete integrity verification on demand. Corrupt entries report per-record errors and do not hide later pages. `listPendingRuns` is loaded independently and reports reserved runs plus stage identity and `recoverable`. After process termination, a trusted immutable outcome is persisted before collection; staging is removed only after the terminal record is durably committed. Same-ID execution on a recoverable interrupted finalization reuses that stored outcome without spawning Python. No outcome means no automatic rerun or invented terminal result; active/unquiescent processes and orphan locks still require inspection. `publishRun` takes `{documentId,operationId,expectedDocumentRevision,runId,outputPath,baselineRevisionId?,baselineHash?}`; `outputPath` must be the exact reference path returned by the run. Failed runs cannot publish. Template `render` freezes its own code/run IDs deterministically from document/operation IDs; changed template requests with reused IDs fail.
+
+`status` returns renderer diagnostics. Example original import: `{ "action":"importOriginal", "input":{"documentId":"figure-a","operationId":"import-a","expectedDocumentRevision":0,"path":"inputs/original.png"} }`.
+
+## Persistence and protection
+
+The 0.4 plugin's `.scientific-figures` code/run/image records are independent storage. They do not automatically register ArtifactVersion records or Evidence DAG nodes with those domain owners; that integration requires their explicit public registration contracts.
 
 ```text
-src/contract.ts            # zod 契约（与静态包逐字节一致；re-export @sciforge/scientific-plotting/contract）
-src/ports/capabilities.ts  # 唯一环境接缝：DomainMainSystemCapabilityInvoker（G1）
-src/core/service-factory.ts  # statusService + serviceFor(workspace) 缓存；有 invoker 时构建 artifact ports（同静态构造）
-src/core/operations.ts     # 5 个操作镜像静态 handler：strict parse、requireWorkspace 同文案、spoof 覆盖、错误直抛
-src/fixture/config.ts      # dshConfig 模式（空对象；G1 落地前 engine 走自带降级模式）
-src/dsh-adapter/           # Cordis 入口（同步 apply）+ 5 个工具定义（defineTool 注入，可测）
+<workspace>/.scientific-figures/
+  store.json
+  codes/<code-revision-id>/
+    code.json
+    files/<entrypoint-and-helper-files>
+    inputs/<selected-workspace-relative-files>
+  runs/<run-id>/
+    pending.json
+    outcome.json            # trusted terminated-process receipt for finalization retry
+    run.json
+    outputs/<PNG-or-analysis-file>
+    outputs/_environment/{requirements.txt,environment.json,REBUILD.md}
+  documents/<document-id>/
+    document.json
+    images/<revision-id>.<original-format>
+    revisions/<revision-id>.json
+    sources/<generation-id>/
+      recipe.json
+      code.py
+      inputs.json
 ```
 
-core 不导入 SciForge 主程序、Electron、renderer 或静态 catalog。`@sciforge/scientific-plotting` 与 `@sciforge/image-generation` 是 TS 源工作包，esbuild 内联编译进 dist；`@napi-rs/canvas` 是原生 addon 必须 external，由 runner 子进程从仓库 node_modules 解析。
+New generated revisions link `execution:{codeRevisionId,runId,run,output}` to immutable code/run/output records. The legacy optional per-revision `sources` snapshot is retained when already present; new template and script generation use the shared code/run model. All stored JSON file references are relative. Documents retain original/current pointers, all revisions/candidate states, annotations, acceptance records, monotonic document revisions and compact original-result receipts. Accepting updates the pointer and records authority; image bytes are never overwritten or recopied. Every read verifies all referenced images, revision metadata and generated sources by hash and length. Missing or corrupt files fail visibly.
 
-## G4：原生依赖在隔离 runner 中的验证
+Writes serialize per document with exclusive cross-process locks and optimistic revisions. Confirmation releases the lock, then reloads and rechecks document revision, current baseline and candidate bytes before commit. Complete image/source/revision files are published before atomic document replacement. Discovery scans committed documents to repair a missed index update. Same operation and input return the original result after restart; changed content/inputs with a reused ID fail. A crashed worker can leave a lock: it fails closed and requires manual inspection, with no automatic lock stealing, migration or cleanup.
 
-`@napi-rs/canvas`（`.node` 二进制，经 `@napi-rs/canvas-darwin-arm64` 平台包加载）是本组唯一的原生依赖。验证链：
-
-1. esbuild 打包：external 声明后 dist/main.js 保留对 `@napi-rs/canvas` 的运行时 import（自包含 ESM，966K）。
-2. 主进程基线：`node -e` 直接渲染 PNG（探针验证）。
-3. **决定性证据**：`tests/host-loading.test.ts` 用真实 `ProcessExtensionHost` fork 隔离子进程加载 dist，完成 status → map_data → **真实 render**（`{ ok: true, status: 'rendered' }`，PNG 落盘 `<workspace>/.sciforge/figures/`，含 engine 降级 warning）→ rerun fail-closed。
-
-结论：原生 addon 与 Python matplotlib 渲染器在 DSH 隔离 runner 进程内均可工作，无需特殊打包开关。G4 登记为"已验证可行"。
-
-## MCP 形态对照（方案要求）
-
-`@sciforge/scientific-plotting` 自带 MCP server 形态（`./mcp-server` 入口，`scientific-plotting-mcp-server.ts`）。两种运行时形态的对照：
-
-| 维度 | MCP server（现状） | DSH 插件（本改造） |
-| --- | --- | --- |
-| 进程模型 | 独立 stdio 进程，由 MCP 客户端拉起 | 宿主 `ProcessExtensionHost` fork 的隔离子进程，宿主托管生命周期 |
-| 授权 | 无宿主授权层；工具调用即执行 | 每次调用经宿主授权信封（`authorizeDshTool`，host-loading 逐次校验）；grant 表宿主配置（`EXPECTED_HOST_GRANTS`），无 grant fail-closed |
-| 能力治理 | MCP tool 名自由约定 | 能力 id 沿用静态契约（`scientific-plotting.*`），effect/audiences 快照钉死；runner 投影规则固定（read→resource scope；compute/write→global + idempotency required） |
-| 输入校验 | MCP 层 JSON Schema | runner 参数 DSL 边界 + 插件内 strict zod 契约（双层，parity 钉住与静态宿主 parse 的等价性） |
-| 降级语义 | engine 自带（无 artifact ports → unversioned render） | 同左——G1 落地前插件走同一条 engine 降级路径 |
-| 工作区归属 | 参数自带 `workspaceRoot` | 显式 `workspaceRoot` 工具参数（G1：宿主暂不转发 caller 身份），operation 层覆盖 spoof 输入 |
-
-MCP server 保留为技能/外部集成形态；DSH 插件是宿主内治理形态。两者共用同一 engine 实现，无代码复制。
-
-## 宿主依赖、权限与生命周期清单
-
-**宿主依赖**：
-
-1. `capabilities.invoke`（artifact-versions `commit`/`read` ports）—— **G1 未落地**：DSH 环境下不传 invoker，engine 进入自带降级模式（render unversioned + warning；rerun/compare 返回 `{ ok:false, message: 'Exact plot rerun requires Artifact Versions read and commit capabilities.' }` 形态）。桥落地后仅需在 adapter 注入 invoker，无插件代码变更。
-2. 无其他宿主依赖（不消费 agentThreads/turnEvents/enablement）。
-
-**期望的宿主 grant 表**（宿主配置，插件不自带；见 `src/dsh-adapter/tools.ts` 的 `EXPECTED_HOST_GRANTS`）：
-
-| DSH 工具 | capability id | effect |
-| --- | --- | --- |
-| `status` | `scientific-plotting.status` | `read` |
-| `map_data` | `scientific-plotting.map-data` | `compute` |
-| `render` | `scientific-plotting.render` | `workspace-write` |
-| `rerun` | `scientific-plotting.rerun` | `workspace-write` |
-| `compare` | `scientific-plotting.compare` | `read` |
-
-宿主投影差异（runner 固定规则）：read → scope `resource` + resourceKinds `['dsh-session']`（静态 status 为 global scope）；compute/write → scope `global` + idempotency `required`（与静态非 read 能力一致）；approval 一律 `none`（与静态一致）；audiences 投影为 `['agent','ui']`（静态含 `system`）；tags 为 `dsh-tool`。
-
-**生命周期**：`apply(ctx, config)` 同步注册 5 个工具；service 按 workspace 懒创建并缓存（进程内 Map），无定时器/socket/全局状态（`tests/clean-state.test.ts` 举证），停用与 dispose 由宿主/runner 负责，重复 dispose 安全（`tests/host-loading.test.ts` 覆盖）。
-
-**不迁移的静态贡献**（宿主侧能力，不属于 DSH 工具面）：`main.capability-eval`（能力评估）、`main.agent-routing`（路由提示，静态值为 `null`）——两者是宿主框架贡献而非可调用能力，留在静态包；G5 摘除静态 main 入口时由宿主薄层承接。
-
-**与静态入口的关系**：能力 id 完全一致，静态 renderer 无需改动；两者不能在同一宿主实例同时注册（重复 id 冲突）。静态包在阶段一保留为对照基准。
-
-## 构建、加载与测试复现命令
-
-```bash
-cd plugins/scientific-plotting
-npm run typecheck   # bundler moduleResolution（对齐引擎包自身的 TS 源形态）
-npm run build       # esbuild 自包含 ESM；@deepseek-ai/* 与 @napi-rs/canvas external
-npm test            # pretest 自动构建；18 项测试
-node --import tsx tests/baseline/generate-baseline.ts   # 重新生成 golden 基线
-```
-
-测试构成（18 项）：source-fidelity（contract 逐字节 + 私有 import 扫描）/ capability-parity（5 能力双侧面：输出、service 转发参数、spoof 覆盖、scope 拒绝、无效输入、治理元数据快照）/ dsh-tools 接线 / clean-state（句柄、并发、实例确定性）/ baseline golden（mapData 确定性输出，workspace 路径归一化）/ host-loading（真实宿主 + 原生渲染）。
-
-## 已知边界
-
-- **G1 导致的降级面**：DSH 环境 render 产物不带 Artifact Version 溯源（engine 既有 warning 明示）；rerun/compare 不可用。等价性证据由 capability-parity（scripted service）与 engine 自带测试承担。
-- **status 输出环境相关**：`renderer.version`、poppler 路径等字段随运行环境变化，不进 golden；结构由 dsh-tools/host-loading 钉住。
-- **render 写盘副作用**：engine 在 `<workspace>/.sciforge/` 下写 PNG/recipe/manifest/render.py（静态既有行为）；`outputPolicy.writesOnlyInsideWorkspace` 由 engine 保证。
-- **runner 参数 DSL 先于插件 zod**：类型错误（如 `expectedCurrentVersionId` 非 string）在 runner 边界以 `invalid arguments` 拒绝；深层契约错误由插件 strict parse 拒绝。与静态宿主直接调 handler 的可观察路径不同，属于宿主投影差异。
-- 直移契约（`src/contract.ts`）与静态包保持同步：静态包修订时必须重新同步，source-fidelity 测试是护栏。
+This plugin does not automatically export files; `exports/` is reserved for user-directed exports. The full manual installed-GUI, allowed approval and Matplotlib rendering acceptance must be completed in the configured local acceptance workspace. Source tests and a successful build alone do not establish those results.

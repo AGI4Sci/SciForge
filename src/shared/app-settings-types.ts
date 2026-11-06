@@ -60,6 +60,8 @@ export type ModelRouterProtocolPreference = typeof MODEL_ROUTER_PROTOCOL_PREFERE
 
 export const MODEL_ROUTER_CHAT_STRUCTURED_OUTPUT_MODES = ['json_schema', 'json_object'] as const
 export type ModelRouterChatStructuredOutputMode = typeof MODEL_ROUTER_CHAT_STRUCTURED_OUTPUT_MODES[number]
+export const MODEL_ROUTER_CHAT_REASONING_CONTROLS = ['effort', 'thinking-type'] as const
+export type ModelRouterChatReasoningControl = typeof MODEL_ROUTER_CHAT_REASONING_CONTROLS[number]
 
 /** Upper bounds for per-model reasoning-effort vocabularies. */
 export const MODEL_ROUTER_MAX_REASONING_EFFORT_TOKENS = 32
@@ -70,12 +72,14 @@ export type ModelRouterMemberSettingsV1 = {
   apiKey: string
   model: string
   protocol?: ModelRouterProtocolPreference
-  /** Upstream context window in tokens for this member; text reasoner only. */
+  /** Upstream context window in tokens for this member, independent of other roles. */
   contextWindow?: number
   /** Reasoning-effort tokens the upstream model accepts, ordered shallow → deep. */
   reasoningEfforts?: string[]
   /** Strongest Chat Completions response_format the upstream accepts; omitted means json_schema. */
   chatStructuredOutputMode?: ModelRouterChatStructuredOutputMode
+  /** Explicit Chat reasoning wire contract; omitted uses reasoning_effort. */
+  chatReasoningControl?: ModelRouterChatReasoningControl
 }
 
 export type ModelRouterProfileSettingsV1 = {
@@ -169,7 +173,6 @@ export type LocalRuntimeSettingsV1 = {
   /** Persistent store backend used by the local runtime. */
   storage: LocalRuntimeStorageSettingsV1
   /** Fallback compaction thresholds and summary behavior. Per-model thresholds live in local runtime config models.profiles. */
-  contextCompaction: LocalRuntimeContextCompactionSettingsV1
 }
 
 export type ResolvedLocalRuntimeSettingsV1 = LocalRuntimeSettingsV1 & {
@@ -197,8 +200,6 @@ export type LocalRuntimeStorageSettingsV1 = {
   sqlitePath: string
 }
 
-export type LocalRuntimeCompactionSummaryMode = 'heuristic' | 'model'
-
 export type LocalRuntimeHistoryHygieneSettingsV1 = {
   maxToolResultLines: number
   maxToolResultBytes: number
@@ -214,15 +215,6 @@ export type LocalRuntimeTokenEconomySettingsV1 = {
   compressToolResults: boolean
   conciseResponses: boolean
   historyHygiene: LocalRuntimeHistoryHygieneSettingsV1
-}
-
-export type LocalRuntimeContextCompactionSettingsV1 = {
-  defaultSoftThreshold: number
-  defaultHardThreshold: number
-  summaryMode: LocalRuntimeCompactionSummaryMode
-  summaryTimeoutMs: number
-  summaryMaxTokens: number
-  summaryInputMaxBytes: number
 }
 
 export type RuntimeExecutionGuardSettingsV1 = {
@@ -320,13 +312,12 @@ export type LocalRuntimeTokenEconomySettingsPatchV1 = Partial<
 export type LocalRuntimeSettingsPatchV1 = Partial<
   Omit<
     LocalRuntimeSettingsV1,
-    'mcpSearch' | 'storage' | 'contextCompaction' | 'tokenEconomy'
+    'mcpSearch' | 'storage' | 'tokenEconomy'
   >
 > & {
   mcpSearch?: Partial<LocalRuntimeMcpSearchSettingsV1>
   tokenEconomy?: LocalRuntimeTokenEconomySettingsPatchV1
   storage?: Partial<LocalRuntimeStorageSettingsV1>
-  contextCompaction?: Partial<LocalRuntimeContextCompactionSettingsV1>
 }
 
 export type AgentRuntimeSettingsEnvelopePatchV1 = {

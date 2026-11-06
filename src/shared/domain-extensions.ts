@@ -88,6 +88,12 @@ export type DomainExtensionRendererContribution = {
   version: string
   entryUrl: string
   stateVersion: number
+/** Exact capability ids this plugin's own frame may invoke through the panel
+   * bridge. Host-computed from the approved contract; an absent list denies every
+   * call (fail-closed). The frame never names a capability outside this set. */
+  capabilityIds?: readonly string[]
+  /** Resource kinds this panel can display; the Host opens it for those kinds. */
+  resourceKinds?: readonly string[]
 }
 
 /**
@@ -114,8 +120,19 @@ export function domainExtensionRendererContributionsEqual(
       contribution.generation === other.generation &&
       contribution.version === other.version &&
       contribution.entryUrl === other.entryUrl &&
-      contribution.stateVersion === other.stateVersion
+      contribution.stateVersion === other.stateVersion &&
+      sameStrings(contribution.capabilityIds, other.capabilityIds) &&
+      sameStrings(contribution.resourceKinds, other.resourceKinds)
   })
+}
+
+function sameStrings(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined
+): boolean {
+  if (left === right) return true
+  if (left === undefined || right === undefined || left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
 }
 
 export type DomainExtensionInventoryRequest = Readonly<{

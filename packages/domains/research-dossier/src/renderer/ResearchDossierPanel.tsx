@@ -1,3 +1,5 @@
+import { ExactArtifactImageCard } from './ExactArtifactImageCard.js'
+import { ResearchDossierEvidenceReview } from './ResearchDossierEvidenceReview.js'
 import {
   AlertTriangle,
   Archive,
@@ -180,7 +182,24 @@ export function ResearchDossierPanel({
     () => parseDossierActivation(activation),
     [activation]
   )
-  const [state, setState] = useState<LoadState>({ status: 'idle' })
+  const [loadedState, setState] = useState<LoadState>({ status: 'idle' })
+  const contentScope = useMemo(() => ({}), [client, session.workspaceRoot, session.id, session.runtimeId])
+  const contentScopeRef = useRef(contentScope)
+  contentScopeRef.current = contentScope
+  const loadedScopeRef = useRef(contentScope)
+  const [scopedBrowseQuery, setBrowseQuery] = useState({ scope: contentScope, query: '' })
+  const browseQuery = scopedBrowseQuery.scope === contentScope ? scopedBrowseQuery.query : ''
+  const targetKey = parsedActivation.kind === 'valid'
+    ? JSON.stringify([parsedActivation.value.target, parsedActivation.value.expectedDigest])
+    : parsedActivation.kind
+  const loadedTargetRef = useRef(targetKey)
+  const state: LoadState = loadedScopeRef.current === contentScope && loadedTargetRef.current === targetKey ? loadedState : { status: 'loading' }
+  const browseCache = useRef<{ scope: object; value: ResearchDossierBrowseV1 } | null>(null)
+  const [browseBusy, setBrowseBusy] = useState(false)
+  const browseRequest = useRef(false)
+  const [browsePosition, setBrowsePosition] = useState({ scope: contentScope, query: '', page: 0 })
+  const browseScroll = useRef(0)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const [refreshing, setRefreshing] = useState(false)
   const hasContentRef = useRef(false)
   const [previewBusy, setPreviewBusy] = useState(false)
@@ -234,8 +253,12 @@ export function ResearchDossierPanel({
 
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current
+    const scope = contentScope
     const commit = (next: LoadState) => {
-      if (generation !== loadGeneration.current) return
+      if (generation !== loadGeneration.current || contentScopeRef.current !== scope) return
+      if (loadedScopeRef.current !== scope || loadedTargetRef.current !== targetKey) hasContentRef.current = false
+      loadedScopeRef.current = scope
+      loadedTargetRef.current = targetKey
       if (next.status === 'loading') {
         // Keep already-rendered content during refreshes so typing or task
         // processing does not flash the panel to a full-screen loader.
@@ -264,9 +287,14 @@ export function ResearchDossierPanel({
     }
     try {
       if (parsedActivation.kind === 'empty') {
+        const value = browseCache.current?.scope === scope && (browseCache.current.value.query ?? '') === browseQuery.trim()
+          ? browseCache.current.value
+          : await loadResearchDossierBrowse(client, workspaceRoot, undefined, browseQuery)
+        if (generation !== loadGeneration.current || contentScopeRef.current !== scope) return
+        browseCache.current = { scope, value }
         commit({
           status: 'browse',
-          value: await loadResearchDossierBrowse(client, workspaceRoot)
+          value
         })
         return
       }
@@ -293,11 +321,24 @@ export function ResearchDossierPanel({
     } catch (error) {
       commit({ status: 'error', code: 'owner-unavailable', message: errorMessage(error) })
     }
-  }, [client, parsedActivation, session.workspaceRoot, t])
+  }, [client, parsedActivation, session.workspaceRoot, contentScope, targetKey, browseQuery, t])
 
   useEffect(() => {
     void load()
+    return () => { loadGeneration.current++ }
   }, [load])
+
+  useEffect(() => {
+    browseRequest.current = false
+    setBrowseBusy(false)
+    setHistoryBusy(false)
+  }, [contentScope, parsedActivation, browseQuery])
+
+  useEffect(() => { browseScroll.current = 0 }, [contentScope])
+
+  useEffect(() => {
+    if (state.status === 'browse' && bodyRef.current) bodyRef.current.scrollTop = browseScroll.current
+  }, [state.status])
 
   const loadRecording = useCallback(async (showLoading = true) => {
     const scope = recordingScope
@@ -538,6 +579,7 @@ export function ResearchDossierPanel({
 
   const openArtifact = (ref: ArtifactVersionRefV1, page: ResearchDossierPage = 'overview') => {
     if (!workbench) return
+    if (state.status === 'browse') browseScroll.current = bodyRef.current?.scrollTop ?? 0
     workbench.openRightPanel({
       contributionId: 'research-dossier.workbench-right-panel',
       sessionId: session.id,
@@ -551,6 +593,29 @@ export function ResearchDossierPanel({
         revision: (activation?.revision ?? 0) + 1
       })
     })
+  }
+
+  const loadMoreBrowse = async () => {
+    if (state.status !== 'browse' || browseRequest.current || !session.workspaceRoot) return
+    const generation = loadGeneration.current
+    const scope = contentScope
+    browseRequest.current = true
+    setBrowseBusy(true)
+    try {
+      const value = await loadResearchDossierBrowse(client, session.workspaceRoot, state.value, browseQuery)
+      if (generation !== loadGeneration.current || contentScopeRef.current !== scope) return
+      browseCache.current = { scope, value }
+      setState({ status: 'browse', value })
+    } catch (error) {
+      if (generation === loadGeneration.current && contentScopeRef.current === scope) {
+        setState({ ...state, value: { ...state.value, issues: { artifacts: errorMessage(error) } } })
+      }
+    } finally {
+      if (generation === loadGeneration.current && contentScopeRef.current === scope) {
+        browseRequest.current = false
+        setBrowseBusy(false)
+      }
+    }
   }
 
   const preview = async () => {
@@ -595,20 +660,25 @@ export function ResearchDossierPanel({
 
   const loadMoreHistory = async () => {
     if (
-      state.status !== 'ready' ||
+      historyBusy || state.status !== 'ready' ||
       state.record.kind !== 'artifact-version' ||
-      !state.record.history.nextBeforeSequence ||
+      (!state.record.history.nextCursor && !state.record.history.nextBeforeSequence) ||
       !session.workspaceRoot
     ) return
+    const generation = loadGeneration.current
+    const scope = contentScope
+    const isCurrent = () => generation === loadGeneration.current && contentScopeRef.current === scope
     setHistoryBusy(true)
     try {
       const next = await client.listArtifactVersions(
         session.workspaceRoot,
         artifactHistoryInput(
           state.record.descriptor.artifact.artifactId,
-          state.record.history.nextBeforeSequence
+          state.record.history.nextBeforeSequence,
+          state.record.history.nextCursor
         )
       )
+      if (!isCurrent()) return
       if (!next.ok) {
         setState({ ...state, issues: { ...state.issues, versions: next.issue.message } })
         return
@@ -622,9 +692,9 @@ export function ResearchDossierPanel({
         issues: { ...state.issues, versions: undefined }
       })
     } catch (error) {
-      setState({ ...state, issues: { ...state.issues, versions: errorMessage(error) } })
+      if (isCurrent()) setState({ ...state, issues: { ...state.issues, versions: errorMessage(error) } })
     } finally {
-      setHistoryBusy(false)
+      if (isCurrent()) setHistoryBusy(false)
     }
   }
 
@@ -754,7 +824,7 @@ export function ResearchDossierPanel({
               <div className="truncate text-[9.5px] text-ds-faint/80">
                 {targetLabel(
                   parsedActivation,
-                  t('researchDossierRecentRecords'),
+                  t('researchDossierArtifactHistory'),
                   t('researchDossierVerifiedRecord')
                 )}
               </div>
@@ -764,6 +834,7 @@ export function ResearchDossierPanel({
             <button
               type="button"
               onClick={() => {
+                browseCache.current = null
                 void load()
                 void loadRecording()
               }}
@@ -806,7 +877,7 @@ export function ResearchDossierPanel({
         ) : null}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-auto p-3">
         {refreshing ? (
           <div className="mb-2 flex items-center gap-1.5 text-[9.5px] text-ds-faint">
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -852,12 +923,25 @@ export function ResearchDossierPanel({
             onLegacyTitleChange={setLegacyTitle}
             onImportLegacy={() => void importLegacyTurns()}
             onOpenArtifact={openArtifact}
+            browseBusy={browseBusy}
+            onLoadMore={() => void loadMoreBrowse()}
+            position={browsePosition.scope === contentScope ? browsePosition : { query: '', page: 0 }}
+            onPosition={(position) => { setBrowsePosition({ ...position, scope: contentScope }); if (position.query !== browseQuery) { browseCache.current = null; setBrowseQuery({ scope: contentScope, query: position.query }) } }}
           />
         ) : state.status === 'ready' ? (
           <div className="grid gap-3">
+            <button type="button" className={actionButtonClass} onClick={() => workbench?.openRightPanel({
+              contributionId: 'research-dossier.workbench-right-panel', sessionId: session.id, surfaceId
+            })} disabled={!workbench}>{t('researchDossierBackToHistory')}</button>
             {previewIssue ? <InlineIssue message={previewIssue} /> : null}
+            {state.record.kind === 'artifact-version' && session.workspaceRoot ? (
+              <ResearchDossierEvidenceReview active={active} key={`${session.workspaceRoot}:${state.record.descriptor.ref.versionId}:${state.record.descriptor.ref.contentDigest}`}
+                client={client} reference={state.record.descriptor.ref} workspaceRoot={session.workspaceRoot}
+                sessionId={session.id} runtimeId={session.runtimeId} workbench={workbench} />
+            ) : null}
             {page === 'overview' ? (
               <OverviewPage
+                imageCard={(ref) => session.workspaceRoot ? <ExactArtifactImageCard reference={ref} client={client} workspaceRoot={session.workspaceRoot} sessionId={session.id} workbench={workbench} /> : null}
                 record={state.record}
                 issues={state.issues}
                 canPreview={canPreview && Boolean(workspacePreview)}
@@ -916,7 +1000,11 @@ function BrowsePage({
   onToggleLegacyTurn,
   onLegacyTitleChange,
   onImportLegacy,
-  onOpenArtifact
+  onOpenArtifact,
+  browseBusy,
+  onLoadMore,
+  position,
+  onPosition
 }: Readonly<{
   value: ResearchDossierBrowseV1
   session: DomainWorkbenchRightPanelSession
@@ -938,15 +1026,24 @@ function BrowsePage({
   onLegacyTitleChange: (value: string) => void
   onImportLegacy: () => void
   onOpenArtifact: (ref: ArtifactVersionRefV1, page?: ResearchDossierPage) => void
+  browseBusy: boolean
+  onLoadMore: () => void
+  position: Readonly<{ query: string; page: number }>
+  onPosition: (position: { query: string; page: number }) => void
 }>): ReactElement {
   const { t } = useTranslation('common')
+  const matching = (value.query ?? '') === position.query.trim() ? value.artifacts.items : []
+  const page = Math.min(position.page, Math.max(0, Math.ceil(matching.length / 25) - 1))
+  const visible = matching.slice(page * 25, (page + 1) * 25)
+  const complete = value.streams.every(stream => stream.complete)
   return (
     <div className="grid gap-3">
+      <details className="rounded-lg border border-ds-border p-3"><summary className="cursor-pointer text-xs text-ds-muted">研究概览与正式证据状态</summary><p className="my-2 text-[11px] text-ds-muted">来源已归类、版本字节校验、正式证据与复现状态分别记录；阶段摘要不代表证据核验。</p>
       <ResearchSummaryList
         session={session}
         workbench={workbench}
         contributions={researchSummaries}
-      />
+      /></details>
       <ResearchRecordingCallout
         state={recordingState}
         action={recordingAction}
@@ -966,9 +1063,32 @@ function BrowsePage({
         onTitleChange={onLegacyTitleChange}
         onImport={onImportLegacy}
       />
-      <SectionCard title={t('researchDossierRecentArtifacts')} icon={<Boxes />}>
+      <SectionCard title={t('researchDossierArtifactHistory')} icon={<Boxes />}>
         {value.issues.artifacts ? <InlineIssue message={value.issues.artifacts} /> : null}
-        <BrowseArtifactList items={value.artifacts.items} onOpen={onOpenArtifact} />
+        <label className="mb-2 grid gap-1 text-xs text-ds-muted">
+          {t('researchDossierSearchLoaded')}
+          <input type="search" value={position.query} className="min-w-0 w-full rounded border border-ds-border bg-ds-main px-2 py-1.5 text-ds-ink"
+            onChange={event => onPosition({ query: event.target.value, page: 0 })} />
+        </label>
+        <p className="mb-2 text-[11px] text-ds-muted" role="status" data-dossier-browse-scope>
+          {t('researchDossierLoadedScope', { count: value.artifacts.items.length, matches: matching.length })}
+          {' · '}{t(complete ? 'researchDossierHistoryExhausted' : 'researchDossierHistoryPartial')}
+        </p>
+        <p className="mb-2 text-[11px] text-ds-muted">{t('researchDossierBrowseNotReview')}</p>
+        {position.query.trim() && !matching.length ? <p className="mb-2 text-xs text-ds-muted">{t('researchDossierNoLoadedMatches')}</p> : null}
+        <details className="mb-2 text-[11px] text-ds-muted"><summary>{t('researchDossierQueryCoverage')}</summary>
+          {value.streams.map(stream => <p key={stream.kind}>{stream.kind}: {stream.pagesRead} {t('researchDossierPagesRead')} · {stream.scanned} {t('researchDossierRowsRead')} · {stream.issue ?? t(stream.complete ? 'researchDossierHistoryExhausted' : 'researchDossierHistoryPartial')}</p>)}
+        </details>
+        <BrowseSessionArtifacts items={visible} knownItems={value.artifacts.items} session={session} onOpen={onOpenArtifact} />
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs" aria-label={t('researchDossierHistoryPagination')}>
+          <button type="button" className={actionButtonClass} disabled={page === 0} onClick={() => onPosition({ ...position, page: page - 1 })}>{t('researchDossierPreviousPage')}</button>
+          <span>{page + 1} / {Math.max(1, Math.ceil(matching.length / 25))}</span>
+          <button type="button" className={actionButtonClass} disabled={(page + 1) * 25 >= matching.length} onClick={() => onPosition({ ...position, page: page + 1 })}>{t('researchDossierNextPage')}</button>
+          {!complete ? <button type="button" className={actionButtonClass} disabled={browseBusy} aria-busy={browseBusy} onClick={onLoadMore}>
+            {browseBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            {t(position.query.trim() ? 'researchDossierContinueSearch' : 'researchDossierContinueHistory')}
+          </button> : null}
+        </div>
       </SectionCard>
     </div>
   )
@@ -1388,6 +1508,42 @@ function ResearchSummaryCard({
   )
 }
 
+export function groupBrowseArtifacts(items: ArtifactVersionListV2['items'], session: DomainWorkbenchRightPanelSession): { current: ArtifactVersionListV2['items']; other: ArtifactVersionListV2['items'] } {
+  const belongs = (item: ArtifactVersionListV2['items'][number]) => item.version.metadata?.runtimeId === session.runtimeId && item.version.metadata?.threadId === session.id
+  const recordingIds = new Set(items.filter(belongs).map(item => item.version.metadata?.researchRecordingId).filter(value => typeof value === 'string'))
+  const current = items.filter(item => belongs(item) || (typeof item.version.metadata?.researchRecordingId === 'string' && recordingIds.has(item.version.metadata?.researchRecordingId)))
+  const selected = new Set(current.map(item => item.version.versionId))
+  return { current, other: items.filter(item => !selected.has(item.version.versionId)) }
+}
+
+function BrowseSessionArtifacts({ items, knownItems, session, onOpen }: {
+  items: ArtifactVersionListV2['items']; session: DomainWorkbenchRightPanelSession
+  knownItems: ArtifactVersionListV2['items']
+  onOpen: (ref: ArtifactVersionRefV1, page?: ResearchDossierPage) => void
+}): ReactElement {
+  const visibleIds = new Set(items.map(item => item.version.versionId))
+  const knownGroups = groupBrowseArtifacts(knownItems, session)
+  const groups = {
+    current: knownGroups.current.filter(item => visibleIds.has(item.version.versionId)),
+    other: knownGroups.other.filter(item => visibleIds.has(item.version.versionId))
+  }
+  return <div className="space-y-3">
+    <h3 className="text-xs text-ds-muted">当前会话</h3>
+    <BrowseArtifactList items={groups.current} onOpen={onOpen} />
+    {!!groups.other.length && <details><summary className="cursor-pointer text-xs text-ds-muted">其他会话与未确定归属（{groups.other.length}）</summary><div className="mt-2"><BrowseArtifactList items={groups.other} onOpen={onOpen} /></div></details>}
+  </div>
+}
+
+export function browseArtifactTitle(item: ArtifactVersionListV2['items'][number]): string {
+  const title = item.artifact.label?.trim()
+  if (title && !/^Research [0-9a-f-]{32,}$/i.test(title)) return title
+  if (item.artifact.kind !== 'research-checkpoint') return title || item.artifact.kind
+  const reason = item.version.metadata?.changeReason
+  if (typeof reason !== 'string' || !reason.trim()) return '研究轮次档案'
+  const heading = reason.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]
+  return (heading ?? reason.trim().split(/\r?\n/, 1)[0]).replace(/\s+/g, ' ').trim().slice(0, 80)
+}
+
 function BrowseArtifactList({
   items,
   onOpen
@@ -1400,7 +1556,7 @@ function BrowseArtifactList({
   return (
     <ol className="grid gap-1.5">
       {items.map((item) => (
-        <li key={item.version.versionId}>
+        <li key={item.version.versionId} title={[item.artifact.label, item.version.metadata?.runtimeId, item.version.metadata?.threadId, item.version.versionId].filter(Boolean).join(" · ")}>
           <button
             type="button"
             onClick={() => onOpen(item.ref)}
@@ -1408,7 +1564,7 @@ function BrowseArtifactList({
           >
             <div className="flex items-center justify-between gap-2 text-[10.5px]">
               <span className="truncate font-semibold text-ds-ink">
-                {item.artifact.label ?? item.artifact.kind}
+                {browseArtifactTitle(item)}
               </span>
               <span className="font-mono text-ds-faint">v{item.artifactOrdinal}</span>
             </div>
@@ -1424,6 +1580,7 @@ function BrowseArtifactList({
 }
 
 export function OverviewPage({
+  imageCard,
   record,
   issues = {},
   canPreview,
@@ -1432,6 +1589,7 @@ export function OverviewPage({
   onOpenArtifact
 }: Readonly<{
   record: ResearchDossierExactRecord
+  imageCard?: (ref: ArtifactVersionRefV1) => ReactNode
   issues?: Readonly<Partial<Record<'checkpoint' | 'reproduction', string>>>
   canPreview: boolean
   previewBusy: boolean
@@ -1506,7 +1664,7 @@ export function OverviewPage({
       {record.kind === 'artifact-version' && record.checkpoint ? (
         <>
           <ResearchCheckpointNarrative record={record.checkpoint} />
-          <ResearchCheckpointKeyArtifacts record={record.checkpoint} onOpenArtifact={onOpenArtifact} />
+          <ResearchCheckpointKeyArtifacts record={record.checkpoint} onOpenArtifact={onOpenArtifact} imageCard={imageCard} />
         </>
       ) : null}
 
@@ -1607,6 +1765,9 @@ function VersionsPage({
     <SectionCard title={record.descriptor.artifact.label ?? record.descriptor.artifact.kind} icon={<History />}>
       {issue ? <InlineIssue message={issue} /> : null}
       {actionNotice ? <InlineIssue message={actionNotice} /> : null}
+      <p className="mb-2 break-words text-xs text-ds-muted" data-dossier-selected-version={record.descriptor.ref.versionId}>
+        {t('researchDossierSelectedVersion')}: v{record.descriptor.artifactOrdinal} · {record.descriptor.ref.versionId}
+      </p>
       <div className="mb-2 flex flex-wrap gap-1.5">
         <button
           type="button"
@@ -1696,6 +1857,7 @@ function VersionsPage({
               <button
                 type="button"
                 onClick={() => onOpenArtifact(item.ref, 'versions')}
+                aria-current={item.version.versionId === record.descriptor.ref.versionId ? 'true' : undefined}
                 className="group w-full text-left"
               >
                 <div className="flex items-center justify-between gap-2">
@@ -1714,7 +1876,7 @@ function VersionsPage({
           </li>
         ))}
       </ol>
-      {record.history.nextBeforeSequence ? (
+      {record.history.nextCursor || record.history.nextBeforeSequence ? (
         <button type="button" disabled={historyBusy} onClick={onLoadMore} className={`${actionButtonClass} mt-2`}>
           {historyBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArchiveRestore className="h-3 w-3" />}
           {t('researchDossierLoadMore')}
@@ -1898,9 +2060,11 @@ function ResearchCheckpointNarrative({
 }
 
 function ResearchCheckpointKeyArtifacts({
+  imageCard,
   record,
   onOpenArtifact
 }: Readonly<{
+  imageCard?: (ref: ArtifactVersionRefV1) => ReactNode
   record: ResearchCheckpointRecordV1
   onOpenArtifact?: (ref: ArtifactVersionRefV1, page?: ResearchDossierPage) => void
 }>): ReactElement | null {
@@ -1932,6 +2096,8 @@ function ResearchCheckpointKeyArtifacts({
                 </button>
               ) : null}
             </div>
+            {file.artifactVersionRef?.mediaType?.startsWith('image/') ? imageCard?.(file.artifactVersionRef) : null}
+            {!file.artifactVersionRef && file.mediaType?.startsWith('image/') ? <p className="mt-2">{t('researchDossierUnboundImage')}</p> : null}
             <TechnicalDetails className="mt-2">
               <LabeledValue label="Capture" value={file.capture} mono />
               {file.artifactVersionRef ? <ExactReferenceRows refValue={file.artifactVersionRef} /> : null}

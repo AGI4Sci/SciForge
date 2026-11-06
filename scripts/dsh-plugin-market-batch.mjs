@@ -11,9 +11,10 @@
  * Usage: node --import tsx scripts/dsh-plugin-market-batch.mjs [--json]
  */
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
+import { listDshPluginDirectories } from './dsh-plugin-sources.mjs'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -31,8 +32,6 @@ const KNOWN_RUNTIME_GAPS = Object.freeze({
   'research-checkpoints': 'Needs the host artifact-version service (G1); activation only here.',
   'scientific-plotting': 'Renders real PNGs; the end-to-end acceptance script invokes it for real.',
   'change-inspector': 'Investigation tools need a workspace with real changes; activation only here.',
-  'biology-room': 'Adapter-provided UI and inputs; activation only here.',
-  'life-science-preview': 'Adapter-provided preview inputs; activation only here.',
   'visual-review': 'Adapter-provided review inputs; activation only here.'
 })
 
@@ -42,8 +41,8 @@ async function resolveTestPublisherKey({ keyDir, generate }) {
   }
   const directory = resolve(keyDir)
   await mkdir(directory, { recursive: true })
-  const keyId = 'market-publisher-key'
-  const publisherId = 'sciforge-market'
+  const keyId = process.env.SCIFORGE_MARKET_KEY_ID?.trim() || 'market-publisher-key'
+  const publisherId = process.env.SCIFORGE_MARKET_PUBLISHER_ID?.trim() || 'sciforge-market'
   const keyringPath = join(directory, 'dsh-publisher-keys.json')
   const privateKeyPath = join(directory, `${keyId}.private.pem`)
   try {
@@ -73,7 +72,7 @@ async function main() {
   const { loadDshPublisherKeyring } = await import(
     pathToFileURL(resolve('src/main/extensions/dsh-plugin-signature.ts')).href
   )
-  const { emptyDshPluginPolicy, policyContracts, readDshPluginPolicy } = await import(
+  const { policyContracts, readDshPluginPolicy } = await import(
     pathToFileURL(resolve('src/main/extensions/dsh-plugin-policy.ts')).href
   )
   const { installDshPluginArtifact } = await import(
@@ -88,11 +87,12 @@ async function main() {
 
   const entries = []
   const results = []
-  for (const directory of await listPluginDirectories()) {
+  for (const directory of await listDshPluginDirectories({ pluginsDirectory: process.env.SCIFORGE_PLUGINS_DIR?.trim() })) {
     const manifestRaw = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
     const label = directory.split('/').pop()
     const record = {
       plugin: label,
+      source: relative(process.cwd(), directory).split('\\').join('/'),
       packageName: manifestRaw.name,
       version: manifestRaw.version,
       declared: manifestRaw.dsh !== undefined,
@@ -184,8 +184,17 @@ async function main() {
         artifactPath: record.artifact.path,
         expectedSha256: record.artifact.sha256,
         approvedToolNames: record.artifact.tools,
+        // Explicit batch engineering review; installer verifies actual signer again.
+        expectedApproval: await (async () => {
+          const { manifest } = await readDshPluginArtifact(record.artifact.path)
+          return { packageName: manifest.packageName, version: manifest.version,
+            sha256: record.artifact.sha256, publisher: record.artifact.publisherId, entry: manifest.entry,
+            tools: Object.entries(manifest.tools).map(([name, grant]) => ({ name, ...grant })),
+            ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies }
+        })(),
+        approvedPorts: (await readDshPluginArtifact(record.artifact.path)).manifest.ports ?? [],
         source: 'batch'
-      }, emptyDshPluginPolicy())
+      })
       const listed = (await service.list()).find((entry) => entry.packageName === record.packageName)
       record.activated = listed?.enabled === true
       record.status = record.activated ? 'activation-only' : 'blocked'
@@ -229,21 +238,6 @@ async function main() {
     if (record.reason) process.stdout.write(`\t\t└─ ${record.reason}\n`)
   }
   await rm(root, { recursive: true, force: true })
-}
-
-async function listPluginDirectories() {
-  const pluginsDirectory = resolve(process.env.SCIFORGE_PLUGINS_DIR?.trim() || 'plugins')
-  const directories = []
-  for (const entry of await readdir(pluginsDirectory, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name === 'templates') continue
-    try {
-      await readFile(join(pluginsDirectory, entry.name, 'package.json'))
-      directories.push(join(pluginsDirectory, entry.name))
-    } catch {
-      // A directory without a package.json is not a plugin.
-    }
-  }
-  return directories.sort()
 }
 
 main().catch((error) => {

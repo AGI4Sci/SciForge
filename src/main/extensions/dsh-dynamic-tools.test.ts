@@ -42,7 +42,9 @@ async function fixture(code = source, enable = true, duplicateGrants = false) {
  const contracts = new Map([['dynamic',contract]])
  const registry = new CapabilityRegistry()
  const broker = new CapabilityBroker(registry)
- const service = new DevelopmentExternalPluginService({root:join(root,'plugins'),userDataPath:join(root,'data'),hostApiVersion:'1.0.0',dshRuntimeVersion:'0.2.0-rc.2',adapterContracts:contracts})
+ const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,root:join(root,'plugins'),userDataPath:join(root,'data'),hostApiVersion:'1.0.0',dshRuntimeVersion:'0.2.0-rc.2',adapterContracts:contracts})
  await service.initialize()
  await service.attachCapabilityRegistry(registry)
  // Attaching the service publishes five Host-owned development capabilities.
@@ -100,7 +102,7 @@ it('initial publication cleanup failure still disposes the failed generation', a
  f.registry.unregister = ((id)=>{unregister(id);throw new Error('synthetic cleanup failure')}) as typeof f.registry.unregister
  try {
   await expect(f.service.setEnabled('dynamic',true)).rejects.toThrow(/failure/)
-  await expect(saved!.handler({op:'noop'}, {caller} as never)).rejects.toThrow(/stale|not connected/)
+  await expect(saved!.handler({op:'noop'}, {caller} as never)).rejects.toThrow(/stale|not connected|host grant is no longer authorized/)
   expect(f.broker.discover(caller)).toEqual(f.hostBaseline)
  } finally {f.registry.register = register;f.registry.unregister = unregister;await f.close()}
 })
@@ -217,10 +219,10 @@ it('candidate contribution publication waits for commit and fences saved old han
 it('startup duplicate grants dynamically withdraw both colliding IDs with a diagnostic', async()=>{
  const f=await fixture(source,true,true)
  try {
-  await f.invoke('control',{op:'add'})
+   await expect(f.invoke('control',{op:'add'})).rejects.toMatchObject({code:'stale_capability_definition'})
   await expect.poll(()=>f.broker.discover(caller)).toEqual(f.hostBaseline)
   expect((await f.service.list())[0]?.diagnostic).toMatch(/duplicate/i)
-  await expect(f.invoke('control',{op:'noop'})).rejects.toThrow()
+  await expect(f.invoke('control',{op:'noop'})).rejects.toMatchObject({code:'unknown_capability'})
  }finally{await f.close()}
 })
 it('disable fences queued and saved generation handlers across re-enable', async()=>{

@@ -1,4 +1,6 @@
+import { assertCapabilityDefinitionCurrent } from './registry'
 import { createHash, randomBytes } from 'node:crypto'
+import { bindWorkspaceMutationIdentity, copyWorkspaceMutationReceipt } from '../services/workspace-mutation-receipt'
 import type { WorkspaceLocator } from '@sciforge/domain-sdk/workspace-host'
 import type { DomainMainOrdinarySessionIdentity } from '@sciforge/domain-sdk/host'
 import {
@@ -174,6 +176,7 @@ export type AgentCapabilityObservation = Readonly<{
   observedAt: string
   state: CapabilityJsonValue
   operations: AgentOperationDescriptor[]
+  progress?: { status: 'unchanged'; consecutiveObservations: number; instruction: string }
 }>
 
 export type AgentCapabilityInvocation = Readonly<{
@@ -252,14 +255,14 @@ export type CapabilityAgentBroker = Readonly<{
   invoke: (
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
-    options?: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext }
+    options?: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext; expectedDescriptor?: CapabilityDescriptor }
   ) => CapabilityInvocationResult | Promise<CapabilityInvocationResult>
   /** Host-only path; raw capability callers cannot attach Session provenance. */
   invokeOrdinarySession?: (
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
     ordinarySession: DomainMainOrdinarySessionIdentity,
-    options?: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext }
+    options?: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext; expectedDescriptor?: CapabilityDescriptor }
   ) => CapabilityInvocationResult | Promise<CapabilityInvocationResult>
   listEvents: (
     caller: CapabilityCallerContext,
@@ -291,6 +294,7 @@ type CallerCache = {
   schemaRefsById: Map<string, string>
   resources: Map<string, CapabilityResourceHandle>
   resourceLabels: Map<string, string>
+  observations: Map<string, { digest: string; count: number }>
 }
 
 const CALLER_CACHE_LIMIT = 32
@@ -670,7 +674,8 @@ export class CapabilityAgentToolSurface {
         operationRefsById: new Map(),
         schemaRefsById: new Map(),
         resources: new Map(),
-        resourceLabels: new Map()
+        resourceLabels: new Map(),
+        observations: new Map()
       }
       this.#callerCaches.set(key, cache)
       if (this.#callerCaches.size > CALLER_CACHE_LIMIT) {
@@ -717,6 +722,7 @@ export class CapabilityAgentToolSurface {
         resourceRef ? cache.resourceLabels.get(resourceRef) : undefined
       )
       this.#assertPrincipalLease(context)
+      assertCapabilityDefinitionCurrent(resolvedDescriptor)
       const invoke = (resource: CapabilityResourceHandle | undefined) => this.#broker.invoke(invokeCaller, {
         actionId: resolvedDescriptor.id,
         ...(resource ? { resource } : {}),
@@ -725,7 +731,7 @@ export class CapabilityAgentToolSurface {
           : {}),
         ...(invocationId ? { invocationId } : {}),
         input
-      }, { signal: active.signal, context })
+      }, { signal: active.signal, context, expectedDescriptor: resolvedDescriptor })
       let result: CapabilityInvocationResult
       try {
         dispatchedEffect = resolvedDescriptor.effect
@@ -745,6 +751,7 @@ export class CapabilityAgentToolSurface {
         dispatchedEffect = resolvedDescriptor.effect
         result = await invoke(renewed)
       }
+      assertCapabilityDefinitionCurrent(resolvedDescriptor)
       if (result.actionId !== resolvedDescriptor.id) {
         throw new CapabilityAgentToolError(
           'capability_identity_mismatch',
@@ -766,11 +773,13 @@ export class CapabilityAgentToolSurface {
           )
         }
         this.#assertPrincipalLease(context)
+        assertCapabilityDefinitionCurrent(resolvedDescriptor)
       } catch (error) {
         if (isMutationEffect(resolvedDescriptor.effect)) throw outcomeUnknownAgentToolError()
         throw error
       }
-      return {
+      bindWorkspaceMutationIdentity(result, context)
+      return copyWorkspaceMutationReceipt(result, {
         tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
         deliveryEffect: resolvedDescriptor.effect,
         value: {
@@ -782,7 +791,7 @@ export class CapabilityAgentToolSurface {
           replayed: result.replayed,
           completedAt: result.completedAt
         }
-      }
+      })
     } catch (error) {
       let finalError = error
       if (
@@ -871,6 +880,7 @@ export class CapabilityAgentToolSurface {
           : `Confirmation for ${descriptor.title} was denied.`
       )
     }
+    assertCapabilityDefinitionCurrent(descriptor)
     return capabilityCallerContextSchema.parse({
       ...caller,
       approvals: [{
@@ -902,11 +912,9 @@ export class CapabilityAgentToolSurface {
 
   #operationRef(cache: CallerCache, descriptor: CapabilityDescriptor): string {
     const existing = cache.operationRefsById.get(descriptor.id)
-    if (existing) {
-      cache.operationsByRef.set(existing, descriptor)
-      return existing
-    }
+    if (existing && cache.operationsByRef.get(existing) === descriptor) return existing
     const ref = opaqueId('op')
+    cache.schemaRefsById.delete(descriptor.id)
     cache.operationRefsById.set(descriptor.id, ref)
     cache.operationsByRef.set(ref, descriptor)
     return ref
@@ -923,6 +931,7 @@ export class CapabilityAgentToolSurface {
   #operation(cache: CallerCache, ref: string): CapabilityDescriptor {
     const descriptor = cache.operationsByRef.get(ref)
     if (!descriptor) throw new CapabilityAgentToolError('unknown_operation_ref', 'The operation reference is unknown or expired.')
+    assertCapabilityDefinitionCurrent(descriptor)
     return descriptor
   }
 
@@ -955,15 +964,25 @@ export class CapabilityAgentToolSurface {
     this.#rememberObservation(cache, observation)
     const state = await this.#sanitizeOutput(caller, cache, observation.state, context)
     this.#assertPrincipalLease(context)
+    const operations = observation.operations.map((descriptor) => this.#agentOperation(cache, descriptor, includeSchema))
+    // Time of observation is not evidence of changed resource state. Compare fresh
+    // authorized state and operations; never reuse a cached observation as truth.
+    const key = JSON.stringify([context.threadId, context.turnId, resourceRef, includeSchema])
+    const digest = createHash('sha256').update(stableObservationJson({ state, operations })).digest('hex')
+    const previous = cache.observations.get(key)
+    const count = previous?.digest === digest ? previous.count + 1 : 1
+    cache.observations.delete(key)
+    cache.observations.set(key, { digest, count })
+    if (cache.observations.size > 64) cache.observations.delete(cache.observations.keys().next().value!)
     return {
       resourceRef: observation.resourceRef,
       resourceKind: observation.resourceKind,
       observedAt: observation.observedAt,
-      state,
-      // Observation already resolves the resource-scoped operation set. Include
-      // each compact input shape here so callers can go directly from
-      // observe -> invoke without a redundant discover/expand round trip.
-      operations: observation.operations.map((descriptor) => this.#agentOperation(cache, descriptor, includeSchema))
+      state, operations,
+      ...(count > 1 ? { progress: {
+        status: 'unchanged' as const, consecutiveObservations: count,
+        instruction: 'Fresh authorized observation is unchanged. Repeating observe will not recover omitted content. Read the stored result continuation if present, or use the returned operation. Observe again only when expecting a state change; do not treat a partial preview as an execution failure.'
+      } } : {})
     }
   }
 
@@ -1629,4 +1648,10 @@ function deepFreeze<T>(value: T): T {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
   for (const nested of Object.values(value)) deepFreeze(nested)
   return Object.freeze(value)
+}
+
+function stableObservationJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableObservationJson).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableObservationJson((value as Record<string, unknown>)[key])}`).join(',')}}`
+  return JSON.stringify(value) ?? 'null'
 }

@@ -3,6 +3,8 @@ export type HostServiceClientFactory = Readonly<{
   serviceId: string
   modulePath: string
   exportName: string
+  /** Exact Cordis services supplied by a trusted grouped factory. */
+  provides?: readonly string[]
   config: Readonly<Record<string, unknown>>
 }>
 
@@ -20,6 +22,10 @@ export type HostServiceHandle = Readonly<{
 
 /** Runner-local client: there is deliberately no caller/scope/authority argument. */
 export type HostServiceClient = Readonly<{
+  /** Trusted runner correlation; never grants caller authority. */
+  invocationId?: string
+  /** Opaque runner-owned lifetime object, never serialized or used as authority. */
+  invocationToken?: object
   request: (serviceId: string, operation: string, input: unknown) => HostServiceHandle
 }>
 

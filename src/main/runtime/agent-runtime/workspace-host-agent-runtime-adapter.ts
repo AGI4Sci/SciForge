@@ -466,10 +466,20 @@ export function createPlacementAwareAgentRuntimeAdapter(
 
   const selected = (context: AgentRuntimeAdapterContext): AgentRuntimeAdapter =>
     context.workspaceHost ? workspaceHost : local
+  const selectedForProfile = (context: AgentRuntimeAdapterContext, profile?: 'minimal'): AgentRuntimeAdapter => {
+    const adapter = selected(context)
+    if (profile && !adapter.contextProfiles?.includes(profile)) {
+      throw new WorkspaceHostAgentRuntimeError('compatibility-error',
+        `Runtime ${adapter.id} does not support context profile ${profile} for this placement.`)
+    }
+    return adapter
+  }
 
   return {
     id: local.id,
     transport: local.transport,
+    // Advertise the union, then validate the actual selected placement before dispatch.
+    contextProfiles: [...new Set([...(local.contextProfiles ?? []), ...(workspaceHost.contextProfiles ?? [])])],
     ...(local.subagents || workspaceHost.subagents
       ? {
           subagents: {
@@ -486,11 +496,11 @@ export function createPlacementAwareAgentRuntimeAdapter(
     connect: (context) => selected(context).connect(context),
     capabilities: (context) => selected(context).capabilities(context),
     listThreads: (context, input) => selected(context).listThreads(context, input),
-    startThread: (context, input) => selected(context).startThread(context, input),
+    startThread: async (context, input) => selectedForProfile(context, input.contextProfile).startThread(context, input),
     readThreadStatus: (context, input) => selected(context).readThreadStatus(context, input),
     readThreadPage: (context, input) => selected(context).readThreadPage(context, input),
     readToolArtifact: (context, input) => selected(context).readToolArtifact(context, input),
-    startTurn: (context, input) => selected(context).startTurn(context, input),
+    startTurn: async (context, input) => selectedForProfile(context, input.contextProfile).startTurn(context, input),
     interruptTurn: (context, input) => selected(context).interruptTurn(context, input),
     steerTurn: (context, input) => selected(context).steerTurn(context, input),
     renameThread: (context, input) => selected(context).renameThread(context, input),

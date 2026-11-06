@@ -43,7 +43,9 @@ async function dispatch(msg) {
  }
  case 'session/prompt': {
   const s = sessions.get(msg.params.sessionId); if (!s) throw new Error('unknown session')
-  const text = msg.params.prompt[0].text
+  // The fixture interprets the task portion of the real ACP prompt.
+      const prompt = msg.params.prompt[0].text
+      const text = prompt.includes('\n\nUser task:\n') ? prompt.split('\n\nUser task:\n').slice(1).join('\n\nUser task:\n') : prompt
   if (text === 'cancel-hold') { held = msg; return }
   const config = s.servers[0]; if (!config) throw new Error('MCP missing')
   const client = clients.get(msg.params.sessionId)

@@ -1,6 +1,7 @@
 import { importComposerWorkspaceAttachment } from '../../renderer/src/lib/composer-workspace-attachment'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, open, readFile, realpath, readdir, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, realpath, readdir, stat, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'

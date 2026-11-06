@@ -168,3 +168,20 @@ it('does not claim the selected runtime is a transcript binding when the thread 
   expect(output.turnId).toBe('turn-unbound')
   expect(output.runtimeId).toBeUndefined()
 })
+
+it('uses the explicit transcript runtime for a side conversation independently of the selected runtime', async () => {
+  const seen: DomainRendererChatMessageRenderContext[] = []
+  cleanup.push(installedRendererContributions.chatMessages.register({
+    id: 'fixture.side-runtime', ownerId: 'fixture', order: -10_000,
+    contribution: { render: (context) => { seen.push(context); return null } }
+  }).dispose)
+  useChatStore.setState({ activeAgentRuntime: 'codex', activeThreadId: 'main-thread', busy: false, threads: [] })
+  await mount(<MessageTimeline blocks={[
+    { kind: 'user', id: 'side-input', turnId: 'side-turn', text: 'input' },
+    { kind: 'assistant', id: 'side-output', text: 'result' }
+  ]} live="" liveReasoning="" activeThreadId="side-thread" runtimeIdOverride="dsh" runtimeConnection="ready"
+  onRetryConnection={() => undefined} onOpenSettings={() => undefined} />)
+  expect(seen.find(({ message }) => message.id === 'side-output')).toMatchObject({
+    runtimeId: 'dsh', threadId: 'side-thread', turnId: 'side-turn'
+  })
+})

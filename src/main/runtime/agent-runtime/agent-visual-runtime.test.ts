@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { symlink } from '../../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
