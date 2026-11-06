@@ -11,8 +11,7 @@
 
 <p align="center">
   <a href="./README.en.md">English</a> ·
-  <a href="https://agi4sci.github.io/sciforge-docs-v2/">使用文档站</a> ·
-  <a href="./docs/wiki/README.md">使用 Wiki</a> ·
+  <a href="https://agi4sci.github.io/sciforge-docs-v2/">使用文档</a> ·
   <a href="https://agi4sci.github.io/SciForge/submit/">提交科研需求</a>
 </p>
 
@@ -106,9 +105,9 @@ npm run dev
 
 | 入口 | 内容 |
 | --- | --- |
-| [使用文档站](https://agi4sci.github.io/sciforge-docs-v2/) | 五分钟快速开始、端到端案例、22 个内置扩展的功能手册、视频导览 |
+| [使用文档](https://agi4sci.github.io/sciforge-docs-v2/) | 快速开始、功能手册、科研案例与视频导览 |
+| [版本与兼容性](https://agi4sci.github.io/sciforge-docs-v2/docs/reference/version-and-compatibility) | 本次公开源码基线为 `57ac3d0`；教程所用客户端版本及插件可能不同 |
 | [安装与最小使用](./INSTALL.md) | 本地客户端环境、步骤与验证 |
-| [使用 Wiki](./docs/wiki/README.md) | 随仓版本化的中文使用手册 |
 | [开发指南](./docs/DEVELOPMENT.md) | 本地开发、测试与构建 |
 | [贡献指南](./CONTRIBUTING.md) · [安全策略](./SECURITY.md) | 协作约定与漏洞报告 |
 

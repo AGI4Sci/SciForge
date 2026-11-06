@@ -11,8 +11,7 @@
 
 <p align="center">
   <a href="./README.md">简体中文</a> ·
-  <a href="https://agi4sci.github.io/sciforge-docs-v2/">Documentation</a> ·
-  <a href="./docs/wiki/README.md">Usage Wiki</a> ·
+  <a href="https://agi4sci.github.io/sciforge-docs-v2/">User documentation</a> ·
   <a href="https://agi4sci.github.io/SciForge/submit/">Submit a research need</a>
 </p>
 
@@ -104,9 +103,9 @@ No installer has been published for the current source snapshot — running from
 
 | Entry | Contents |
 | --- | --- |
-| [Documentation site](https://agi4sci.github.io/sciforge-docs-v2/) | Five-minute quickstart, end-to-end cases, the 22-extension feature manual, and video tours (Chinese) |
+| [User documentation](https://agi4sci.github.io/sciforge-docs-v2/) | Quickstart, feature guides, research cases, and video tours (Chinese) |
+| [Version and compatibility](https://agi4sci.github.io/sciforge-docs-v2/docs/reference/version-and-compatibility) | This public source baseline is `57ac3d0`; the tutorials may use a different client and plugin version |
 | [Installation](./INSTALL.md) | Local client setup, prerequisites, and verification |
-| [Usage Wiki](./docs/wiki/README.md) | The Chinese usage manual versioned with this repository |
 | [Development Guide](./docs/DEVELOPMENT.md) | Local development, testing, and builds |
 | [Contribution Guide](./CONTRIBUTING.md) · [Security Policy](./SECURITY.md) | Collaboration conventions and vulnerability reporting |
 
