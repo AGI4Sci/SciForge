@@ -40,7 +40,10 @@ function mainShutdownHarness(host: {
     codexRuntime: { stop: vi.fn(async () => { order.push('codex-stop') }) },
     agentRuntimeHostForShutdown: host,
     portablePrincipalSubscriptionForShutdown: null, portableResourceReferencesForShutdown: null,
-    mainRuntimeContributions: null, hostFileTransfersForShutdown: null,
+    mainRuntimeContributions: {
+      dispose: vi.fn(async () => { order.push('runtime-contributions-dispose') })
+    },
+    hostFileTransfersForShutdown: null,
     hostExternalNavigationForShutdown: null, workspaceHostSessionManagerForShutdown: null,
     domainExecutionEventsForShutdown: null, turnArtifactHandoffForShutdown: null,
     workspaceEgressServiceForShutdown: null, codeNavigationService: null,
@@ -78,6 +81,7 @@ it('production before-quit retains failed capture ownership and retries before S
   await vi.waitFor(() => expect(harness.context.isQuitting).toBe(false))
   expect(harness.context.agentRuntimeHostForShutdown).toBe(host)
   expect(harness.context.managedRuntimesStoppedForQuit).toBe(false)
+  expect(harness.order).not.toContain('runtime-contributions-dispose')
   expect(harness.app.quit).not.toHaveBeenCalled()
   harness.quit()
   await vi.waitFor(() => expect(host.retryEventCaptures).toHaveBeenCalledOnce())
@@ -93,8 +97,10 @@ it('production before-quit retains failed capture ownership and retries before S
   expect(harness.order).toEqual([
     'claude-stop', 'codex-stop', 'capture-close',
     'claude-stop', 'codex-stop', 'capture-retry',
-    'claude-stop', 'codex-stop', 'capture-retry', 'capture-close'
+    'claude-stop', 'codex-stop', 'capture-retry', 'capture-close',
+    'runtime-contributions-dispose'
   ])
+  expect(harness.context.mainRuntimeContributions).toBeNull()
   expect(harness.app.listenerCount('before-quit')).toBe(1)
 })
 
@@ -137,6 +143,8 @@ it('production before-quit preserves a real Host capture after producer failure 
     expect(running).toBe(false)
     expect(accepted).toEqual([1, 2])
     expect(dispose).toHaveBeenCalledOnce()
+    expect(harness.order).toContain('runtime-contributions-dispose')
+    expect(harness.context.mainRuntimeContributions).toBeNull()
     harness.order.push('session-close')
   })
   harness.context.domainExecutionEventsForShutdown = { close: sessionClose }

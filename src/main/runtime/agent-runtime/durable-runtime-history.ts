@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { open, readdir, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
 import type { AgentRuntimeEvent, AgentRuntimeThread, AgentRuntimeThreadPage, AgentRuntimeTurn } from '../../../shared/agent-runtime-contract'
-import { AppDataJsonlStore } from '../../services/app-data-store'
+import { appDataStorePath, atomicWriteAppDataText, readAppDataStoreText, AppDataJsonlStore } from '../../services/app-data-store'
 import { readJsonlThreadPage, readLatestJsonlThreadRecord, decodeToolArtifactRef, externalizeToolDetails, toolArtifactContent } from './jsonl-thread-page'
 
 type Record = { seq: number; threadId: string; thread?: AgentRuntimeThread; event?: AgentRuntimeEvent; captureFailure?: true }
@@ -21,10 +21,16 @@ export function withDurableAgentRuntimeHistory<T extends AgentRuntimeAdapter & {
   const failures = new Map<string, unknown>()
   const activeTurns = new Map<string, string>()
   const listeners = new Set<{ threadId: string; push(event: AgentRuntimeEvent): void; stop(): void }>()
+  const threadKey = (threadId: string): string => createHash('sha256').update(JSON.stringify([adapter.id, threadId])).digest('hex')
+  const deletionKey = (threadId: string): string => threadKey(threadId) + '.deleted'
+  const isDeleted = async (threadId: string): Promise<boolean> => {
+    try { await readAppDataStoreText(rootDir, [deletionKey(threadId)]); return true }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
+  }
   const store = (threadId: string): AppDataJsonlStore => {
     let result = stores.get(threadId)
     if (!result) {
-      result = new AppDataJsonlStore({ rootDir, segments: [createHash('sha256').update(JSON.stringify([adapter.id, threadId])).digest('hex') + '.jsonl'] })
+      result = new AppDataJsonlStore({ rootDir, segments: [threadKey(threadId) + '.jsonl'] })
       stores.set(threadId, result)
     }
     return result
@@ -35,16 +41,22 @@ export function withDurableAgentRuntimeHistory<T extends AgentRuntimeAdapter & {
     const path = await journal.path() // validates the app-data owner path, including symlink confinement
     const handle = await open(path, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0))
     try { await handle.sync() } finally { await handle.close() }
-    if (record.seq === 0) {
+    // Windows supports flushing files, but not directory handles. Keep the
+    // journal flush above on every platform; only POSIX can flush its parents.
+    if (record.seq === 0 && process.platform !== 'win32') {
       for (const directory of [dirname(path), dirname(dirname(path))]) {
         const dir = await open(directory, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
         try { await dir.sync() } finally { await dir.close() }
       }
     }
   }
-  const parse = (line: string): Record => {
+  const parseRecord = (line: string): Record => {
     const record = JSON.parse(line) as Record
     if (!Number.isSafeInteger(record.seq) || record.seq < 0 || typeof record.threadId !== 'string') throw new Error('runtime_history_corrupt')
+    return record
+  }
+  const parse = (line: string): Record => {
+    const record = parseRecord(line)
     if (record.captureFailure) throw new Error('runtime_history_capture_failed')
     return record
   }
@@ -53,6 +65,7 @@ export function withDurableAgentRuntimeHistory<T extends AgentRuntimeAdapter & {
     if (failures.has(input.threadId)) throw failures.get(input.threadId)
   }
   const header = async (threadId: string): Promise<AgentRuntimeThread> => {
+    if (await isDeleted(threadId)) throw new Error('runtime_thread_not_found')
     const cached = headers.get(threadId)
     if (cached) return structuredClone(cached)
     let first: Record | undefined
@@ -125,15 +138,76 @@ export function withDurableAgentRuntimeHistory<T extends AgentRuntimeAdapter & {
       return thread
     },
     async listThreads(context, input) {
-      // The Host asks for one exact durable thread by identity; the journal
-      // header is the authority for it because the provider omits sessions it
-      // currently holds open. `search` stays a free-text query for the caller.
+      if (input.runtimeId && input.runtimeId !== adapter.id) throw new Error('runtime_mismatch')
+      // Exact Host identity reads remain journal-authoritative for cold resume.
       const exactThreadId = input.threadId?.trim()
       if (exactThreadId) {
-        try { return [await header(exactThreadId)] }
+        if (await isDeleted(exactThreadId)) return []
+        try {
+          const thread = await header(exactThreadId)
+          const tail = await readLatestJsonlThreadRecord({ store: store(exactThreadId), threadId: exactThreadId, parse: parseRecord })
+          return failures.has(exactThreadId) || tail?.captureFailure ? [] : [thread]
+        }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       }
-      return adapter.listThreads(context, input)
+      // A failed provider discovery (including route/policy failures) must never
+      // become a successful journal-only list. Live summaries win by identity.
+      const threads = await adapter.listThreads(context, input)
+      const merged = new Map(threads.map(thread => [thread.id, thread]))
+      const { parentPath } = await appDataStorePath(rootDir, [deletionKey('')], { createParentDirectories: false })
+      for (const entry of await readdir(parentPath, { withFileTypes: true })) {
+        if (!/^[a-f0-9]{64}\.jsonl$/.test(entry.name)) continue
+        const journal = new AppDataJsonlStore({ rootDir, segments: [entry.name] })
+        let first: Record | undefined
+        await journal.readLines(line => { if (!first) first = parse(line) })
+        if (!first?.thread || first.seq !== 0 || first.thread.id !== first.threadId) throw new Error('runtime_history_corrupt')
+        if (first.thread.runtimeId !== adapter.id) continue
+        if (entry.name !== threadKey(first.threadId) + '.jsonl') throw new Error('runtime_history_corrupt')
+        if (await isDeleted(first.threadId)) continue
+        const tail = await readLatestJsonlThreadRecord({ store: journal, threadId: first.threadId, parse: parseRecord })
+        // A capture loss invalidates one transcript, including stale provider
+        // metadata, without making healthy journals undiscoverable. Corrupt
+        // tails still reject discovery; transcript access uses the strict parser.
+        if (failures.has(first.threadId) || tail?.captureFailure) {
+          merged.delete(first.threadId)
+          continue
+        }
+        if (!merged.has(first.threadId)) merged.set(first.threadId, first.thread)
+      }
+      const search = input.search?.trim().toLowerCase()
+      const locator = input.workspaceLocator
+      const visible: AgentRuntimeThread[] = []
+      for (const thread of merged.values()) {
+        if (thread.runtimeId !== adapter.id || await isDeleted(thread.id)) continue
+        if (exactThreadId && thread.id !== exactThreadId) continue
+        if (locator && (thread.workspaceLocator?.hostSessionId !== locator.hostSessionId ||
+          (thread.workspaceLocator?.path ?? thread.workspace) !== locator.path)) continue
+        if (input.archivedOnly ? thread.archived !== true : !input.includeArchived && thread.archived === true) continue
+        if (!input.includeSide && thread.sidebarVisibility !== 'main' &&
+          (thread.sidebarVisibility === 'side' || thread.sidebarVisibility === 'hidden' ||
+           thread.relation === 'side' || thread.parentThreadId?.trim())) continue
+        if (search && ![thread.title, thread.preview, thread.workspace, thread.model].some(value => value?.toLowerCase().includes(search))) continue
+        visible.push(structuredClone(thread))
+      }
+      visible.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0))
+      return typeof input.limit === 'number' && Number.isFinite(input.limit) && input.limit > 0
+        ? visible.slice(0, Math.floor(input.limit)) : visible
+    },
+    async deleteThread(context, input) {
+      if (input.runtimeId && input.runtimeId !== adapter.id) throw new Error('runtime_mismatch')
+      await adapter.deleteThread(context, input)
+      await captures.get(input.threadId)
+      await lanes.get(input.threadId)?.catch(() => {})
+      // Persist removal even for provider-listed sessions with no enrolled journal.
+      // Retained provider history must never resurrect a deleted GUI conversation.
+      await atomicWriteAppDataText(rootDir, [deletionKey(input.threadId)], JSON.stringify({ threadId: input.threadId }))
+      await rm(await store(input.threadId).path(), { force: true })
+      headers.delete(input.threadId)
+      stores.delete(input.threadId)
+      lanes.delete(input.threadId)
+      failures.delete(input.threadId)
+      activeTurns.delete(input.threadId)
+      for (const listener of [...listeners]) if (listener.threadId === input.threadId) listener.stop()
     },
     async readThreadStatus(_context, input) {
       check(input)
@@ -156,6 +230,10 @@ export function withDurableAgentRuntimeHistory<T extends AgentRuntimeAdapter & {
         turns: projectTurns(page.records).map(turn => ({ ...turn, items: externalizeToolDetails({
           runtimeId: adapter.id, threadId: input.threadId, items: turn.items ?? []
         }) })), nextCursor: page.nextCursor }
+    },
+    async publishSyntheticEvent(_context, event) {
+      check(event)
+      return append(event)
     },
     async readToolArtifact(_context, input) {
       check(input)
@@ -209,9 +287,11 @@ export function withDurableAgentRuntimeHistory<T extends AgentRuntimeAdapter & {
           // Register live delivery before taking the durable high-water mark.
           // Events racing with the replay occur in both sources; seq removes
           // that overlap without leaving a replay/live subscription gap.
+          // Even live-only subscriptions must honor a persisted loss fence
+          // after cold reopen; absence of a replay cursor does not waive it.
+          const end = await latest(input.threadId)
           let delivered = input.sinceSeq
           if (delivered !== undefined) {
-            const end = await latest(input.threadId)
             const replay: AgentRuntimeEvent[] = []
             await store(input.threadId).readLines(line => {
               const record = parse(line)

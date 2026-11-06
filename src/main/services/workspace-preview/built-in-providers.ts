@@ -1,3 +1,4 @@
+import { readWorkspacePreviewTextRange } from '@sciforge/workspace-host/preview-service'
 import { readFile } from 'node:fs/promises'
 import {
   DOMMatrix,
@@ -209,6 +210,10 @@ export function createBuiltInWorkspacePreviewProviderRegistrations(
     registration(ownerId, 5, {
       pluginId: PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
       renderVisual: renderPdfVisual,
+      readText: (input) => readWorkspacePreviewTextRange(input.file.path, input.session.id, input.range, {
+        version: 'pdfjs-text-v1',
+        extract: extractPdfText
+      }),
       ...hostOperations({
         applyEdit: chainEdits(...annotationEdits),
         exportPreview: pdfExport
@@ -276,6 +281,7 @@ async function renderImageVisual(
   input: WorkspacePreviewProviderVisualInput
 ): Promise<VisualFrame> {
   const bytes = await readVisualSourceBytes(input.file.path)
+  if (input.request.frameIndex && input.request.frameIndex !== 1) throw new Error('This image source has only one frame.')
   const mimeType = detectVisualImageMimeType(bytes)
   const image = await loadImage(bytes)
   assertDecodedDimensions(image.width, image.height)
@@ -292,6 +298,7 @@ async function renderImageVisual(
 
   if (
     !region &&
+    (!input.request.outputMimeType || input.request.outputMimeType === mimeType) &&
     output.width === image.width &&
     output.height === image.height
   ) {
@@ -545,4 +552,30 @@ function ensurePdfJsNodePrimitives(): void {
   target.DOMMatrix ??= DOMMatrix
   target.ImageData ??= ImageData
   target.Path2D ??= Path2D
+}
+
+/** Preserve page anchors; uncertain PDF reading order is not reconstructed as invented prose. */
+async function extractPdfText(bytes: Uint8Array) {
+  ensurePdfJsNodePrimitives()
+  const pdfjs = await import(PDF_JS_MODULE_SPECIFIER)
+  const document = await pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true }).promise
+  let text = ''
+  const anchors: { frameIndex: number; start: number; end: number }[] = []
+  try {
+    for (let frameIndex = 1; frameIndex <= document.numPages; frameIndex++) {
+      const page = await document.getPage(frameIndex)
+      try {
+        const content = await page.getTextContent()
+        const start = text.length
+        for (const item of content.items) {
+          if ('str' in item) text += item.str + (item.hasEOL ? '\n' : ' ')
+        }
+        text += '\n\n'
+        anchors.push({ frameIndex, start, end: text.length })
+        if (text.length > 16 * 1024 * 1024) throw new Error('PDF extracted text exceeds the document budget.')
+      } finally { page.cleanup() }
+    }
+    if (!text.trim()) throw new Error('Document has no extractable text; OCR is required.')
+    return { text, anchors }
+  } finally { await document.destroy() }
 }

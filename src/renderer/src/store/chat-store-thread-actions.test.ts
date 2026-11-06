@@ -10,7 +10,7 @@ import type {
 } from '@shared/agent-runtime-contract'
 import { defaultCodexRuntimeSettings, defaultSkillsSettings } from '@shared/app-settings'
 import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
-import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext } from './chat-store-types'
+import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext, ChatStreamRef } from './chat-store-types'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -37,6 +37,7 @@ vi.mock('../lib/session-right-panel-lifecycle', () => ({
 }))
 
 import { createThreadActions } from './chat-store-thread-actions'
+import { createMaintenanceActions } from './chat-store-maintenance-actions'
 import i18n from '../i18n'
 import { composerReferenceFromWorkspaceReference } from '../lib/workspace-reference-composer'
 import { composerReasoningDiscoveryKey } from '../lib/composer-reasoning-discovery'
@@ -56,8 +57,9 @@ function thread(id: string): NormalizedThread {
 
 function buildHarness(): {
   actions: ReturnType<typeof createThreadActions>
+  interrupt: ReturnType<typeof createMaintenanceActions>['interrupt']
   state: ChatState
-  sseAbortRef: { current: AbortController | null }
+  sseAbortRef: ChatStreamRef
 } {
   let state: ChatState
   state = {
@@ -93,7 +95,7 @@ function buildHarness(): {
     Object.assign(state, update)
   }
   const get: ChatStoreGet = () => state
-  const sseAbortRef: { current: AbortController | null } = { current: null }
+  const sseAbortRef: ChatStreamRef = { current: null }
   const actions = createThreadActions({
     set,
     get,
@@ -101,7 +103,8 @@ function buildHarness(): {
   })
   state.sendMessage = actions.sendMessage
   state.drainQueuedMessages = actions.drainQueuedMessages
-  return { actions, state, sseAbortRef }
+  const { interrupt } = createMaintenanceActions({ set, get, sseAbortRef })
+  return { actions, interrupt, state, sseAbortRef }
 }
 
 function deferred<T>(): {
@@ -126,6 +129,223 @@ function mockHistoricalInput(receipt: Record<string, unknown>, payload: Record<s
 }
 
 describe('chat-store-thread-actions queued messages', () => {
+  it('source viewing retains queued inputs through selection, recovery and background draining', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      rememberThreadRuntime: vi.fn(),
+      getRecentThreadView: vi.fn(async () => ({ blocks: [], latestSeq: 4, threadStatus: 'idle' })),
+      subscribeThreadEvents: vi.fn(async () => undefined), sendUserMessage: vi.fn(), resumeIncompleteWork: vi.fn()
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.threads = [{ ...thread('source'), runtimeId: 'codex' }]
+    state.busy = false
+    const queued = { id: 'queue-source', text: 'pending experiment', threadId: 'source', targetThreadId: 'source', runtimeId: 'codex' as const,
+      admissionReceipt: { clientDirectiveId: 'queue-source', revision: 1, payloadDigest: 'a'.repeat(64), mode: 'queue' as const, delivery: 'accepted' as const, execution: 'not_started' as const } }
+    state.queuedMessages = [queued]
+    admissionMock.readQueuedInputs.mockResolvedValue([{ payload: queued, receipt: queued.admissionReceipt }])
+    await actions.selectThread('source', { readOnly: true })
+    await actions.recoverActiveTurn()
+    await actions.drainQueuedMessages()
+    expect(await actions.sendMessage(queued.text, 'agent', { queued })).toBe(false)
+    state.activeThreadId = 'another'
+    expect(await actions.drainQueuedMessagesForThread('source')).toBe(false)
+    expect(state.queuedMessages).toEqual([queued])
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(provider.resumeIncompleteWork).not.toHaveBeenCalled()
+    expect(provider.rememberThreadRuntime).toHaveBeenCalledWith('source', 'codex')
+    expect(runtimeClientMock.setSettings).not.toHaveBeenCalled()
+    expect(state.refreshComposerReasoningDiscovery).not.toHaveBeenCalled()
+    // A normal explicit selection restores the ordinary auto-drain path.
+    state.drainQueuedMessages = vi.fn(async () => undefined)
+    await actions.selectThread('source')
+    expect(state.readOnlyThreadIds.source).toBeUndefined()
+    expect(state.drainQueuedMessages).toHaveBeenCalledOnce()
+  })
+
+
+  it('cancels an unstarted queue dispatch if read-only selection wins while settings are loading', async () => {
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex', title: 'Research' }]
+    const queued = { id: 'pending-source', text: 'pending experiment', threadId: 'thr_existing', targetThreadId: 'thr_existing', runtimeId: 'codex' as const }
+    state.queuedMessages = [queued]
+    const settings = await runtimeClientMock.getSettings()
+    const pending = deferred<typeof settings>()
+    runtimeClientMock.getSettings.mockReturnValueOnce(pending.promise)
+    const provider = { getRecentThreadView: vi.fn(async () => ({ blocks: [], latestSeq: 3, threadStatus: 'idle' })), subscribeThreadEvents: vi.fn(async () => undefined), sendUserMessage: vi.fn() }
+    registryMock.getProvider.mockReturnValue(provider)
+    const dispatch = actions.sendMessage(queued.text, 'agent', { queued })
+    await vi.waitFor(() => expect(state.queuedMessages[0].deliveryAttempt).toBeDefined())
+    state.focusedAgentThreadId = 'focused-child'
+    await actions.selectThread('thr_existing', { readOnly: true })
+    expect(state.focusedAgentThreadId).toBe('thr_existing')
+    pending.resolve(settings)
+    expect(await dispatch).toBe(false)
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toEqual([queued])
+    expect(state.blocks).toEqual([])
+    expect(state.busy).toBe(false)
+  })
+
+
+  it('recovery keeps the older history already loaded by source viewing', async () => {
+    const { actions, state } = buildHarness()
+    const old: ChatBlock = { kind: 'user', id: 'old-user', turnId: 'old-turn', text: 'source' }
+    const recent: ChatBlock = { kind: 'user', id: 'recent-user', turnId: 'recent-turn', text: 'recent' }
+    state.readOnlyThreadIds = { thr_existing: true }
+    state.blocks = [old, recent]
+    state.threadHistoryCursor = 'older-page'
+    state.busy = false
+    registryMock.getProvider.mockReturnValue({
+      getRecentThreadView: vi.fn(async () => ({ blocks: [recent], latestSeq: 5, threadStatus: 'idle', nextCursor: 'recent-page' })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    })
+    await actions.recoverActiveTurn()
+    expect(state.blocks).toEqual([old, recent])
+    expect(state.threadHistoryCursor).toBe('older-page')
+  })
+
+  it('an explicit user send leaves source-view mode and uses the normal provider path', async () => {
+    const { actions, state } = buildHarness()
+    state.busy = false
+    state.readOnlyThreadIds = { thr_existing: true }
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex', title: 'Research' }]
+    const provider = { sendUserMessage: vi.fn(async () => ({ turnId: 'explicit-turn' })), subscribeThreadEvents: vi.fn(async () => undefined) }
+    registryMock.getProvider.mockReturnValue(provider)
+    expect(await actions.sendMessage('explicit follow-up', 'agent')).toBe(true)
+    expect(state.readOnlyThreadIds.thr_existing).toBeUndefined()
+    expect(provider.sendUserMessage).toHaveBeenCalledOnce()
+  })
+
+  it('keeps A cancellation owned while B starts and A is reselected with a runtime user id', async () => {
+    const { actions, interrupt, state, sseAbortRef } = buildHarness()
+    const a = deferred<{ threadId: string; turnId: string; userMessageItemId: string }>()
+    const b = deferred<{ threadId: string; turnId: string; userMessageItemId: string }>()
+    const provider = {
+      sendUserMessage: vi.fn((id: string) => id === 'thr_existing' ? a.promise : b.promise),
+      renameThread: vi.fn(async () => undefined),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      interruptTurn: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.threads = [thread('thr_existing'), thread('thread-b')]
+    const sendA = actions.sendMessage('start A')
+    await vi.waitFor(() => expect(provider.sendUserMessage).toHaveBeenCalledTimes(1))
+    Object.assign(state, { activeThreadId: 'thread-b', busy: false, currentTurnUserId: null, currentTurnId: null, blocks: [] })
+    const sendB = actions.sendMessage('start B')
+    await vi.waitFor(() => expect(provider.sendUserMessage).toHaveBeenCalledTimes(2))
+    Object.assign(state, { activeThreadId: 'thr_existing', busy: true, currentTurnUserId: 'runtime-user-a', currentTurnId: null, blocks: [] })
+    await interrupt({ discard: true })
+    expect(state.busy).toBe(true)
+    b.resolve({ threadId: 'thread-b', turnId: 'turn-b', userMessageItemId: 'runtime-user-b' })
+    await sendB
+    expect(provider.interruptTurn).not.toHaveBeenCalled()
+    a.resolve({ threadId: 'thr_existing', turnId: 'turn-a', userMessageItemId: 'runtime-user-a' })
+    await sendA
+    expect(provider.interruptTurn).toHaveBeenCalledExactlyOnceWith('thr_existing', 'turn-a', { discard: true })
+    expect(sseAbortRef.pendingTurnStarts?.size).toBe(0)
+  })
+
+  it('can cancel a background targeted send after its thread becomes selected', async () => {
+    const { actions, interrupt, state, sseAbortRef } = buildHarness()
+    const accepted = deferred<{ threadId: string; turnId: string }>()
+    const provider = {
+      sendUserMessage: vi.fn(() => accepted.promise),
+      renameThread: vi.fn(async () => undefined),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      interruptTurn: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.threads = [thread('thr_existing'), thread('background')]
+    state.busy = false
+    const sent = actions.sendMessage('background start', undefined, { targetThreadId: 'background' })
+    await vi.waitFor(() => expect(provider.sendUserMessage).toHaveBeenCalledOnce())
+    Object.assign(state, { activeThreadId: 'background', busy: true, currentTurnUserId: null, currentTurnId: null })
+    await interrupt()
+    accepted.resolve({ threadId: 'background', turnId: 'background-turn' })
+    await sent
+    expect(provider.interruptTurn).toHaveBeenCalledExactlyOnceWith('background', 'background-turn', undefined)
+    expect(sseAbortRef.pendingTurnStarts?.size).toBe(0)
+  })
+
+  it('a not-running response invalidates the old stream so late running events cannot revive it', async () => {
+    const { actions, interrupt, state, sseAbortRef } = buildHarness()
+    let sink!: ThreadEventSink
+    registryMock.getProvider.mockReturnValue({
+      sendUserMessage: vi.fn(async () => ({ threadId: 'thr_existing', turnId: 'finished-turn' })),
+      renameThread: vi.fn(async () => undefined),
+      subscribeThreadEvents: vi.fn(async (_thread: string, _seq: number, next: ThreadEventSink) => { sink = next }),
+      interruptTurn: vi.fn(async () => { throw new Error(JSON.stringify({ code: 'turn_not_running', message: 'finished' })) })
+    })
+    state.busy = false
+    await actions.sendMessage('already finished')
+    const signal = sseAbortRef.current!.signal
+    await interrupt()
+    expect(signal.aborted).toBe(true)
+    expect(state.busy).toBe(false)
+    sink.onTurnLifecycle?.({ threadId: 'thr_existing', turnId: 'finished-turn', state: 'running' })
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+  })
+
+  it.each([false, true])('cancels the exact accepted turn while auto-title is pending (discard=%s)', async (discard) => {
+    const { actions, interrupt, state, sseAbortRef } = buildHarness()
+    const rename = deferred<void>()
+    let sink!: ThreadEventSink
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({ threadId: 'thr_existing', turnId: 'turn-cancel', userMessageItemId: 'user-cancel' })),
+      renameThread: vi.fn(() => rename.promise),
+      subscribeThreadEvents: vi.fn(async (_thread: string, _seq: number, next: ThreadEventSink) => { sink = next }),
+      interruptTurn: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.threads = [{ ...thread('thr_existing'), title: 'New chat', runtimeId: 'codex' }]
+    const sent = actions.sendMessage('rename must not block stop')
+    try {
+      await vi.waitFor(() => expect(provider.renameThread).toHaveBeenCalledOnce())
+      await interrupt({ discard })
+      expect(provider.interruptTurn).toHaveBeenCalledExactlyOnceWith('thr_existing', 'turn-cancel', { discard })
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledOnce()
+      expect(sseAbortRef.current?.signal.aborted).toBe(false)
+      expect(state.busy).toBe(true)
+      sink.onTurnLifecycle?.({ threadId: 'thr_existing', turnId: 'turn-cancel', state: 'interrupted' })
+      expect(state.busy).toBe(false)
+      expect(state.currentTurnId).toBeNull()
+    } finally {
+      rename.resolve()
+      await sent
+    }
+  })
+
+  it('remembers stop before acceptance and subscribes before interrupting the returned handle', async () => {
+    const { actions, interrupt, state } = buildHarness()
+    const handle = deferred<{ threadId: string; turnId: string }>()
+    let sink!: ThreadEventSink
+    const order: string[] = []
+    const provider = {
+      sendUserMessage: vi.fn(() => handle.promise),
+      renameThread: vi.fn(async () => undefined),
+      subscribeThreadEvents: vi.fn(async (_thread: string, _seq: number, next: ThreadEventSink) => { sink = next; order.push('subscribe') }),
+      interruptTurn: vi.fn(async () => { order.push('interrupt') })
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    const sent = actions.sendMessage('stop before handle')
+    await vi.waitFor(() => expect(provider.sendUserMessage).toHaveBeenCalledOnce())
+    await interrupt({ discard: true })
+    await interrupt({ discard: true })
+    expect(state.busy).toBe(true)
+    handle.resolve({ threadId: 'thr_existing', turnId: 'late-turn' })
+    await sent
+    expect(provider.interruptTurn).toHaveBeenCalledExactlyOnceWith('thr_existing', 'late-turn', { discard: true })
+    expect(order).toEqual(['subscribe', 'interrupt'])
+    expect(state.busy).toBe(true)
+    sink.onTurnLifecycle?.({ threadId: 'thr_existing', turnId: 'late-turn', state: 'interrupted' })
+    expect(state.busy).toBe(false)
+  })
+
   it('keeps an explicit API level through canonical queue admission when the runtime lists the alias', async () => {
     const { actions, state } = buildHarness()
     registryMock.getProvider.mockReturnValue({ sendUserMessage: vi.fn(), createThread: vi.fn() })
@@ -304,6 +524,27 @@ describe('chat-store-thread-actions queued messages', () => {
     ])
     expect(state.threadHistoryCursor).toBe('cursor-before-old')
     expect(state.threadHistoryLoading).toBe(false)
+  })
+
+  it('restores the first input to its original position when pages overlap a long turn', async () => {
+    const { actions, state } = buildHarness()
+    registryMock.getProvider.mockReturnValue({
+      getThreadPage: vi.fn(async () => ({ blocks: [
+        { kind: 'user', id: 'first', text: 'first question' },
+        { kind: 'assistant', id: 'early', text: 'early output' }
+      ], nextCursor: null })), rememberThreadRuntime: vi.fn()
+    })
+    state.activeThreadId = 'thr_existing'
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex' }]
+    state.blocks = [
+      { kind: 'assistant', id: 'recent', text: 'recent output' },
+      { kind: 'user', id: 'first', text: 'first question' }
+    ]
+    state.threadHistoryCursor = 'older'
+    state.threadHistoryLoading = false
+    await actions.loadEarlierThreadHistory()
+    expect(state.blocks.map(block => block.id)).toEqual(['first', 'early', 'recent'])
+    expect(state.threadHistoryCursor).toBeNull()
   })
 
   it('does not queue GUI plan messages while another turn is active', async () => {
@@ -967,6 +1208,21 @@ describe('chat-store-thread-actions queued messages', () => {
     )
   })
 
+  it('continues a temporary-root Session in its authoritative workspace instead of the global default', async () => {
+    const { actions, state } = buildHarness()
+    const workspace = 'C:\\Users\\tester\\AppData\\Local\\Temp\\app\\worker-workspaces\\execution'
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex', workspace }]
+    state.workspaceRoot = '/workspace/default'
+    state.busy = false
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({ threadId: 'thr_existing', turnId: 'turn-1', userMessageItemId: 'runtime-user-1' })),
+      subscribeThreadEvents: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    await expect(actions.sendMessage('Create the missing output file.')).resolves.toBe(true)
+    expect(provider.sendUserMessage).toHaveBeenCalledWith('thr_existing', expect.any(String), expect.objectContaining({ workspace }))
+  })
+
   it('creates the runtime thread when the first draft message is sent', async () => {
     const { actions, state } = buildHarness()
     const createdThread = {
@@ -1340,7 +1596,7 @@ describe('chat-store-thread-actions queued messages', () => {
       threadId: 'thr_existing',
       rawHistoryItems: 10,
       effectiveHistoryItems: 4,
-      summarySource: 'heuristic' as const,
+      summarySource: 'runtime' as const,
       updatedAt: '2026-06-20T00:00:00.000Z',
       goalResume: {
         status: 'blocked' as const,
@@ -2354,6 +2610,7 @@ describe('chat-store-thread-actions queued messages', () => {
     }
     registryMock.getProvider.mockReturnValue(provider)
     state.activeThreadId = 'thr_existing'
+    state.activeAgentRuntime = 'claude'
     state.threads = [
       { ...thread('thr_existing'), runtimeId: 'codex' },
       { ...thread('thr_background'), runtimeId: 'codex' }
@@ -2371,7 +2628,7 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.sendUserMessage).toHaveBeenCalledWith(
       'thr_background',
       'background instruction',
-      expect.objectContaining({ clientDirectiveId: expect.stringMatching(/^u-/) })
+      expect.objectContaining({ clientDirectiveId: expect.stringMatching(/^u-/), runtimeId: 'codex' })
     )
     expect(provider.subscribeThreadEvents).not.toHaveBeenCalled()
     expect(activeAbort.signal.aborted).toBe(false)

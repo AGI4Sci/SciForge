@@ -51,7 +51,7 @@ class StdioQueueTests(unittest.TestCase):
         env['PYTHONPATH'] = python_path
         self.process = subprocess.Popen([sys.executable, '-s', '-u', '-m', 'project_dag.runtime_stdio',
             '--db', str(self.db), '--evidence', str(self.evidence), '--workspace', str(self.root)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8',
             env=env)
     def states(self):
         with closing(sqlite3.connect(self.db)) as db:
@@ -95,7 +95,19 @@ class StdioQueueTests(unittest.TestCase):
         self.process.stdin.close()
         self.assertEqual(self.process.wait(timeout=5), 0)
         self.assertEqual(self.states(), ['succeeded'])
-        with self.assertRaises(ProcessLookupError): os.kill(self.process.pid, 0)
+        self.assertEqual(self.process.poll(), 0)
+
+    def test_incomplete_input_does_not_block_idle_retry(self):
+        self.seed_retry(); self.start()
+        self.process.stdin.write('{"id":')
+        self.process.stdin.flush()
+        self.wait_success()
+        tail = '7,"method":"GET","route":' + json.dumps('/updates/status?workspaceRoot='+str(self.root)) + '}'
+        out, err = self.process.communicate(tail, timeout=5)
+        self.assertEqual(self.process.returncode, 0, err)
+        response = json.loads(out)
+        self.assertEqual(response['id'], 7)
+        self.assertTrue(response['ok'], response)
 
     def test_eof_drains_all_queued_projects(self):
         self.engine.enqueue_update(self.payload)

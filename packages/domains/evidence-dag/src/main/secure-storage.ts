@@ -1,4 +1,4 @@
-import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
+import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { restrictWindowsStorageSync } from '@sciforge/domain-sdk/node/windows-private-storage'
@@ -63,13 +63,55 @@ export class EvidenceFileStorage {
       return { root, fd }
     } catch (error) { closeSync(fd); throw error }
   }
-  readText(): string {
+  /** Inventory and lock use the same checked private directory as file IO. */
+  inventory(prefix: string): { name: string; bytes: number }[] {
+    const { root, fd } = this.directory()
+    try {
+      const rows = readdirSync(root).filter(name => name.startsWith(prefix) && name.endsWith('.json')).map(name => {
+        const path = this.targetForName(root, name), info = lstatSync(path)
+        return { name, bytes: info.size }
+      })
+      this.unchanged(root, fd, true)
+      return rows
+    } finally { closeSync(fd) }
+  }
+  private targetForName(root: string, name: string) {
+    const storage = new EvidenceFileStorage(join(root, name))
+    return storage.target(root)
+  }
+  hasExclusiveLock(): boolean {
+    const { root, fd } = this.directory()
+    try {
+      const path = this.targetForName(root, `.${basename(this.path)}.lock`)
+      try { lstatSync(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
+    } finally { closeSync(fd) }
+  }
+  withExclusiveLock<T>(operation: () => T): T {
+    const { root, fd: directory } = this.directory()
+    const path = join(root, `.${basename(this.path)}.lock`)
+    let fd: number | undefined
+    try {
+      fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600)
+      this.unchanged(path, fd)
+      this.unchanged(root, directory, true)
+      return operation()
+    } finally {
+      try {
+        if (fd !== undefined) {
+          try { this.unchanged(path, fd); unlinkSync(path) } finally { closeSync(fd) }
+        }
+      } finally { closeSync(directory) }
+    }
+  }
+
+  readText(maxBytes = Infinity): string {
     const { root, fd: directory } = this.directory()
     try {
       const path = this.target(root)
       const fd = openSync(path, constants.O_RDONLY | noFollow | constants.O_NONBLOCK)
       try {
         const info = this.unchanged(path, fd)
+        if (info.size > BigInt(Number.isFinite(maxBytes) ? maxBytes : Number.MAX_SAFE_INTEGER)) throw new Error('Evidence storage read byte limit exceeded.')
         if (process.platform === 'win32') this.restrict(path, info)
         else fchmodSync(fd, 0o600)
         this.unchanged(root, directory, true)

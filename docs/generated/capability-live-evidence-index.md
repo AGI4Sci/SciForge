@@ -1,27 +1,18 @@
 # Capability live evidence index
 
-This index contains all 198 Agent-visible actions. Current live evidence is no-live-evidence=198. Only `outcome-verified` means an accepted action result; invocation success alone is not outcome verification.
+This index contains all 152 Agent-visible actions. Current live evidence is no-live-evidence=152. Only `outcome-verified` means an accepted action result; invocation success alone is not outcome verification.
 
 | Batch | Actions | Design-ready | Outcome-verified | Invocation-succeeded | Invoked | No live evidence |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| batch-a | 34 | 34 | 0 | 0 | 0 | 34 |
-| batch-b | 52 | 27 | 0 | 0 | 0 | 52 |
+| batch-b | 44 | 21 | 0 | 0 | 0 | 44 |
 | batch-c | 24 | 8 | 0 | 0 | 0 | 24 |
-| batch-d | 19 | 0 | 0 | 0 | 0 | 19 |
-| batch-e | 19 | 0 | 0 | 0 | 0 | 19 |
+| batch-d | 14 | 0 | 0 | 0 | 0 | 14 |
+| batch-e | 18 | 0 | 0 | 0 | 0 | 18 |
 | batch-f | 43 | 0 | 0 | 0 | 0 | 43 |
-| unassigned | 7 | 0 | 0 | 0 | 0 | 7 |
+| unassigned | 9 | 0 | 0 | 0 | 0 | 9 |
 
 | Action | Owner | Batch | Effect | Approval | Live status | Passed cases | Representative runs | Failure types |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `anchored-comments.asset.read` | anchored-comments | batch-b | read | none | no-live-evidence | — | — | — |
-| `anchored-comments.capture` | anchored-comments | batch-b | workspace-write | none | no-live-evidence | — | — | — |
-| `anchored-comments.delete` | anchored-comments | batch-b | workspace-write | confirmation | no-live-evidence | — | — | — |
-| `anchored-comments.feedback.status` | anchored-comments | batch-b | read | none | no-live-evidence | — | — | — |
-| `anchored-comments.feedback.submit` | anchored-comments | batch-b | external-write | confirmation | no-live-evidence | — | — | — |
-| `anchored-comments.get` | anchored-comments | batch-b | read | none | no-live-evidence | — | — | — |
-| `anchored-comments.list` | anchored-comments | batch-b | read | none | no-live-evidence | — | — | — |
-| `anchored-comments.upsert` | anchored-comments | batch-b | workspace-write | none | no-live-evidence | — | — | — |
 | `artifact-versions.bundle.export` | artifact-versions | batch-b | workspace-write | none | no-live-evidence | — | — | — |
 | `artifact-versions.bundle.export-v2` | artifact-versions | batch-b | workspace-write | none | no-live-evidence | — | — | — |
 | `artifact-versions.bundle.import` | artifact-versions | batch-b | workspace-write | none | no-live-evidence | — | — | — |
@@ -61,7 +52,6 @@ This index contains all 198 Agent-visible actions. Current live evidence is no-l
 | `browser-preview.reload` | browser-preview | batch-d | external-write | confirmation | no-live-evidence | — | — | — |
 | `browser-preview.scroll` | browser-preview | batch-d | external-write | none | no-live-evidence | — | — | — |
 | `browser-preview.select` | browser-preview | batch-d | external-write | none | no-live-evidence | — | — | — |
-| `change-inspector.list-changes` | change-inspector | unassigned | read | none | no-live-evidence | — | — | — |
 | `collaboration.coordinator.transfer` | collaboration | batch-f | external-write | confirmation | no-live-evidence | — | — | — |
 | `collaboration.human-needed.answer` | collaboration | batch-f | external-write | confirmation | no-live-evidence | — | — | — |
 | `collaboration.human-needed.create` | collaboration | batch-f | external-write | confirmation | no-live-evidence | — | — | — |
@@ -105,7 +95,6 @@ This index contains all 198 Agent-visible actions. Current live evidence is no-l
 | `content-space.describe-capabilities` | content-space | batch-f | read | none | no-live-evidence | — | — | — |
 | `content-space.list-agent-root-candidates` | content-space | batch-f | read | none | no-live-evidence | — | — | — |
 | `content-space.list-provider-instances` | content-space | batch-f | read | none | no-live-evidence | — | — | — |
-| `create-loop.build-dataset` | create-loop | batch-e | external-write | confirmation | no-live-evidence | — | — | — |
 | `create-loop.check-code` | create-loop | batch-e | compute | none | no-live-evidence | — | — | — |
 | `create-loop.export-dsl` | create-loop | batch-e | read | none | no-live-evidence | — | — | — |
 | `create-loop.export-rerun` | create-loop | batch-e | read | none | no-live-evidence | — | — | — |
@@ -118,33 +107,6 @@ This index contains all 198 Agent-visible actions. Current live evidence is no-l
 | `create-loop.status` | create-loop | batch-e | read | none | no-live-evidence | — | — | — |
 | `create-loop.stop` | create-loop | batch-e | external-write | confirmation | no-live-evidence | — | — | — |
 | `create-loop.test-node` | create-loop | batch-e | compute | none | no-live-evidence | — | — | — |
-| `dataset-api.catalog` | dataset-api | batch-a | read | none | no-live-evidence | — | — | — |
-| `dataset-api.confirm-plan` | dataset-api | batch-a | external-write | confirmation | no-live-evidence | — | — | — |
-| `dataset-api.deduplicate` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.execute-plan` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.filter` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.graph-organize` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.id-map` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.id-map-provider` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.join` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.list` | dataset-api | batch-a | read | none | no-live-evidence | — | — | — |
-| `dataset-api.list-object-stores` | dataset-api | batch-a | read | none | no-live-evidence | — | — | — |
-| `dataset-api.list-objects` | dataset-api | batch-a | read | none | no-live-evidence | — | — | — |
-| `dataset-api.materialize` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.metadata` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.object-metadata` | dataset-api | batch-a | read | none | no-live-evidence | — | — | — |
-| `dataset-api.object-raw-data` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.prepare-plan` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.profile` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.publish` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.raw-data` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.register-provider` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.resume-plan` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.select-columns` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.structure-profile` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.structure-validate` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.transform` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `dataset-api.validate` | dataset-api | batch-a | workspace-write | none | no-live-evidence | — | — | — |
 | `evidence-dag.audit-query` | evidence-dag | batch-c | read | none | no-live-evidence | — | — | — |
 | `evidence-dag.export-snapshot-products` | evidence-dag | batch-c | workspace-write | none | no-live-evidence | — | — | — |
 | `evidence-dag.priority` | evidence-dag | batch-c | compute | none | no-live-evidence | — | — | — |
@@ -176,15 +138,11 @@ This index contains all 198 Agent-visible actions. Current live evidence is no-l
 | `research-checkpoints.read` | research-checkpoints | batch-c | read | none | no-live-evidence | — | — | — |
 | `research-checkpoints.status` | research-checkpoints | batch-c | read | none | no-live-evidence | — | — | — |
 | `research-checkpoints.turn-status` | research-checkpoints | batch-c | read | none | no-live-evidence | — | — | — |
-| `scientific-compute.run-baseline` | scientific-compute | batch-a | compute | none | no-live-evidence | — | — | — |
-| `scientific-compute.status` | scientific-compute | batch-a | read | none | no-live-evidence | — | — | — |
-| `scientific-plotting.compare` | scientific-plotting | batch-a | read | none | no-live-evidence | — | — | — |
-| `scientific-plotting.map-data` | scientific-plotting | batch-a | compute | none | no-live-evidence | — | — | — |
-| `scientific-plotting.render` | scientific-plotting | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `scientific-plotting.rerun` | scientific-plotting | batch-a | workspace-write | none | no-live-evidence | — | — | — |
-| `scientific-plotting.status` | scientific-plotting | batch-a | read | none | no-live-evidence | — | — | — |
 | `siyuan.document.compose` | siyuan | unassigned | external-write | confirmation | no-live-evidence | — | — | — |
+| `siyuan.document.read` | siyuan | unassigned | read | none | no-live-evidence | — | — | — |
+| `siyuan.document.search` | siyuan | unassigned | read | none | no-live-evidence | — | — | — |
 | `surface.current` | surface | batch-b | read | none | no-live-evidence | — | — | — |
+| `user-decisions.request` | user-decisions | unassigned | read | none | no-live-evidence | — | — | — |
 | `version-control.create-reference` | version-control | batch-b | workspace-write | none | no-live-evidence | — | — | — |
 | `version-control.create-snapshot` | version-control | batch-b | workspace-write | none | no-live-evidence | — | — | — |
 | `version-control.diff` | version-control | batch-b | read | none | no-live-evidence | — | — | — |
@@ -194,11 +152,6 @@ This index contains all 198 Agent-visible actions. Current live evidence is no-l
 | `version-control.read-file` | version-control | batch-b | read | none | no-live-evidence | — | — | — |
 | `version-control.restore` | version-control | batch-b | destructive | confirmation | no-live-evidence | — | — | — |
 | `version-control.status` | version-control | batch-b | read | none | no-live-evidence | — | — | — |
-| `visual-review.create-candidate` | visual-review | batch-d | workspace-write | none | no-live-evidence | — | — | — |
-| `visual-review.export-review-packet` | visual-review | batch-d | workspace-write | none | no-live-evidence | — | — | — |
-| `visual-review.open` | visual-review | batch-d | workspace-write | none | no-live-evidence | — | — | — |
-| `visual-review.read-document` | visual-review | batch-d | read | none | no-live-evidence | — | — | — |
-| `visual-review.update-context` | visual-review | batch-d | workspace-write | none | no-live-evidence | — | — | — |
 | `workspace-preview.annotations.delete` | workspace-preview | batch-b | workspace-write | none | no-live-evidence | — | — | — |
 | `workspace-preview.annotations.list` | workspace-preview | batch-b | read | none | no-live-evidence | — | — | — |
 | `workspace-preview.annotations.resolve` | workspace-preview | batch-b | workspace-write | none | no-live-evidence | — | — | — |
@@ -215,4 +168,4 @@ This index contains all 198 Agent-visible actions. Current live evidence is no-l
 
 Accepted outcome-verified actions (0): none.
 
-This is an evidence index, not a readiness report. Planned, blocked, failed and unobserved actions remain in the 198-action denominator.
+This is an evidence index, not a readiness report. Planned, blocked, failed and unobserved actions remain in the 152-action denominator.

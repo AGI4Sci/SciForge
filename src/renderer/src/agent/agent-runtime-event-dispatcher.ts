@@ -1,3 +1,4 @@
+import { userInputAnswerSchema } from '@sciforge/domain-sdk/user-input'
 import type {
   AgentRuntimeEvent,
   AgentRuntimeInputQuestion,
@@ -358,6 +359,7 @@ function normalizeUserInputQuestion(question: AgentRuntimeInputQuestion): UserIn
     id: question.id?.trim() || 'input',
     question: question.question?.trim() || 'Input requested',
     options: (question.options ?? []).map((option) => ({
+      ...option,
       label: option.label,
       description: option.description ?? ''
     }))
@@ -518,6 +520,12 @@ function dispatchItemSnapshot(event: Extract<AgentRuntimeEvent, { kind: 'item_sn
       return
     case 'user_input':
       sink.onUserInput(userInputFromItem(item))
+      if (item.meta?.userInputStatus === 'submitted' || item.meta?.userInputStatus === 'cancelled') {
+        sink.onUserInputStatus({ itemId: item.id, status: item.meta.userInputStatus,
+          answers: Array.isArray(item.meta.answers) ? item.meta.answers.flatMap((raw) => {
+            const result = userInputAnswerSchema.safeParse(raw); return result.success ? [result.data] : []
+          }) : [] })
+      }
       return
     case 'system':
       if (item.status === 'error' || item.status === 'failed') {
@@ -654,7 +662,9 @@ function normalizeMetaOption(raw: unknown): UserInputQuestion['options'][number]
   if (!label) return null
   return {
     label,
-    description: stringMeta(record, 'description') ?? ''
+    description: stringMeta(record, 'description') ?? '',
+    ...(typeof record.id === 'string' ? { id: record.id } : {}),
+    ...(typeof record.recommended === 'boolean' ? { recommended: record.recommended } : {})
   }
 }
 

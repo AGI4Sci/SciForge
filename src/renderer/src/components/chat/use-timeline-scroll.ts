@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 
 /** Threshold (px) from the top of the scroll container that triggers
  * auto-loading earlier turns. */
@@ -23,7 +23,9 @@ export type UseTimelineScrollResult = {
   visibleTurnCount: number
   hiddenTurnCount: number
   loadEarlierTurns: (options?: { userInitiated?: boolean }) => void
+  loadEarlierHistory: (load: () => Promise<void>) => Promise<void>
   collapseEarlierTurns: () => void
+  revealTurn: (index: number) => void
 }
 
 export function deriveTimelineVisibleTurnCount({
@@ -89,6 +91,8 @@ export function useTimelineScroll({
   )
   const hiddenTurnCount = Math.max(0, totalTurns - visibleTurnCount)
 
+  const [historyLoadRevision, setHistoryLoadRevision] = useState(0)
+  const threadEpochRef = useRef(0)
   const stickToBottomRef = useRef(true)
   const lastUserTurnKeyRef = useRef(userTurnKey)
   const historyExpansionRequestedRef = useRef(false)
@@ -114,6 +118,43 @@ export function useTimelineScroll({
     },
     [containerRef, hiddenTurnCount, pageSize, totalTurns]
   )
+
+  const loadEarlierHistory = useCallback(async (load: () => Promise<void>): Promise<void> => {
+    if (prependInFlightRef.current) return
+    const epoch = threadEpochRef.current
+    historyExpansionRequestedRef.current = true
+    stickToBottomRef.current = false
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current)
+      scrollFrameRef.current = null
+    }
+    const el = containerRef.current
+    const snapshot = el ? { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop } : null
+    prependInFlightRef.current = true
+    try {
+      await load()
+      if (threadEpochRef.current !== epoch) return
+      // Reveal the newly fetched prefix, including pages that split one turn.
+      // The next turn-count derivation bounds this to the actual history size.
+      pendingPrependRef.current = snapshot
+      setVisibleTurnCount(Number.MAX_SAFE_INTEGER)
+      setHistoryLoadRevision(revision => revision + 1)
+    } finally {
+      if (threadEpochRef.current === epoch) prependInFlightRef.current = false
+    }
+  }, [containerRef])
+
+  const revealTurn = useCallback((index: number): void => {
+    historyExpansionRequestedRef.current = true
+    stickToBottomRef.current = false
+    pendingPrependRef.current = null
+    prependInFlightRef.current = false
+    if (scrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(scrollFrameRef.current)
+      scrollFrameRef.current = null
+    }
+    setVisibleTurnCount(count => Math.max(count, totalTurns - index))
+  }, [totalTurns])
 
   const collapseEarlierTurns = useCallback((): void => {
     historyExpansionRequestedRef.current = false
@@ -160,6 +201,7 @@ export function useTimelineScroll({
 
   // Hard reset on thread switch.
   useEffect(() => {
+    threadEpochRef.current += 1
     stickToBottomRef.current = true
     historyExpansionRequestedRef.current = false
     pendingPrependRef.current = null
@@ -217,7 +259,7 @@ export function useTimelineScroll({
 
   // After a prepend, restore scroll position so the user's viewport
   // doesn't jump.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const snapshot = pendingPrependRef.current
     const el = containerRef.current
     if (!snapshot || !el) return
@@ -225,11 +267,9 @@ export function useTimelineScroll({
     pendingPrependRef.current = null
     prependInFlightRef.current = false
 
-    requestAnimationFrame(() => {
-      const addedHeight = el.scrollHeight - snapshot.scrollHeight
-      el.scrollTop = snapshot.scrollTop + Math.max(0, addedHeight)
-    })
-  }, [containerRef, visibleTurnCount])
+    const addedHeight = el.scrollHeight - snapshot.scrollHeight
+    el.scrollTop = snapshot.scrollTop + Math.max(0, addedHeight)
+  }, [containerRef, visibleTurnCount, contentKey, historyLoadRevision])
 
   // If the user explicitly asked to expand history and the container
   // still has room, keep loading earlier turns until it overflows.
@@ -243,9 +283,11 @@ export function useTimelineScroll({
   }, [containerRef, hiddenTurnCount, loadEarlierTurns, visibleTurnCount])
 
   return {
-    visibleTurnCount,
+    visibleTurnCount: Math.min(totalTurns, visibleTurnCount),
     hiddenTurnCount,
     loadEarlierTurns,
-    collapseEarlierTurns
+    loadEarlierHistory,
+    collapseEarlierTurns,
+    revealTurn
   }
 }

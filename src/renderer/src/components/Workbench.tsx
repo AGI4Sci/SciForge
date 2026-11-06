@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from 'react-i18next'
 import { formatRuntimeError } from '../lib/format-runtime-error'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowLeft, CircleAlert, Eye } from 'lucide-react'
+import { ArrowLeft, CircleAlert, Eye, MessageCircleMore } from 'lucide-react'
 import type {
   DomainWorkbenchOpenRightPanelInput,
   DomainWorkbenchOpenSurfaceInput,
@@ -56,6 +56,7 @@ import { navigationSessionKey, partitionNavigationSessions, WorkbenchNavigationS
 import {
   RIGHT_PANEL_MODES,
   WorkbenchTopBar,
+  WorkbenchToolbarMenu,
   type RightPanelMode
 } from './chat/WorkbenchTopBar'
 import { WorkbenchMessageTimeline } from './chat/WorkbenchMessageTimeline'
@@ -72,6 +73,8 @@ import {
   supportedComposerTurnSettings
 } from './chat/FloatingComposerModelPicker'
 import { SideConversationPanel } from './chat/SideConversationPanel'
+import { useSideConversationDock } from './side-conversation-layout'
+import { sendSideConversationHandoff } from './chat/side-conversation-handoff'
 import {
   SessionChildAgentsPanel,
   filterDirectChildAgents,
@@ -116,6 +119,11 @@ import {
   hostSidebarPresentation,
   useWorkbenchLayout
 } from './workbench-layout'
+import {
+  resolveWorkbenchOverlaySession,
+  updateWorkbenchGlobalOverlays,
+  type WorkbenchGlobalOverlays
+} from './workbench-global-overlays'
 import {
   SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
   type SessionRightPanelPane,
@@ -171,16 +179,30 @@ import { installedRendererContributions } from '../domain-modules/installed-rend
 import { DevelopmentPluginPanelHost, developmentRendererPanelId } from './extensions/DevelopmentPluginPanelHost'
 import { buildWorkbenchNavigationSectionRenderContext } from '../domain-modules/workbench-navigation-context'
 import { WorkbenchMainAreaOutlet } from '../domain-modules/workbench-main-area'
+import { useWorkbenchPageLayout } from './workbench-page-layout'
 import { WorkbenchSessionReturn } from '../domain-modules/workbench-session-return'
+import { locateConversationSource, type ConversationSourceNavigation } from '../lib/conversation-source-navigation'
 import {
   DOMAIN_WORKBENCH_OPEN_BOTTOM_PANEL_EVENT,
   DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
   DOMAIN_WORKBENCH_TOGGLE_GLOBAL_OVERLAY_EVENT,
   sendDomainWorkbenchMessage,
   setDomainWorkbenchMessageSender,
+  setDomainWorkbenchSideConversationOpener,
+  openDomainWorkbenchSideConversation,
   setDomainWorkbenchSessionNavigator,
-  resolveDomainWorkbenchSession
+  setDevelopmentWorkbenchResourceNavigationProvider,
+  resolveDomainWorkbenchSession,
+  selectDomainWorkbenchSession,
+  domainRendererNavigationHost
 } from '../domain-modules/domain-renderer-navigation'
+
+function canReturnToSurface(target: DomainWorkbenchMainAreaReturnTarget): boolean {
+  const registry = target.presentation === 'global-overlay' ? installedRendererContributions.globalOverlays
+    : target.presentation === 'right-panel' ? installedRendererContributions.rightPanels : installedRendererContributions.mainAreas
+  return registry.list().some(page => page.id === target.contributionId) &&
+    (!target.session || Boolean(resolveDomainWorkbenchSession(target.session, useChatStore.getState().threads)))
+}
 
 const ChatFileTreePanel = lazy(() =>
   import('./chat/ChatFileTreePanel').then((module) => ({ default: module.ChatFileTreePanel }))
@@ -938,10 +960,46 @@ export function Workbench(): ReactElement {
       window.clearInterval(timer)
     }
   }, [])
-  const developmentRightPanels = developmentRendererContributions.filter(({ kind }) => kind === 'panel')
-  const developmentRightPanelsById = new Map(
-    developmentRightPanels.map((contribution) => [developmentRendererPanelId(contribution), contribution])
+  const developmentRightPanels = useMemo(
+    () => developmentRendererContributions.filter(({ kind }) => kind === 'panel'),
+    [developmentRendererContributions]
   )
+  const developmentRightPanelsById = useMemo(
+    () => new Map(
+      developmentRightPanels.map((contribution) => [developmentRendererPanelId(contribution), contribution])
+    ),
+    [developmentRightPanels]
+  )
+  // Plugin panels that declare resource kinds join workbench resource
+  // navigation. Domain packages keep priority; this only fills kinds they do
+  // not own, and the activation carries the raw resource for the panel.
+  useEffect(() => {
+    const panels = developmentRendererContributions.filter(({ kind, resourceKinds }) =>
+      kind === 'panel' && (resourceKinds?.length ?? 0) > 0)
+    if (panels.length === 0) return undefined
+    return setDevelopmentWorkbenchResourceNavigationProvider({
+      canOpen: (resourceKind) => panels.some(({ resourceKinds }) => resourceKinds?.includes(resourceKind)),
+      resolve: (input) => {
+        const resourceKind = input.resource.resourceKind
+        const panel = panels.find(({ resourceKinds }) => resourceKinds?.includes(resourceKind))
+        if (!panel) return null
+        const contributionId = developmentRendererPanelId(panel)
+        const target = 'surfaceId' in input && input.surfaceId
+          ? { surfaceId: input.surfaceId }
+          : input.placement ? { placement: input.placement } : {}
+        return Object.freeze({
+          contributionId,
+          sessionId: input.sessionId,
+          ...target,
+          activation: Object.freeze({
+            contributionId,
+            revision: 1,
+            payload: Object.freeze({ resource: input.resource })
+          })
+        })
+      }
+    })
+  }, [developmentRendererContributions])
   const installedNavigationSections = useMemo(
     () => installedRendererContributions.navigationSections.list(),
     []
@@ -950,6 +1008,7 @@ export function Workbench(): ReactElement {
     () => installedRendererContributions.mainAreas.list(),
     []
   )
+  const pageLayout = useWorkbenchPageLayout(installedMainAreas, mainAreaPageId, setMainAreaPageId)
   const activeMainAreaSidebarPreference = installedMainAreas.find(({ id }) => id === mainAreaPageId)?.contribution.preferredHostSidebar ?? 'expanded'
   const installedToolbarActions = installedRendererContributions.toolbarActions.list()
   const keyboardShortcuts = useKeyboardShortcutSettings()
@@ -1065,6 +1124,7 @@ export function Workbench(): ReactElement {
     beginBottomPanelResize,
     beginLeftResize,
     beginRightPanelPaneResize,
+    centerSurfaceRef,
     bottomPanelActivation,
     bottomPanelContributionId,
     bottomPanelHeight,
@@ -1076,11 +1136,14 @@ export function Workbench(): ReactElement {
     leftSidebarCollapsed,
     leftSidebarWidth,
     leftSidebarOverlay,
+    leftSidebarModal,
+    leftSidebarEdge,
     sidebarOverlayRef,
     navigateRightPanelPaneHistoryForSession,
     placeRightPanelPaneForSession,
     rebindRightPanelPaneForSession,
     rightPanelDockViewportWidth,
+    rightPanelOverlay,
     rightPanelWorkspaces,
     rightPanelVisible,
     setRightPanelPaneWidthForSession,
@@ -1092,6 +1155,7 @@ export function Workbench(): ReactElement {
   } = useWorkbenchLayout({
     activeSessionId: rightPanelOwnerId,
     preferredHostSidebar: activeMainAreaSidebarPreference,
+    auxiliarySidePanelVisible: Boolean(pageLayout.selectedPage('left') || pageLayout.selectedPage('right')),
     isRightPanelModeAvailable: (mode) => Boolean(
       installedRendererContributions.rightPanels.resolve(mode)
     )
@@ -1099,7 +1163,7 @@ export function Workbench(): ReactElement {
   const sidebarRail = hostSidebarPresentation({
     collapsed: leftSidebarCollapsed,
     mainAreaActive: mainAreaPageId !== null
-  }) === 'rail'
+  }) === 'rail' && leftSidebarEdge.behavior !== 'auto'
   const closeRightPanelPaneForSession = useCallback((
     sessionId: string,
     paneId: string
@@ -1152,16 +1216,23 @@ export function Workbench(): ReactElement {
   const activeBottomPanel = installedRendererContributions.bottomPanels.resolve(
     bottomPanelContributionId
   )
-  const [globalOverlay, setGlobalOverlay] =
-    useState<DomainWorkbenchToggleGlobalOverlayInput | null>(null)
-  const activeGlobalOverlay = installedRendererContributions.globalOverlays.resolve(
-    globalOverlay?.contributionId
-  )
+  const [globalOverlays, setGlobalOverlays] = useState<WorkbenchGlobalOverlays>({ window: null, workspace: null })
+  const windowOverlay = globalOverlays.window
+  const workspaceOverlay = globalOverlays.workspace
+  const activeWindowOverlay = installedRendererContributions.globalOverlays.resolve(windowOverlay?.contributionId)
+  const activeWorkspaceOverlay = installedRendererContributions.globalOverlays.resolve(workspaceOverlay?.contributionId)
+  const activeGlobalOverlay = activeWindowOverlay ?? activeWorkspaceOverlay
+  const windowOverlaySession = windowOverlay && resolveWorkbenchOverlaySession(windowOverlay.session.id, threads, windowOverlay.session)
+  const workspaceOverlaySession = workspaceOverlay && resolveWorkbenchOverlaySession(workspaceOverlay.session.id, threads, workspaceOverlay.session)
+  const workspaceOverlayVisible = Boolean(activeWorkspaceOverlay && workspaceOverlaySession)
+  const sideChatDock = useSideConversationDock(workspaceOverlayVisible || !rightPanelVisible || rightPanelOverlay ? 0 : rightPanelDockViewportWidth)
+  const toolbarSession = windowOverlaySession ?? workspaceOverlaySession
   const toolbarCommandInvocation = {
-    ...(rightPanelOwnerId ? { sessionId: rightPanelOwnerId } : {}),
-    ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
-    ...(activeWorkspaceReferenceRoot
-      ? { workspaceRoot: activeWorkspaceReferenceRoot }
+    ...(toolbarSession?.id || rightPanelOwnerId ? { sessionId: toolbarSession?.id ?? rightPanelOwnerId! } : {}),
+    ...(toolbarSession ? toolbarSession.runtimeId ? { runtimeId: toolbarSession.runtimeId } : {}
+      : activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
+    ...(toolbarSession?.workspaceRoot || (!toolbarSession && activeWorkspaceReferenceRoot)
+      ? { workspaceRoot: toolbarSession?.workspaceRoot ?? activeWorkspaceReferenceRoot }
       : {}),
     ...(activeGlobalOverlay
       ? {
@@ -1431,6 +1502,24 @@ export function Workbench(): ReactElement {
     openSideConversationDraft()
   }
 
+  const openWorkspaceOverlaySideChat = (): void => {
+    if (!workspaceOverlaySession?.runtimeId) return
+    const state = useChatStore.getState()
+    const existing = Object.values(state.sideConversations).reverse().find(side =>
+      side.parentThreadId === workspaceOverlaySession.id &&
+      side.runtimeId === workspaceOverlaySession.runtimeId &&
+      !side.context && (!side.source || side.source === 'side'))
+    if (existing) {
+      state.selectSideConversation(existing.threadId)
+      return
+    }
+    void openDomainWorkbenchSideConversation({
+      parentThreadId: workspaceOverlaySession.id,
+      runtimeId: workspaceOverlaySession.runtimeId,
+      ...(workspaceOverlaySession.workspaceRoot ? { workspaceRoot: workspaceOverlaySession.workspaceRoot } : {})
+    }, state)
+  }
+
   const codeThreads = useMemo(
     () => threads.filter((thread) =>
       !isSddAssistantThread(thread) &&
@@ -1469,14 +1558,18 @@ export function Workbench(): ReactElement {
       if (!sessionId || !contributionId) return
       if (detail.activation && detail.activation.contributionId !== contributionId) return
       const registered = installedRendererContributions.rightPanels.resolve(contributionId)
-      if (!registered) return
+      const development = developmentRightPanelsById.get(contributionId)
+      if (!registered && !development) return
+      // A development panel has no domain contract; the pane mode is its
+      // synthetic id and it owns no preferred width.
+      const preferredWidth = registered?.contribution.preferredWidth ?? CODE_PANEL_PREFERRED
       const workspace = rightPanelWorkspaces.find(
         (candidate) => candidate.sessionId === sessionId
       )
       const target = resolveRightPanelLaunchTarget(workspace, detail)
       if (!target) return
       const binding: SessionRightPanelPaneBinding = {
-        mode: registered.id,
+        mode: registered?.id ?? contributionId,
         panelActivation: detail.activation ?? null
       }
       if (target.kind === 'exact') {
@@ -1485,8 +1578,7 @@ export function Workbench(): ReactElement {
         setRightPanelPaneWidthForSession(
           sessionId,
           pane.paneId,
-          (width) => Math.max(width, registered.contribution.preferredWidth ??
-            CODE_PANEL_PREFERRED)
+          (width) => Math.max(width, preferredWidth)
         )
         rebindRightPanelPaneForSession(sessionId, pane.paneId, binding)
         return
@@ -1495,7 +1587,7 @@ export function Workbench(): ReactElement {
         sessionId,
         binding,
         target.placement,
-        { width: registered.contribution.preferredWidth ?? CODE_PANEL_PREFERRED }
+        { width: preferredWidth }
       )
     }
     window.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, openDomainRightPanel)
@@ -1507,7 +1599,9 @@ export function Workbench(): ReactElement {
     placeRightPanelPaneForSession,
     rebindRightPanelPaneForSession,
     rightPanelWorkspaces,
-    setRightPanelPaneWidthForSession
+    setRightPanelPaneWidthForSession,
+    developmentRendererContributions,
+    developmentRightPanelsById
   ])
 
   useEffect(() => {
@@ -1534,20 +1628,19 @@ export function Workbench(): ReactElement {
       const detail = (event as CustomEvent<DomainWorkbenchToggleGlobalOverlayInput>).detail
       const contributionId = detail?.contributionId?.trim()
       if (!contributionId) return
-      if (!installedRendererContributions.globalOverlays.resolve(contributionId)) return
-      setGlobalOverlay((current) => {
-        if (detail.open === false) {
-          return current?.contributionId === contributionId ? null : current
-        }
-        if (detail.open !== true && current?.contributionId === contributionId) {
-          return null
-        }
-        return {
-          contributionId,
-          ...(detail.sessionId?.trim() ? { sessionId: detail.sessionId.trim() } : {}),
-          ...(detail.activation ? { activation: detail.activation } : {}),
-          open: true
-        }
+      const registered = installedRendererContributions.globalOverlays.resolve(contributionId)
+      if (!registered) return
+      const state = useChatStore.getState()
+      const fallbackId = state.activeThreadId ?? draftSessionRightPanelId(state.workspaceRoot)
+      setGlobalOverlays(current => {
+        // Unscoped window tools act on the visible canvas, if one is open.
+        const visibleSession = current.workspace?.session
+        const ownerId = detail.sessionId?.trim() || visibleSession?.id || fallbackId
+        const session = ownerId ? resolveWorkbenchOverlaySession(ownerId, state.threads,
+          visibleSession?.id === ownerId ? visibleSession : fallbackId === ownerId
+            ? { id: ownerId, ...(state.workspaceRoot ? { workspaceRoot: state.workspaceRoot } : {}) }
+            : undefined) : undefined
+        return updateWorkbenchGlobalOverlays(current, registered.contribution.placement ?? 'window', detail, session)
       })
     }
     window.addEventListener(
@@ -1563,29 +1656,48 @@ export function Workbench(): ReactElement {
   useEffect(() => setDomainWorkbenchMessageSender((request) =>
     sendDomainWorkbenchMessage(request, useChatStore.getState())), [])
 
+  useEffect(() => setDomainWorkbenchSideConversationOpener((request) =>
+    openDomainWorkbenchSideConversation(request, useChatStore.getState())), [])
+
+  const sessionNavigationRequest = useRef(0)
+
   useEffect(() => setDomainWorkbenchSessionNavigator(async (request) => {
     const target = resolveDomainWorkbenchSession(request, useChatStore.getState().threads)
-    if (!target || (request.returnTo && !installedRendererContributions.mainAreas.list()
-      .some(page => page.id === request.returnTo!.contributionId))) return false
+    if (!target || (request.returnTo && !canReturnToSurface(request.returnTo))) return false
+    const sequence = ++sessionNavigationRequest.current
+    // Selection changes the visible Session before its history arrives. Keep the
+    // return action available even if that read fails or reaches its deadline.
+    if (request.returnTo) setSessionReturnTargets(current => ({
+      ...current, [navigationSessionKey(target)]: request.returnTo!
+    }))
     try {
-      getProvider().rememberThreadRuntime?.(target.threadId, target.runtimeId as AgentRuntimeId)
-      await selectThread(target.threadId)
-      const state = useChatStore.getState()
-      if (state.activeThreadId !== target.threadId ||
-        !resolveDomainWorkbenchSession(request, state.threads)) return false
-      if (request.returnTo) setSessionReturnTargets(current => ({
-        ...current,
-        [navigationSessionKey(target)]: request.returnTo!
-      }))
+      if (!await selectDomainWorkbenchSession(request, useChatStore.getState) || sequence !== sessionNavigationRequest.current) {
+        if (sequence === sessionNavigationRequest.current && useChatStore.getState().activeThreadId === target.threadId) {
+          useChatStore.setState({ error: useChatStore.getState().error ?? t('conversationSourceSessionFailed') })
+        }
+        return false
+      }
       setNavigationOverview(null)
       setMainAreaPageId(null)
       setRoute('chat')
+      if (request.turnId || request.itemId) {
+        setGlobalOverlays({ window: null, workspace: null })
+        setFocusedRightPanelMode(null)
+        const navigation: ConversationSourceNavigation = {
+          ...target, requestId: crypto.randomUUID(), status: 'loading',
+          ...(request.turnId ? { turnId: request.turnId.trim() } : {}),
+          ...(request.itemId ? { itemId: request.itemId.trim() } : {})
+        }
+        useChatStore.setState({ conversationSourceNavigation: navigation })
+        const isCurrent = () => useChatStore.getState().conversationSourceNavigation?.requestId === navigation.requestId
+        void locateConversationSource(navigation, useChatStore.getState, isCurrent).then(result => {
+          if (isCurrent()) useChatStore.setState({ conversationSourceNavigation: { ...navigation, ...result } })
+        })
+      }
       if (request.focusComposer) setComposerFocusRequest(current => current + 1)
       return true
-    } catch {
-      return false
-    }
-  }), [selectThread, setRoute])
+    } catch { return false }
+  }), [setRoute, setFocusedRightPanelMode, t])
 
   const activeTodoItemCount = activeThreadTodos?.items.length ?? 0
   const activeTodoAutoOpenKey = activeThreadId && activeTodoItemCount > 0
@@ -2743,15 +2855,15 @@ export function Workbench(): ReactElement {
     () => installedMainAreas.map(({ id, contribution }) => ({
       id,
       label: t(contribution.label),
-      active: id === mainAreaPageId
+      active: pageLayout.isOpen(id)
     })),
-    [installedMainAreas, mainAreaPageId, t]
+    [installedMainAreas, pageLayout, t]
   )
   const selectMainAreaPage = useCallback((id: string): void => {
     setNavigationOverview(null)
     setRoute('chat')
-    setMainAreaPageId(id)
-  }, [setRoute])
+    pageLayout.openPage(id)
+  }, [pageLayout, setRoute])
 
   const runtimeRecoveryOptions = runtimeProvider.getRecoveryOptions(activeAgentRuntime)
 
@@ -2916,7 +3028,13 @@ export function Workbench(): ReactElement {
               <DevelopmentPluginPanelHost
                 contribution={developmentRightPanel}
                 active={active}
+                workspaceRoot={workspaceRoot}
+                services={{ sendMessage: (request) => sendDomainWorkbenchMessage(request as never, useChatStore.getState()) }}
                 className="h-full max-h-full w-full"
+                sessionId={ownerSessionId}
+                runtimeId={ownerThread?.runtimeId}
+                activation={pane.panelActivation}
+                onClose={closeOwnerRightPanel}
               />
             ) : paneMode === 'file' ? (
               <div className="relative h-full max-h-full w-full overflow-hidden">
@@ -3126,6 +3244,7 @@ export function Workbench(): ReactElement {
     ...installedRightPanels.map(({ id, contribution }) => ({
       id,
       label: t(contribution.titleKey ?? contribution.title, { defaultValue: contribution.title }),
+      navigation: contribution.navigation,
       allowSplit: contribution.allowSplit !== false
     })),
     ...developmentRightPanels.map((contribution) => ({
@@ -3141,10 +3260,11 @@ export function Workbench(): ReactElement {
     return (
       <div
         className={rightPanelVisible
-          ? WORKBENCH_RIGHT_PANEL_VISIBLE_CLASS
+          ? `${WORKBENCH_RIGHT_PANEL_VISIBLE_CLASS}${rightPanelOverlay ? ' absolute inset-y-0 right-0 z-40 shadow-xl' : ''}`
           : 'pointer-events-none fixed h-0 w-0 overflow-hidden invisible'}
         style={rightPanelVisible ? { width: rightPanelDockViewportWidth } : undefined}
         aria-hidden={!rightPanelVisible}
+        data-right-panel-presentation={rightPanelOverlay ? 'overlay' : 'docked'}
       >
         <SessionRightPanelStack
           activeSessionId={rightPanelVisible ? rightPanelOwnerId : null}
@@ -3316,11 +3436,26 @@ export function Workbench(): ReactElement {
     </header>
     {activeSessionReturnTarget ? (
       <WorkbenchSessionReturn target={activeSessionReturnTarget} onReturn={target => {
-        if (!installedRendererContributions.mainAreas.list().some(page => page.id === target.contributionId)) return
-        if (target.activation) setMainAreaActivations(current => ({ ...current, [target.contributionId]: { ...target.activation! } }))
-        setNavigationOverview(null)
-        setRoute('chat')
-        setMainAreaPageId(target.contributionId)
+        void (async () => {
+          if (!canReturnToSurface(target)) { useChatStore.setState({ error: t('conversationSourceReturnMissing') }); return }
+          if (target.session && !await selectDomainWorkbenchSession({ ...target.session, readOnly: true }, useChatStore.getState)) {
+            useChatStore.setState({ error: t('conversationSourceReturnFailed') }); return
+          }
+          useChatStore.setState({ conversationSourceNavigation: null })
+          setNavigationOverview(null)
+          setRoute('chat')
+          if (target.presentation === 'global-overlay') {
+            domainRendererNavigationHost.workbench.toggleGlobalOverlay?.({ contributionId: target.contributionId,
+              sessionId: target.session?.threadId, activation: target.activation, open: true })
+          } else if (target.presentation === 'right-panel') {
+            const sessionId = target.session?.threadId ?? useChatStore.getState().activeThreadId
+            if (sessionId) domainRendererNavigationHost.workbench.openRightPanel({ contributionId: target.contributionId, sessionId,
+              ...(target.activation ? { activation: { ...target.activation, contributionId: target.contributionId } } : {}) })
+          } else {
+            if (target.activation) setMainAreaActivations(current => ({ ...current, [target.contributionId]: { ...target.activation! } }))
+            pageLayout.openPage(target.contributionId)
+          }
+        })().catch(() => useChatStore.setState({ error: t('conversationSourceReturnFailed') }))
       }} />
     ) : null}
     {focusNavigationLineage.length > 1 || agentFocusHistory.length > 1 ? (
@@ -3516,7 +3651,7 @@ export function Workbench(): ReactElement {
   return (
     <div
       ref={shellRef}
-      className="ds-workbench-shell flex h-full min-h-0 w-full min-w-0 bg-ds-main"
+      className="ds-workbench-shell relative flex h-full min-h-0 w-full min-w-0 bg-ds-main"
     >
       {visualCaptureActive ? (
         <div
@@ -3528,40 +3663,51 @@ export function Workbench(): ReactElement {
           {t('visualContextCaptureActive')}
         </div>
       ) : null}
-      {activeGlobalOverlay && (globalOverlay?.sessionId || rightPanelOwnerId) ? (
-        activeGlobalOverlay.contribution.render({
+      {activeWindowOverlay && windowOverlaySession ? (
+        activeWindowOverlay.contribution.render({
           active: true,
           className: 'fixed inset-0',
-          session: {
-            id: globalOverlay?.sessionId || rightPanelOwnerId!,
-            ...(activeThread?.title ? { title: activeThread.title } : {}),
-            ...(activeThread?.runtimeId ? { runtimeId: activeThread.runtimeId } : {}),
-            ...(activeWorkspaceReferenceRoot
-              ? { workspaceRoot: activeWorkspaceReferenceRoot }
-              : {})
-          },
-          ...(globalOverlay?.activation
-            ? { activation: globalOverlay.activation }
+          session: windowOverlaySession,
+          ...(windowOverlay?.activation
+            ? { activation: windowOverlay.activation }
             : {}),
-          onClose: () => setGlobalOverlay(null)
+          onClose: () => setGlobalOverlays(current => ({ ...current, window: null }))
         })
       ) : null}
       <>
-          {leftSidebarOverlay && !leftSidebarCollapsed ? (
+          {leftSidebarEdge.edgeVisible ? <button
+            {...leftSidebarEdge.edgeProps}
+            className="ds-no-drag absolute inset-y-0 left-0 z-[65] w-3 bg-transparent hover:bg-accent/10 focus-visible:bg-accent/10"
+            aria-label={t('sidebarExpand')}
+            title={t('sidebarExpand')}
+          ><span className="absolute left-1 top-1/2 h-10 w-0.5 rounded bg-ds-border" /></button> : null}
+          {leftSidebarModal && !leftSidebarCollapsed ? (
             <button className="ds-no-drag absolute inset-0 z-30 bg-black/20" aria-label={t('sidebarCollapse')} onClick={toggleLeftSidebar} />
           ) : null}
           <div
             ref={sidebarOverlayRef}
+            {...leftSidebarEdge.panelProps}
             hidden={leftSidebarCollapsed && !sidebarRail}
-            role={leftSidebarOverlay && !leftSidebarCollapsed ? 'dialog' : undefined}
-            aria-modal={leftSidebarOverlay && !leftSidebarCollapsed || undefined}
-            aria-label={leftSidebarOverlay && !leftSidebarCollapsed ? t('sidebarLocalWorkspaces') : undefined}
-            tabIndex={leftSidebarOverlay && !leftSidebarCollapsed ? -1 : undefined}
-            className={leftSidebarOverlay && !leftSidebarCollapsed ? 'absolute inset-y-0 left-0 z-40 min-h-0 shadow-xl' : 'min-h-0 shrink-0'}
+            role={leftSidebarModal && !leftSidebarCollapsed ? 'dialog' : undefined}
+            aria-modal={leftSidebarModal && !leftSidebarCollapsed || undefined}
+            aria-label={leftSidebarModal && !leftSidebarCollapsed ? t('sidebarLocalWorkspaces') : undefined}
+            tabIndex={leftSidebarModal && !leftSidebarCollapsed ? -1 : undefined}
+            className={leftSidebarOverlay && !leftSidebarCollapsed ? 'absolute inset-y-0 left-0 z-[60] min-h-0 shadow-xl' : 'min-h-0 shrink-0'}
             style={{ width: sidebarRail ? 'var(--ds-sidebar-rail-width)' : leftSidebarCollapsed ? 0 : leftSidebarWidth, maxWidth: leftSidebarOverlay ? 'calc(100% - 48px)' : undefined }}
           >
             <Sidebar
               collapsed={sidebarRail}
+              displayControl={<label className="flex items-center justify-between gap-2 px-2 py-1 text-[11px] text-ds-muted">
+                {t('sidebarDisplayMode', { defaultValue: '侧栏显示' })}
+                <select aria-label={t('sidebarDisplayMode', { defaultValue: '侧栏显示' })}
+                  value={leftSidebarEdge.behavior}
+                  onChange={event => leftSidebarEdge.setBehavior(event.target.value as 'pinned' | 'auto' | 'hidden')}
+                  className="ds-no-drag rounded border border-ds-border bg-ds-main px-1 py-1">
+                  <option value="pinned">{t('panelPinned', { defaultValue: '固定显示' })}</option>
+                  <option value="auto">{t('panelAutoReveal', { defaultValue: '靠近展开' })}</option>
+                  <option value="hidden">{t('panelManual', { defaultValue: '手动收起' })}</option>
+                </select>
+              </label>}
               navigationSections={sidebarNavigationSections}
               mainAreaPages={sidebarMainAreaPages}
               onSelectMainAreaPage={selectMainAreaPage}
@@ -3599,11 +3745,45 @@ export function Workbench(): ReactElement {
         </>
 
       <main
-        inert={leftSidebarOverlay && !leftSidebarCollapsed}
-        className={`ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col ${
+        ref={sideChatDock.stageRef}
+        inert={leftSidebarModal && !leftSidebarCollapsed}
+        className={`ds-stage-surface relative flex min-h-0 min-w-0 flex-1 ${
           route === 'plugins' ? 'px-0' : ''
         }`}
       >
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-workbench-content>
+        {activeWorkspaceOverlay && workspaceOverlaySession ? (
+          <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-ds-main" data-workbench-workspace-overlay>
+            <header className="ds-no-drag flex min-h-11 shrink-0 items-center gap-2 border-b border-ds-border px-3 py-1.5">
+              <SidebarTitlebarToggleButton
+                onClick={toggleLeftSidebar}
+                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+              />
+              <span className="min-w-0 flex-1 truncate text-xs text-ds-muted">{workspaceOverlaySession.title}</span>
+              <button type="button" className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-ds-muted hover:bg-ds-hover disabled:opacity-40"
+                disabled={!workspaceOverlaySession.runtimeId}
+                onClick={openWorkspaceOverlaySideChat}
+                aria-label={t('sidePanelOpen')} title={t('sidePanelOpen')}>
+                <MessageCircleMore className="h-4 w-4" aria-hidden="true" />{t('sidePanelOpen')}
+              </button>
+              <WorkbenchToolbarMenu toolbarActions={installedToolbarActions} toolbarCommandInvocation={toolbarCommandInvocation}
+                onExecuteToolbarCommand={commandId => {
+                  void installedRendererContributions.commands.execute(commandId, toolbarCommandInvocation)
+                }} />
+            </header>
+            <div className="relative min-h-0 flex-1">
+            {activeWorkspaceOverlay.contribution.render({
+              active: true,
+              className: 'absolute inset-0',
+              session: workspaceOverlaySession,
+              ...(workspaceOverlay?.activation ? { activation: workspaceOverlay.activation } : {}),
+              onClose: () => setGlobalOverlays(current => ({ ...current, workspace: null }))
+            })}
+            </div>
+          </div>
+        ) : null}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" inert={workspaceOverlayVisible} data-workbench-covered-content>
         {route === 'plugins' ? (
           <>
             <div className="ds-no-drag shrink-0 px-4 pt-4">
@@ -3628,15 +3808,16 @@ export function Workbench(): ReactElement {
         ) : null}
         {!mainAreaHidden && error && !(runtimeConnection !== 'ready' && !activeThreadId) ? renderRuntimeBanner(error, runtimeErrorDetail) : null}
 
-        <div className={`flex min-h-0 flex-1 ${mainAreaHidden ? 'hidden' : ''}`} hidden={mainAreaHidden}>
-          <div
-            className={`relative flex min-h-0 min-w-0 flex-1 ${activeSddDraft || mainAreaPageId ? '' : stageInsetClass}`}
-            style={mainAreaPageId ? { '--ds-main-area-leading-inset': sidebarRail ? 'max(0px, calc(var(--ds-window-controls-end) - var(--ds-sidebar-rail-width)))' : '0px' } as CSSProperties : undefined}
-          >
+        <div className={`flex min-h-0 flex-1 ${mainAreaHidden ? 'hidden' : ''}`} hidden={mainAreaHidden}
+          style={mainAreaPageId ? { '--ds-main-area-leading-inset': sidebarRail ? 'max(0px, calc(var(--ds-window-controls-end) - var(--ds-sidebar-rail-width)))' : '0px' } as CSSProperties : undefined}>
           <WorkbenchMainAreaOutlet
             pages={installedMainAreas}
             activations={mainAreaActivations}
             activePageId={mainAreaHidden ? null : mainAreaPageId}
+            layout={pageLayout}
+            centerRef={centerSurfaceRef}
+            visible={!mainAreaHidden}
+            rightPanel={mainAreaHidden ? null : renderRightPanel()}
             dock={{
               ownedSessionIds,
               activeSessionId: activeThreadId,
@@ -3644,7 +3825,10 @@ export function Workbench(): ReactElement {
               activateSession: activateDockedSession,
               labels: { refused: t('sessionDockRefused'), close: t('close') }
             }}
-          />
+          >
+          <div
+            className={`relative flex min-h-0 min-w-0 flex-1 ${activeSddDraft || mainAreaPageId ? '' : stageInsetClass}`}
+          >
           {mainAreaHidden || mainAreaPageId ? null : navigationOverview ? (
             <NavigationOverview
               title={navigationOverview}
@@ -3669,14 +3853,17 @@ export function Workbench(): ReactElement {
           )}
           </div>
 
-          {route === 'chat' && !activeSddDraft ? (
-            <SideConversationPanel
-              rightOffset={rightPanelVisible ? rightPanelDockViewportWidth + 24 : 24}
-            />
-          ) : null}
-
-          {mainAreaHidden ? null : renderRightPanel()}
+          </WorkbenchMainAreaOutlet>
         </div>
+        </div>
+        </div>
+        {route === 'chat' && !activeSddDraft ? (
+          <SideConversationPanel
+            dockAvailable={sideChatDock.dockAvailable}
+            onHandoff={input => sendSideConversationHandoff(input, useChatStore.getState())}
+            rightOffset={workspaceOverlayVisible ? 16 : rightPanelVisible && !rightPanelOverlay ? rightPanelDockViewportWidth + 24 : 24}
+          />
+        ) : null}
       </main>
     </div>
   )

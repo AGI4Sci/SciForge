@@ -90,124 +90,34 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
-  it.each(RUNTIME_IDS)(
-    'turns a native locate call into a region-capture and final-look obligation for %s',
-    (runtimeId) => {
+  it.each(RUNTIME_IDS)('does not promote exploratory tool arguments into task obligations for %s', (runtimeId) => {
+    for (const status of ['succeeded', 'failed'] as const) {
       const guard = new RuntimeExecutionIntegrityGuard()
-      guard.rememberTurn(
-        runtimeId,
-        baseInput(runtimeId, 'Apply every requirement in the referenced template.'),
-        `${runtimeId}-thread`,
-        `${runtimeId}-turn`
-      )
-
-      guard.observe(runtimeId, semanticTool(
-        runtimeId,
-        'look-call',
-        'sciforge_look',
-        semanticReceipt('visual.look', 'look-locate', 'look-call', [], [REGION_REF]),
-        { intent: 'locate', capture: 'region' }
-      ))
-      expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`)).toEqual({
-        requiresTerminalValidation: true,
-        nativeVisualObligationsPending: true
+      guard.rememberTurn(runtimeId, baseInput(runtimeId, 'Inspect the reference.'), `${runtimeId}-thread`, `${runtimeId}-turn`)
+      guard.observe(runtimeId, {
+        ...tool(runtimeId, 'requested'),
+        toolName: 'sciforge_look',
+        meta: { arguments: { intent: 'describe', capture: 'region' } }
       })
-
-      guard.observe(runtimeId, semanticTool(
-        runtimeId,
-        'capture-call',
-        'sciforge_capture',
-        semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'], [REGION_REF])
-      ))
-      guard.observe(runtimeId, semanticTool(
-        runtimeId,
-        'final-look-call',
-        'sciforge_look',
-        semanticReceipt('visual.look', 'look-final', 'final-look-call', ['capture'])
-      ))
-
-      expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`)).toEqual({
-        requiresTerminalValidation: true,
-        nativeVisualObligationsPending: false
+      expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`).nativeVisualObligationsPending).toBe(false)
+      guard.observe(runtimeId, {
+        ...tool(runtimeId, status),
+        toolName: 'sciforge_look',
+        meta: { arguments: { intent: 'describe', capture: 'region' } }
       })
+      expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`).nativeVisualObligationsPending).toBe(false)
       expect(guard.observe(runtimeId, completed(runtimeId)).violation).toBeUndefined()
     }
-  )
+  })
 
-  it('rejects a full-source substitute after a native locate call', () => {
+  it.each(RUNTIME_IDS)('does not make successful region location require persistence for %s', (runtimeId) => {
     const guard = new RuntimeExecutionIntegrityGuard()
-    guard.rememberTurn('codex', baseInput('codex', 'Apply the referenced template.'), 'codex-thread', 'codex-turn')
-    guard.observe('codex', semanticTool(
-      'codex',
-      'look-call',
-      'sciforge_look',
+    guard.rememberTurn(runtimeId, baseInput(runtimeId, 'Locate the reference.'), `${runtimeId}-thread`, `${runtimeId}-turn`)
+    guard.observe(runtimeId, semanticTool(runtimeId, 'look-call', 'sciforge_look',
       semanticReceipt('visual.look', 'look-locate', 'look-call', [], [REGION_REF]),
-      { intent: 'locate', capture: 'region' }
-    ))
-    guard.observe('codex', semanticTool(
-      'codex',
-      'capture-call',
-      'sciforge_capture',
-      semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'])
-    ))
-    guard.observe('codex', semanticTool(
-      'codex',
-      'final-look-call',
-      'sciforge_look',
-      semanticReceipt('visual.look', 'look-final', 'final-look-call', ['capture'])
-    ))
-
-    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
-      code: 'runtime_visual_execution_missing',
-      unsatisfiedObligationIds: expect.arrayContaining([
-        expect.stringContaining('native-visual-capture:')
-      ])
-    })
-  })
-
-  it('activates the region-capture gate even when the declaring look returns no region', () => {
-    const guard = new RuntimeExecutionIntegrityGuard()
-    guard.rememberTurn('codex', baseInput('codex', 'Apply the referenced template.'), 'codex-thread', 'codex-turn')
-    guard.observe('codex', semanticTool(
-      'codex',
-      'look-call',
-      'sciforge_look',
-      semanticReceipt('visual.look', 'look-locate', 'look-call'),
-      { intent: 'locate', capture: 'region' }
-    ))
-
-    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
-      requiresTerminalValidation: true,
-      nativeVisualObligationsPending: true
-    })
-    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
-      code: 'runtime_visual_execution_missing',
-      unsatisfiedObligationIds: expect.arrayContaining([
-        'native-visual-locate:look-call',
-        'native-visual-capture:look-call',
-        'native-visual-final-look:look-call'
-      ])
-    })
-  })
-
-  it('activates the declared capture gate even when the native look fails', () => {
-    const guard = new RuntimeExecutionIntegrityGuard()
-    guard.rememberTurn('codex', baseInput('codex', 'Apply the referenced template.'), 'codex-thread', 'codex-turn')
-    guard.observe('codex', {
-      ...tool('codex', 'failed'),
-      toolName: 'sciforge_look',
-      meta: {
-        arguments: { intent: 'locate', capture: 'region' }
-      }
-    })
-
-    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
-      requiresTerminalValidation: true,
-      nativeVisualObligationsPending: true
-    })
-    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
-      code: 'runtime_visual_execution_missing'
-    })
+      { intent: 'locate', capture: 'region' }))
+    expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`).nativeVisualObligationsPending).toBe(false)
+    expect(guard.observe(runtimeId, completed(runtimeId)).violation).toBeUndefined()
   })
 
   it.each(RUNTIME_IDS)('blocks a requested execution with no receipt for %s', (runtimeId) => {

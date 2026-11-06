@@ -1,0 +1,28 @@
+{
+  "name": "@sciforge/plugin-workspace-note",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Neutral fixture plugin: one workspace-write tool that records the workspace it was actually given. It exists to prove the host binds the caller workspace into plugin tool input.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/main.js"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.0-rc.2 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

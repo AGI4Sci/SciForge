@@ -18,6 +18,8 @@ it.each([
   const directory = await mkdtemp(join(tmpdir(), 'host-semver-rejection-'))
   const registry = new CapabilityRegistry()
   const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,
     root: join(directory, 'plugins'), userDataPath: join(directory, 'user-data'),
     hostApiVersion, dshRuntimeVersion: '0.2.0-rc.2',
     adapterContracts: new Map([[packageName, { hostApiRange: '*', permissions: [], approved: true,
@@ -41,6 +43,8 @@ it('host service accepts explicit DSH prerelease support and standard Host API O
   const directory = await mkdtemp(join(tmpdir(), 'host-semver-acceptance-'))
   const registry = new CapabilityRegistry()
   const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,
     root: join(directory, 'plugins'), userDataPath: join(directory, 'user-data'),
     hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2',
     adapterContracts: new Map([[packageName, { hostApiRange: '^1.0.0 || ^2.0.0', permissions: [], approved: true }]])

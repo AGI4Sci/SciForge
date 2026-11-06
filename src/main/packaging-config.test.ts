@@ -234,7 +234,7 @@ function bundledDirectoryFileSets(): BuilderFileSet[] {
     if (typeof entry !== 'object' || entry === null) return false
     // The installed-plugin runtime ships as its own file sets; they are asserted
     // separately in "ships the installed-plugin runtime and the catalog".
-    const from = String((entry as BuilderFileSet).from ?? '')
+    const from = String((entry as BuilderFileSet).from ?? '').replaceAll('\\', '/')
     return !from.startsWith('node_modules/@deepseek-ai/') && from !== 'node_modules/@standard-schema/spec'
   })
 }
@@ -254,8 +254,8 @@ function fileSetEntries(value: unknown): ResolvedFileSet[] {
         .filter((entry): entry is BuilderFileSet =>
           typeof entry === 'object' && entry !== null && typeof (entry as BuilderFileSet).from === 'string')
         .map((entry) => ({
-          from: entry.from as string,
-          to: (entry.to ?? entry.from) as string,
+          from: (entry.from as string).replaceAll('\\', '/'),
+          to: ((entry.to ?? entry.from) as string).replaceAll('\\', '/'),
           filter: entry.filter ?? []
         }))
     : []
@@ -385,6 +385,8 @@ describe('electron-builder release packaging', () => {
     expect(builderConfig.asarUnpack).toEqual(expect.arrayContaining(
       releaseWorkerManifest.createAsarUnpackGlobs()
     ))
+    const manifestUnpackGlobs = releaseWorkerManifest.createAsarUnpackGlobs()
+    expect(manifestUnpackGlobs).toEqual([...new Set(manifestUnpackGlobs)])
     expect(releaseWorkerManifest.BUILT_RUNTIME_UNPACK_GLOBS).toEqual(['**/out/main/**/*'])
     expect(builderConfig.asarUnpack).toContain('**/out/main/**/*')
     expect(builderConfig.asarUnpack).toContain('**/packages/full-trace/**/*')
@@ -408,8 +410,21 @@ describe('electron-builder release packaging', () => {
       expect(unpackGlobs).not.toContain(`**/${packageDir}/**/*`)
     }
 
-    expect(bundledDirectoryFileSetDirs.filter((entry) => entry.startsWith('plugins/'))).toEqual([])
-    expect(unpackGlobs.filter((entry) => entry.includes('/plugins/'))).toEqual([])
+    // Release eligibility comes from the runtime manifest, not the source
+    // directory name: a plugin package can own a bundled worker/MCP runtime.
+    const runtimePluginDirs = [...new Set(releaseWorkerManifest.runtimeEntries
+      .flatMap((entry) => entry.packageIds)
+      .map((id) => releaseWorkerManifest.PACKAGE_DEFINITIONS[id]!.dir)
+      .filter((dir) => dir.startsWith('plugins/')))].sort()
+    expect(bundledDirectoryFileSetDirs.filter((entry) => entry.startsWith('plugins/')).sort())
+      .toEqual(runtimePluginDirs)
+    const declaredPluginUnpackGlobs = releaseWorkerManifest.createAsarUnpackGlobs()
+      .filter((entry) => entry.includes('/plugins/'))
+    expect(unpackGlobs.filter((entry) => entry.includes('/plugins/')).sort())
+      .toEqual([...declaredPluginUnpackGlobs].sort())
+    for (const packageDir of runtimePluginDirs) {
+      expect(unpackGlobs).toContain(`**/${packageDir}/**/*`)
+    }
     for (const rawGlob of [
       'plugins/**/*',
       'packages/workers/sci-modality-router/**/*',
@@ -666,7 +681,29 @@ describe('electron-builder release packaging', () => {
     expect(releaseWorkerManifest.runtimeEntries.map((entry) => entry.id)).not.toContain('paper-radar')
     expect(releaseWorkerManifest.workspacePackageDirs).not.toContain('packages/workers/paper-radar')
     expect(releaseWorkerManifest.bundledPackageDirs).not.toContain('packages/workers/paper-radar')
-    expect(releaseWorkerManifest.bundledPackageDirs.some((dir) => dir.startsWith('plugins/'))).toBe(false)
+    expect(releaseWorkerManifest.discoverBundledDomainPackages(projectRoot)
+      .map(({ packageName }) => packageName)).not.toContain('@sciforge/domain-scientific-plotting')
+    expect(releaseWorkerManifest.runtimeEntries.map(({ id }) => id)).not.toContain('scientific-plotting')
+    expect(releaseWorkerManifest.runtimeRequiredPathExports).not.toHaveProperty('SCIENTIFIC_PLOTTING_RUNTIME_REQUIRED_PATHS')
+    expect(releaseWorkerManifest.runtimeEntries.map(({ id }) => id)).not.toContain('scientific-skills')
+    expect(releaseWorkerManifest.runtimeRequiredPathExports).not.toHaveProperty('SCIENTIFIC_SKILLS_RUNTIME_REQUIRED_PATHS')
+    expect(releaseWorkerManifest.PACKAGE_DEFINITIONS).not.toHaveProperty('scientificSkills')
+    expect(releaseWorkerManifest.createBundledFileSets()
+      .map(({ from }) => from)).not.toContain('plugins/scientific-plotting')
+    for (const kind of ['skills', 'plotting']) {
+      expect(releaseWorkerManifest.packagedExecutableNodeEntryRequiredPaths)
+        .not.toContain(`out/main/scientific-${kind}-mcp-node-entry.js`)
+    }
+    expect(releaseWorkerManifest.runtimeEntries.flatMap(({ requiredPaths }) => requiredPaths)
+      .some((path) => path.startsWith('plugins/scientific-plotting/'))).toBe(false)
+    // Every bundled plugin directory must back an explicit runtime entry;
+    // compile-time-only domains do not acquire a second runtime by location.
+    const runtimePackageDirs = new Set(releaseWorkerManifest.runtimeEntries
+      .flatMap((entry) => entry.packageIds)
+      .map((id) => releaseWorkerManifest.PACKAGE_DEFINITIONS[id]!.dir))
+    for (const dir of releaseWorkerManifest.bundledPackageDirs.filter((dir) => dir.startsWith('plugins/'))) {
+      expect(runtimePackageDirs.has(dir)).toBe(true)
+    }
     expect(releaseWorkerManifest.nonBundledPackageDirs).toEqual(expect.arrayContaining([
       'packages/workers/sci-modality-router',
       'packages/workers/gui-owl-computer-use'
@@ -870,7 +907,6 @@ describe('root package workspace contracts', () => {
     expect(rootPackage.workspaces).toEqual(expect.arrayContaining([
       'packages/workers/model-router',
       'packages/workers/sci-modality-router',
-      'packages/workers/paper-radar',
       'packages/domains/*',
       ...workspacePreviewWorkerPackageDirs
     ]))
@@ -878,7 +914,14 @@ describe('root package workspace contracts', () => {
       expect(releaseWorkerManifest.workspacePackageDirs).not.toContain(workspacePreviewWorkerPackageDir)
       expect(releaseWorkerManifest.bundledPackageDirs).not.toContain(workspacePreviewWorkerPackageDir)
     }
-    expect(rootPackage.workspaces.some((workspace) => workspace.startsWith('plugins/'))).toBe(false)
+    for (const packageDir of releaseWorkerManifest.bundledPackageDirs.filter((dir) => dir.startsWith('plugins/'))) {
+      expect(rootPackage.workspaces.some((workspace) => workspaceCoversPackage(workspace, packageDir))).toBe(true)
+    }
+    expect(releaseWorkerManifest.workspacePackageDirs).not.toContain('plugins/scientific-plotting')
+    // Workspace installation includes independently built plugin packages;
+    // release inclusion remains the narrower runtime-manifest decision above.
+    expect(rootPackage.workspaces.filter((workspace) => workspace.startsWith('plugins/')))
+      .toEqual(['plugins/*'])
     expect(rootPackage.workspaces.some(
       (workspace) => workspace === 'internal' || workspace.startsWith('internal/')
     )).toBe(false)
@@ -895,8 +938,6 @@ describe('root package workspace contracts', () => {
       'plan-gateway:start': 'npm --workspace @sciforge/plan-gateway run start',
       'plan-gateway:test': 'npm --workspace @sciforge/plan-gateway run test',
       'plan-gateway:typecheck': 'npm --workspace @sciforge/plan-gateway run typecheck',
-      'paper-radar:test': 'npm --workspace @sciforge/paper-radar run test',
-      'paper-radar:typecheck': 'npm --workspace @sciforge/paper-radar run typecheck'
     })
     expect(rootPackage.scripts).not.toHaveProperty('paper-radar:start')
     expect(rootPackage.scripts).not.toHaveProperty('paper-radar-mcp:start')

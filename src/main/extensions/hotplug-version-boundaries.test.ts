@@ -15,7 +15,9 @@ it('rejects same-version check and direct replace before writing candidate or ac
   await cp(resolve('test-fixtures/migration-plugins/p1-unitverse'), source, { recursive: true })
   await mkdir(join(plugins, '.candidates'))
   await cp(source, candidate, { recursive: true })
-  const service = new DevelopmentExternalPluginService({ root: plugins, userDataPath: join(root, 'data'),
+  const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: plugins, userDataPath: join(root, 'data'),
     hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2',
     adapterContracts: new Map([[name, { hostApiRange: '^1.0.0', permissions: [], approved: true }]]), allowedPermissionIds: new Set() })
   try {

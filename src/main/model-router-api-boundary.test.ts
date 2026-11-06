@@ -218,20 +218,22 @@ function scanProductionText(pattern: RegExp): DirectCallHit[] {
   return scanProductionTextInRoots(sourceRoots, pattern)
 }
 
-function scanProductionTextInRoots(sourceRootsToScan: string[], pattern: RegExp): DirectCallHit[] {
+function scanProductionTextInRoots(sourceRootsToScan: string[], ...patterns: RegExp[]): DirectCallHit[] {
   const files = scanProductionFiles(sourceRootsToScan)
   return files.flatMap((file) => {
     const absolutePath = join(repoRoot, file)
     return readFileSync(absolutePath, 'utf8').split(/\r?\n/).flatMap((text, index) => {
-      const column = text.search(pattern)
-      if (column < 0) return []
-      return [{
-        file,
-        line: index + 1,
-        column: column + 1,
-        marker: pattern.source,
-        text: text.trim().replace(/\s+/g, ' ')
-      }]
+      return patterns.flatMap((pattern) => {
+        const column = text.search(pattern)
+        if (column < 0) return []
+        return [{
+          file,
+          line: index + 1,
+          column: column + 1,
+          marker: pattern.source,
+          text: text.trim().replace(/\s+/g, ' ')
+        }]
+      })
     })
   })
 }
@@ -388,11 +390,12 @@ describe('P7/P8 model router API boundary enforcement', () => {
   })
 
   it('blocks GUI/runtime direct calls to the sci-modality service endpoint', () => {
-    const directSciModalityHits = [
-      ...scanProductionTextInRoots(guiRuntimeSourceRoots, /\bSCIFORGE_SCIMODALITY_SERVICE_[A-Z0-9_]+\b/),
-      ...scanProductionTextInRoots(guiRuntimeSourceRoots, /\bSCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN\b/),
-      ...scanProductionTextInRoots(guiRuntimeSourceRoots, /\/modality\/translate/)
-    ].filter((hit) => !isAllowedSciModalityBoundaryMarker(hit))
+    const directSciModalityHits = scanProductionTextInRoots(
+      guiRuntimeSourceRoots,
+      /\bSCIFORGE_SCIMODALITY_SERVICE_[A-Z0-9_]+\b/,
+      /\bSCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN\b/,
+      /\/modality\/translate/
+    ).filter((hit) => !isAllowedSciModalityBoundaryMarker(hit))
 
     expect(formatHits(directSciModalityHits)).toBe('')
   })

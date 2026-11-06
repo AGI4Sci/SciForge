@@ -2,12 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createDshRuntimeAdapter } from '../src/index.ts'
 
 const fixture = fileURLToPath(new URL('./fixture.mjs', import.meta.url))
 for (const failure of [new Error('deterministic deployment cleanup failure'), undefined]) {
-  const root = await mkdtemp(join(process.env.TMPDIR, 'disconnect-cleanup-'))
+  const root = await mkdtemp(join(tmpdir(), 'disconnect-cleanup-'))
   const adapter = createDshRuntimeAdapter({ executable: process.execPath, executableArgs: [fixture], stateDirectory: root, requestTimeoutMs: 1000, verifyDeployment: async () => {} })
   const events = []
   const controller = new AbortController()

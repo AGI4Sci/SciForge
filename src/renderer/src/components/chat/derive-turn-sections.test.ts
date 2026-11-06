@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatBlock } from '../../agent/types'
-import { deriveTurnSections } from './derive-turn-sections'
+import { stableTimelineItems, deriveTurnSections, type TurnSections } from './derive-turn-sections'
 import type { Turn } from './message-timeline-turns'
+
+function processBlocks(result: TurnSections) {
+  return result.timeline.flatMap((section) => section.kind === 'process' ? section.blocks : [])
+}
+function conversationBlocks(result: TurnSections) {
+  return result.timeline.flatMap((section) => section.kind === 'conversation' ? [section.block] : [])
+}
 
 function sections(blocks: ChatBlock[]) {
   return deriveTurnSections({
@@ -34,7 +41,7 @@ describe('deriveTurnSections', () => {
       { kind: 'user', id: 'directive-1', text: '请再核对生成的图片。' }
     ])
 
-    expect(result.conversationBlocks).toEqual([
+    expect(conversationBlocks(result)).toEqual([
       { kind: 'assistant', id: 'answer', text: '先处理原始请求。' },
       { kind: 'user', id: 'directive-1', text: '请再核对生成的图片。' }
     ])
@@ -65,7 +72,7 @@ describe('deriveTurnSections', () => {
       }
     ])
 
-    expect(result.conversationBlocks).toEqual([
+    expect(conversationBlocks(result)).toEqual([
       expect.objectContaining({ id: 'approval-pending', status: 'pending' })
     ])
   })
@@ -76,10 +83,10 @@ describe('deriveTurnSections', () => {
       { kind: 'reasoning', id: 'reasoning', text: 'The user greeted me.' }
     ])
 
-    expect(result.conversationBlocks).toEqual([
+    expect(conversationBlocks(result)).toEqual([
       { kind: 'assistant', id: 'answer', text: '你好！' }
     ])
-    expect(result.processBlocks.map((block) => block.kind)).toEqual(['reasoning'])
+    expect(processBlocks(result).map((block) => block.kind)).toEqual(['reasoning'])
   })
 
   it('uses the last assistant text as final content without duplicating it in process work', () => {
@@ -94,10 +101,10 @@ describe('deriveTurnSections', () => {
       }
     ])
 
-    expect(result.conversationBlocks).toEqual([
+    expect(conversationBlocks(result)).toEqual([
       { kind: 'assistant', id: 'preface', text: '我先检查一下。' }
     ])
-    expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
+    expect(processBlocks(result).map((block) => block.kind)).toEqual(['tool'])
   })
 
   it('keeps intermediate assistant text in the completed process timeline', () => {
@@ -134,16 +141,16 @@ describe('deriveTurnSections', () => {
       { kind: 'assistant', id: 'next', text: 'The issue link above should still be visible.' }
     ])
 
-    expect(result.conversationBlocks.map((block) => block.id)).toEqual([
+    expect(conversationBlocks(result).map((block) => block.id)).toEqual([
       'next'
     ])
-    expect(result.processBlocks.map((block) => block.id)).toEqual([
+    expect(processBlocks(result).map((block) => block.id)).toEqual([
       'intro',
       'tool_read',
       'analysis',
       'tool_issue'
     ])
-    expect(result.processBlocks.map((block) => 'text' in block ? block.text : '').join('\n\n')).toContain(
+    expect(processBlocks(result).map((block) => 'text' in block ? block.text : '').join('\n\n')).toContain(
       'command output line 2'
     )
   })
@@ -159,8 +166,8 @@ describe('deriveTurnSections', () => {
       }
     ])
 
-    expect(result.conversationBlocks).toEqual([])
-    expect(result.processBlocks.map((block) => block.kind)).toEqual(['tool'])
+    expect(conversationBlocks(result)).toEqual([])
+    expect(processBlocks(result).map((block) => block.kind)).toEqual(['tool'])
   })
 
   it('hides internal user-input tool calls while keeping the input card', () => {
@@ -192,8 +199,8 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.processBlocks).toEqual([])
-    expect(result.conversationBlocks.map((block) => block.id)).toEqual(['input_card'])
+    expect(processBlocks(result)).toEqual([])
+    expect(conversationBlocks(result).map((block) => block.id)).toEqual(['input_card'])
   })
 
   it('dedupes repeated user-input cards by request id', () => {
@@ -224,8 +231,8 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.processBlocks).toEqual([])
-    expect(result.conversationBlocks.map((block) => block.id)).toEqual(['input_new'])
+    expect(processBlocks(result)).toEqual([])
+    expect(conversationBlocks(result).map((block) => block.id)).toEqual(['input_new'])
   })
 
   it('renders approval cards directly in the conversation instead of process work', () => {
@@ -249,8 +256,8 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.conversationBlocks.map((block) => block.id)).toEqual(['approval-card'])
-    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1'])
+    expect(conversationBlocks(result).map((block) => block.id)).toEqual(['approval-card'])
+    expect(processBlocks(result).map((block) => block.id)).toEqual(['tool_1'])
   })
 
   it('extracts file changes from JSON-wrapped tool output diffs', () => {
@@ -336,8 +343,8 @@ describe('deriveTurnSections', () => {
       liveContent: '这里是正在生成的回答。'
     })
 
-    expect(result.conversationBlocks).toEqual([])
-    expect(result.processBlocks).toEqual([
+    expect(conversationBlocks(result)).toEqual([])
+    expect(processBlocks(result)).toEqual([
       { kind: 'reasoning', id: 'live-reasoning', text: 'private reasoning' }
     ])
   })
@@ -352,7 +359,7 @@ describe('deriveTurnSections', () => {
       workspaceRoot: '/tmp'
     })
 
-    expect(result.processBlocks).toEqual([
+    expect(processBlocks(result)).toEqual([
       {
         kind: 'reasoning',
         id: 'live-reasoning',
@@ -376,8 +383,8 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.conversationBlocks).toEqual([])
-    expect(result.processBlocks).toEqual([
+    expect(conversationBlocks(result)).toEqual([])
+    expect(processBlocks(result)).toEqual([
       { kind: 'assistant', id: 'answer', text: '先给你一部分结果。' },
       {
         kind: 'tool',
@@ -410,8 +417,8 @@ describe('deriveTurnSections', () => {
       ]
     })
 
-    expect(result.conversationBlocks).toEqual([])
-    expect(result.processBlocks.map((block) => block.id)).toEqual(['tool_1', 'answer', 'tool_2'])
+    expect(conversationBlocks(result)).toEqual([])
+    expect(processBlocks(result).map((block) => block.id)).toEqual(['tool_1', 'answer', 'tool_2'])
   })
 
   it('does not duplicate historical thinking when a live reasoning stream is active', () => {
@@ -422,12 +429,35 @@ describe('deriveTurnSections', () => {
       liveProcessText: 'first thought'
     })
 
-    expect(result.processBlocks.map((block) => block.id)).toEqual([
+    expect(processBlocks(result).map((block) => block.id)).toEqual([
       'assistant-1', 'live-reasoning'
     ])
-    expect(result.processBlocks).not.toContainEqual(
+    expect(processBlocks(result)).not.toContainEqual(
       expect.objectContaining({ id: 'assistant-1-think' })
     )
   })
 })
 
+
+it.each([true, false])('keeps multiple questionnaires in their original order (processing: %s)', (isProcessing) => {
+  const blocks: ChatBlock[] = [
+    { kind: 'tool', id: 'before', summary: 'Before', status: 'success' },
+    { kind: 'user_input', id: 'q1', requestId: 'r1', questions: [], status: 'submitted' },
+    { kind: 'assistant', id: 'between', text: 'Continue after first answer' },
+    { kind: 'tool', id: 'middle', summary: 'Between', status: 'success' },
+    { kind: 'user_input', id: 'q2', requestId: 'r2', questions: [], status: isProcessing ? 'pending' : 'submitted' },
+    { kind: 'assistant', id: 'after', text: 'Final response' }
+  ]
+  const result = deriveTurnSections({ turn: { blocks }, isProcessing, liveContent: '', liveProcessText: '', workspaceRoot: '/tmp' })
+  expect(result.timeline.flatMap((section) => section.kind === 'process' ? section.blocks.map((block) => block.id) : [section.block.id]))
+    .toEqual(['before', 'q1', 'between', 'middle', 'q2', 'after'])
+})
+
+
+it('replays updates at the first source position instead of moving them to the tail', () => {
+  const initial: ChatBlock = { id: 'question', kind: 'user_input', requestId: 'request', questions: [], status: 'pending' }
+  const following: ChatBlock = { id: 'following', kind: 'tool', summary: 'Later work', status: 'success' }
+  const updated: ChatBlock = { ...initial, id: 'question-update', status: 'submitted' }
+  expect(stableTimelineItems([initial, following, updated, { ...following, summary: 'Updated work' }]))
+    .toEqual([updated, { ...following, summary: 'Updated work' }])
+})

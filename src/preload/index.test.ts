@@ -37,6 +37,15 @@ describe('preload agentRuntime bridge', () => {
     await import('./index')
   })
 
+  it('keeps retired scientific skills and plotting bridges out of the preload API', () => {
+    for (const method of [
+      'buildScientificPlottingMcpConfig',
+      'buildScientificSkillsMcpConfig',
+      'getScientificSkillsStatus',
+      'installScientificSkills'
+    ]) expect(exposedApi).not.toHaveProperty(method)
+  })
+
   it('uses native Chromium zoom for renderer UI scaling', () => {
     const api = exposedApi as {
       setUiZoomFactor(factor: number): void

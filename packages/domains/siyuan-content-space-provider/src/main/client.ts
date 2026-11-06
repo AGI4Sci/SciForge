@@ -6,15 +6,59 @@ const notebookSchema = z.object({
 })
 export type SiYuanNotebook = z.infer<typeof notebookSchema>
 export type SiYuanErrorCode =
-  | 'invalid_configuration' | 'invalid_input' | 'unauthorized'
+  | 'not_configured' | 'invalid_configuration' | 'invalid_input' | 'unauthorized'
+  | 'secure_storage_unavailable'
   | 'provider_unavailable' | 'provider_contract_violation'
+  | 'document_not_found'
   | 'api_error' | 'outcome_unknown'
 
+/** One actionable sentence per failure, in the language of the page and of the
+ * Agent. The transport only forwards a message when the error carries a `code`
+ * and a `category`, so these texts are what a person or an Agent actually sees
+ * instead of "the request failed before a safe result could be delivered". */
+const siYuanErrorMessages: Readonly<Record<SiYuanErrorCode, string>> = Object.freeze({
+  not_configured: '尚未配置思源服务地址：请在本页设置中填写，或设置 SIYUAN_BASE_URL。',
+  invalid_configuration: '思源服务地址无效：必须是 HTTP 或 HTTPS 地址，且不能包含用户名、密码、查询参数或换行。',
+  invalid_input: '思源请求参数不合法：请检查文档 id（形如 20240101120000-abcdefg）、以 / 开头的路径，以及笔记本 id。',
+  unauthorized: '思源服务拒绝了访问：请在本页设置中填写 API 令牌，或确认该服务未启用访问授权码。',
+  secure_storage_unavailable: '本机的安全存储不可用，无法保存思源令牌：请改用 SIYUAN_API_TOKEN 环境变量。',
+  provider_unavailable: '连不上思源服务：请确认服务地址可访问、服务已启动，且网络未被拦截。',
+  provider_contract_violation: '思源服务返回了无法识别的响应：可能是版本不兼容，请确认该服务是受支持的思源版本。',
+  document_not_found: '思源里没有找到该文档：请先用 siyuan.document.search 定位，再用返回的 id 或 path 读取。',
+  api_error: '思源服务返回了错误码，本次操作没有完成。',
+  outcome_unknown: '写入结果未知：请求已发出但未收到确认。请先用 siyuan.document.search 确认是否已经写入，避免重复创建。'
+})
+
+/** Rejections are the caller's to fix; failures are the service's or the
+ * network's. Only the latter are worth retrying. */
+const rejectedSiYuanErrorCodes: ReadonlySet<SiYuanErrorCode> = new Set<SiYuanErrorCode>([
+  'not_configured', 'invalid_configuration', 'invalid_input', 'unauthorized',
+  'secure_storage_unavailable', 'document_not_found'
+])
+
+export const siYuanErrorMessage = (code: SiYuanErrorCode): string => siYuanErrorMessages[code]
+const documentRowSchema = z.object({
+  id: blockId, box: blockId, hpath: z.string(), updated: z.string()
+})
+export type SiYuanDocumentRow = z.infer<typeof documentRowSchema>
+
+/** SQL literals must stay inert: SiYuan paths come from people and from the
+ * Agent, so a quote in a title may never change the statement. */
+const sqlLiteral = (value: string): string => `'${value.replace(/'/gu, "''")}'`
+/** `ESCAPE '\'` keeps a literal `%` or `_` from widening the search. */
+const sqlLikePattern = (value: string): string =>
+  `'%${value.replace(/[\\%_']/gu, (character) => (character === "'" ? "''" : `\\${character}`))}%'`
+
 export class SiYuanError extends Error {
+  readonly category: 'rejected' | 'failed'
+  readonly retryable: boolean
+
   constructor(readonly code: SiYuanErrorCode) {
-    // Do not include server messages, request bodies, tokens or raw transport errors.
-    super(`SiYuan request failed: ${code}.`)
+    // Never include server messages, request bodies, tokens or raw transport errors.
+    super(siYuanErrorMessage(code))
     this.name = 'SiYuanError'
+    this.category = rejectedSiYuanErrorCodes.has(code) ? 'rejected' : 'failed'
+    this.retryable = code === 'provider_unavailable'
   }
 }
 
@@ -87,6 +131,59 @@ export class SiYuanClient {
       z.object({ id: blockId, kramdown: z.string() }), false, signal)
     if (data.id !== id) throw new SiYuanError('provider_contract_violation')
     return data.kramdown
+  }
+
+  /** Clean Markdown export, which is what a reader wants: `getBlockKramdown`
+   * interleaves SiYuan's own `{: id="…" }` block attributes into the text. */
+  async exportDocumentMarkdown(id: string, signal?: AbortSignal): Promise<{ path: string; markdown: string }> {
+    if (!blockId.safeParse(id).success) throw new SiYuanError('invalid_input')
+    const data = await this.#call('/api/export/exportMdContent', { id },
+      z.object({ hPath: z.string(), content: z.string() }), false, signal)
+    return { path: data.hPath, markdown: data.content }
+  }
+
+  async documentMetadata(id: string, signal?: AbortSignal): Promise<SiYuanDocumentRow> {
+    if (!blockId.safeParse(id).success) throw new SiYuanError('invalid_input')
+    const rows = await this.#call('/api/query/sql', {
+      stmt: `SELECT id, box, hpath, updated FROM blocks WHERE id = ${sqlLiteral(id)} LIMIT 1`
+    }, z.array(documentRowSchema), false, signal)
+    const row = rows[0]
+    if (!row || row.id !== id) throw new SiYuanError('document_not_found')
+    return row
+  }
+
+  async findDocumentByPath(path: string, notebook?: string, signal?: AbortSignal):
+  Promise<SiYuanDocumentRow> {
+    if (!path.startsWith('/') || path.length > 1_024) throw new SiYuanError('invalid_input')
+    if (notebook !== undefined && !blockId.safeParse(notebook).success) {
+      throw new SiYuanError('invalid_input')
+    }
+    const filter = notebook === undefined ? '' : ` AND box = ${sqlLiteral(notebook)}`
+    const rows = await this.#call('/api/query/sql', {
+      stmt: `SELECT id, box, hpath, updated FROM blocks WHERE type = 'd'` +
+        ` AND hpath = ${sqlLiteral(path)}${filter} LIMIT 1`
+    }, z.array(documentRowSchema), false, signal)
+    const row = rows[0]
+    if (!row) throw new SiYuanError('document_not_found')
+    return row
+  }
+
+  async searchDocuments(input: {
+    query: string; notebook?: string; limit: number; signal?: AbortSignal
+  }): Promise<SiYuanDocumentRow[]> {
+    if (!input.query.trim() || input.query.length > 200 ||
+      !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50) {
+      throw new SiYuanError('invalid_input')
+    }
+    if (input.notebook !== undefined && !blockId.safeParse(input.notebook).success) {
+      throw new SiYuanError('invalid_input')
+    }
+    const filter = input.notebook === undefined ? '' : ` AND box = ${sqlLiteral(input.notebook)}`
+    return this.#call('/api/query/sql', {
+      stmt: `SELECT id, box, hpath, updated FROM blocks WHERE type = 'd'` +
+        ` AND hpath LIKE ${sqlLikePattern(input.query)} ESCAPE '\\'${filter}` +
+        ` ORDER BY updated DESC LIMIT ${input.limit}`
+    }, z.array(documentRowSchema).max(50), false, input.signal)
   }
 
   async #call<T>(path: string, body: unknown, schema: z.ZodType<T>,

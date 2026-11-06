@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
@@ -98,7 +99,7 @@ it('loads host-owned exact approval through the desktop startup seam, never in p
   const path = join(root, 'host-contracts.json')
   const contract = { hostApiRange: '^1.0.0', permissions: [], approved: true,
     dshAuthorization: { packageName: 'sample', packageVersion: '1.1.1', dshRuntimeVersion: '0.2.0-rc.2',
-      tools: { list: { id: 'sample.list', effect: 'read' }, create: { id: 'sample.create', effect: 'workspace-write' } } } }
+      tools: { list: { id: 'sample.list', effect: 'read' }, create: { id: 'sample.create', effect: 'workspace-write', scope: 'workspace' } } } }
   try {
     await mkdir(join(root, 'plugins'))
     await writeFile(path, JSON.stringify([contract]))
@@ -112,6 +113,55 @@ it('loads host-owned exact approval through the desktop startup seam, never in p
     expect(await loadDevelopmentPluginOptions({ ...input, isPackaged: true, env: { ...input.env, SCIFORGE_DEV_PLUGIN_CONTRACTS: '/nonexistent' } })).toBeUndefined()
     expect(await loadDevelopmentPluginOptions({ ...input, env: {} })).toBeUndefined()
     expect((await loadDevelopmentPluginOptions({ ...input, env: { SCIFORGE_DEV_PLUGIN_ROOT: join(root, 'plugins') } }))?.adapterContracts?.size).toBe(0)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('loads eight workspace-bound tool grants through the real desktop startup parser', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'desktop-plugin-scope-'))
+  const path = join(root, 'host-contracts.json')
+  const contract = { hostApiRange: '^1.0.0', permissions: [], approved: true,
+    dshAuthorization: { packageName: 'sample', packageVersion: '1.1.1', dshRuntimeVersion: '0.2.0-rc.2',
+      tools: Object.fromEntries(['read', 'read', 'workspace-write', 'workspace-write', 'read', 'workspace-write', 'external-write', 'read'].map((effect, index) => [
+        `tool_${index}`, { id: `sample.tool-${index}`, effect, scope: 'workspace', ...(index === 3 || index === 6 ? { approval: 'confirmation' } : {}) }
+      ])) } }
+  try {
+    await mkdir(join(root, 'plugins'))
+    const input = { isPackaged: false, userDataPath: root, hostApiVersion: '1.11.0', env: {
+      SCIFORGE_DEV_PLUGIN_ROOT: join(root, 'plugins'),
+      SCIFORGE_DEV_PLUGIN_CONTRACTS: path } }
+    await writeFile(path, JSON.stringify([contract]))
+    const options = await loadDevelopmentPluginOptions(input)
+    const grants = options?.adapterContracts?.get('sample@1.1.1')?.dshAuthorization?.tools
+    expect(grants).toEqual(contract.dshAuthorization.tools)
+    expect(Object.keys(grants ?? {})).toHaveLength(8)
+    expect(grants?.tool_3.approval).toBe('confirmation')
+    expect(grants?.tool_6.approval).toBe('confirmation')
+
+    // Read and compute tools can both bind the authenticated workspace.
+    for (const effect of ['read', 'compute'] as const) {
+      await writeFile(path, JSON.stringify([{ ...contract, dshAuthorization: {
+        ...contract.dshAuthorization,
+        tools: { list: { id: 'sample.list', effect, scope: 'workspace' } } } }]))
+      expect((await loadDevelopmentPluginOptions(input))?.adapterContracts?.get('sample@1.1.1')?.dshAuthorization?.tools?.list)
+        .toEqual({ id: 'sample.list', effect, scope: 'workspace' })
+    }
+    // A read may select workspace binding or a reusable read resource, not both.
+    for (const grant of [
+      { id: 'sample.list', effect: 'read', scope: 'workspace', readResource: 'workspace' },
+      { id: 'sample.write', effect: 'workspace-write' },
+      { id: 'sample.delete', effect: 'destructive' },
+      { id: 'sample.compute', effect: 'compute', readResource: 'workspace' }
+    ]) {
+      await writeFile(path, JSON.stringify([{ ...contract, dshAuthorization: {
+        ...contract.dshAuthorization, tools: { invalid: grant } } }]))
+      await expect(loadDevelopmentPluginOptions(input)).rejects.toThrow()
+    }
+    await writeFile(path, JSON.stringify([{ ...contract, dshAuthorization: {
+      ...contract.dshAuthorization,
+      tools: { list: { id: 'sample.list', effect: 'read', readResource: 'workspace' } } } }]))
+    const resourceOptions = await loadDevelopmentPluginOptions(input)
+    expect(resourceOptions?.adapterContracts?.get('sample@1.1.1')?.dshAuthorization?.tools?.list)
+      .toEqual({ id: 'sample.list', effect: 'read', readResource: 'workspace' })
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -138,6 +188,31 @@ it('loads approved host ports allowlists and rejects malformed declarations', as
       { ...contract, dshAuthorization: { ...contract.dshAuthorization, ports: { operation: 'artifacts.commit' } } }
     ]) {
       await writeFile(path, JSON.stringify([malformed]))
+      await expect(loadDevelopmentPluginOptions(input)).rejects.toThrow()
+    }
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('accepts explicit host service requirements and rejects malformed declarations', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'desktop-plugin-hostservices-'))
+  const path = join(root, 'host-contracts.json')
+  const base = { hostApiRange: '^1.0.0', permissions: [], approved: true,
+    dshAuthorization: { packageName: 'sample', packageVersion: '1.1.1', dshRuntimeVersion: '0.2.0-rc.2' } }
+  const input = { isPackaged: false, userDataPath: root, hostApiVersion: '1.11.0', env: {
+    SCIFORGE_DEV_PLUGIN_ROOT: join(root, 'plugins'), SCIFORGE_DSH_RUNTIME_VERSION: '0.2.0-rc.2',
+    SCIFORGE_DEV_PLUGIN_CONTRACTS: path } }
+  try {
+    await mkdir(join(root, 'plugins'))
+    await writeFile(path, JSON.stringify([{ ...base, dshAuthorization: { ...base.dshAuthorization, hostServices: 'none' } }]))
+    const options = await loadDevelopmentPluginOptions(input)
+    expect(options?.adapterContracts?.get('sample@1.1.1')?.dshAuthorization?.hostServices).toBe('none')
+
+    await writeFile(path, JSON.stringify([{ ...base, dshAuthorization: { ...base.dshAuthorization, hostServices: [' service.alpha ', 'service.beta'] } }]))
+    const withServices = await loadDevelopmentPluginOptions(input)
+    expect(withServices?.adapterContracts?.get('sample@1.1.1')?.dshAuthorization?.hostServices).toEqual(['service.alpha', 'service.beta'])
+
+    for (const invalid of ['all', true, null, [], [''], ['  '], [1], ['service.alpha', ' service.alpha '], ['x'.repeat(129)], Array.from({ length: 33 }, (_, index) => `service.${index}`)]) {
+      await writeFile(path, JSON.stringify([{ ...base, dshAuthorization: { ...base.dshAuthorization, hostServices: invalid } }]))
       await expect(loadDevelopmentPluginOptions(input)).rejects.toThrow()
     }
   } finally { await rm(root, { recursive: true, force: true }) }

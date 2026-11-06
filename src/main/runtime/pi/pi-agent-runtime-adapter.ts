@@ -161,6 +161,8 @@ export function createPiAgentRuntimeAdapter(options: { storageRoot?: string; too
 
     readToolArtifact: unsupported,
 
+    publishSyntheticEvent: async (context, event) => (await serviceFor(context)).publishSyntheticEvent(event),
+
     startTurn: async (context, input) =>
       (await serviceFor(context)).startTurn(
         input.threadId,

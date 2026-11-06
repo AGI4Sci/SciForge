@@ -26,7 +26,6 @@ import {
   calculateFloatingMenuPlacement,
   calculateFloatingSubmenuPlacement,
   composerReasoningEffortRequestValue,
-  normalizeComposerRuntimeId,
 } from './FloatingComposerModelPicker'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
@@ -151,7 +150,7 @@ describe('FloatingComposer goal helpers', () => {
       threadId: 'thr_1',
       rawHistoryItems: 12,
       effectiveHistoryItems: 4,
-      summarySource: 'heuristic',
+      summarySource: 'runtime',
       updatedAt: '2026-06-20T00:00:00.000Z',
       goalResume: {
         status: 'blocked',
@@ -1212,14 +1211,14 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('<input')
   })
 
-  it('shows the active execution runtime as a short label in the model picker', () => {
+  it.each(['claude', 'pi'] as const)('shows %s as the active execution runtime', (runtimeId) => {
     const html = renderToStaticMarkup(
       createElement(FloatingComposerModelPicker, {
         compact: true,
         mode: 'combobox',
         composerModel: 'deepseek-v4-flash',
         composerPickList: ['auto', 'deepseek-v4-flash', 'deepseek-v4-pro'],
-        activeAgentRuntime: 'claude',
+        activeAgentRuntime: runtimeId,
         canChangeModel: true,
         composerReasoningEffort: 'high',
         onActiveAgentRuntimeChange: () => undefined,
@@ -1228,7 +1227,8 @@ describe('FloatingComposer capability controls', () => {
       })
     )
 
-    expect(html).toContain('Execution: claude')
+    expect(html).toContain(runtimeId === 'pi' ? 'Execution: Pi' : 'Execution: claude')
+    expect(html).not.toContain('Execution: codex')
     expect(html).not.toContain('Claude Code CLI')
     expect(html).toContain('Execution environment, model, and reasoning settings')
     // The architecture-explaining suffix is gone; the control title is just the labels.
@@ -1236,10 +1236,7 @@ describe('FloatingComposer capability controls', () => {
   })
 
   it('only offers supported external runtimes and falls back to Codex', () => {
-    expect(COMPOSER_RUNTIME_IDS).toEqual(['codex', 'claude', 'dsh'])
-    expect(normalizeComposerRuntimeId(undefined)).toBe('codex')
-    expect(normalizeComposerRuntimeId('dsh')).toBe('dsh')
-    expect(normalizeComposerRuntimeId('legacy-runtime')).toBe('codex')
+    expect(COMPOSER_RUNTIME_IDS).toEqual(['codex', 'claude', 'dsh', 'pi'])
 
     const html = renderToStaticMarkup(
       createElement(FloatingComposerModelPicker, {
@@ -1495,7 +1492,7 @@ describe('FloatingComposer capability controls', () => {
         threadId: 'thr_1',
         rawHistoryItems: 10,
         effectiveHistoryItems: 3,
-        summarySource: 'heuristic',
+        summarySource: 'runtime',
         summary: 'Kept recent work.',
         updatedAt: '2026-06-20T00:00:00.000Z',
         goalResume: {
@@ -1532,7 +1529,7 @@ describe('FloatingComposer capability controls', () => {
           threadId: 'thr_1',
           rawHistoryItems: 10,
           effectiveHistoryItems: 3,
-          summarySource: 'heuristic',
+          summarySource: 'runtime',
           summary: 'Kept recent work.',
           updatedAt: '2026-06-20T00:00:00.000Z',
           goalResume: {

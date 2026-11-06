@@ -159,7 +159,7 @@ function primitiveEnumSchema(value: unknown): z.ZodType | null {
 function successfulToolResult(toolName: string, value: unknown, modelContent?: string): CallToolResult {
   return {
     content: [{ type: 'text', text: modelContent ?? stringifyToolValue(value) }],
-    structuredContent: { tool: toolName, value }
+    ...(modelContent === undefined ? { structuredContent: { tool: toolName, value } } : {})
   }
 }
 

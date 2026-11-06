@@ -45,7 +45,7 @@ export class RuntimeContextStateService {
       rawHistoryItems: input.rawHistoryItems ?? current.rawHistoryItems,
       effectiveHistoryItems: input.effectiveHistoryItems ?? current.effectiveHistoryItems,
       summary: input.summary ?? current.summary,
-      summarySource: input.summarySource ?? current.summarySource ?? 'heuristic',
+      summarySource: input.summarySource ?? (input.summary?.trim() ? 'runtime' : current.summarySource ?? 'none'),
       estimatedTokens: input.estimatedTokens ?? current.estimatedTokens,
       triggerReason: input.triggerReason ?? current.triggerReason,
       replacedTokens: input.replacedTokens ?? current.replacedTokens,
@@ -92,11 +92,11 @@ export class RuntimeContextStateService {
     if (!event.runtimeId) return
     const current = this.ensure(event.runtimeId, event.threadId)
     if (event.kind === 'compaction_event') {
-      if (event.status !== 'success') return
+      if (event.status !== 'success' || !event.contextSummary?.trim()) return
       this.recordCompaction({
         runtimeId: event.runtimeId,
         threadId: event.threadId,
-        summary: event.summary,
+        summary: event.contextSummary,
         summarySource: 'runtime',
         triggerReason: event.detail,
         rawHistoryItems: event.messagesBefore,

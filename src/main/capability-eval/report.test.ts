@@ -88,7 +88,7 @@ describe('capability aggregate report', () => {
       result({
         caseId: 'case-2',
         passed: false,
-        domain: 'scientific-compute',
+        domain: 'scientific-plotting',
         scores: { ...result().scores, routing: 0 },
         failures: [{ type: 'wrong_domain', message: 'wrong domain' }]
       })

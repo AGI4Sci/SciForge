@@ -113,7 +113,8 @@ test('injects host-resolved reasoning access and restarts when it changes', asyn
     fetchImpl: async () => running
       ? evidenceServiceResponse()
       : new Response('{}', { status: 503 }),
-    spawnImpl: (_command, _args, options) => {
+    spawnImpl: (_command, args, options) => {
+      assert.deepEqual(args, ['-B', '-m', 'evidence_dag.server'])
       environments.push({ ...options.env })
       running = true
       return fakeChild(() => {
@@ -123,6 +124,8 @@ test('injects host-resolved reasoning access and restarts when it changes', asyn
     }
   })
   sidecar.configure(lifecycleContext({
+    LAUNCH_SENTINEL: 'inherited',
+    PYTHONDONTWRITEBYTECODE: '',
     EDAG_MODEL_ROUTER_BASE_URL: 'http://stale-domain-env/v1',
     EDAG_MODEL_ROUTER_API_KEY: 'stale-domain-key',
     EDAG_MODEL_ROUTER_MODEL: 'stale-domain-model',
@@ -133,6 +136,8 @@ test('injects host-resolved reasoning access and restarts when it changes', asyn
   await sidecar.ensureReady()
   await sidecar.ensureReady()
   assert.equal(environments.length, 1)
+  assert.equal(environments[0]?.LAUNCH_SENTINEL, 'inherited')
+  assert.equal(environments[0]?.PYTHONDONTWRITEBYTECODE, '1')
   assert.equal(environments[0]?.EDAG_MODEL_ROUTER_BASE_URL, 'http://127.0.0.1:3892/v1')
   assert.equal(environments[0]?.EDAG_MODEL_ROUTER_API_KEY, 'first-key')
   assert.equal(environments[0]?.EDAG_MODEL_ROUTER_MODEL, 'first-model')

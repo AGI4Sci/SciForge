@@ -34,6 +34,16 @@ const dshPublisherKeyringSchema = z.object({
   })).min(1).max(64)
 }).strict()
 
+const officialPublisherKeyringSchema = z.object({
+  schemaVersion: z.literal(1),
+  keys: z.array(z.object({
+    keyId: z.string().trim().min(1).max(128).regex(identifier),
+    publisherId: z.string().trim().min(1).max(128).regex(identifier),
+    algorithm: z.literal('ed25519'),
+    publicKeyPem: z.string().trim().min(1).max(4_096)
+  })).min(1).max(64)
+}).strict()
+
 const dshPluginSignatureSchema = z.object({
   version: z.literal(1),
   algorithm: z.literal('ed25519'),
@@ -70,7 +80,18 @@ export async function loadDshPublisherKeyring(sourcePath: string): Promise<DshPu
   }
   let parsed: z.infer<typeof dshPublisherKeyringSchema>
   try {
-    parsed = dshPublisherKeyringSchema.parse(JSON.parse(raw))
+    const value: unknown = JSON.parse(raw)
+    const official = officialPublisherKeyringSchema.safeParse(value)
+    parsed = official.success
+      ? {
+          version: 1,
+          keys: official.data.keys.map((key) => ({
+            keyId: key.keyId,
+            publisherId: key.publisherId,
+            publicKey: key.publicKeyPem
+          }))
+        }
+      : dshPublisherKeyringSchema.parse(value)
   } catch (error) {
     throw new ExtensionStoreError(
       'unknown_signing_key',

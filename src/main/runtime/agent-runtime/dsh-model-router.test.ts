@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import yaml from 'js-yaml'
 import { DSH_SAFETY_PATCH, DSH_MODEL_ROUTER_PATCH } from '@sciforge/dsh-runtime'
 import { createProductionDshHostRuntimeAdapter } from './dsh-agent-runtime-adapter'
 import { defaultModelRouterSettings } from '../../../shared/app-settings-model-router'
 import type { AppSettingsV1 } from '../../../shared/app-settings-types'
+import { resolveDshModelRouterInputModalities } from './dsh-model-router'
 const releases = vi.hoisted(() => [] as unknown[])
 // Only the reviewed release metadata is fixture-specific. Real closure, hash,
 // safety and full-config verification execute through the production factory.
@@ -22,19 +25,24 @@ vi.mock('./dsh-executable-discovery', async () => {
       const artifactDirectory = join(options.resourcesDirectory, 'agent-runtimes', 'dsh', '0.2.0-rc.2', `${process.platform}-${process.arch}`)
       const executable = join(artifactDirectory, process.platform === 'win32' ? 'dsh.exe' : 'dsh')
       const pin = DSH_RELEASE_PINS.find(release => release.platform === process.platform && release.arch === process.arch)?.pin
-      return { executable, artifactRoot: artifactDirectory, expectedVersion: '0.2.0-rc.2', ...createPinnedDshDeployment({ artifactDirectory, executable, pin }), source: 'packaged-application' as const }
+      return { executable, executableArgs: process.platform === 'win32' ? [join(artifactDirectory, 'fixture.mjs')] : [], artifactRoot: artifactDirectory, expectedVersion: '0.2.0-rc.2', ...createPinnedDshDeployment({ artifactDirectory, executable, pin }), source: 'packaged-application' as const }
     }
   }
 })
-const sha = (s: string) => createHash('sha256').update(s).digest('hex')
+const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 const surface = { tools: () => [], call: vi.fn(), abortTurn: vi.fn(), assertPrincipalLease: vi.fn() }
 
 async function setup() {
-  const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-route-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-route-'))
   const requests: { url?: string; auth?: string; body: any }[] = []
   let healthy = true
   const server = createServer(async (req, res) => {
     if (req.url === '/health') { res.writeHead(healthy ? 200 : 503); res.end('{"ok":true}'); return }
+    if (req.url === '/v1/models') {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ data: [{ id: modelRouter.publicModelAlias, input_modalities: ['text'] }] }))
+      return
+    }
     let text = ''; for await (const chunk of req) text += chunk
     requests.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(text) })
     res.setHeader('Content-Type', 'application/json')
@@ -51,17 +59,58 @@ async function setup() {
   const artifact = join(root, 'agent-runtimes/dsh/0.2.0-rc.2', `${process.platform}-${process.arch}`)
   await mkdir(artifact, { recursive: true })
   const source = await readFile(new URL('./tests/fixtures/dsh-router-acp.mjs', import.meta.url), 'utf8')
-  const script = `#!${process.execPath}\n` + source.replace('YAML_MODULE', new URL('file://' + createRequire(import.meta.url).resolve('js-yaml')).href)
-  await writeFile(join(artifact, 'dsh'), script, { mode: 0o700 })
+  const script = `#!${process.execPath}\n` + source.replace('YAML_MODULE', pathToFileURL(createRequire(import.meta.url).resolve('js-yaml')).href)
+  const files: Record<string, string> = {}
+  if (process.platform === 'win32') {
+    // Windows cannot execute a shebang. Pin the real executable and script as
+    // one complete fixture closure, retaining production hash verification.
+    await copyFile(process.execPath, join(artifact, 'dsh.exe'))
+    await writeFile(join(artifact, 'fixture.mjs'), script)
+    files['dsh.exe'] = sha(await readFile(join(artifact, 'dsh.exe')))
+    files['fixture.mjs'] = sha(script)
+  } else {
+    await writeFile(join(artifact, 'dsh'), script, { mode: 0o700 })
+    files.dsh = sha(script)
+  }
   const schema = yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js', { kind: 'scalar', construct: value => ({ expr: value }) })])
   const rows = yaml.load(yaml.dump(JSON.parse(DSH_SAFETY_PATCH)) + DSH_MODEL_ROUTER_PATCH, { schema }) as any[]
   const composed = new Map<string, any>()
   for (const row of rows) composed.set(row.id, { ...composed.get(row.id), ...row, config: { ...composed.get(row.id)?.config, ...row.config } })
   const text = JSON.stringify([...composed.values()])
-  releases.splice(0, releases.length, { platform: process.platform, arch: process.arch, pin: { version: '0.2.0-rc.2', sourceCommit: 'a'.repeat(40), files: { dsh: sha(script) }, configDigest: sha(text), entryIds: [...composed.keys()], pluginNames: [] } })
+  releases.splice(0, releases.length, { platform: process.platform, arch: process.arch, pin: { version: '0.2.0-rc.2', sourceCommit: 'a'.repeat(40), files, configDigest: sha(text), entryIds: [...composed.keys()], pluginNames: [] } })
   const adapter = createProductionDshHostRuntimeAdapter({ userDataDirectory: root, resourcesDirectory: root, toolSurface: surface })
   return { root, settings, adapter, requests, setHealthy: (value: boolean) => { healthy = value }, close: async () => { await adapter.close(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) } }
 }
+
+describe('Host-authorized DSH model input modalities', () => {
+  it.each([undefined, ['text'], ['text', 'image']] as const)('uses only explicit public alias input declarations: %j', async declared => {
+    const server = createServer((req, res) => {
+      expect(req.url).toBe('/v1/models')
+      expect(req.headers.authorization).toBe('Bearer local-test')
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ data: [{ id: 'another', input_modalities: ['text', 'image'] }, { id: 'selected', input_modalities: declared }] }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const route = { baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: 'local-test', model: 'selected' }
+      expect(await resolveDshModelRouterInputModalities(route)).toEqual({ ...route, inputModalities: declared ?? ['text'] })
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+  })
+  it('rejects remote routes before sending credentials', async () => {
+    await expect(resolveDshModelRouterInputModalities({ baseUrl: 'https://external.invalid/v1', apiKey: 'secret', model: 'selected' })).rejects.toMatchObject({ code: 'runtime_model_route_invalid' })
+  })
+  it.each(['missing', 'invalid', 'redirect', 'unavailable'])('fails closed for %s catalog data', async failure => {
+    const server = createServer((_req, res) => {
+      if (failure === 'redirect') { res.writeHead(302, { location: 'https://external.invalid/models' }); res.end(); return }
+      if (failure === 'unavailable') { res.writeHead(503); res.end(); return }
+      res.end(JSON.stringify({ data: [{ id: failure === 'missing' ? 'other' : 'selected', input_modalities: ['audio'] }] }))
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      await expect(resolveDshModelRouterInputModalities({ baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, apiKey: 'local-test', model: 'selected' })).rejects.toMatchObject({ code: 'runtime_model_route_unavailable' })
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
+  })
+})
 
 describe('production DSH ModelRouter route over local HTTP', () => {
   it('rejects an explicitly blank model rather than silently choosing the default alias, then recovers', async () => {

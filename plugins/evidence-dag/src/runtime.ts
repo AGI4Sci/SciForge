@@ -1,3 +1,4 @@
+import { EvidenceProducerProvenanceConsumer, scientificPlottingReceiptAdapter, verifyProducerArtifactRefs, type EvidenceProducerReceipt } from '@sciforge/domain-evidence-dag/producer-consumer'
 import { createEvidenceArtifactVersionClient, evidenceArtifactVersionIdentities, mergeLifecycleProjection } from '../../../packages/domains/evidence-dag/src/main/artifact-version-client.js'
 import { EvidenceArtifactVersionLifecycleConsumer } from '../../../packages/domains/evidence-dag/src/main/artifact-version-lifecycle-consumer.js'
 import { artifactVersionCommitResultV1Schema, artifactVersionReadResultV1Schema, artifactVersionEventListResultV1Schema } from '@sciforge/domain-artifact-versions/contract'
@@ -18,6 +19,7 @@ export class EvidenceRuntime {
     return this.invocation.run({ caller, signal }, action)
   }
   readonly store: EvidenceDagDeltaStore
+  private readonly producer: EvidenceProducerProvenanceConsumer
   private readonly lifecycle: EvidenceArtifactVersionLifecycleConsumer
   private closing = false
   private closeAttempt: Promise<void> | undefined
@@ -40,22 +42,67 @@ export class EvidenceRuntime {
       append: (input) => this.store.append(evidenceDagDeltaInputFromTrace({ ...input, threadId: `${input.runtimeId}:${input.threadId}` })),
       now: options.now,
     })
+    this.producer = new EvidenceProducerProvenanceConsumer({
+      // Explicit polls supply the exact Host-authorized scope. No ambient timer
+      // competes with the installed native Evidence owner.
+      discoverWorkspaces: async () => [],
+      adapters: new Map([['scientific-plotting', scientificPlottingReceiptAdapter]]),
+      prepare: (workspaceRoot, receipt) => this.prepareProducer(workspaceRoot, receipt),
+      append: async input => {
+        this.assertLive()
+        const threadId = `${input.runtimeId}:${input.threadId}`
+        const result = await this.store.append(evidenceDagDeltaInputFromTrace({ ...input, threadId }))
+        const head = await this.store.head(threadId)
+        await this.store.compileProvisional(threadId, { compilerVersion: 'evidence-provisional.v1', policyVersion: 'evidence-provisional-policy.v1', desiredHeadDigest: head.headDigest, now: this.now() })
+        return result
+      },
+      afterAppend: prepared => this.lifecycle.rememberThread(prepared),
+      verifyExistingDelivery: async delivery => {
+        this.assertLive()
+        if (delivery.state !== 'committed') throw new Error('Evidence delivery is not committed by this fact owner.')
+        const chain = await this.store.chain(`${delivery.runtimeId}:${delivery.threadId}`)
+        if (!chain.list().some(delta => delta.deltaDigest === delivery.deltaDigest)) {
+          throw new Error('Evidence delivery belongs to another fact owner; this runtime cannot seal or export its delta. Keep the installed Evidence owner canonical.')
+        }
+      },
+      now: options.now,
+    })
   }
   private now() { return (this.options.now?.() ?? new Date()).toISOString() }
   async start() {
     await this.store.load()
     await this.store.reconcileProvisional({ compilerVersion: 'evidence-provisional.v1', policyVersion: 'evidence-provisional-policy.v1', now: this.now() })
     await this.lifecycle.start(false)
+    await this.producer.start(false)
     this.started = true
   }
-  private async pin(scope: Scope, detail: ThreadProjection) {
+  private async pin(scope: Scope, detail: ThreadProjection, receipt?: EvidenceProducerReceipt) {
     // Bind ports to this operation's authorized identity, never workspace cache
     // or ambient poll identity (one workspace can contain many threads).
     const client = createEvidenceArtifactVersionClient(
       () => ({ commit: async input => artifactVersionCommitResultV1Schema.parse(await this.request('artifacts.commit', input as unknown as Json, scope)) }),
       () => ({ read: async input => artifactVersionReadResultV1Schema.parse(await this.request('artifacts.read', input as unknown as Json, scope)) }),
     )
-    return client.pinTrace(detail.trace, { ...scope, operationId: `manual:${detail.watermark}`, occurredAt: this.now() })
+    return client.pinTrace(detail.trace, { ...scope, operationId: receipt?.operationId ?? `manual:${detail.watermark}`, occurredAt: receipt?.createdAt ?? this.now() })
+  }
+  private async prepareProducer(workspaceRoot: string, receipt: EvidenceProducerReceipt) {
+    if (!receipt.runtimeId || !receipt.threadId) throw new Error('Producer provenance has no target Evidence thread.')
+    const scope = { runtimeId: receipt.runtimeId, threadId: receipt.threadId, workspaceRoot }
+    const detail = await this.thread(scope)
+    await verifyProducerArtifactRefs(receipt.artifactRefs, {
+      read: async input => artifactVersionReadResultV1Schema.parse(await this.request('artifacts.read', input as unknown as Json, scope)),
+    })
+    const trace = await this.pin(scope, { ...detail, trace: [...detail.trace, receipt.traceItem] }, receipt)
+    return { ...scope, targetWatermark: detail.watermark, trace }
+  }
+  pollProducerProvenance(raw: Scope) {
+    return this.admit(async () => {
+      const scope = evidenceDagUpdateInputSchema.parse(raw) as Scope
+      await this.thread(scope)
+      const report = await this.producer.pollNow(true, scope)
+      this.assertLive()
+      return { ...report, drained: report.pending.length === 0 }
+    })
   }
   private async pollLocked(scope: Scope) {
     this.assertLive()
@@ -239,6 +286,7 @@ export class EvidenceRuntime {
       for (const outcome of outcomes) if (outcome.status === 'rejected') failures.push(outcome.reason)
     } catch (error) { failures.push(error) }
     try { await awaitQuiescence(Promise.allSettled([...this.admitted]), timeout, 'admitted operations') } catch (error) { failures.push(error) }
+    try { await awaitQuiescence(this.producer.close(), timeout, 'producer drain') } catch (error) { failures.push(error) }
     try { await awaitQuiescence(this.lifecycle.close(), timeout, 'lifecycle drain') } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, 'Evidence runtime close failed.')
     this.closed = true

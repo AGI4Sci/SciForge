@@ -25,7 +25,7 @@ export type ScenarioStep = Readonly<{
 
 /** Fresh copies on every call so scenario runs cannot mutate shared state. */
 export function corpusSessions(): Record<string, ChangeInspectorSessionDetail> {
-  return {
+  const sessions = {
     'thread-plain-diff': {
       workspaceRoot: WORKSPACE,
       watermark: 'wm-7',
@@ -133,15 +133,20 @@ export function corpusSessions(): Record<string, ChangeInspectorSessionDetail> {
       artifacts: []
     },
     'thread-no-workspace': {
+      workspaceRoot: WORKSPACE,
       watermark: 'wm-no-ws',
       artifacts: [{ kind: 'tool', toolKind: 'file_change', id: 'nw-1', detail: DIFF_A }]
     }
   }
+  return Object.fromEntries(Object.entries(sessions).map(([sessionId, detail]) =>
+    [sessionId, { ...detail, sessionId, runtimeId: 'codex' }]))
 }
 
-/** >5000 changes: projection must truncate to the LAST 5000. */
+/** >5000 changes: projection retains a byte-bounded newest suffix. */
 export function manyChangesSession(count = 5_001): ChangeInspectorSessionDetail {
   return {
+    sessionId: 'thread-many',
+    runtimeId: 'codex',
     workspaceRoot: WORKSPACE,
     watermark: 'wm-many',
     artifacts: Array.from({ length: count }, (_, index) => ({
@@ -153,9 +158,11 @@ export function manyChangesSession(count = 5_001): ChangeInspectorSessionDetail 
   }
 }
 
-/** >2MB patch: projection must truncate to exactly 2,000,000 characters. */
+/** Large patch corpus for the new UTF-8 byte-budget contract. */
 export function hugePatchSession(): ChangeInspectorSessionDetail {
   return {
+    sessionId: 'thread-huge',
+    runtimeId: 'codex',
     workspaceRoot: WORKSPACE,
     watermark: 'wm-huge',
     artifacts: [{
@@ -194,7 +201,7 @@ export function rejectionSteps(): readonly ScenarioStep[] {
     // Unknown session: the port read fails.
     { input: { sessionId: 'missing-thread', runtimeId: 'codex' } },
     // Contract violations.
-    { input: { runtimeId: 'codex' } },
+    { input: { workspaceRoot: WORKSPACE } },
     { input: { sessionId: 42, runtimeId: 'codex' } },
     { input: { sessionId: 'thread-plain-diff', runtimeId: 'codex', extra: true } },
     { input: { sessionId: '', runtimeId: 'codex' } },

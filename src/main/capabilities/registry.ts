@@ -16,6 +16,21 @@ import {
   type CapabilityResourceHandle
 } from '../../shared/capability-broker'
 
+// Host-private reference leases never enter model JSON, approvals or plugin IPC.
+const definitionLeases = new WeakMap<CapabilityDescriptor, () => boolean>()
+export function bindCapabilityDefinitionLease(descriptor: CapabilityDescriptor, isCurrent: () => boolean): void {
+  if (definitionLeases.has(descriptor)) throw new Error('A capability definition lease cannot be rebound.')
+  definitionLeases.set(descriptor, isCurrent)
+}
+export function assertCapabilityDefinitionCurrent(descriptor: CapabilityDescriptor): void {
+  const current = definitionLeases.get(descriptor)
+  if (!current || !current()) {
+    throw Object.assign(new Error('The capability registration changed; discover and confirm the current operation again.'), {
+      code: 'stale_capability_definition'
+    })
+  }
+}
+
 export type CapabilityResourceObservation = {
   state: CapabilityJsonValue
   semanticRevision: string
@@ -265,12 +280,14 @@ export class CapabilityRegistry {
       )
     }
 
-    target.set(descriptorResult.data.id, Object.freeze({
+    const registered = Object.freeze({
       descriptor: deepFreeze(descriptorResult.data),
       inputSchema: definition.inputSchema,
       outputSchema: definition.outputSchema,
       handler: definition.handler
-    }))
+    })
+    bindCapabilityDefinitionLease(registered.descriptor, () => this.#definitions.get(registered.descriptor.id) === registered)
+    target.set(registered.descriptor.id, registered)
     return this
   }
 

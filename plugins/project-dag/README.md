@@ -54,6 +54,6 @@ python3 -c 'from pathlib import Path; import subprocess; files=sorted(str(p) for
 
 测试层级分开：ports fixture 对照/官方 Context contract/独立真实 Python 进程，不把任何一项说成 SciForge Agent。core 对 adapter 的对照只证明一致性，不是原行为证明；静态 update URL 的正式契约测试使用来源为 `376fc34e301b05a3abf5846d9196795ef15c191d` 的固定 runtime 文本夹具及 SHA256 校验，不要求克隆私有 Git 历史；测试仍构建该 runtime 并验证认证只在静态边界。独立进程 fixture 是真实 Evidence 空图 committed Snapshot，其 mutation 检查修改实际文件的 pending 状态/水位并跨已安装 Python reader 验证拒绝，不再仅比较字面 digest。有 claim/artifact 的深入编译语义由既有 Python 回归覆盖；旧双插件非空 formal history 已只读验证，最终 Evidence 交付物的全链组合仍待父代理。
 
-stdio 队列由 canonical `Engine.process_updates` 的单一串行 pump 推进：启动恢复、空闲 due retry 和 EOF drain 不依赖新 POST/GET，stdin 使用 select/字节缓冲，不另开与 SQLite 编译竞争的输入线程。同进程跨 core（含最终公开 ESM 双入口）的 saveGoal 按规范化 Project 根目录串行执行完整 draft/apply；相同路径不同 store 仍会保守互相等待，不保证跨进程锁。子进程环境仅显式选择 HOME/TMPDIR；不是 OS sandbox。
+stdio 队列由 canonical `Engine.process_updates` 的单一串行 pump 推进：启动恢复、空闲 due retry 和 EOF drain 不依赖新 POST/GET。stdin 由唯一的字节读取线程送入有界队列，兼容 Windows 管道；该线程不访问 Engine/SQLite。主线程按原顺序执行命令和编译，空闲时继续推进重试，收到 EOF 后处理已接收命令和队列任务。此受限 sidecar 的 NoModel 不读 stdin，不适用于另有模型输入协议的进程。同进程跨 core（含最终公开 ESM 双入口）的 saveGoal 按规范化 Project 根目录串行执行完整 draft/apply；相同路径不同 store 仍会保守互相等待，不保证跨进程锁。子进程环境仅显式选择 HOME/TMPDIR；不是 OS sandbox。
 
 官方 DSH 固定源码 SHA `639ed015397290b3745d163aafe02ffee4aa3f84`；已安装测试包 Tools/SystemPrompt 0.2.0-rc.2、Cordis4.0.4。动态 schema 使用 DSH 支持的结构子集，完整 bounds/refinement 在执行前后由既有 Zod 合同强制校验，未削弱 Evidence 协议。

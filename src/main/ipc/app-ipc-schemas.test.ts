@@ -61,6 +61,16 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts an empty turn tool allowlist and rejects malformed restrictions', () => {
+    const turn = { runtimeId: 'codex', threadId: 'side-1', text: 'A light question' }
+    expect(agentRuntimeStartTurnPayloadSchema.parse({ ...turn, allowedTools: [] }).allowedTools).toEqual([])
+    expect(agentRuntimeStartTurnPayloadSchema.parse({ ...turn, allowedTools: ['sciforge_invoke'] }).allowedTools).toEqual(['sciforge_invoke'])
+    expect(agentRuntimeStartTurnPayloadSchema.parse(turn).allowedTools).toBeUndefined()
+    for (const allowedTools of [null, 'bash', [''], ['*'], ['bash', 'bash'], [12], Array.from({ length: 129 }, (_, i) => `tool${i}`)]) {
+      expect(agentRuntimeStartTurnPayloadSchema.safeParse({ ...turn, allowedTools }).success).toBe(false)
+    }
+  })
+
   it.each([
     '', '.', '..', '.hidden', '_hidden', 'Dsh-example', 'dsh/example',
     '@scope', '@scope/../example', '@scope/Example', 'node_modules', 'favicon.ico',
@@ -1021,6 +1031,21 @@ describe('app-ipc-schemas', () => {
       expect(() => settingsPatchSchema.parse({
         modelRouter: { profiles: { default: { textReasoner: { chatStructuredOutputMode: bad } } } }
       })).toThrow()
+    }
+  })
+
+  it('accepts only explicit Chat reasoning wire controls on model bindings', () => {
+    for (const value of ['effort', 'thinking-type'] as const) {
+      const patch = settingsPatchSchema.parse({ modelRouter: { profiles: { default: {
+        textReasoner: { chatReasoningControl: value }, translators: { vision: { chatReasoningControl: value } }
+      } } } })
+      expect(patch.modelRouter?.profiles?.default?.textReasoner?.chatReasoningControl).toBe(value)
+      expect(patch.modelRouter?.profiles?.default?.translators?.vision?.chatReasoningControl).toBe(value)
+    }
+    for (const bad of ['disabled', 'Thinking-Type', '', true, 1, null]) {
+      expect(() => settingsPatchSchema.parse({ modelRouter: { profiles: { default: {
+        textReasoner: { chatReasoningControl: bad }
+      } } } })).toThrow()
     }
   })
 

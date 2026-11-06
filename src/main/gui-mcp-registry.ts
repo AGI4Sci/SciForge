@@ -45,24 +45,6 @@ import {
   type WriteAssistMcpLaunchConfig
 } from './write-assist-mcp-config'
 import {
-  buildScientificSkillsMcpArgs,
-  buildScientificSkillsMcpJsonServerConfig,
-  GUI_SCIENTIFIC_SKILLS_MCP_SERVER_NAME,
-  GUI_SCIENTIFIC_SKILLS_MCP_TIMEOUT_MS,
-  resolveScientificSkillsMcpCommand,
-  scientificSkillsMcpEnabledTools,
-  type ScientificSkillsMcpLaunchConfig
-} from './scientific-skills-mcp-config'
-import {
-  buildScientificPlottingMcpArgs,
-  buildScientificPlottingMcpJsonServerConfig,
-  GUI_SCIENTIFIC_PLOTTING_MCP_SERVER_NAME,
-  GUI_SCIENTIFIC_PLOTTING_MCP_TIMEOUT_MS,
-  resolveScientificPlottingMcpCommand,
-  scientificPlottingMcpEnabledTools,
-  type ScientificPlottingMcpLaunchConfig
-} from './scientific-plotting-mcp-config'
-import {
   buildBgcDiscoveryMcpArgs,
   GUI_BGC_DISCOVERY_MCP_SERVER_NAME,
   GUI_BGC_DISCOVERY_MCP_TIMEOUT_MS,
@@ -119,14 +101,6 @@ export type GuiMcpRegistryInput = {
   runtimeInspectorMcp?: {
     settings?: AppSettingsV1
     launch: RuntimeInspectorMcpLaunchConfig
-  }
-  scientificSkillsMcp?: {
-    settings?: AppSettingsV1
-    launch: ScientificSkillsMcpLaunchConfig
-  }
-  scientificPlottingMcp?: {
-    settings?: AppSettingsV1
-    launch: ScientificPlottingMcpLaunchConfig
   }
   bgcDiscoveryMcp?: {
     settings?: AppSettingsV1
@@ -208,34 +182,6 @@ function managedRuntimeServerConfigs(
       env: runtimeInspectorMcpEnv(),
       timeoutMs: RUNTIME_INSPECTOR_MCP_TIMEOUT_MS,
       enabledTools: runtimeInspectorMcpEnabledTools()
-    })
-  }
-  const scientificSkillsSettings = input.scientificSkillsMcp?.settings ?? settings
-  if (input.scientificSkillsMcp && scientificSkillsSettings) {
-    servers.push({
-      id: GUI_SCIENTIFIC_SKILLS_MCP_SERVER_NAME,
-      command: resolveScientificSkillsMcpCommand(input.scientificSkillsMcp.launch),
-      args: buildScientificSkillsMcpArgs(
-        input.scientificSkillsMcp.launch,
-        scientificSkillsSettings.workspaceRoot
-      ),
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      timeoutMs: GUI_SCIENTIFIC_SKILLS_MCP_TIMEOUT_MS,
-      enabledTools: scientificSkillsMcpEnabledTools()
-    })
-  }
-  const scientificPlottingSettings = input.scientificPlottingMcp?.settings ?? settings
-  if (input.scientificPlottingMcp && scientificPlottingSettings) {
-    servers.push({
-      id: GUI_SCIENTIFIC_PLOTTING_MCP_SERVER_NAME,
-      command: resolveScientificPlottingMcpCommand(input.scientificPlottingMcp.launch),
-      args: buildScientificPlottingMcpArgs(
-        input.scientificPlottingMcp.launch,
-        scientificPlottingSettings.workspaceRoot
-      ),
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      timeoutMs: GUI_SCIENTIFIC_PLOTTING_MCP_TIMEOUT_MS,
-      enabledTools: scientificPlottingMcpEnabledTools()
     })
   }
   const bgcDiscoverySettings = input.bgcDiscoveryMcp?.settings ?? settings

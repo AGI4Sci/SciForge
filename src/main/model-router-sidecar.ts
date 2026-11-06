@@ -8,6 +8,7 @@ import {
   isModelRouterTextReasonerConfigured,
   type AppSettingsV1,
   type ModelRouterChatStructuredOutputMode,
+  type ModelRouterChatReasoningControl,
   type ModelRouterMemberSettingsV1,
   type ModelRouterProtocolPreference
 } from '../shared/app-settings'
@@ -23,6 +24,8 @@ import {
   isUpstreamProviderConfigEnv
 } from './upstream-provider-env'
 import { resolveModelAccessSidecarProcessLaunch } from './model-access-sidecar-launch'
+import { isModelRouterServiceHealthy } from './model-router-health'
+import { MODEL_PROVIDER_SECRET_ENV_PREFIX, resolveModelProviderSecret } from './model-provider-secret'
 import {
   stopModelAccessGatewaySidecar,
   synchronizeModelAccessGatewaySidecar,
@@ -53,6 +56,7 @@ const LEGACY_MODEL_ROUTER_ENV_NAMES = [
 ] as const
 
 type ModelRouterMemberConfig = {
+  contextWindow?: number
   baseUrl: string
   apiKeyEnv: string
   model: string
@@ -62,6 +66,7 @@ type ModelRouterMemberConfig = {
     probeBeforeUse?: boolean
     reasoningEfforts?: string[]
     chatStructuredOutputMode?: ModelRouterChatStructuredOutputMode
+    chatReasoningControl?: ModelRouterChatReasoningControl
   }
 }
 
@@ -139,15 +144,20 @@ export function buildModelRouterSidecarLaunch(
   const env: NodeJS.ProcessEnv = modelRouterSidecarEnv(baseEnv)
   env[MODEL_ROUTER_USER_DATA_DIR_ENV] = options.userDataDir
   env[ROUTER_RUNTIME_KEY_ENV] = router.runtimeApiKey
-  env[TEXT_REASONER_KEY_ENV] = textReasoner.apiKey.trim()
-  if (isModelRouterMemberConfigured(vision)) {
-    env[VISION_TRANSLATOR_KEY_ENV] = vision.apiKey.trim()
-  }
-  if (isModelRouterMemberConfigured(imageGenerator)) {
-    env[IMAGE_GENERATOR_KEY_ENV] = imageGenerator.apiKey.trim()
-  }
-  if (isModelRouterMemberConfigured(scientific)) {
-    env[SCIENTIFIC_TRANSLATOR_TOKEN_ENV] = scientific.apiKey.trim()
+  try {
+    env[TEXT_REASONER_KEY_ENV] = resolveModelProviderSecret(textReasoner.apiKey, baseEnv)
+    if (isModelRouterMemberConfigured(vision)) {
+      env[VISION_TRANSLATOR_KEY_ENV] = resolveModelProviderSecret(vision.apiKey, baseEnv)
+    }
+    if (isModelRouterMemberConfigured(imageGenerator)) {
+      env[IMAGE_GENERATOR_KEY_ENV] = resolveModelProviderSecret(imageGenerator.apiKey, baseEnv)
+    }
+    if (isModelRouterMemberConfigured(scientific)) {
+      env[SCIENTIFIC_TRANSLATOR_TOKEN_ENV] = resolveModelProviderSecret(scientific.apiKey, baseEnv)
+    }
+  } catch {
+    // Credential values and reference contents must never enter diagnostics.
+    return { ok: false, reason: 'Model Router provider credential environment reference is invalid or unavailable.' }
   }
 
   const processLaunch = resolveModelAccessSidecarProcessLaunch('model-router', [
@@ -195,6 +205,7 @@ function modelRouterSidecarEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   }
   for (const key of Object.keys(env)) {
     if (
+      key.startsWith(MODEL_PROVIDER_SECRET_ENV_PREFIX) ||
       isUpstreamProviderConfigEnv(key) ||
       isBlockedInheritedWorkerEnv(key) ||
       isBlockedStandaloneModelRouterEnv(key)
@@ -235,6 +246,8 @@ export async function ensureModelRouterSidecar(
     env?: NodeJS.ProcessEnv
     nodeExecPath?: string
     spawnImpl?: typeof spawn
+    fetchImpl?: typeof fetch
+    readyTimeoutMs?: number
     log?: (message: string) => void
   }
 ): Promise<void> {
@@ -253,7 +266,7 @@ type ModelRouterGatewayLaunchSpecResult =
 
 export function buildModelRouterGatewayLaunchSpec(
   settings: AppSettingsV1,
-  options: Parameters<typeof buildModelRouterSidecarLaunch>[1]
+  options: Parameters<typeof buildModelRouterSidecarLaunch>[1] & { readyTimeoutMs?: number }
 ): ModelRouterGatewayLaunchSpecResult {
   const instanceId = randomUUID()
   const launchEnv = {
@@ -275,9 +288,29 @@ export function buildModelRouterGatewayLaunchSpec(
       healthUrl,
       startMessage: `Starting Model Router sidecar from ${result.launch.cwd}.`,
       logLabel: 'Model Router',
-      prepare: () => syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir }).then(() => undefined)
+      prepare: () => syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir }).then(() => undefined),
+      waitReady: (fetchImpl) => waitForManagedRouter(settings, instanceId, fetchImpl, options.readyTimeoutMs ?? 30_000)
     }
   }
+}
+
+async function waitForManagedRouter(
+  settings: AppSettingsV1,
+  instanceId: string,
+  fetchImpl: typeof fetch,
+  timeoutMs: number
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await isModelRouterServiceHealthy(settings, {
+      fetchImpl,
+      expectedInstanceId: instanceId,
+      timeoutMs: Math.max(1, Math.min(1_000, deadline - Date.now()))
+    })) return
+    const remaining = deadline - Date.now()
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)))
+  }
+  throw new Error(`Model Router did not become ready within ${timeoutMs}ms.`)
 }
 
 function defaultModelRouterSidecarConfig(
@@ -346,12 +379,13 @@ function memberConfig(
     baseUrl: member.baseUrl,
     apiKeyEnv,
     model: member.model,
+    ...(member.contextWindow !== undefined ? { contextWindow: member.contextWindow } : {}),
     ...(protocolAware ? memberCompatibility(member) : {})
   }
 }
 
 function memberCompatibility(
-  member: Pick<ModelRouterMemberSettingsV1, 'protocol' | 'reasoningEfforts' | 'chatStructuredOutputMode'>
+  member: Pick<ModelRouterMemberSettingsV1, 'protocol' | 'reasoningEfforts' | 'chatStructuredOutputMode' | 'chatReasoningControl'>
 ): Pick<ModelRouterMemberConfig, 'compatibility'> | Record<string, never> {
   const protocol = protocolCompatibility(member.protocol)
   // Passed for every protocol choice: the Router applies it only on the Chat
@@ -359,7 +393,8 @@ function memberCompatibility(
   const compatibility = {
     ...(protocol.compatibility ?? {}),
     ...(member.reasoningEfforts?.length ? { reasoningEfforts: member.reasoningEfforts } : {}),
-    ...(member.chatStructuredOutputMode ? { chatStructuredOutputMode: member.chatStructuredOutputMode } : {})
+    ...(member.chatStructuredOutputMode ? { chatStructuredOutputMode: member.chatStructuredOutputMode } : {}),
+    ...(member.chatReasoningControl ? { chatReasoningControl: member.chatReasoningControl } : {})
   }
   return Object.keys(compatibility).length > 0 ? { compatibility } : {}
 }

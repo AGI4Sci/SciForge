@@ -38,6 +38,8 @@ export function DeliveryDraft({ data, busy = false, materialSelection, returnCon
   const titleId = useId()
   const hintId = useId()
   const confirmTitleId = useId()
+  const [historyRevision, setHistoryRevision] = useState(String(data.history?.[0]?.revision ?? ''))
+  const historicalSnapshot = data.history?.find((entry) => String(entry.revision) === historyRevision)
   const [text, setText] = useState(data.summary)
   const [additionalFiles, setAdditionalFiles] = useState<readonly DeliveryDraftFile[]>(data.additionalFiles ?? [])
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -166,13 +168,13 @@ export function DeliveryDraft({ data, busy = false, materialSelection, returnCon
       {visibleSubmitError && !confirmOpen ? <p className="collaboration-workspace-delivery-limit-error" data-testid="delivery-submit-error" role="alert">{visibleSubmitError}</p> : null}
       {returnControls}
     </> : <DeliverySnapshot snapshot={{ revision: data.revision, summary: data.summary, declaredFiles: data.declaredFiles, additionalFiles: data.additionalFiles, submitter: data.submitter ?? '成员', submittedAt: data.submittedAt ?? '', adopted: data.state === 'adopted' }} showAdditional={hasMaterialSelection} busy={busy} onPreview={onPreview} />}
-    {data.history?.length ? <details className="collaboration-workspace-delivery-history" data-testid="delivery-history">
-      <summary>历史版本（{data.history.length}）</summary>
-      {data.history.map((snapshot) => <details key={snapshot.revision} className="collaboration-workspace-delivery-history-version" data-testid="delivery-history-version">
-        <summary>第 {snapshot.revision} 版 · {snapshot.adopted ? '已采纳' : '已提交'} · {formatWorkspaceTime(snapshot.submittedAt)}</summary>
-        <DeliverySnapshot snapshot={snapshot} showAdditional={hasMaterialSelection} busy={busy} onPreview={onPreview} />
-      </details>)}
-    </details> : null}
+    {data.history?.length ? <section className="collaboration-workspace-delivery-history" data-testid="delivery-history" aria-label="历史版本">
+      <label>历史版本（{data.history.length}） <select aria-label="选择历史版本" value={historicalSnapshot ? historyRevision : ''} onChange={(event) => setHistoryRevision(event.target.value)}>
+        <option value="">选择一个版本查看</option>
+        {data.history.map((snapshot) => <option key={snapshot.revision} value={snapshot.revision}>第 {snapshot.revision} 版 · {snapshot.adopted ? '已采纳' : '已提交'} · {formatWorkspaceTime(snapshot.submittedAt)}</option>)}
+      </select></label>
+      {historicalSnapshot ? <div className="collaboration-workspace-delivery-history-version" data-testid="delivery-history-version"><DeliverySnapshot snapshot={historicalSnapshot} showAdditional={hasMaterialSelection} busy={busy} onPreview={onPreview} /></div> : null}
+    </section> : null}
     {pickerOpen && materialSelection && !editingDisabled ? <DeliveryMaterialPicker selection={materialSelection} declaredFiles={data.declaredFiles} additionalFiles={additionalFiles} onClose={() => setPickerOpen(false)} onConfirm={(selected) => { updateFiles(selected); setPickerOpen(false) }} /> : null}
     {confirmOpen ? <DeliveryDialog titleId={confirmTitleId} testId="delivery-submit-confirmation" busy={locked} onClose={() => setConfirmOpen(false)}>
       <h2 id={confirmTitleId}>提交第 {data.revision} 版？</h2>

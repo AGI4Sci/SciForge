@@ -916,115 +916,21 @@ describe('ExecutionGovernorCore', () => {
     })
   })
 
-  it('allows only the native look and capture tools through the pending visual proof path', () => {
-    const governor = new ExecutionGovernorCore()
-    const context = { nativeVisualProofChainPending: true }
-    const look = attempt('sciforge_look', {
-      sourceRef: 'artifact_12345678901234567890',
-      task: 'Inspect this visual.'
-    })
-    const capture = attempt('sciforge_capture', {
-      snapshotRef: 'snapshot_12345678901234567890',
-      purpose: 'workspace-asset'
-    })
-
-    expect(governor.inspectAttempt(look, context)).toMatchObject({
-      action: 'allow',
-      attempt: {
-        family: 'tool_call:visual.look',
-        mutating: false
-      }
-    })
-    expect(governor.inspectAttempt(capture, context)).toMatchObject({
-      action: 'allow',
-      attempt: {
-        family: 'tool_call:visual.capture',
-        mutating: true
-      }
-    })
-  })
-
-  it.each(['view_image', 'functions.view_image', 'ViewImage'])(
-    'rejects %s while the native visual proof chain is pending',
-    (toolName) => {
-      const governor = new ExecutionGovernorCore()
-      const decision = governor.inspectAttempt(attempt(toolName, {
-        path: '/tmp/unattested.png'
-      }), {
-        nativeVisualProofChainPending: true
-      })
-
-      expect(decision).toMatchObject({
-        action: 'deny',
-        code: 'native_visual_proof_chain_required',
-        reason: expect.stringContaining('native visual proof chain')
-      })
-      expect(decision.guidance).toContain('sciforge_look')
-      expect(decision.guidance).toContain('sciforge_capture')
-      expect(decision.guidance).toContain('view_image')
-    }
-  )
-
   it.each([
-    { toolName: 'exec_command', command: 'file .sciforge/visual-assets/figure.png' },
-    { toolName: 'local_shell', command: 'python3 inspect_pixels.py' }
-  ])(
-    'rejects command execution as a pending visual proof bypass: $toolName',
-    ({ toolName, command }) => {
-      const governor = new ExecutionGovernorCore()
-      const decision = governor.inspectAttempt(attempt(toolName, {
-        command
-      }, {
-        toolKind: 'command_execution'
-      }), {
-        nativeVisualProofChainPending: true
-      })
-
-      expect(decision).toMatchObject({
-        action: 'deny',
-        code: 'native_visual_proof_chain_required',
-        attempt: { toolKind: 'command_execution' }
-      })
-      expect(decision.guidance).toContain('typed native visual proofs')
-    }
-  )
-
-  it('routes existing executor session controls through the pending visual governor', () => {
+    ['sciforge_look', { sourceRef: 'artifact_12345678901234567890', task: 'Inspect.' }],
+    ['sciforge_capture', { snapshotRef: 'snapshot_12345678901234567890', purpose: 'workspace-asset' }],
+    ['view_image', { path: '/tmp/reference.png' }],
+    ['exec_command', { command: 'file /tmp/figure.png' }],
+    ['local_shell', { command: 'python3 inspect_pixels.py' }],
+    ['Bash', { action: 'write', session_id: 'session-1', chars: 'cat README.md\n' }],
+    ['write_stdin', { session_id: 'session-1' }],
+    ['subagent_wait', { childIds: ['child-1'] }],
+    ['subagent_status', { childId: 'child-1' }]
+  ])('does not turn visual tool availability into an execution ban for %s', (toolName, args) => {
     const governor = new ExecutionGovernorCore()
-    const context = { nativeVisualProofChainPending: true }
-
-    for (const call of [
-      attempt('Bash', {
-        action: 'write',
-        session_id: 'session-1',
-        chars: 'python3 inspect_pixels.py\n'
-      }),
-      attempt('Bash', {
-        action: 'poll',
-        session_id: 'session-1'
-      }),
-      attempt('write_stdin', {
-        session_id: 'session-1',
-        chars: 'python3 inspect_pixels.py\n'
-      }),
-      attempt('functions.write_stdin', {
-        session_id: 'session-1'
-      })
-    ]) {
-      expect(governor.inspectAttempt(call, context)).toMatchObject({
-        action: 'deny',
-        code: 'native_visual_proof_chain_required',
-        attempt: { toolKind: 'command_execution' }
-      })
-    }
-
-    expect(governor.inspectAttempt(attempt('Bash', {
-      action: 'stop',
-      session_id: 'session-1'
-    }), context)).toMatchObject({
-      action: 'allow',
-      attempt: { toolKind: 'command_execution' }
-    })
+    expect(governor.inspectAttempt(attempt(toolName, args), {
+      ownedVisualToolsAvailable: true
+    }).action).toBe('allow')
   })
 
   it('preserves ordinary view_image and command execution behavior without a pending proof chain', () => {
@@ -1094,5 +1000,27 @@ describe('ExecutionGovernorCore', () => {
       duplicateResult: false,
       receipt: { status: 'success' }
     })
+  })
+})
+
+describe('file image processing and desktop capture boundaries', () => {
+  it.each([
+    'python3 -c "from PIL import Image; Image.open(\'source.png\').resize((800, 600)).save(\'preview.png\')"',
+    "python3 <<'PY'\nfrom PIL import Image, ImageChops\nprint(Image.open('input.png').size)\nPY",
+    'python3 inspect_local_image.py'
+  ])('allows local image processing: %s', (command) => {
+    const governor = new ExecutionGovernorCore()
+    expect(governor.inspectAttempt({ callId: 'local', toolName: 'exec_command', toolKind: 'command_execution', arguments: { command } }, { ownedVisualToolsAvailable: true }).action).toBe('allow')
+  })
+  it.each([
+    'python3 -c "from PIL import ImageGrab; ImageGrab.grab()"',
+    'python3 -c "from PIL.ImageGrab import grab; grab()"',
+    'python3 -c "from PIL import Image, ImageGrab as capture; capture.grab()"',
+    'python3 -c "import PIL.ImageGrab as capture; capture.grab()"',
+    'python3 -c "import pyautogui; pyautogui.screenshot()"',
+    'screencapture -x screen.png'
+  ])('still governs actual screen capture: %s', (command) => {
+    const governor = new ExecutionGovernorCore()
+    expect(governor.inspectAttempt({ callId: 'capture', toolName: 'exec_command', toolKind: 'command_execution', arguments: { command } }, { ownedVisualToolsAvailable: true }).action).toBe('deny')
   })
 })

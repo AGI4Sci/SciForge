@@ -1,5 +1,6 @@
 import { readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, isAbsolute } from 'node:path'
+import { z } from 'zod'
 import { checkPluginCompatibility, checkPluginPermissions, manifestClientEntry, manifestMainEntry, parsePluginManifest, pluginAdapterDeclarationSchema, type PluginAdapterContract, type PluginAdapterDeclaration, type PluginCompatibility, type PluginPermissionCheck, type PluginManifest } from './manifest.js'
 import { PluginLifecycle, PluginLifecycleHooks, PluginLifecycleRegistry } from './lifecycle.js'
 
@@ -19,6 +20,27 @@ export function governedPackageAdapterContract(contracts: PluginAdapterContracts
 export type PluginHostOptions = Readonly<{ root: string; hostApiVersion: string; dshRuntimeVersion?: string; adapterContracts?: PluginAdapterContracts; allowedPermissionIds?: ReadonlySet<string>; resolvePluginDirectory?: (packageName: string, directory: string) => Promise<string>; createLifecycleHooks?: (plugin: DiscoveredPlugin) => PluginLifecycleHooks }>
 
 function asPaths(value: string | readonly string[] | undefined): readonly string[] { return value === undefined ? [] : typeof value === 'string' ? [value] : value }
+
+/** A DSH-native plugin declares its renderer surface in its own `sciforge.dsh.json`
+ * (`ui.entry`). The host serves it from the plugin directory through exactly the same
+ * sandboxed `sciforge-plugin://` frame as an adapter-declared renderer, so a formal
+ * plugin can own its panel without reintroducing the adapter form. */
+const dshUiDeclarationSchema = z.object({
+  schemaVersion: z.literal(1),
+  ui: z.object({
+    entry: z.string().trim().min(1).max(512),
+    stateVersion: z.number().int().nonnegative().optional()
+  }).strict().optional()
+}).passthrough()
+
+async function dshUiEntry(directory: string): Promise<string | undefined> {
+  const text = await readFile(join(directory, 'sciforge.dsh.json'), 'utf8').catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  })
+  if (text === undefined) return undefined
+  return dshUiDeclarationSchema.parse(JSON.parse(text)).ui?.entry
+}
 function patchIds(text: string): string[] {
   try {
     const parsed = JSON.parse(text) as unknown
@@ -67,7 +89,7 @@ export async function validatePluginDirectory(directory: string, options: Plugin
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
         throw error
       })
-    const rendererEntry = declaration?.kind === 'renderer' ? declaration.ui?.entry : undefined
+    const rendererEntry = declaration?.kind === 'renderer' ? declaration.ui?.entry : await dshUiEntry(directory)
     if (declaration?.kind === 'renderer' && !rendererEntry) throw new Error('Renderer adapter declaration requires ui.entry.')
     if (rendererEntry) {
       const rendererPath = safeRelative(directory, rendererEntry)

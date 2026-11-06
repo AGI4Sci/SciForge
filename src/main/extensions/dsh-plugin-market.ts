@@ -18,8 +18,9 @@ import {
   uninstallDshPlugin,
   type DshPluginInstallDeps
 } from './dsh-plugin-install'
-import { readDshPluginPolicy } from './dsh-plugin-policy'
 import { sha256Hex } from './dsh-plugin-artifact'
+import { canonicalJson, type CanonicalJsonValue } from './canonical-json'
+import { dshMarketApprovalToolSchema, normalizeDshMarketApproval } from '../../shared/dsh-market'
 import type {
   DshMarketInstallInput,
   DshMarketInstallResult,
@@ -33,6 +34,9 @@ import type {
 const identifier = /^[a-z0-9][a-z0-9._-]*$/
 const sha256Pattern = /^[0-9a-f]{64}$/
 
+const marketPortsSchema = z.array(z.string().trim().min(1).max(256)).max(32)
+  .refine(ports => new Set(ports).size === ports.length, 'Host operations must be unique.')
+
 const dshMarketPluginSchema = z.object({
   name: z.string().trim().min(1).max(214),
   title: z.string().trim().min(1).max(128).optional(),
@@ -40,12 +44,8 @@ const dshMarketPluginSchema = z.object({
   form: z.literal('dsh-runtime'),
   categories: z.array(z.string().trim().min(1).max(64)).max(16).default([]),
   entry: z.string().trim().min(1).max(1_024),
-  tools: z.array(z.object({
-    name: z.string().trim().min(1).max(128),
-    /** Capability id the grant authorizes, as declared by the artifact. */
-    id: z.string().trim().min(1).max(192),
-    effect: z.enum(['read', 'compute', 'workspace-write', 'external-write', 'destructive'])
-  }).strict()).max(64),
+  tools: z.array(dshMarketApprovalToolSchema).max(64),
+  ports: marketPortsSchema.default([]),
   hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64),
   publisher: z.string().trim().min(1).max(128).regex(identifier).nullable(),
   artifact: z.object({
@@ -160,9 +160,15 @@ export function resolveArtifactLocation(source: DshMarketSource, file: string): 
   return { kind: 'url', url: new URL(`artifacts/${file}`, source.url).toString() }
 }
 
+function approvalFor(entry: DshMarketPlugin) {
+  return normalizeDshMarketApproval({ packageName: entry.name, version: entry.version,
+    sha256: entry.artifact.sha256, publisher: entry.publisher, entry: entry.entry,
+    tools: entry.tools, ports: entry.ports, hostDependencies: entry.hostDependencies })
+}
+
 export async function installDshMarketPlugin(
   deps: DshMarketDeps,
-  request: Readonly<{ packageName: string; approvedToolNames: readonly string[] }>
+  request: DshMarketInstallInput
 ): Promise<DshMarketInstallOutcome> {
   const report = (progress: DshMarketProgress) => deps.onProgress?.(progress)
   const index = await readDshMarketIndex(deps.source)
@@ -174,6 +180,11 @@ export async function installDshMarketPlugin(
       : `Plugin ${request.packageName} is not in the market index.`)
   }
 
+  const approval = normalizeDshMarketApproval(request.approvalSnapshot)
+  if (canonicalJson(approval as unknown as CanonicalJsonValue) !== canonicalJson(approvalFor(entry) as unknown as CanonicalJsonValue)) {
+    throw new Error('Market identity or permissions changed; refresh and confirm the complete approval again.')
+  }
+
   // The catalog cannot widen what the user approved: the plugin's own declared
   // tools must be exactly what the user agreed to.
   const declared = entry.tools.map((tool) => tool.name).sort()
@@ -182,6 +193,12 @@ export async function installDshMarketPlugin(
     throw new Error(
       `Approving ${approved.join(', ') || 'nothing'} does not match what ${entry.name} declares (${declared.join(', ')}).`
     )
+  }
+
+  const approvedPorts = marketPortsSchema.parse(request.approvedPorts ?? []).sort()
+  const declaredPorts = [...entry.ports].sort()
+  if (declaredPorts.length !== approvedPorts.length || declaredPorts.some((port, index) => port !== approvedPorts[index])) {
+    throw new Error('Explicit Host operation approval does not match the market declaration.')
   }
 
   report({ packageName: entry.name, phase: 'downloading' })
@@ -208,14 +225,19 @@ export async function installDshMarketPlugin(
     throw new Error(`The downloaded artifact digest ${digest} does not match the published digest ${entry.artifact.sha256}.`)
   }
 
+  const current = (await readDshMarketIndex(deps.source)).plugins.find(plugin => plugin.name === request.packageName)
+  if (!current || canonicalJson(approvalFor(current) as unknown as CanonicalJsonValue) !== canonicalJson(approval as unknown as CanonicalJsonValue)) {
+    throw new Error('Market identity or permissions changed during download; refresh and confirm again.')
+  }
   report({ packageName: entry.name, phase: 'installing' })
-  const policy = await readDshPluginPolicy(deps.installDeps.policyPath)
   const installed = await installDshPluginArtifact(deps.installDeps, {
     artifactBytes: bytes,
     expectedSha256: entry.artifact.sha256,
+    expectedApproval: approval,
     approvedToolNames: approved,
+    approvedPorts,
     source: deps.source.kind === 'file' ? deps.source.path : deps.source.url
-  }, policy)
+  })
 
   report({ packageName: entry.name, phase: 'activating' })
   await deps.installDeps.service.refreshDiscoveredPlugins()
@@ -279,11 +301,7 @@ export async function uninstallDshMarketPlugin(
   deps: DshMarketDeps,
   packageName: string
 ): Promise<void> {
-  const policy = await readDshPluginPolicy(deps.installDeps.policyPath)
-  if (!policy.approved.some((entry) => entry.packageName === packageName)) {
-    throw new Error(`Plugin ${packageName} has no recorded approval, so it was not installed by the market.`)
-  }
-  await uninstallDshPlugin(deps.installDeps, packageName, policy)
+  await uninstallDshPlugin(deps.installDeps, packageName)
 }
 
 /** What the installed-state lookup the surface needs looks like. */
@@ -353,17 +371,19 @@ export function createDshMarketSurface(deps: Readonly<{
     entry: DshMarketPlugin,
     installed: ReadonlyMap<string, DshMarketInstalledPlugin>
   ): DshMarketPluginView => ({
+    approvalSnapshot: approvalFor(entry),
     name: entry.name,
     title: entry.title ?? entry.name,
     version: entry.version,
     categories: entry.categories,
-    tools: entry.tools,
+    tools: approvalFor(entry).tools,
     capabilities: entry.tools.map((tool) => ({
       name: tool.name,
       id: tool.id,
       effect: tool.effect,
       registered: deps.isCapabilityRegistered?.(tool.id) === true
     })),
+    ports: entry.ports,
     hostDependencies: entry.hostDependencies,
     publisher: entry.publisher,
     sizeBytes: entry.artifact.sizeBytes,
@@ -397,7 +417,7 @@ export function createDshMarketSurface(deps: Readonly<{
     },
     install: async (input) => {
       const joined = inFlightInstalls.get(input.packageName)
-      if (joined) return joined
+      if (joined) throw new Error('An installation is already running; wait and confirm the current catalog again.')
       const attempt = (async () => {
       progressByPackage.delete(input.packageName)
       try {

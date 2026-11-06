@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   BIOLOGY_ROOM_CAPABILITY_IDS
-} from '@sciforge/domain-biology-room/contract'
+} from '@sciforge/domain-biology-workbench/contract'
 import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
 import type { DomainExtensionSummary } from '../../shared/domain-extensions'
 import {
@@ -385,7 +385,7 @@ describe('app capability registry', () => {
         ]
       },
       {
-        moduleId: 'sciforge.biology-room',
+        moduleId: 'sciforge.biology-workbench',
         capabilityIds: [
           BIOLOGY_ROOM_CAPABILITY_IDS.list,
           BIOLOGY_ROOM_CAPABILITY_IDS.create,

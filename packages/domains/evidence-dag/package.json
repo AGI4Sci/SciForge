@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-evidence-dag",
-  "version": "1.1.5",
+  "version": "2.13.0",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -18,7 +18,8 @@
     "./host/quiescence": "./src/host/quiescence.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main.ts",
-    "./renderer": "./src/renderer/index.tsx"
+    "./renderer": "./src/renderer/index.tsx",
+    "./producer-consumer": "./src/producer-consumer.ts"
   },
   "files": [
     "src",
@@ -48,17 +49,22 @@
   },
   "dependencies": {
     "@sciforge/domain-artifact-versions": "^1.1.0",
-    "@sciforge/domain-sdk": "^0.2.18",
+    "@sciforge/domain-sdk": "^0.2.34",
     "@sciforge/plugin-sdk": "^0.1.0",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@sciforge/domain-research-checkpoints": "^1.0.5",
+    "@sciforge/domain-create-loop": "^1.1.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.10",
     "tsx": "^4.22.4",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.11.2",
+    "react-dom": "^19.0.0"
   }
 }

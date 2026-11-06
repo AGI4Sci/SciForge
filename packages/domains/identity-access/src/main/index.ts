@@ -40,6 +40,8 @@ import {
 } from '../contract.js'
 import {
   IDENTITY_ACCESS_DOMAIN_MODULE_ID,
+  IDENTITY_CURRENT_USER_PROFILE_CONTRIBUTION,
+  IDENTITY_CURRENT_USER_PROFILE_CONTRACT,
   IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION,
   IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT,
   IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION,
@@ -51,6 +53,9 @@ import {
   IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition.js'
+import {
+  CURRENT_USER_SERVICE_ID, CURRENT_USER_CONTRACT_VERSION, createCurrentUserProfileService
+} from '../current-user-profile.js'
 import { IdentityService } from './service.js'
 import { CloudIdentityRuntime, type IdentityAuthorityInvalidation } from './cloud-runtime.js'
 import { createIdentityAuthenticatedCloudTransport } from './authenticated-cloud-transport.js'
@@ -143,6 +148,7 @@ type IdentityMainContribution =
   | typeof authenticatedCloudTransportDescriptor
   | typeof deviceFactAttestationSigningDescriptor
   | typeof agentCloudRuntimeDescriptor
+  | typeof currentUserProfileDescriptor
 
 const authenticatedCloudTransportDescriptor = defineDomainMainInternalServiceDescriptor({
   location: 'main.internal-service-descriptor',
@@ -163,6 +169,12 @@ const agentCloudRuntimeDescriptor = defineDomainMainInternalServiceDescriptor({
   serviceId: AGENT_CLOUD_RUNTIME_SERVICE_ID,
   contractVersion: AGENT_CLOUD_RUNTIME_CONTRACT_VERSION,
   allowedConsumerModuleIds: ['sciforge.collaboration']
+})
+
+const currentUserProfileDescriptor = defineDomainMainInternalServiceDescriptor({
+  location: 'main.internal-service-descriptor', serviceId: CURRENT_USER_SERVICE_ID,
+  contractVersion: CURRENT_USER_CONTRACT_VERSION,
+  allowedConsumerModuleIds: ['sciforge.siyuan-content-space-provider']
 })
 
 export function createDomainMainEntry(
@@ -198,6 +210,11 @@ export function createDomainMainEntry(
     if (!cloudRuntime) throw new Error('Cloud identity runtime is not active.')
     return cloudRuntime
   }
+  host.internalServices.register({
+    serviceId: CURRENT_USER_SERVICE_ID, contractVersion: CURRENT_USER_CONTRACT_VERSION,
+    allowedConsumerModuleIds: currentUserProfileDescriptor.allowedConsumerModuleIds,
+    service: createCurrentUserProfileService(() => cloudRuntime?.snapshot().identity)
+  })
   const authenticatedCloudTransport = createIdentityAuthenticatedCloudTransport({
     getRuntime: () => cloudRuntime
   })
@@ -342,6 +359,11 @@ export function createDomainMainEntry(
         ...IDENTITY_AGENT_CLOUD_RUNTIME_CONTRIBUTION,
         contract: IDENTITY_AGENT_CLOUD_RUNTIME_CONTRACT,
         value: agentCloudRuntimeDescriptor
+      },
+      {
+        ...IDENTITY_CURRENT_USER_PROFILE_CONTRIBUTION,
+        contract: IDENTITY_CURRENT_USER_PROFILE_CONTRACT,
+        value: currentUserProfileDescriptor
       }
     ]
   }

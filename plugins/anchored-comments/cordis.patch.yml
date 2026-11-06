@@ -1,0 +1,3 @@
+- insert:
+    - id: anchored-comments
+      name: "@sciforge/plugin-anchored-comments"

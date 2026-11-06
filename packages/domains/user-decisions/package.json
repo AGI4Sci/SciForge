@@ -1,0 +1,37 @@
+{
+  "name": "@sciforge/domain-user-decisions",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": false,
+  "description": "Runtime-neutral structured user decisions and movable non-modal questionnaire.",
+  "exports": {
+    "./definition": "./src/definition.ts",
+    "./contract": "./src/contract.ts",
+    "./main": "./src/main.ts",
+    "./renderer": "./src/renderer/index.tsx"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "^0.2.24",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-i18next": "^15.7.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

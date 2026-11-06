@@ -1,3 +1,4 @@
+import { normalizedVisualRegionSchema } from './visual-source.js'
 import { z } from 'zod'
 import { namespacedIdSchema } from './contract.js'
 import type {
@@ -214,6 +215,7 @@ export type WorkspacePreviewProviderActionInput = WorkspacePreviewProviderObserv
 }
 
 export type WorkspacePreviewRenderVisualInput = Readonly<{
+  outputMimeType?: 'image/png'
   frameIndex?: number
   target?: VisualSourceTarget
   maxDimension?: number
@@ -321,12 +323,21 @@ export type WorkspacePreviewProviderExportResult =
       path: string
       target: WorkspacePreviewExportTarget
       exportedAt: string
+      visual?: {
+        sourceSha256: string
+        contentCompleteness: 'not-assessed'
+        width: number
+        height: number
+        sourceRevision: string
+        sha256: string
+        anchor: VisualFrame['anchor']
+      }
       audit: {
         pluginId: string
         sourcePath: string
         targetKind: WorkspacePreviewExportTarget['kind']
         format: string
-        effect: 'source-copy' | 'sidecar-package' | 'annotated-pdf'
+        effect: 'source-copy' | 'sidecar-package' | 'annotated-pdf' | 'visual-export'
       }
     }
   | { ok: false; message: string }
@@ -349,6 +360,9 @@ export type WorkspacePreviewProvider = Readonly<{
   prepareArtifact?: (
     input: WorkspacePreviewProviderArtifactInput
   ) => Promise<WorkspacePreviewProviderArtifactResult>
+  readText?: (
+    input: WorkspacePreviewProviderObservationInput & { range: WorkspacePreviewTextReadRange }
+  ) => Promise<WorkspacePreviewTextReadResult>
   renderVisual?: (
     input: WorkspacePreviewProviderVisualInput
   ) => Promise<VisualFrame>
@@ -1258,7 +1272,12 @@ export const workspacePreviewExportTargetSchema = z.object({
   kind: z.enum(['download', 'workspace-file', 'clipboard', 'attachment']),
   format: z.string().trim().min(1).max(64),
   path: z.string().trim().max(4096).optional(),
-  mimeType: z.string().trim().max(128).optional()
+  mimeType: z.string().trim().max(128).optional(),
+  render: z.object({
+    frameIndex: z.number().int().positive().optional(),
+    region: normalizedVisualRegionSchema.optional(),
+    maxDimension: z.number().int().positive().max(8192).default(4096)
+  }).strict().optional()
 }).strict()
 
 export type WorkspacePreviewExportTarget = z.infer<typeof workspacePreviewExportTargetSchema>
@@ -1624,9 +1643,14 @@ export type WorkspacePreviewByteRange = z.infer<typeof workspacePreviewByteRange
 
 /** Source coordinates match text.replaceRange: one-based lines and UTF-16 columns. */
 export const workspacePreviewTextReadRangeSchema = z.object({
-  start: positionSchema,
-  maxCharacters: z.number().int().min(2).max(16_000).default(12_000)
-}).strict()
+  start: positionSchema.optional(),
+  cursor: z.string().min(1).max(1024).optional(),
+  frameIndex: z.number().int().positive().optional(),
+  query: z.string().min(1).max(256).optional(),
+  maxCharacters: z.number().int().min(2).max(4000).default(4000)
+}).strict().refine((range) => !(range.cursor && (range.start || range.frameIndex || range.query)) && !(range.start && (range.frameIndex || range.query)), {
+  message: 'Continue with a cursor alone, or start with a position or frame/query selector.'
+})
 export const workspacePreviewReadRangeSchema = z.union([
   workspacePreviewByteRangeSchema,
   workspacePreviewTextReadRangeSchema
@@ -1639,7 +1663,9 @@ export const workspacePreviewTextReadResultSchema = z.object({
   text: z.string().max(16_000),
   start: positionSchema,
   end: positionSchema,
-  nextStart: positionSchema.optional(),
+  snapshotId: z.string().min(1),
+  anchors: z.array(z.object({ frameIndex: z.number().int().positive(), start: z.number().int().nonnegative(), end: z.number().int().nonnegative() }).strict()).optional(),
+  nextCursor: z.string().min(1).max(1024).optional(),
   truncated: z.boolean()
 }).strict()
 export type WorkspacePreviewTextReadResult = z.infer<typeof workspacePreviewTextReadResultSchema>

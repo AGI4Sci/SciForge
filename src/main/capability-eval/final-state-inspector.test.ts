@@ -84,13 +84,13 @@ describe('workspace final-state inspector', () => {
       expectedFinalState: {
         assertions: [],
         artifacts: [{
-          pathFromOutput: { actionId: 'dataset-api.filter', jsonPath: 'datasetApi.result.artifact.path' },
+          pathFromOutput: { actionId: 'fixture-data.filter', jsonPath: 'fixtureData.result.artifact.path' },
           format: 'json',
           minBytes: 1
         }],
         dataLineage: [{
-          sourceFromOutput: { actionId: 'dataset-api.filter', jsonPath: 'datasetApi.result.artifact.path' },
-          targetFromOutput: { actionId: 'dataset-api.validate', jsonPath: 'datasetApi.result.artifact.parents.0.path' }
+          sourceFromOutput: { actionId: 'fixture-data.filter', jsonPath: 'fixtureData.result.artifact.path' },
+          targetFromOutput: { actionId: 'fixture-data.validate', jsonPath: 'fixtureData.result.artifact.parents.0.path' }
         }]
       }
     })
@@ -98,17 +98,17 @@ describe('workspace final-state inspector', () => {
     const result = await inspectWorkspaceFinalState(evalCase, directory, {}, {
       invocations: [
         {
-          actionId: 'dataset-api.filter',
+          actionId: 'fixture-data.filter',
           args: {},
-          output: { datasetApi: { actionId: 'dataset-api.filter', success: true, result: { artifact: { path: 'filtered.json' } } } },
+          output: { fixtureData: { actionId: 'fixture-data.filter', success: true, result: { artifact: { path: 'filtered.json' } } } },
           success: true,
           retryCount: 0,
           latencyMs: 1
         },
         {
-          actionId: 'dataset-api.validate',
+          actionId: 'fixture-data.validate',
           args: {},
-          output: { datasetApi: { actionId: 'dataset-api.validate', success: true, result: { artifact: { parents: [{ path: 'filtered.json' }] } } } },
+          output: { fixtureData: { actionId: 'fixture-data.validate', success: true, result: { artifact: { parents: [{ path: 'filtered.json' }] } } } },
           success: true,
           retryCount: 0,
           latencyMs: 1
@@ -118,8 +118,8 @@ describe('workspace final-state inspector', () => {
 
     expect(result.taskSuccess).toBe(true)
     expect(result.finalState).toMatchObject({
-      artifacts: { 'dataset-api.filter.datasetApi.result.artifact.path': { exists: true, formatValid: true } },
-      dataLineage: { 'dataset-api.filter.datasetApi.result.artifact.path → dataset-api.validate.datasetApi.result.artifact.parents.0.path': { status: 'verified' } }
+      artifacts: { 'fixture-data.filter.fixtureData.result.artifact.path': { exists: true, formatValid: true } },
+      dataLineage: { 'fixture-data.filter.fixtureData.result.artifact.path → fixture-data.validate.fixtureData.result.artifact.parents.0.path': { status: 'verified' } }
     })
   })
 
@@ -159,8 +159,8 @@ describe('workspace final-state inspector', () => {
       expectedFinalState: {
         assertions: [],
         dataLineage: [{
-          sourceFromOutput: { actionId: 'dataset-api.filter', jsonPath: 'datasetApi.result.artifact.path' },
-          targetFromOutput: { actionId: 'dataset-api.validate', jsonPath: 'datasetApi.result.artifact.parents.0.path' }
+          sourceFromOutput: { actionId: 'fixture-data.filter', jsonPath: 'fixtureData.result.artifact.path' },
+          targetFromOutput: { actionId: 'fixture-data.validate', jsonPath: 'fixtureData.result.artifact.parents.0.path' }
         }]
       }
     })
@@ -169,7 +169,7 @@ describe('workspace final-state inspector', () => {
 
     expect(result.taskSuccess).toBeUndefined()
     expect(result.finalState).toMatchObject({
-      dataLineage: { 'dataset-api.filter.datasetApi.result.artifact.path → dataset-api.validate.datasetApi.result.artifact.parents.0.path': { status: 'unsupported' } }
+      dataLineage: { 'fixture-data.filter.fixtureData.result.artifact.path → fixture-data.validate.fixtureData.result.artifact.parents.0.path': { status: 'unsupported' } }
     })
     expect(result.unsupported).toHaveLength(1)
   })

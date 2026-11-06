@@ -1,3 +1,5 @@
+import { exportWorkspacePreviewVisual } from './preview-visual-export.js'
+export { cachedVisualFrame, exportWorkspacePreviewVisual } from './preview-visual-export.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { lstat, open, realpath, stat } from 'node:fs/promises'
@@ -282,7 +284,9 @@ async function readPreviewRange(
   const record = requireSession(installed, input, sessions)
   const range = workspacePreviewReadRangeSchema.parse(input.range)
   const sourceStat = await refreshSource(record)
-  if ('start' in range) return toWirePayload(await readWorkspacePreviewTextRange(record.file.path, record.session.id, range))
+  if (!('offset' in range)) return toWirePayload(installed.provider.readText
+    ? await installed.provider.readText({ ...providerBaseInput(record), range })
+    : await readWorkspacePreviewTextRange(record.file.path, record.session.id, range))
   const handle = await open(record.file.path, 'r')
   try {
     const length = Math.min(range.length, Math.max(0, sourceStat.size - range.offset))
@@ -451,12 +455,27 @@ async function exportPreview(
   sessions: Map<string, PreviewSessionRecord>
 ): Promise<WorkspaceHostPayload> {
   const record = requireSession(installed, input, sessions)
-  if (!installed.provider.exportPreview) {
-    return { ok: false, message: 'Workspace Preview provider cannot export this source.' }
-  }
   await requireExpectedRevision(record, input.expectedRevision)
   const target = workspacePreviewExportTargetSchema.parse(input.target)
   const normalizedTarget = await normalizeExportTarget(record.file.workspaceRoot, target)
+  if (target.render) {
+    const renderVisual = installed.provider.renderVisual
+    if (!renderVisual) return { ok: false, message: 'Workspace Preview provider cannot render visual exports.' }
+    const before = await refreshSource(record)
+    return toWirePayload(await exportWorkspacePreviewVisual({ ...providerBaseInput(record), target: normalizedTarget, now: new Date().toISOString() }, async () => {
+      const frame = await renderVisual({ ...providerBaseInput(record), request: {
+        resource: { resourceId: record.session.id, resourceKind: 'workspace-preview', semanticRevision: record.sourceRevision },
+        frameIndex: target.render!.frameIndex,
+        maxDimension: target.render!.maxDimension,
+        outputMimeType: 'image/png',
+        ...(target.render!.region ? { target: { kind: 'region', region: target.render!.region } } : {})
+      } })
+      const after = await refreshSource(record)
+      if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error('Source changed while rendering.')
+      return frame
+    }))
+  }
+  if (!installed.provider.exportPreview) return { ok: false, message: 'Workspace Preview provider cannot export this source.' }
   return toWirePayload(await installed.provider.exportPreview({
     ...providerBaseInput(record),
     target: normalizedTarget,

@@ -64,12 +64,25 @@ export function apply(ctx) {
 }`)
   const clientPath = join(root, 'client.mjs')
   await writeFile(clientPath, `export function create(client) { return { read: () => client.request('inspect', 'read', {}).result } }`)
+  const resolverPath = join(root, 'agent-resolver.mjs')
+  await writeFile(resolverPath, `
+import { createScope } from '@deepseek-ai/dsh-scope'
+export function resolveAgent({ identity, rootContext }) {
+  const agent = { id: identity.sessionId, session: { id: identity.sessionId } }
+  const scope = createScope(rootContext, agent)
+  agent.ctx = scope.ctx
+  return { agent, dispose: scope.dispose }
+}
+`)
   const host = { marker: 'ready-host' }
   const hostRef: { current: object | null } = { current: host }
   const resolutions: object[] = []
   let failure: Error | undefined
   const create = () => new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,
     root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2',
+    dshAgentResolver: { path: resolverPath },
     adapterContracts: new Map([[name, { hostApiRange: '^1', permissions: [], approved: true, dshAuthorization: { packageName: name, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', tools: { status: { id: 'neutral.status', effect: 'read' }, read: { id: 'neutral.read', effect: 'read' } } } }]]),
     hostServiceIds: ['inspect'],
     resolveHostServiceClients: () => [{ serviceId: 'inspect', modulePath: clientPath, exportName: 'create', config: {} }],

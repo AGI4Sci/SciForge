@@ -1969,7 +1969,7 @@ export class CollaborationTaskAdapter {
     const prompt = repairAttempt
       ? workerResultRepairPrompt()
       : run.humanAnswer
-      ? workerHumanAnswerPrompt(run.humanAnswer.answer)
+      ? workerHumanAnswerPrompt(run.humanAnswer)
       : workerTaskPrompt({
           title: task.title,
           objective: task.objective,

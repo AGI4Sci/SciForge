@@ -92,18 +92,12 @@ const api = {
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   pickFile: (request) => ipcRenderer.invoke('workspace:pick-file', request),
-  buildScientificSkillsMcpConfig: (workspaceRoot) =>
-    ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
   buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:bgc-discovery-config', { workspaceRoot }),
   buildImageGenerationMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:image-generation-config', { workspaceRoot }),
   buildPptMasterMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:ppt-master-config', { workspaceRoot }),
-  getScientificSkillsStatus: (workspaceRoot) =>
-    ipcRenderer.invoke('mcp:scientific-skills-status', { workspaceRoot }),
-  installScientificSkills: (request) =>
-    ipcRenderer.invoke('scientific-skills:install', request),
   listSkills: (workspaceRoot) =>
     ipcRenderer.invoke('skill:list', { workspaceRoot }),
   saveSkillFile: (rootPath, skillName, content) =>

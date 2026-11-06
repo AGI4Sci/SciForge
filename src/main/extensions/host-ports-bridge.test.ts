@@ -86,6 +86,8 @@ async function createPortsFixture(options: Readonly<{
   ])
   const executions: Array<{ operation: string; input: unknown; workspaceId: string }> = []
   const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
     root: join(root, 'plugins'),
     userDataPath: join(root, 'data'),
     hostApiVersion: '1.0.0',
@@ -104,13 +106,23 @@ async function createPortsFixture(options: Readonly<{
 }
 
 describe('development plugin host ports bridge', () => {
-  it('executes approved operations through the Host executor with the bound workspace', async () => {
+  it('rejects foreign roots without execution and uses only the Host-bound workspace for approved operations', async () => {
     const { service, registry, executions } = await createPortsFixture({ ports: ['artifacts.commit', 'artifacts.read'] })
     try {
       const definition = registry.require('portsprobe.workspace')
       const caller = { caller: { workspaceId: '/ws/one' } } as never
+      await expect(definition.handler(
+        { workspaceRoot: '/ws/foreign', operation: 'artifacts.commit', portInput: { x: 1 } }, caller))
+        .rejects.toThrow('rejects a workspaceRoot outside the authenticated caller workspace')
+      expect(executions).toEqual([])
+      await expect(definition.handler(
+        { workspaceRoot: '/ws/one', operation: 'artifacts.commit', __sciforgeHostWorkspace: 'host' },
+        {} as never))
+        .rejects.toThrow('requires a workspace-scoped caller')
+      expect(executions).toEqual([])
+
       const result = await definition.handler(
-        { workspaceRoot: '/ignored-by-host-binding', operation: 'artifacts.commit', portInput: { x: 1 } }, caller)
+        { workspaceRoot: '/ws/one', operation: 'artifacts.commit', portInput: { x: 1 } }, caller)
       expect(result.output).toEqual({
         ok: true,
         value: { executed: 'artifacts.commit', input: { x: 1 } }

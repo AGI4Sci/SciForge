@@ -10,12 +10,22 @@ import {
   researchAuditFreshnessSchema,
   researchAuditProjectReadRecordsResultSchema,
   researchAuditSessionChangeListChangesOutputSchema,
-  researchAuditSubjectSchema
+  researchAuditSubjectSchema,
+  researchAuditScientificReviewSchema
 } from './research-audit.js'
 
 const DIGEST_A = `sha256:${'a'.repeat(64)}`
 
 describe('research-audit SDK contracts', () => {
+  it('accepts explained revision coverage and rejects negative work, over-budget queries and removed cursor metadata', () => {
+    const review = { coverage: 'recorded-links-only', bounded: true, impacts: [],
+      conditions: ['independence', 'controls', 'negative-results', 'reproduction', 'scope'].map(axis => ({ axis, status: 'unknown', observations: [] })),
+      coverageDetails: { indexRevision: 1, indexedChains: 1, indexedDeltas: 1101, scannedDeltas: 1101, totalRelevantDeltas: 1101, queryNodes: 15, extractionNodes: 1101, omittedRecords: 0, reasons: ['projection-budget-or-output-limit; narrow the audit subject'] } }
+    assert.equal(researchAuditScientificReviewSchema.safeParse(review).success, true)
+    assert.equal(researchAuditScientificReviewSchema.safeParse({ ...review, coverageDetails: { ...review.coverageDetails, scannedDeltas: -1 } }).success, false)
+    assert.equal(researchAuditScientificReviewSchema.safeParse({ ...review, coverageDetails: { ...review.coverageDetails, nextCursor: null } }).success, false)
+    assert.equal(researchAuditScientificReviewSchema.safeParse({ ...review, coverageDetails: { ...review.coverageDetails, queryNodes: 10001 } }).success, false)
+  })
   it('pins the three read-port capability ids', () => {
     assert.equal(RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS.evidenceAuditQuery, 'evidence-dag.audit-query')
     assert.equal(RESEARCH_AUDIT_SESSION_CHANGE_MAX_LIST_CHANGES, 500)

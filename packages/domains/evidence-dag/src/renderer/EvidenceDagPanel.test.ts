@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   evidenceDagCommittedFrameKey,
   evidenceDagPanelTarget,
+  evidenceDagPanelViewInput,
   evidenceDagViewUrlWithNode
 } from './EvidenceDagPanel'
 import {
@@ -50,6 +51,17 @@ test('keys the iframe only by URL and committed snapshot digest', () => {
     evidenceDagViewUrlWithNode('http://127.0.0.1:8000/', 'source-1', true),
     'http://127.0.0.1:8000/?node=source-1&preview=trusted'
   )
+})
+
+test('graph requests retain the owning workspace and fail closed for unbound sessions or partial identity', () => {
+  const target = evidenceDagPanelTarget({ id: 'thread-session', runtimeId: 'codex', workspaceRoot: '/workspace/owner' })
+  assert.deepEqual(evidenceDagPanelViewInput(target), {
+    runtimeId: 'codex', threadId: 'thread-session', workspaceRoot: '/workspace/owner'
+  })
+  assert.equal(evidenceDagPanelViewInput(evidenceDagPanelTarget({ id: 'thread-unbound', runtimeId: 'codex' })), null)
+  assert.equal(evidenceDagPanelViewInput({ runtimeId: 'codex', threadId: 'thread-unbound', workspaceRoot: ' ' }), null)
+  assert.equal(evidenceDagPanelViewInput({ runtimeId: 'codex', workspaceRoot: '/workspace/owner' }), null)
+  assert.deepEqual(evidenceDagPanelViewInput({ workspaceRoot: '/workspace/owner' }), { workspaceRoot: '/workspace/owner' })
 })
 
 test('polls visible active and failed attempts without inventing progress', () => {

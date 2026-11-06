@@ -1,3 +1,4 @@
+import { userInputAnswerSchema } from '@sciforge/domain-sdk/user-input'
 import {
   claudeSettingsPatch,
   codexSettingsPatch,
@@ -192,7 +193,7 @@ function legacyCapabilities(capabilities: AgentRuntimeCapabilities): LegacyCapab
     approvals: capabilities.controls.approval === 'sync' || capabilities.controls.approval === 'async',
     attachFiles: capabilities.storage.attachments.available,
     review: capabilities.controls.review === true,
-    compact: capabilities.controls.compact === 'native' || capabilities.controls.compact === 'noop',
+    compact: capabilities.controls.compact === 'native',
     fork: capabilities.controls.fork === true,
     steer: capabilities.controls.steer === true,
     goals: capabilities.controls.goals === true,
@@ -513,7 +514,8 @@ function blockFromItem(item: AgentRuntimeItem, turnStatus?: string): ChatBlock |
                 question: item.summary?.trim() || item.text?.trim() || 'Input requested',
                 options: []
               }],
-          status: visibleStatus(item.status) === 'error'
+          answers: Array.isArray(item.meta?.answers) ? item.meta.answers.flatMap((raw) => { const result = userInputAnswerSchema.safeParse(raw); return result.success ? [result.data] : [] }) : undefined,
+          status: item.meta?.userInputStatus === 'cancelled' ? 'cancelled' : visibleStatus(item.status) === 'error'
             ? 'error'
             : visibleStatus(item.status) === 'success'
               ? 'submitted'
@@ -926,8 +928,9 @@ export class AgentRuntimeProvider implements AgentProvider {
   }
 
   async createThread(input: Parameters<AgentProvider['createThread']>[0]): Promise<NormalizedThread> {
-    const runtimeId = await this.activeRuntimeId()
-    const thread = await agentRuntimeClient.startThread({ runtimeId, ...input })
+    const { runtimeId: requestedRuntimeId, ...threadInput } = input
+    const runtimeId = requestedRuntimeId ?? await this.activeRuntimeId()
+    const thread = await agentRuntimeClient.startThread({ runtimeId, ...threadInput })
     const workspaceLocator = thread.workspaceLocator ?? input.workspaceLocator
     return this.normalizeRememberedThread({ ...thread, ...(workspaceLocator ? { workspaceLocator } : {}) })
   }
@@ -1018,15 +1021,16 @@ export class AgentRuntimeProvider implements AgentProvider {
     text: string,
     options: Parameters<AgentProvider['sendUserMessage']>[2] = {}
   ): ReturnType<AgentProvider['sendUserMessage']> {
-    const { title, ...turnOptions } = options
+    const { title, runtimeId: requestedRuntimeId, ...turnOptions } = options
     const runtimeId = await this.runtimeIdForThread(threadId)
+    if (requestedRuntimeId && requestedRuntimeId !== runtimeId) throw unresolvedThreadRuntime(threadId)
     const workspaceLocator =
       turnOptions.workspaceLocator ?? this.workspaceLocatorForThread(threadId)
     const placedTurnOptions = {
       ...turnOptions,
       ...(workspaceLocator ? { workspaceLocator } : {})
     }
-    const activeRuntimeId = await this.activeRuntimeId()
+    const activeRuntimeId = requestedRuntimeId ?? await this.activeRuntimeId()
     if (activeRuntimeId !== runtimeId) {
       const result = await this.auxiliary<AgentRuntimeHandoffStartResult>('startRuntimeHandoff', {
         sourceThreadId: threadId,

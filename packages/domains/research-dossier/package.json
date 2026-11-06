@@ -1,10 +1,10 @@
 {
   "name": "@sciforge/domain-research-dossier",
-  "version": "1.0.3",
+  "version": "1.6.0",
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Presentation-only exact scientific artifact and compute run dossier for SciForge.",
+  "description": "Research workspace and exact artifact dossier presentation for SciForge.",
   "exports": {
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
@@ -21,13 +21,14 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""
   },
   "dependencies": {
-    "@sciforge/domain-artifact-versions": "^1.1.0",
+    "@sciforge/domain-artifact-versions": "^1.4.0",
     "@sciforge/domain-research-checkpoints": "^1.0.0",
-    "@sciforge/domain-sdk": "^0.2.0",
+    "@sciforge/domain-sdk": "^0.2.34",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@sciforge/domain-evidence-dag": "^2.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

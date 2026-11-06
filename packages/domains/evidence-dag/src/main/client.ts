@@ -1,3 +1,4 @@
+import { evidenceDagRerunSnapshotInputSchema, evidenceDagRerunCompareInputSchema, evidenceDagRerunSpecOutputSchema, evidenceDagRerunCompareOutputSchema, type EvidenceDagRerunSnapshotInput, type EvidenceDagRerunCompareInput } from '../contract.js'
 import {
   artifactVersionRefV1Schema,
 } from '@sciforge/domain-artifact-versions/contract'
@@ -191,6 +192,33 @@ export class EvidenceDagServiceClient {
       `/evidence-preview?${query.toString()}`,
       { method: 'GET', cache: 'no-store' }
     )
+  }
+
+  async rerunSpec(raw: EvidenceDagRerunSnapshotInput) {
+    const input = evidenceDagRerunSnapshotInputSchema.parse(raw)
+    const query = new URLSearchParams({ snapshotDigest: input.snapshotDigest, conclusionId: input.conclusionId })
+    const spec = evidenceDagRerunSpecOutputSchema.parse(await this.request(
+      `/threads/${encodeURIComponent(evidenceDagThreadId(input.runtimeId, input.threadId))}/rerun-spec?${query}`, { method: 'GET', cache: 'no-store' }))
+    this.verifyRerunIdentity(spec, input, input.snapshotDigest, input.conclusionId)
+    return spec
+  }
+
+  async rerunCompare(raw: EvidenceDagRerunCompareInput) {
+    const input = evidenceDagRerunCompareInputSchema.parse(raw)
+    const query = new URLSearchParams({ baselineDigest: input.baselineDigest, baselineConclusionId: input.baselineConclusionId,
+      candidateDigest: input.candidateDigest, candidateConclusionId: input.candidateConclusionId })
+    const result = evidenceDagRerunCompareOutputSchema.parse(await this.request(
+      `/threads/${encodeURIComponent(evidenceDagThreadId(input.runtimeId, input.threadId))}/rerun-compare?${query}`, { method: 'GET', cache: 'no-store' }))
+    this.verifyRerunIdentity(result.baseline, input, input.baselineDigest, input.baselineConclusionId)
+    this.verifyRerunIdentity(result.candidate, input, input.candidateDigest, input.candidateConclusionId)
+    return result
+  }
+
+  private verifyRerunIdentity(spec: z.infer<typeof evidenceDagRerunSpecOutputSchema>, input: { runtimeId: string; threadId: string }, digest: string, conclusion: string) {
+    if (spec.source.threadId !== evidenceDagThreadId(input.runtimeId, input.threadId) || spec.source.snapshotDigest !== digest ||
+        spec.source.conclusionId !== conclusion || spec.target.kind !== 'conclusion' || spec.target.id !== conclusion) {
+      throw new Error('Rerun owner response identity mismatch.')
+    }
   }
 
   async audit(threadId: string, targetDigest: string): Promise<unknown> {

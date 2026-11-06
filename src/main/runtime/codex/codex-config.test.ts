@@ -1,4 +1,5 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { symlink } from '../../../test-support/symlink'
 import { join, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1217,7 +1218,7 @@ describe('Codex startup model catalog', () => {
     }))
     expect(JSON.parse(await readFile(join(codexHome, 'model-catalog.json'), 'utf8'))).toEqual(published)
     const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).toContain(`model_catalog_json = "${join(codexHome, 'model-catalog.json')}"`)
+    expect(config).toContain(`model_catalog_json = ${JSON.stringify(join(codexHome, 'model-catalog.json'))}`)
     expect(config).not.toContain('model_supports_reasoning_summaries')
     await expect(stat(join(codexHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(stat(join(codexHome, 'models_cache.json'))).rejects.toMatchObject({ code: 'ENOENT' })

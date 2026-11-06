@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access, readFile, writeFile } from 'node:fs/promises'
+import { access, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -156,9 +156,30 @@ function inputShapeForAction(lines, actionId, headingIndex) {
   }
 }
 
+/**
+ * 能力 ID 前缀不一定等于包目录名（合并包：biology-room.* 住在 biology-workbench）。
+ * 先用目录名直连，找不到再按 sciforge.domain.json 的贡献 id 前缀反查包目录。
+ */
+async function resolveDomainPackage(domain) {
+  const direct = path.join(root, 'packages', 'domains', domain)
+  try { await access(direct); return domain } catch { /* 继续反查 */ }
+  const domainsRoot = path.join(root, 'packages', 'domains')
+  let entries = []
+  try { entries = await readdir(domainsRoot) } catch { return domain }
+  for (const entry of entries) {
+    try {
+      const manifest = JSON.parse(await readFile(path.join(domainsRoot, entry, 'sciforge.domain.json'), 'utf8'))
+      const ids = (manifest.entrypoints ?? []).flatMap((point) => (point.contributions ?? []).map((c) => c.id)).filter(Boolean)
+      if (ids.some((id) => id === `${domain}.capabilities` || id.startsWith(`${domain}.`))) return entry
+    } catch { /* 不是域包 */ }
+  }
+  return domain
+}
+
 async function actionEvidence(actionId) {
   const domain = actionId.split('.')[0]
-  const evidencePath = path.resolve(root, 'packages', 'domains', domain, 'eval-cases', 'action-evidence.json')
+  const packageDirectory = await resolveDomainPackage(domain)
+  const evidencePath = path.resolve(root, 'packages', 'domains', packageDirectory, 'eval-cases', 'action-evidence.json')
   let payload
   try {
     payload = JSON.parse(await readFile(evidencePath, 'utf8'))

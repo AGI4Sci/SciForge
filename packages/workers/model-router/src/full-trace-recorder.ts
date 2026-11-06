@@ -15,6 +15,7 @@ import type {
   UpstreamTraceAttemptObserver,
   UpstreamTraceAttemptStart
 } from './upstream-drivers.js'
+import { requestMetrics, traceProtocol, WireResponseMetrics } from './wire-metrics.js'
 
 export type ModelRouterTraceSink = {
   appendMany(inputs: readonly TraceEventInput[]): Promise<readonly TraceEvent[] | void>
@@ -157,6 +158,7 @@ export class ModelRouterFullTraceRecorder {
 
 export class ModelRouterTraceSession {
   private readonly startedAt: string
+  private readonly responseMetrics: WireResponseMetrics
   private requestBody: unknown = null
   private parsedRequestBody: unknown
   private responseHeadersAt?: string
@@ -177,11 +179,13 @@ export class ModelRouterTraceSession {
     private readonly now: () => Date
   ) {
     this.startedAt = now().toISOString()
+    this.responseMetrics = new WireResponseMetrics(traceProtocol(input.path))
   }
 
   recordRequestBody(body: unknown, parsedBody?: unknown): void {
     this.requestBody = body
     this.parsedRequestBody = parsedBody
+    this.responseMetrics.request(parsedBody)
     this.resolvedCorrelation = undefined
   }
 
@@ -210,6 +214,7 @@ export class ModelRouterTraceSession {
   }
 
   recordError(error: unknown): void {
+    this.responseMetrics.error(error)
     const record = asRecord(error)
     this.capturedError = {
       message: error instanceof Error ? error.message : String(error),
@@ -223,10 +228,12 @@ export class ModelRouterTraceSession {
     const originalWrite = response.write.bind(response)
     const originalEnd = response.end.bind(response)
     response.write = ((chunk: unknown, ...args: unknown[]) => {
+      this.responseMetrics.headers(response.statusCode, response.getHeaders())
       this.recordChunk(chunk, encodingFromArgs(args))
       return Reflect.apply(originalWrite, response, [chunk, ...args]) as boolean
     }) as ServerResponse['write']
     response.end = ((chunk?: unknown, ...args: unknown[]) => {
+      this.responseMetrics.headers(response.statusCode, response.getHeaders())
       if (chunk !== undefined && chunk !== null) this.recordChunk(chunk, encodingFromArgs(args))
       return Reflect.apply(originalEnd, response, [chunk, ...args]) as ServerResponse
     }) as ServerResponse['end']
@@ -238,6 +245,7 @@ export class ModelRouterTraceSession {
     })
     response.once('close', () => {
       if (this.finished || response.writableFinished) return
+      this.responseMetrics.abort()
       this.recordError(new Error('Client connection closed before the model response completed.'))
       this.responseStatus = response.statusCode || 499
       this.responseHeaders = response.getHeaders()
@@ -246,11 +254,16 @@ export class ModelRouterTraceSession {
   }
 
   private recordChunk(chunk: unknown, encoding?: BufferEncoding): void {
-    this.responseHeadersAt ??= this.now().toISOString()
+    const timestamp = this.now().toISOString()
+    this.responseHeadersAt ??= timestamp
+    this.responseMetrics.chunk(
+      typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk instanceof Uint8Array ? chunk : Buffer.from(String(chunk)),
+      timestamp
+    )
     this.chunks.push({
       body: chunkText(chunk, encoding),
       byteLength: chunkByteLength(chunk, encoding),
-      timestamp: this.now().toISOString()
+      timestamp
     })
   }
 
@@ -258,6 +271,8 @@ export class ModelRouterTraceSession {
     if (this.finished) return
     this.finished = true
     const endedAt = this.now().toISOString()
+    this.responseMetrics.headers(this.responseStatus, this.responseHeaders)
+    const inputMetrics = requestMetrics(this.parsedRequestBody ?? this.requestBody)
     const correlation = this.correlation()
     const base = {
       ...correlation,
@@ -272,6 +287,7 @@ export class ModelRouterTraceSession {
         path: this.input.path,
         headers: this.input.headers,
         body: this.requestBody,
+        metrics: inputMetrics,
         ...(modelFromBody(this.parsedRequestBody) ? { model: modelFromBody(this.parsedRequestBody) } : {})
       }
     }]
@@ -314,6 +330,7 @@ export class ModelRouterTraceSession {
       payload: {
         status: this.responseStatus,
         durationMs: Math.max(0, Date.parse(endedAt) - Date.parse(this.startedAt)),
+        metrics: { request: inputMetrics, response: this.responseMetrics.finish(endedAt) },
         ...(usage ? { usage } : {})
       }
     })
@@ -335,6 +352,7 @@ export class ModelRouterTraceSession {
 
 class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
   private readonly startedAt: string
+  private readonly responseMetrics: WireResponseMetrics
   private readonly requestId = createRequestId()
   private responseStatus?: number
   private responseHeadersAt?: string
@@ -350,23 +368,29 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
     private readonly now: () => Date
   ) {
     this.startedAt = now().toISOString()
+    this.responseMetrics = new WireResponseMetrics(traceProtocol(input.protocol))
+    this.responseMetrics.request(input.body)
   }
 
   responseHeaders(status: number, headers: Record<string, string>): void {
+    this.responseMetrics.headers(status, headers)
     this.responseStatus = status
     this.responseHeadersValue = headers
     this.responseHeadersAt = this.now().toISOString()
   }
 
   responseChunk(index: number, chunk: Uint8Array): void {
+    const timestamp = this.now().toISOString()
+    this.responseMetrics.chunk(chunk, timestamp)
     this.chunks.push({
       index,
       body: Uint8Array.from(chunk),
-      timestamp: this.now().toISOString()
+      timestamp
     })
   }
 
   error(error: unknown): void {
+    this.responseMetrics.error(error)
     const record = asRecord(error)
     this.capturedError = {
       message: error instanceof Error ? error.message : String(error),
@@ -380,7 +404,9 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
     if (this.finished) return
     this.finished = true
     const endedAt = this.now().toISOString()
+    const inputMetrics = requestMetrics(this.input.body)
     this.responseStatus ??= result.status
+    if (this.responseStatus !== undefined) this.responseMetrics.headers(this.responseStatus, this.responseHeadersValue)
     const base = {
       traceId: this.parent.traceId,
       ...(this.parent.runtimeId ? { runtimeId: this.parent.runtimeId } : {}),
@@ -401,6 +427,7 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
         path: this.input.url,
         headers: this.input.headers,
         body: this.input.body,
+        metrics: inputMetrics,
         ...(modelFromBody(this.input.body) ? { model: modelFromBody(this.input.body) } : {}),
         ...(this.input.upstreamModel ? { upstreamModel: this.input.upstreamModel } : {}),
         ...(this.input.reasoning ? { reasoning: this.input.reasoning } : {}),
@@ -462,6 +489,7 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
         durationMs: Math.max(0, result.durationMs),
         protocol: this.input.protocol,
         upstream: true,
+        metrics: { request: inputMetrics, response: this.responseMetrics.finish(endedAt) },
         ...(usage ? { usage } : {})
       }
     })

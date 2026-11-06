@@ -1,3 +1,4 @@
+import { withBoundedToolResults } from './runtime/agent-runtime/model-visible-tool-result'
 import type { AgentRuntimeId } from '../shared/agent-runtime-contract'
 import type { AgentRuntimeAdapter } from './runtime/agent-runtime/adapter'
 import {
@@ -26,6 +27,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { JsonSettingsStore, devServerHintUrl } from './settings-store'
+import { createWorkspaceAuthority } from './extensions/workspace-authority'
+import { composeNativeExecutionHostServices } from './extensions/native-execution-composition'
 import sciforgeLogoPng from '../asset/img/sciforge.png?url'
 import sciforgeTrayPng from '../asset/img/sciforge_tray.png?url'
 import { createAppIcon, pickTrayIcon, windowsTaskbarAppDetails } from './app-icon'
@@ -148,8 +151,6 @@ import type { ResearchSearchMcpLaunchConfig } from './research-search-mcp-config
 import type { WorkspaceIntelMcpLaunchConfig } from './workspace-intel-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
-import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
-import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import { type ImageGenerationMcpLaunchConfig } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
@@ -182,8 +183,11 @@ import {
 } from './modules/portable-resource-references'
 import { createDomainExtensionsApi, createPluginInventoryService, loadOfficialExtensionKeyring, SignedExtensionStore } from './extensions'
 import { DevelopmentExternalPluginService } from './extensions/development-external-plugins'
+import { randomUUID } from 'node:crypto'
+import { createVisualCaptureHostServiceResolver } from './extensions/visual-capture-host-service'
 import { developmentPluginUiScheme, installDevelopmentPluginUiProtocol } from './extensions/development-plugin-ui-protocol'
 import { loadDevelopmentPluginOptions } from './extensions/development-plugin-options'
+import { loadPluginContractPins } from './extensions/plugin-contract-policy'
 import {
   policyContracts,
   readDshPluginPolicy,
@@ -200,12 +204,15 @@ import {
   resolveDshMarketSource
 } from './extensions/dsh-plugin-market'
 import {
+  DSH_PUBLISHER_KEYRING_ENV,
   loadDshPublisherKeyring,
   resolveDshPublisherKeyringPath
 } from './extensions/dsh-plugin-signature'
 import { ensureDshAgentResolverModule } from './extensions/dsh-agent-resolver'
 import { HOST_BUSINESS_INVOKE_TIMEOUT_MS } from './extensions/invocation-budgets'
 import { createEvidenceModelReasoner } from './extensions/evidence-model-reasoner'
+import { createAgentThreadsHostServiceResolver } from './extensions/agent-threads-host-service'
+import { createReadGrantedHostServicePorts, mergeHostServiceResolutions } from './extensions/host-service-resolution'
 import { ModelReasoningService } from './model-reasoning/service'
 import { createUpstreamReasoningDeclarationProvider } from './model-reasoning/upstream-declaration'
 import { createUpstreamCatalogObserver } from './model-reasoning/upstream-catalog'
@@ -251,13 +258,9 @@ import {
   createPlatformPackageEncryption
 } from './domain-package-storage'
 import { ManagedSecretRedactionRegistry } from './managed-secret-redaction'
-import {
-  projectDomainAgentTurnMessages,
-  subscribeDomainAgentTranscriptMessages
-} from './domain-agent-transcript'
+import { createDomainAgentThreadsHost } from './domain-agent-threads'
 import {
   createDomainAgentExecutionHost,
-  domainAgentExecutionFailure,
   resolveDomainAgentRuntimeReadiness
 } from './domain-agent-execution'
 
@@ -351,14 +354,6 @@ function getRuntimeInspectorMcpLaunchConfig(): RuntimeInspectorMcpLaunchConfig {
   return getManagedGuiMcpLaunchConfig()
 }
 
-function getScientificSkillsMcpLaunchConfig(): ScientificSkillsMcpLaunchConfig {
-  return getManagedGuiMcpLaunchConfig()
-}
-
-function getScientificPlottingMcpLaunchConfig(): ScientificPlottingMcpLaunchConfig {
-  return getManagedGuiMcpLaunchConfig()
-}
-
 function getBgcDiscoveryMcpLaunchConfig(): BgcDiscoveryMcpLaunchConfig {
   return getManagedGuiMcpLaunchConfig()
 }
@@ -384,14 +379,6 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
     runtimeInspectorMcp: {
       settings,
       launch: getRuntimeInspectorMcpLaunchConfig()
-    },
-    scientificSkillsMcp: {
-      settings,
-      launch: getScientificSkillsMcpLaunchConfig()
-    },
-    scientificPlottingMcp: {
-      settings,
-      launch: getScientificPlottingMcpLaunchConfig()
     },
     bgcDiscoveryMcp: { settings, launch: getBgcDiscoveryMcpLaunchConfig() },
     imageGenerationMcp: {
@@ -1188,7 +1175,7 @@ app
     store = new JsonSettingsStore(app.getPath('userData'))
     traceStartup('settings load:start')
     let initial = await store.load()
-    const relocatedModelRouterBaseUrl = await relocateModelRouterIfPortIsOccupied(initial)
+    const relocatedModelRouterBaseUrl = await relocateModelRouterIfPortIsOccupied(initial, { userDataDir: app.getPath('userData') })
     if (relocatedModelRouterBaseUrl) {
       initial = await store.patch({
         modelRouter: {
@@ -1343,6 +1330,24 @@ app
         }
       },
       getDeviceId: () => hostExecutionNodeId,
+      userInput: {
+        request: (input) => {
+          const invocation = capabilityBrokerForDomainServices?.currentInvocation()
+          const context = invocation?.originalContext
+          const host = agentRuntimeHostForShutdown
+          if (!host || invocation?.caller.audience !== 'agent' || !context ||
+            typeof context.runtimeId !== 'string' || typeof context.threadId !== 'string' ||
+            typeof context.turnId !== 'string' || typeof context.callId !== 'string') {
+            throw new Error('User input requires a Host-authenticated Agent tool invocation.')
+          }
+          return host.requestUserInput(input, {
+            requestId: String(context.requestId ?? invocation.invocationId ?? ''),
+            runtimeId: context.runtimeId, threadId: context.threadId,
+            turnId: context.turnId, callId: context.callId,
+            ...(invocation.caller.workspaceLocator ? { workspaceLocator: invocation.caller.workspaceLocator } : {})
+          }, invocation.signal)
+        }
+      },
       humanActions: {
         capture: (input) => {
           if (!capabilityBrokerForDomainServices) throw new Error('The Host capability broker is not ready.')
@@ -1516,30 +1521,81 @@ app
     // the runner refuses the call, so an installed plugin would be uncallable.
     const dshAgentResolver = await ensureDshAgentResolverModule(app.getPath('userData'))
     // Publisher trust for the market: host configuration, read once at start-up.
-    const dshPublisherKeyring = await loadDshPublisherKeyring(
-      resolveDshPublisherKeyringPath(app.getPath('userData'), process.env)
-    )
+    // A packaged build ships one public keyring. Use the profile copy when it
+    // exists (or an explicit override), otherwise fall back to that shipped
+    // keyring so a fresh install can verify official artifacts without any
+    // per-profile seeding step.
+    const dshPublisherKeyringPath = resolveDshPublisherKeyringPath(app.getPath('userData'), process.env)
+    const dshPublisherKeyringSource = process.env[DSH_PUBLISHER_KEYRING_ENV]?.trim()
+      || (existsSync(dshPublisherKeyringPath) ? dshPublisherKeyringPath : officialExtensionKeys.sourcePath)
+    const dshPublisherKeyring = await loadDshPublisherKeyring(dshPublisherKeyringSource ?? dshPublisherKeyringPath)
     if (developmentPluginOptions === undefined && dshRuntimeVersion === undefined) {
       logWarn(
         'extensions',
         'The official DSH runtime version could not be resolved; installed plugins cannot be authorized in this build.'
       )
     }
+    const installedAdapterContracts = policyContracts(dshPluginPolicy)
+    const readInstalledContractPorts = createReadGrantedHostServicePorts(() => installedAdapterContracts)
+    const readInstalledGrantedPorts = (identity: Readonly<{ packageName: string; version: string }>) =>
+      developmentPlugins === undefined
+        ? readInstalledContractPorts(identity)
+        : developmentPlugins.approvedHostServicePorts(identity.packageName, identity.version)
+    const visualCaptureInstanceId = randomUUID()
+    // The Host's own record of usable workspaces. `caller.workspaceId` arrives
+    // from the renderer, so it is only a declaration; this is what turns it into
+    // an authorized directory. Roots come from persisted settings and from live
+    // workspace-host Sessions - never from the caller.
+    const workspaceAuthority = createWorkspaceAuthority({
+      readTrustedRoots: async () => {
+        const settings = await store.load()
+        return [
+          settings.workspaceRoot,
+          ...settings.write.workspaces,
+          ...workspaceHostSessions.list().map((session) => session.locator.path)
+        ]
+      }
+    })
+    // Exact-version Host contract pins configure clients; configuration alone is not authority.
+    const pluginDshConfigs: Readonly<Record<string, Readonly<Record<string, unknown>>>> = Object.freeze({})
+    // A market artifact declares its tools; it does not get to declare Host
+    // services, DSH activation or UI authority. Those come from this exact
+    // package-version pin, so installing a package cannot widen its power.
+    const pluginContractPins = await loadPluginContractPins({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged
+    })
+    // Admission is the Host's, not the plugin's: only a package whose Host
+    // configuration promises the artifact lane is resolved a provider (and a
+    // client module). The provider re-checks the request anyway.
+    const authorizeHostService = (input: Readonly<{ packageName: string; version: string; serviceId: string }>): boolean =>
+      (pluginContractPins as Readonly<Record<string, { hostServices: readonly string[] }>>)[`${input.packageName}@${input.version}`]?.hostServices.includes(input.serviceId) === true
     const installedPluginOptions = Object.freeze({
       root: installedPluginRoot,
       userDataPath: app.getPath('userData'),
       hostApiVersion: catalog.hostApiVersion,
-      adapterContracts: policyContracts(dshPluginPolicy),
+      adapterContracts: installedAdapterContracts,
       allowedPermissionIds: new Set<string>(),
       dshAgentResolver,
+      dshConfigs: pluginDshConfigs,
+      pinnedContracts: pluginContractPins,
       ...(dshRuntimeVersion === undefined ? {} : { dshRuntimeVersion })
     })
-    // Shared wiring for the installed-plugin service. The development seam below
-    // keeps its own inline copy: `development-plugin-composition.test.ts` pins the
-    // exact shape of that `if (developmentPluginOptions)` block, so it must not
-    // start referencing new outer bindings.
+    // Domain callbacks remain package-owned. Both startup branches are executed
+    // by composition tests with their real generic resolver dependencies.
     const installedHostServiceOptions = {
       userDataDir: app.getPath('userData'),
+      // Host-chosen client module for domain Host services. Packaged builds
+      // copy it next to the extension resources because a plain Node child
+      // cannot import from inside app.asar.
+      hostServiceClientModule: app.isPackaged
+        ? join(process.resourcesPath, 'extensions', 'host-service-client.mjs')
+        : existsSync(join(__dirname, 'host-service-client.mjs'))
+          ? join(__dirname, 'host-service-client.mjs')
+          : join(app.getAppPath(), 'packages/plugin-sdk/src/host-service-client.mjs'),
+      authorizeWorkspace: workspaceAuthority,
+      authorizeHostService,
       environment: process.env,
       reasoner: createEvidenceModelReasoner(() => store.load(), () => undefined),
       threads: {
@@ -1566,12 +1622,18 @@ app
           context.signal.throwIfAborted()
           const broker = capabilityBrokerForDomainServices
           if (!broker) throw new Error('The Host capability broker is not ready.')
-          const result = await broker.invokeOrdinarySession(
-            context.caller as Parameters<CapabilityBroker['invokeOrdinarySession']>[0],
-            request as Parameters<CapabilityBroker['invokeOrdinarySession']>[1],
-            context.ordinarySession as Parameters<CapabilityBroker['invokeOrdinarySession']>[2],
-            { signal: context.signal, ...(context.originalContext ? { context: context.originalContext } : {}) }
-          )
+          const result = context.ordinarySession
+            ? await broker.invokeOrdinarySession(
+                context.caller as Parameters<CapabilityBroker['invokeOrdinarySession']>[0],
+                request as Parameters<CapabilityBroker['invokeOrdinarySession']>[1],
+                context.ordinarySession as Parameters<CapabilityBroker['invokeOrdinarySession']>[2],
+                { signal: context.signal, ...(context.originalContext ? { context: context.originalContext } : {}) }
+              )
+            : await broker.invoke(
+                context.caller as Parameters<CapabilityBroker['invoke']>[0],
+                request as Parameters<CapabilityBroker['invoke']>[1],
+                { signal: context.signal }
+              )
           context.assertCurrent()
           context.signal.throwIfAborted()
           return result.output
@@ -1586,8 +1648,22 @@ app
         if (!host) throw new Error('Agent runtime Host is not ready for extension invocation.')
         return host
       }
-      const hostServiceResolution = createInstalledDomainHostServiceResolution({
+      const readContractPorts = createReadGrantedHostServicePorts(() => developmentPluginOptions.adapterContracts)
+      const readGrantedPorts = (identity: Readonly<{ packageName: string; version: string }>) =>
+        developmentPlugins === undefined
+          ? readContractPorts(identity)
+          : developmentPlugins.approvedHostServicePorts(identity.packageName, identity.version)
+      const hostServiceClientModule = installedHostServiceOptions.hostServiceClientModule
+      const visualCaptureServices = createVisualCaptureHostServiceResolver({
+        visibleContext: visibleContextService, visualCapture: registeredTargetVisualCapture,
+        authorizeWorkspace: workspaceAuthority, readGrantedPorts, hostServiceClientModule, instanceId: visualCaptureInstanceId
+      })
+      const domainHostServiceResolution = mergeHostServiceResolutions(createInstalledDomainHostServiceResolution({
+        portsFor: (packageName: string, version: string) => readGrantedPorts({ packageName, version }),
         userDataDir: app.getPath('userData'),
+        hostServiceClientModule,
+        authorizeWorkspace: workspaceAuthority,
+        authorizeHostService,
         environment: process.env,
         reasoner: createEvidenceModelReasoner(() => store.load(), () => undefined),
         threads: {
@@ -1606,30 +1682,59 @@ app
             context.signal.throwIfAborted()
             const broker = capabilityBrokerForDomainServices
             if (!broker) throw new Error('The Host capability broker is not ready.')
-            const result = await broker.invokeOrdinarySession(
-              context.caller as Parameters<CapabilityBroker['invokeOrdinarySession']>[0],
-              request as Parameters<CapabilityBroker['invokeOrdinarySession']>[1],
-              context.ordinarySession as Parameters<CapabilityBroker['invokeOrdinarySession']>[2],
-              { signal: context.signal, ...(context.originalContext ? { context: context.originalContext } : {}) }
-            )
+            const result = context.ordinarySession
+              ? await broker.invokeOrdinarySession(
+                  context.caller as Parameters<CapabilityBroker['invokeOrdinarySession']>[0],
+                  request as Parameters<CapabilityBroker['invokeOrdinarySession']>[1],
+                  context.ordinarySession as Parameters<CapabilityBroker['invokeOrdinarySession']>[2],
+                  { signal: context.signal, ...(context.originalContext ? { context: context.originalContext } : {}) }
+                )
+              : await broker.invoke(
+                  context.caller as Parameters<CapabilityBroker['invoke']>[0],
+                  request as Parameters<CapabilityBroker['invoke']>[1],
+                  { signal: context.signal }
+                )
             context.assertCurrent()
             context.signal.throwIfAborted()
             return result.output
           }
         },
         logUnavailable: () => logWarn('domain-host-services', 'A bundled domain Host service is unavailable because its trusted runtime configuration is incomplete.')
+      }), createAgentThreadsHostServiceResolver({
+        readGrantedPorts,
+        hostServiceClientModule,
+        authorizeWorkspace: workspaceAuthority,
+        readArtifact: async ({ signal, ...ref }) => {
+          signal.throwIfAborted()
+          const artifact = await requireAgentRuntimeHost().readToolArtifact(ref)
+          signal.throwIfAborted()
+          return artifact
+        },
+        readSnapshot: async ({ runtimeId, threadId, signal }) => {
+          signal.throwIfAborted()
+          const snapshot = await requireAgentRuntimeHost().readThreadSnapshot({ runtimeId: runtimeId as never, threadId })
+          signal.throwIfAborted()
+          return snapshot
+        }
+      }), { resolveHostServiceProviders: visualCaptureServices.resolve, resolveHostServiceClients: visualCaptureServices.resolveClients, hostServiceIds: visualCaptureServices.serviceIds })
+      const hostServiceResolution = composeNativeExecutionHostServices({
+        domains: domainHostServiceResolution,
+        contracts: { get: key => developmentPlugins ? developmentPlugins.approvedContractFor(key) : developmentPluginOptions.adapterContracts?.get(key) },
+        clientModulePath: app.isPackaged
+          ? join(process.resourcesPath, 'extensions', 'native-execution-client.mjs')
+          : join(app.getAppPath(), 'packages/plugin-sdk/src/native-execution-client.mjs'),
+        authorizeWorkspace: workspaceAuthority,
+        runtimeHost: () => agentRuntimeHostRef.current
       })
       developmentPlugins = new DevelopmentExternalPluginService({
         ...developmentPluginOptions,
+        authorizeWorkspace: workspaceAuthority,
         invokeTimeoutMs: HOST_BUSINESS_INVOKE_TIMEOUT_MS,
         resolveHostServiceProviders: hostServiceResolution.resolveHostServiceProviders,
         resolveHostServiceClients: hostServiceResolution.resolveHostServiceClients,
         hostServiceIds: hostServiceResolution.hostServiceIds,
-      })
-      const pluginUiService = developmentPlugins
-      installDevelopmentPluginUiProtocol(protocol, {
-        resolveAsset: (asset) => pluginUiService.rendererAssetPath(asset),
-        fetchFile: (url, method) => net.fetch(url, { method })
+        dshConfigs: pluginDshConfigs,
+        pinnedContracts: pluginContractPins,
       })
       logInfo('extensions', `Configured development plugins from ${developmentPluginOptions.root}.`)
       app.once('will-quit', () => {
@@ -1641,9 +1746,51 @@ app
     // plugins load from the release plugin root. A separate statement on purpose —
     // it is not part of the seam's `if` above, and it never shares a root with it.
     if (developmentPlugins === undefined && dshRuntimeVersion !== undefined) {
-      const hostServiceResolution = createInstalledDomainHostServiceResolution(installedHostServiceOptions)
+      const visualCaptureServices = createVisualCaptureHostServiceResolver({
+        visibleContext: visibleContextService, visualCapture: registeredTargetVisualCapture,
+        authorizeWorkspace: workspaceAuthority, readGrantedPorts: readInstalledGrantedPorts,
+        hostServiceClientModule: installedHostServiceOptions.hostServiceClientModule, instanceId: visualCaptureInstanceId
+      })
+      const domainHostServiceResolution = mergeHostServiceResolutions(
+        createInstalledDomainHostServiceResolution({
+          ...installedHostServiceOptions,
+          portsFor: (packageName: string, version: string) => readInstalledGrantedPorts({ packageName, version })
+        }),
+        createAgentThreadsHostServiceResolver({
+          readGrantedPorts: readInstalledGrantedPorts,
+          hostServiceClientModule: installedHostServiceOptions.hostServiceClientModule,
+          authorizeWorkspace: workspaceAuthority,
+          readArtifact: async ({ signal, ...ref }) => {
+            signal.throwIfAborted()
+            const host = agentRuntimeHostRef.current
+            if (!host) throw new Error('Agent runtime Host is not ready for extension invocation.')
+            const artifact = await host.readToolArtifact(ref)
+            signal.throwIfAborted()
+            return artifact
+          },
+          readSnapshot: async ({ runtimeId, threadId, signal }) => {
+            signal.throwIfAborted()
+            const host = agentRuntimeHostRef.current
+            if (!host) throw new Error('Agent runtime Host is not ready for extension invocation.')
+            const snapshot = await host.readThreadSnapshot({ runtimeId: runtimeId as never, threadId })
+            signal.throwIfAborted()
+            return snapshot
+          }
+        }),
+        { resolveHostServiceProviders: visualCaptureServices.resolve, resolveHostServiceClients: visualCaptureServices.resolveClients, hostServiceIds: visualCaptureServices.serviceIds }
+      )
+      const hostServiceResolution = composeNativeExecutionHostServices({
+        domains: domainHostServiceResolution,
+        contracts: { get: key => developmentPlugins ? developmentPlugins.approvedContractFor(key) : installedAdapterContracts.get(key) },
+        clientModulePath: app.isPackaged
+          ? join(process.resourcesPath, 'extensions', 'native-execution-client.mjs')
+          : join(app.getAppPath(), 'packages/plugin-sdk/src/native-execution-client.mjs'),
+        authorizeWorkspace: workspaceAuthority,
+        runtimeHost: () => agentRuntimeHostRef.current
+      })
       developmentPlugins = new DevelopmentExternalPluginService({
         ...installedPluginOptions,
+        authorizeWorkspace: workspaceAuthority,
         invokeTimeoutMs: HOST_BUSINESS_INVOKE_TIMEOUT_MS,
         resolveHostServiceProviders: hostServiceResolution.resolveHostServiceProviders,
         resolveHostServiceClients: hostServiceResolution.resolveHostServiceClients,
@@ -1658,6 +1805,16 @@ app
       )
       app.once('will-quit', () => {
         void developmentPlugins?.dispose()
+      })
+    }
+    // One UI protocol for whichever plugin service is active — the development
+    // seam or the release installs. Assets resolve through the same
+    // version-store-backed path either way.
+    if (developmentPlugins !== undefined) {
+      const pluginUiService = developmentPlugins
+      installDevelopmentPluginUiProtocol(protocol, {
+        resolveAsset: (asset) => pluginUiService.rendererAssetPath(asset),
+        fetchFile: (url, method) => net.fetch(url, { method })
       })
     }
     // The market installs into the release plugin root, which is only the loaded
@@ -2111,11 +2268,17 @@ app
       cancelApprovalTurn: (identity, reason) =>
         agentRuntimeHostRef.current?.cancelCapabilityApprovalTurn(identity, reason) ?? 0
     })
-    agentRuntimeTools = composeAgentRuntimeToolSurfaces([
+    agentRuntimeTools = withBoundedToolResults(composeAgentRuntimeToolSurfaces([
       capabilityAgentTools,
       createDeferredAgentRuntimeToolSurface(() => agentRuntimeHostForShutdown?.historyTools()),
       createDeferredAgentRuntimeToolSurface(() => agentRuntimeHostForShutdown?.subagentTools())
-    ])
+    ]), async (request, result) => {
+      if (!agentRuntimeHostForShutdown) throw new Error('Runtime result history is unavailable.')
+      return agentRuntimeHostForShutdown.persistToolResult(request, result)
+    }, async (request, result, signal) => {
+      if (!agentRuntimeHostForShutdown) throw new Error('Runtime mutation history is unavailable.')
+      await agentRuntimeHostForShutdown.persistWorkspaceMutation(request, result, signal)
+    })
     const isTrustedMainRendererIpcSender = (event: IpcMainInvokeEvent): boolean => {
       const window = mainWindow
       if (!window || window.isDestroyed()) return false
@@ -2246,52 +2409,15 @@ app
       (identity, operation) =>
         agentRuntimeHost.withHostToolRequestPrincipalLease(identity, operation)
     )
+    // One agent-threads adapter serves both the domain runtime contributions and
+    // the Change Inspector Host thin layer, so the thin layer reads the same real
+    // session data the static domain would have read.
+    const domainAgentThreadsHost = createDomainAgentThreadsHost(agentRuntimeHost)
     mainRuntimeContributions = await activateMainRuntimeContributions(catalog, {
       userDataDir: app.getPath('userData'),
       appRoot: app.isPackaged ? join(process.resourcesPath, 'app.asar.unpacked') : app.getAppPath(),
       environment: Object.freeze({ ...process.env }),
-      agentThreads: {
-        list: async (input = {}) => {
-          const threads = await agentRuntimeHost.listThreads(input as AgentRuntimeThreadListInput)
-          return Object.freeze(
-            threads.map((thread) =>
-              Object.freeze({
-                id: thread.id,
-                runtimeId: thread.runtimeId,
-                ...(thread.workspace?.trim() ? { workspaceRoot: thread.workspace.trim() } : {}),
-                ...(thread.archived === undefined ? {} : { archived: thread.archived })
-              })
-            )
-          )
-        },
-        read: async (input) => {
-          const detail = await agentRuntimeHost.readThreadSnapshot(input as AgentRuntimeThreadStatusInput)
-          return Object.freeze({
-            id: detail.id,
-            runtimeId: detail.runtimeId,
-            ...(detail.workspace?.trim() ? { workspaceRoot: detail.workspace.trim() } : {}),
-            ...(detail.archived === undefined ? {} : { archived: detail.archived }),
-            watermark: String(detail.latestSeq),
-            turns: Object.freeze(
-              (detail.turns ?? []).map((turn) =>
-                Object.freeze({
-                  id: turn.id,
-                  status: turn.status,
-                  ...(turn.status === 'failed' || turn.status === 'cancelled'
-                    ? { failure: domainAgentExecutionFailure(turn.status, turn.items ?? []) ?? undefined } : {}),
-                  ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
-                  messages: projectDomainAgentTurnMessages(turn),
-                  artifacts: Object.freeze([...(turn.items ?? [])])
-                })
-              )
-            ),
-            artifacts: Object.freeze(detail.turns.flatMap((turn) => turn.items ?? []))
-          })
-        },
-        subscribeMessages: (input) =>
-          subscribeDomainAgentTranscriptMessages(agentRuntimeHost, input),
-        hasActiveTurns: () => agentRuntimeHost.hasActiveTurns()
-      },
+      agentThreads: domainAgentThreadsHost,
       turnEvents: {
         subscribe: (listener) => agentRuntimeHost.subscribeTurnLifecycle(listener),
         subscribeRequiredBeforeTurn: (listener) =>
@@ -2428,6 +2554,16 @@ app
       // A later operation resolves fresh neutral router parameters and repins.
       if (partial.modelRouter || partial.modelAccess || partial.activeAgentRuntime) {
         await dshRuntimeAdapter.invalidateModelAccess()
+      }
+      // The startup probe may predate onboarding by minutes. Recheck before
+      // publishing a changed route, while retaining our verified own listener.
+      if ((partial.modelRouter || partial.modelAccess) && getModelAccessSettings(next)?.mode === 'api') {
+        const relocated = await relocateModelRouterIfPortIsOccupied(next, { userDataDir: app.getPath('userData') })
+        if (relocated) {
+          partial = { ...partial, modelRouter: { ...partial.modelRouter, baseUrl: relocated.baseUrl,
+            portConflict: { configuredPort: relocated.configuredPort, activePort: relocated.activePort } } }
+          logWarn('model-router', `Model Router port ${relocated.configuredPort} became occupied; moved this instance to ${relocated.activePort}.`)
+        }
       }
       const saved = await store.patch(partial)
       traceSensitiveSettings.update(saved)
@@ -2614,7 +2750,6 @@ app
       resolveLogDirectory,
       getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
       logError,
-      getScientificSkillsMcpLaunchConfig,
       getBgcDiscoveryMcpLaunchConfig,
       getImageGenerationMcpLaunchConfig,
       getPptMasterMcpLaunchConfig

@@ -37,6 +37,51 @@ beforeEach(() => {
 })
 
 describe('CodexThreadStore bulk upsert', () => {
+  it('preserves the minimal context marker through updates and reopening old storage', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexThreadStore({ rootDir })
+    await store.upsert({ codexThreadId: 'native-minimal', contextProfile: 'minimal' })
+    await store.upsert({ codexThreadId: 'native-minimal', latestTurnId: 'turn-1', latestSeq: 3 })
+    await store.upsert({ codexThreadId: 'ordinary' })
+    const reopened = new CodexThreadStore({ rootDir })
+    expect(await reopened.get('native-minimal')).toMatchObject({ contextProfile: 'minimal', latestSeq: 3 })
+    expect(await reopened.get('ordinary')).not.toHaveProperty('contextProfile')
+  })
+  it.each(['failed', 'completed', 'aborted'] as const)(
+    'does not inherit a previous %s state when a new turn first reports activity', async (previousStatus) => {
+      const rootDir = await tempRoot()
+      const store = new CodexThreadStore({ rootDir })
+      await store.upsert({
+        guiThreadId: 'gui-thread', codexThreadId: 'native-thread',
+        latestTurnId: 'previous-turn', latestTurnStatus: previousStatus, latestSeq: 6
+      })
+
+      // turn_start_sent identifies the new turn before its user_message sets running.
+      const starting = await store.upsert({
+        guiThreadId: 'gui-thread', codexThreadId: 'native-thread',
+        latestTurnId: 'new-turn', latestSeq: 7
+      })
+      expect(starting.latestTurnId).toBe('new-turn')
+      expect(starting.latestTurnStatus).toBeUndefined()
+      await store.upsert({
+        guiThreadId: 'gui-thread', codexThreadId: 'native-thread',
+        latestTurnId: 'new-turn', latestTurnStatus: 'running', latestSeq: 8
+      })
+      await expect(new CodexThreadStore({ rootDir }).get('gui-thread')).resolves.toMatchObject({
+        latestTurnId: 'new-turn', latestTurnStatus: 'running', latestSeq: 8
+      })
+
+      await store.upsert({
+        guiThreadId: 'gui-thread', codexThreadId: 'native-thread',
+        latestTurnId: 'new-turn', latestTurnStatus: 'completed', latestSeq: 9
+      })
+      await expect(store.upsert({
+        guiThreadId: 'gui-thread', codexThreadId: 'native-thread',
+        latestTurnId: 'new-turn', latestTurnStatus: 'running', latestSeq: 10
+      })).resolves.toMatchObject({ latestTurnId: 'new-turn', latestTurnStatus: 'completed' })
+    }
+  )
+
   it('persists many Codex thread mappings with one snapshot write', async () => {
     const rootDir = await tempRoot()
     const store = new CodexThreadStore({

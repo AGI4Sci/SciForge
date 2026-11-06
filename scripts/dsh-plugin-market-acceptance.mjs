@@ -53,7 +53,7 @@ async function main() {
   const { loadDshPublisherKeyring } = await import(
     pathToFileURL(resolve('src/main/extensions/dsh-plugin-signature.ts')).href
   )
-  const { emptyDshPluginPolicy, policyContracts, readDshPluginPolicy } = await import(
+  const { policyContracts, readDshPluginPolicy } = await import(
     pathToFileURL(resolve('src/main/extensions/dsh-plugin-policy.ts')).href
   )
   const { DevelopmentExternalPluginService } = await import(
@@ -110,7 +110,7 @@ async function main() {
       hostProvidedDependencies: new Set(['@deepseek-ai/dsh-tools', '@napi-rs/canvas']),
       publisherKeyring,
       service: {
-        installFromDirectory: (directory, contract) => holder.current.installFromDirectory(directory, contract),
+        installFromDirectory: (directory, contract, restoreInstallation) => holder.current.installFromDirectory(directory, contract, restoreInstallation),
         uninstall: (packageName) => holder.current.uninstall(packageName),
         refreshDiscoveredPlugins: () => holder.current.refreshDiscoveredPlugins()
       }

@@ -12,7 +12,7 @@ export function offerAvailabilityPresentation(availability: CollaborationOfferAv
     case 'recovering': return { label: '恢复中', detail: '正在重新校验身份和派单，校验完成前不会执行。尚未接受的任务在恢复后仍需你手动接受。' }
     case 'sync_pending': return { label: '待同步', detail: '你的决定已保存在本机，正在核对原请求的云端结果。请等待同步完成。' }
     case 'claimed_elsewhere': return { label: '已被其他设备领取', detail: '此派单已在其他设备领取，这台电脑不会执行。' }
-    case 'unverified': return { label: '待核实', detail: '暂未获得可恢复此派单的完整证据。请保持连接以同步最新派单状态。' }
+    case 'unverified': return { label: '待核实', detail: '这台电脑核对不到这条派单的云端凭据（可能已被重新派发或已过期），因此不会执行。请让负责人重新派发；若刚刚重新连接，稍等片刻派单会自行复核。' }
     case 'invalid': return {
       label: '已失效',
       detail: availability.reason === 'offer_expired' ? '派单已到期，请联系负责人重新派发。'

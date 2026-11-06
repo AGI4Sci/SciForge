@@ -1,3 +1,4 @@
+import { assertCapabilityDefinitionCurrent, bindCapabilityDefinitionLease } from '../../capabilities/registry'
 import { createHash, randomUUID } from 'node:crypto'
 import { freezeInvocationSnapshot, isLosslessJsonValue } from '../../capabilities/invocation-snapshot'
 import {
@@ -116,13 +117,13 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
   async invoke(
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
-    options: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext } = {}
+    options: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext; expectedDescriptor?: CapabilityDescriptor } = {}
   ): Promise<CapabilityInvocationResult> {
     const operation = this.#operationsByActionId.get(request.actionId)
     if (!operation) {
       const ordinarySession = ordinarySessionIdentity(options.context)
       if (!ordinarySession) {
-        return this.#broker.invoke(caller, request, { signal: options.signal })
+        return this.#broker.invoke(caller, request, { signal: options.signal, expectedDescriptor: options.expectedDescriptor })
       }
       if (!this.#broker.invokeOrdinarySession) {
         throw new RuntimeToolError('The Host ordinary Session invocation route is unavailable.', {
@@ -133,9 +134,14 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       }
       return this.invokeOrdinarySession(caller, request, ordinarySession, {
         signal: options.signal,
-        context: options.context
+        context: options.context,
+        expectedDescriptor: options.expectedDescriptor
       })
     }
+    if (options.expectedDescriptor && operation.descriptor !== options.expectedDescriptor) {
+      throw Object.assign(new Error('The managed capability registration changed.'), { code: 'stale_capability_definition' })
+    }
+    assertCapabilityDefinitionCurrent(operation.descriptor)
     const context = options.context
     if (!context) throw new RuntimeToolError('Managed tool invocation requires runtime context.', {
       code: 'missing_runtime_context',
@@ -156,6 +162,7 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
         retryable: false
       })
     }
+    assertCapabilityDefinitionCurrent(operation.descriptor)
     authorizeManagedApproval(caller, operation.descriptor, request)
     await this.#assertPrincipalLease(context)
     const invocationKey = managedInvocationKey(caller, request, operation.descriptor)
@@ -182,14 +189,16 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
       const markSettled = (): void => { entry.settled = true }
       void execution.then(markSettled, markSettled)
     }
-    return execution
+    const result = await execution
+    assertCapabilityDefinitionCurrent(operation.descriptor)
+    return result
   }
 
   async invokeOrdinarySession(
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
     ordinarySession: DomainMainOrdinarySessionIdentity,
-    options: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext } = {}
+    options: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext; expectedDescriptor?: CapabilityDescriptor } = {}
   ): Promise<CapabilityInvocationResult> {
     if (!this.#broker.invokeOrdinarySession) {
       throw new RuntimeToolError('The Host ordinary Session invocation route is unavailable.', {
@@ -317,12 +326,17 @@ export class RuntimeCapabilityBroker implements CapabilityAgentBroker {
           await this.#isToolAvailable(context, tool)) available.push(tool)
       await this.#assertPrincipalLease(context)
     }
-    const descriptors = available.map((tool) => {
-      const descriptor = descriptorForManagedTool(tool)
-      this.#operationsByActionId.set(descriptor.id, { tool, descriptor })
+    const candidates = available.map(tool => ({ tool, descriptor: descriptorForManagedTool(tool) }))
+    const matched = discoverCapabilityDescriptors(candidates.map(value => value.descriptor), caller, query, 'managed-mcp')
+    return matched.map(descriptor => {
+      const tool = candidates.find(value => value.descriptor === descriptor)!.tool
+      const previous = this.#operationsByActionId.get(descriptor.id)
+      if (previous?.tool === tool) return previous.descriptor
+      const operation = { tool, descriptor }
+      bindCapabilityDefinitionLease(descriptor, () => this.#operationsByActionId.get(descriptor.id) === operation)
+      this.#operationsByActionId.set(descriptor.id, operation)
       return descriptor
     })
-    return discoverCapabilityDescriptors(descriptors, caller, query, 'managed-mcp')
   }
 }
 

@@ -4,6 +4,14 @@ import type { ProjectCoordinatorRendererClient } from '../../coordinator/rendere
 const updatedMessage = '项目已更新，请查看后再接受'
 
 function isRevisionConflict(cause: unknown): boolean {
+  if (cause && typeof cause === 'object') {
+    const details = 'details' in cause ? cause.details : undefined
+    const reason = details && typeof details === 'object' && 'reasonCode' in details
+      ? details.reasonCode : 'code' in cause ? cause.code : undefined
+    // Structured business reasons outrank diagnostic text. handler_failed is
+    // the generic broker wrapper and carries no business classification.
+    if (typeof reason === 'string' && reason !== 'handler_failed') return reason === 'revision_conflict'
+  }
   return cause instanceof Error && (
     cause.message.includes('Project invitation acceptance lost the exact current Project revision.') ||
     cause.message.includes('SciForge Cloud request failed: revision_conflict:')
@@ -14,14 +22,14 @@ function explainInvitationChange(cause: unknown): unknown {
   if (!(cause instanceof Error)) return cause
   if (cause.message.includes('Only the exact invited OIDC User may accept this Project invitation.') ||
     cause.message.includes('Only an invited Project Membership may be accepted.')) {
-    return new Error(`${updatedMessage}：本人的邀请记录或当前账户已变化。`)
+    return new Error(`${updatedMessage}：本人的邀请记录或当前账户已变化。`, { cause })
   }
   if (cause.message.includes('Requirements are not confirmed yet.')) {
-    return new Error(`${updatedMessage}：正式需求尚未确认。`)
+    return new Error(`${updatedMessage}：所有者还没有确认正式需求，暂时不能接受邀请；等需求状态变成「已确认」后再来接受。`, { cause })
   }
   if (cause.message.includes('A terminal Project invitation cannot be accepted.') ||
     cause.message.includes('Project is not visible to the current User.')) {
-    return new Error(`${updatedMessage}：项目已结束或当前账户已无访问权限。`)
+    return new Error(`${updatedMessage}：项目已结束或当前账户已无访问权限。`, { cause })
   }
   return cause
 }
@@ -84,7 +92,7 @@ export async function acceptReviewedInvitation(options: Readonly<{
   try {
     return await options.client.acceptInvitation({ ...input, expectedProjectRevision: current.project.revision })
   } catch (cause) {
-    if (isRevisionConflict(cause)) throw new Error(`${updatedMessage}：重提期间项目再次变化。`)
+    if (isRevisionConflict(cause)) throw new Error(`${updatedMessage}：重提期间项目再次变化。`, { cause })
     throw explainInvitationChange(cause)
   }
 }

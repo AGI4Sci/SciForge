@@ -31,7 +31,7 @@ import { mainPerformanceMonitor } from '../performance-monitor'
 import { capabilityAgentCallerId } from '../capabilities/agent-tools'
 import { capabilityUiCallerId } from '../capabilities/ipc'
 import { capabilityTransportRequestIdSchema } from '../../shared/capability-broker'
-import type { DshMarketApi } from '../../shared/dsh-market'
+import { dshMarketApprovalSnapshotSchema, dshMarketApprovalToolSchema, type DshMarketApi } from '../../shared/dsh-market'
 import {
   modelReasoningCancelInputSchema,
   modelReasoningCancelResultSchema,
@@ -109,10 +109,7 @@ import {
   domainExtensionSetEnabledPayloadSchema,
   domainExtensionSummarySchema,
   domainExtensionRendererContributionsResultSchema,
-  pptMasterMcpConfigPayloadSchema,
-  scientificPlottingMcpConfigPayloadSchema,
-  scientificSkillsInstallPayloadSchema,
-  scientificSkillsMcpConfigPayloadSchema,
+  workspaceMcpConfigPayloadSchema,
   gitBranchPayloadSchema,
   gitWorkspacePayloadSchema,
   guiUpdateChannelSchema,
@@ -161,10 +158,6 @@ import {
   type VisibleContextTargetRefRequest
 } from '../../shared/visible-context'
 import {
-  buildScientificSkillsMcpConfigFragment,
-  type ScientificSkillsMcpLaunchConfig
-} from '../scientific-skills-mcp-config'
-import {
   buildBgcDiscoveryMcpConfigFragment,
   type BgcDiscoveryMcpLaunchConfig
 } from '../bgc-discovery-mcp-config'
@@ -176,15 +169,6 @@ import {
   buildPptMasterMcpConfigFragment,
   type PptMasterMcpLaunchConfig
 } from '../ppt-master-mcp-config'
-import {
-  buildScientificSkillsIndex,
-  buildScientificSkillsStatusSummary
-} from '../../../packages/workers/scientific-plotting/src/scientific-skills-index'
-import {
-  installScientificSkills,
-  type ScientificSkillsInstallRequest,
-  type ScientificSkillsInstallResult
-} from '../../../packages/workers/scientific-plotting/src/scientific-skills-installer'
 import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
@@ -428,11 +412,9 @@ export type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   getMainPerformanceSnapshot?: () => unknown
-  getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getBgcDiscoveryMcpLaunchConfig?: () => BgcDiscoveryMcpLaunchConfig
   getImageGenerationMcpLaunchConfig?: () => ImageGenerationMcpLaunchConfig
   getPptMasterMcpLaunchConfig?: () => PptMasterMcpLaunchConfig
-  installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
   logError: (category: string, message: string, detail?: unknown) => void
   transcribeSpeech?: (
     settings: AppSettingsV1,
@@ -542,11 +524,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     loadGuiUpdaterModule,
     resolveLogDirectory,
     getMainPerformanceSnapshot,
-    getScientificSkillsMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
     getPptMasterMcpLaunchConfig,
-    installScientificSkills: installScientificSkillsHandler = installScientificSkills,
     logError,
     transcribeSpeech = requestSpeechTranscription
   } = options
@@ -802,18 +782,19 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const dshMarketPackageInputSchema = z.object({
     packageName: z.string().trim().min(1).max(214)
   }).strict()
+  const dshMarketPortsSchema = z.array(z.string().trim().min(1).max(256)).max(32)
+    .refine(ports => new Set(ports).size === ports.length, 'Host operations must be unique.')
   const dshMarketInstallInputSchema = dshMarketPackageInputSchema.extend({
-    approvedToolNames: z.array(z.string().trim().min(1).max(128)).max(64)
+    approvalSnapshot: dshMarketApprovalSnapshotSchema,
+    approvedToolNames: z.array(z.string().trim().min(1).max(128)).max(64),
+    approvedPorts: dshMarketPortsSchema.optional()
   }).strict()
   const dshMarketSetEnabledInputSchema = dshMarketPackageInputSchema.extend({
     enabled: z.boolean()
   }).strict()
-  const dshMarketToolSchema = z.object({
-    name: z.string().trim().min(1).max(128),
-    id: z.string().trim().min(1).max(192),
-    effect: z.enum(['read', 'compute', 'workspace-write', 'external-write', 'destructive'])
-  }).strict()
+  const dshMarketToolSchema = dshMarketApprovalToolSchema
   const dshMarketPluginSchema = z.object({
+    approvalSnapshot: dshMarketApprovalSnapshotSchema,
     name: z.string().trim().min(1).max(214),
     title: z.string().trim().min(1).max(128),
     version: z.string().trim().min(1).max(64),
@@ -821,6 +802,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     tools: z.array(dshMarketToolSchema).max(64),
     /** Declared capabilities plus whether the Host currently exposes each one. */
     capabilities: z.array(dshMarketToolSchema.extend({ registered: z.boolean() }).strict()).max(64),
+    ports: dshMarketPortsSchema,
     hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64),
     publisher: z.string().trim().min(1).max(128).nullable(),
     sizeBytes: z.number().int().nonnegative().max(512 * 1024 * 1024),
@@ -1793,56 +1775,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return listGuiSkills(settings, request.workspaceRoot)
   })
 
-  handleInvoke('mcp:scientific-skills-config', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'mcp:scientific-skills-config',
-      scientificSkillsMcpConfigPayloadSchema,
-      payload
-    )
-    try {
-      const launch = getScientificSkillsMcpLaunchConfig?.() ?? {
-        appPath: app.getAppPath(),
-        execPath: process.execPath,
-        isPackaged: app.isPackaged
-      }
-      return {
-        ok: true as const,
-        config: buildScientificSkillsMcpConfigFragment(launch, request.workspaceRoot)
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('mcp:scientific-skills-status', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'mcp:scientific-skills-status',
-      scientificSkillsMcpConfigPayloadSchema,
-      payload
-    )
-    try {
-      const summary = buildScientificSkillsStatusSummary(
-        await buildScientificSkillsIndex({ workspaceRoot: request.workspaceRoot })
-      )
-      return {
-        ok: true as const,
-        ...summary
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
   handleInvoke('mcp:bgc-discovery-config', async (_, payload: unknown) => {
     const request = parseIpcPayload(
       'mcp:bgc-discovery-config',
-      scientificPlottingMcpConfigPayloadSchema,
+      workspaceMcpConfigPayloadSchema,
       payload
     )
     try {
@@ -1866,7 +1802,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('mcp:image-generation-config', async (_, payload: unknown) => {
     const request = parseIpcPayload(
       'mcp:image-generation-config',
-      scientificPlottingMcpConfigPayloadSchema,
+      workspaceMcpConfigPayloadSchema,
       payload
     )
     try {
@@ -1892,27 +1828,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('scientific-skills:install', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'scientific-skills:install',
-      scientificSkillsInstallPayloadSchema,
-      payload
-    )
-    try {
-      return installScientificSkillsHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        status: 'unexpected_error' as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
   handleInvoke('mcp:ppt-master-config', async (_, payload: unknown) => {
     const request = parseIpcPayload(
       'mcp:ppt-master-config',
-      pptMasterMcpConfigPayloadSchema,
+      workspaceMcpConfigPayloadSchema,
       payload
     )
     try {

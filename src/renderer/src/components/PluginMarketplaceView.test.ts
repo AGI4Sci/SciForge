@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   RECOMMENDED_SKILL_ITEMS,
-  scientificSkillsRootSourceLabel,
-  scientificSkillsRootSourceTitle,
   skillCatalogItemsFromDiscoveredSkills
 } from './PluginMarketplaceView'
 
@@ -51,27 +49,5 @@ describe('skillCatalogItemsFromDiscoveredSkills', () => {
         sourceLabel: 'Global'
       })
     ])
-  })
-})
-
-describe('scientific skills root display labels', () => {
-  const labels: Record<string, string> = {
-    pluginScientificSkillsRootEnv: 'ENV',
-    pluginScientificSkillsRootWorkspaceAgents: 'Workspace .agents',
-    pluginScientificSkillsRootWorkspaceSkills: 'Workspace skills',
-    pluginScientificSkillsRootGlobalAgents: 'Global .agents'
-  }
-  const t = (key: string): string => labels[key] ?? key
-
-  it('keeps current roots path-addressable', () => {
-    expect(scientificSkillsRootSourceLabel('global-agents', t)).toBe('Global .agents')
-    expect(scientificSkillsRootSourceTitle('global-agents', '/Users/demo/.agents/skills', t)).toBe(
-      '/Users/demo/.agents/skills'
-    )
-  })
-
-  it('falls back to unknown source ids without adding legacy root labels', () => {
-    expect(scientificSkillsRootSourceLabel('custom-source', t)).toBe('custom-source')
-    expect(scientificSkillsRootSourceTitle('custom-source', '/tmp/custom', t)).toBe('/tmp/custom')
   })
 })

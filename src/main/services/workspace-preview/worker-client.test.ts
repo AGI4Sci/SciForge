@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { createDomainMainEntry } from '@sciforge/domain-life-science-preview/main'
-import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-life-science-preview/contract'
+import { createDomainMainEntry } from '@sciforge/domain-biology-workbench/main'
+import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-biology-workbench/workspace-preview-contract'
 import {
   LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES,
   decodeLifeScienceSelectionsInValue,
   decodeLifeScienceWorkspaceObservation
-} from '@sciforge/domain-life-science-preview/workspace-preview-wire'
+} from '@sciforge/domain-biology-workbench/workspace-preview-wire'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspacePreviewFileState,
@@ -17,6 +17,10 @@ import {
   type WorkspacePreviewSession
 } from '../../../shared/workspace-preview'
 import { FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS } from './registry'
+import type {
+  MainWorkspacePreviewPluginSlotContribution,
+  WorkspacePreviewProvider
+} from '@sciforge/domain-sdk/workspace-preview'
 import { WorkspacePreviewWorkerClient } from './worker-client'
 
 function createWorkerClient(): WorkspacePreviewWorkerClient {
@@ -25,11 +29,18 @@ function createWorkerClient(): WorkspacePreviewWorkerClient {
     defineCapability: () => undefined
   })
   return WorkspacePreviewWorkerClient.compose({
-    domainPlugins: entry.contributions.map((contribution) => ({
-      ownerId: entry.definition.module.id,
-      manifest: contribution.value.manifest,
-      provider: contribution.value.provider
-    }))
+    domainPlugins: entry.contributions
+      .filter((contribution) => contribution.kind === 'main.workspace-preview-plugin')
+      .map((contribution) => {
+        const { value } = contribution as {
+          value: MainWorkspacePreviewPluginSlotContribution<WorkspacePreviewProvider>
+        }
+        return {
+          ownerId: entry.definition.module.id,
+          manifest: value.manifest,
+          provider: value.provider
+        }
+      })
   }).workerClient
 }
 

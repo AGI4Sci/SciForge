@@ -185,7 +185,8 @@ renderer 采用“Zustand + React 局部状态 + 主进程权威状态”的混�
 | 写作工作区 | `write/write-workspace-store.ts` | workspace 文件为事实来源；store 管理编辑状态、保存调度 |
 | GUI plan | `plan/plan-store.ts` | renderer 运行态，接收 runtime/IPC 更新 |
 | SDD 草稿 | `sdd/sdd-draft-store.ts` | Zustand + localStorage 恢复 |
-| 领域自有 UI 状态 | 例如 anchored-comments store | 归领域 renderer 包所有 |
+| 领域自有 UI 状态 | 领域 renderer 包的局部交互状态 | 归对应领域 renderer 包所有 |
+| Anchored Comments 业务状态与截图资产 | 独立 DSH 插件的 workspace-local store | 归 `plugins/anchored-comments` 所有，宿主认证 caller 工作区；无内置域或旧浮层 |
 | settings | `RendererRuntimeClient` 缓存 + `settings:changed` | main `JsonSettingsStore` 为权威来源 |
 | 组件短生命周期状态 | React hooks/context | 不持久化 |
 
@@ -221,7 +222,7 @@ localStorage 仅承担 renderer 恢复与偏好类数据，例如活动线程与
 
 #### 领域专用存储
 
-领域或 worker 可以选择适合自身的数据存储。Identity V1 的唯一权威账户库由 `packages/domains/identity-access` 拥有，位于 `<userData>/identity-access/identity.sqlite`，使用 `node:sqlite`、事务迁移和 `PRAGMA user_version`；宿主和 renderer 都不直接访问该数据库。其他示例包括 paper-radar worker 的 SQLite。以上都不是应用核心的统一数据库，也不应被宿主直接当作共享数据层。
+领域或 worker 可以选择适合自身的数据存储。Identity V1 的唯一权威账户库由 `packages/domains/identity-access` 拥有，位于 `<userData>/identity-access/identity.sqlite`，使用 `node:sqlite`、事务迁移和 `PRAGMA user_version`；宿主和 renderer 都不直接访问该数据库。领域数据库不是应用核心的统一数据库，也不应被宿主直接当作共享数据层。
 
 ### 8. 插件/能力扩展机制
 

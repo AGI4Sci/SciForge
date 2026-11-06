@@ -9,6 +9,7 @@ import {
 import { ArrowLeft, ArrowRight, PanelRightOpen, X } from 'lucide-react'
 import {
   SESSION_RIGHT_PANEL_MIN_WIDTH,
+  SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH,
   type SessionRightPanelPane,
   type SessionRightPanelWorkspace
 } from './session-right-panel-workspaces'
@@ -18,6 +19,7 @@ export type SessionRightPanelBindingDescriptor = Readonly<{
   id: SessionRightPanelPane['mode']
   label: string
   disabled?: boolean
+  navigation?: 'default' | 'resource-only'
   allowSplit?: boolean
 }>
 
@@ -90,7 +92,6 @@ type PaneSurfaceProps = Readonly<{
 
 const chromeButtonClass =
   'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:pointer-events-none disabled:opacity-30'
-const RIGHT_PANEL_DIVIDER_WIDTH = 11
 
 function PaneSurface({
   workspace,
@@ -144,13 +145,13 @@ function PaneSurface({
       <section
         role="region"
         aria-labelledby={titleId}
-        className={`flex h-full min-h-0 flex-col bg-ds-sidebar ${workspace.panes.length > 1 ? 'min-w-0 flex-1' : 'shrink-0'} ${
+        className={`flex h-full min-h-0 flex-col bg-ds-sidebar min-w-0 shrink-0 ${
           focused ? 'ring-1 ring-inset ring-accent/35' : ''
         }`}
         style={{
-          width: workspace.panes.length > 1 ? undefined : pane.width,
-          minWidth: workspace.panes.length > 1 ? 0 : SESSION_RIGHT_PANEL_MIN_WIDTH,
-          maxWidth: workspace.panes.length > 1 ? undefined : `calc(100% - ${RIGHT_PANEL_DIVIDER_WIDTH}px)`
+          width: pane.width,
+          minWidth: SESSION_RIGHT_PANEL_MIN_WIDTH,
+          maxWidth: `calc(100% - ${SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH}px)`
         }}
         data-session-right-panel-pane={pane.paneId}
         data-right-panel-pane-instance={pane.instanceKey}
@@ -230,7 +231,7 @@ function PaneSurface({
             {selectedBinding ? null : (
               <option value={pane.mode}>{pane.mode}</option>
             )}
-            {bindings.map((binding) => (
+            {bindings.filter(binding => binding.navigation !== 'resource-only' || binding.id === pane.mode).map((binding) => (
               <option key={binding.id} value={binding.id} disabled={binding.disabled}>
                 {binding.label}
               </option>
@@ -239,13 +240,13 @@ function PaneSurface({
           {allowSplit ? (
             <button
               type="button"
-              className="inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              className={chromeButtonClass}
               aria-label={labels.split}
               title={labels.split}
               onClick={() => onSplitPane(workspace.sessionId, pane.paneId)}
             >
               <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
-              <span>{labels.splitAction}</span>
+              <span className="sr-only">{labels.splitAction}</span>
             </button>
           ) : null}
           <button
@@ -258,7 +259,7 @@ function PaneSurface({
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </header>
-        <div id={contentId} className="min-h-0 flex-1" data-right-panel-pane-content>
+        <div id={contentId} className="min-h-0 min-w-0 flex-1 overflow-auto" data-right-panel-pane-content>
           <RightPanelSurfaceScope surfaceId={pane.paneId}>
             {renderPane(pane, { active, focused })}
           </RightPanelSurfaceScope>
@@ -302,14 +303,23 @@ export function SessionRightPanelDock({
     ).find((element) =>
       element.dataset.sessionRightPanelPane === workspace.focusedPaneId
     )
-    if (dock && workspace.panes.length === 1) dock.scrollLeft = 0
-    focusedPane?.scrollIntoView?.({ block: 'nearest', inline: 'start' })
+    const revealFocusedPane = () => {
+      if (dock && workspace.panes.length === 1) dock.scrollLeft = 0
+      focusedPane?.scrollIntoView?.({ block: 'nearest', inline: 'start' })
+    }
+    revealFocusedPane()
     if (restorePaneSwitcherFocusRef.current) {
       dock?.querySelector<HTMLSelectElement>(
         `[data-right-panel-pane-switcher-for="${workspace.focusedPaneId}"]`
       )?.focus()
       restorePaneSwitcherFocusRef.current = false
     }
+    // A viewport resize may change every pane's CSS width without changing
+    // its saved identity or preference. Keep the focused pane reachable.
+    if (!dock || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(revealFocusedPane)
+    observer.observe(dock)
+    return () => observer.disconnect()
   }, [active, paneIdentityKey, workspace, workspace.focusedPaneId])
 
   return (

@@ -3,16 +3,17 @@ import { ProjectBoard } from './project-board/ProjectBoard.js'
 import { TaskDrawer } from './task-drawer/TaskDrawer.js'
 import { ProjectHeader } from './project-header/ProjectHeader.js'
 import { ProjectSidebar } from './project-sidebar/ProjectSidebar.js'
+import type { HumanDecision, HumanAnswerFeedback } from './human-request-decision.js'
 import type { TaskCardModel } from './workspace-types.js'
 import type { WorkspaceViewModel } from './workspace-view-model.js'
 import type { WorkerDeliveryView } from '../../worker-delivery.js'
 import type { DeliveryFileEntry } from './files/delivery-files.js'
 import type { DeliveryDraftData, DeliveryDraftFile, DeliveryMaterialSelection } from './task-drawer/delivery-draft-types.js'
 
-type ProjectTab = 'board' | 'requirements' | 'files' | 'settings'
+type ProjectTab = 'research' | 'board' | 'requirements' | 'files' | 'settings'
 type PersonalRoute = 'my-work' | 'inbox' | 'settings'
 
-export function CollaborationWorkspaceStructure({ model, selectedCard, busy = false, pendingAction, taskError, content, switching = false, showDrawer, showProjectHeader, activeTab, activeRoute, onSelectProject, onNavigate, onTabChange, onSelectCard, onCreateProject, onAdopt, onRequestRevision, onOfferDecision, onHumanAnswer, onReexecute, onContinueSession, onReturnTask, onSubmitDelivery, onSummaryChange, onMaterialsChange, onAiSummaryDecision, onAssign, onWithdraw, onComment, onCloseDrawer, onPrimaryAction, onConnect, onCopyUserId, activity, delivery, deliveryDetail, materialSelection, onPreviewDraftFile, deliveryError, deliveryFiles, onPreviewDeliveryFile, onPreviewSealedFile }: Readonly<{
+export function CollaborationWorkspaceStructure({ model, selectedCard, busy = false, pendingAction, taskError, content, switching = false, showDrawer, showProjectHeader, activeTab, activeRoute, onSelectProject, onNavigate, onTabChange, onSelectCard, onCreateProject, onAdopt, onRequestRevision, onOfferDecision, onHumanAnswer, humanAnswerFeedback, onReexecute, onContinueSession, onReturnTask, onSubmitDelivery, onSummaryChange, onMaterialsChange, onAiSummaryDecision, onAssign, onWithdraw, onComment, onCloseDrawer, onPrimaryAction, onConnect, onCopyUserId, activity, delivery, deliveryDetail, materialSelection, onPreviewDraftFile, deliveryError, deliveryFiles, onPreviewDeliveryFile, onPreviewSealedFile }: Readonly<{
   model: WorkspaceViewModel
   selectedCard: TaskCardModel
   busy?: boolean
@@ -33,7 +34,8 @@ export function CollaborationWorkspaceStructure({ model, selectedCard, busy = fa
   onAdopt(): void
   onRequestRevision(instruction: string): Promise<boolean> | void
   onOfferDecision(decision: 'accept' | 'reject'): void
-  onHumanAnswer(answer: string): Promise<boolean> | void
+  humanAnswerFeedback?: HumanAnswerFeedback
+  onHumanAnswer(answer: string, decision?: HumanDecision): Promise<boolean> | void
   onReexecute?(): void
   onContinueSession?(): void
   onReturnTask?(reason: string): Promise<boolean>
@@ -123,6 +125,7 @@ export function CollaborationWorkspaceStructure({ model, selectedCard, busy = fa
             onRequestRevision={onRequestRevision}
             onOfferDecision={onOfferDecision}
             onHumanAnswer={onHumanAnswer}
+            humanAnswerFeedback={humanAnswerFeedback}
             onReturnTask={onReturnTask} onReexecute={onReexecute}
             onContinueSession={onContinueSession}
             onSubmitDelivery={onSubmitDelivery}

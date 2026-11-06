@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { pathToFileURL } from 'node:url'
 
 import { LocalTraceStore, type TraceEventInput } from '@sciforge/full-trace'
 
@@ -58,7 +59,7 @@ test('surfaces writer initialization failures instead of leaving capture apparen
   const userDataDirectory = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-writer-failure-'))
   const sink = new ModelRouterFullTraceWorkerSink({
     userDataDirectory,
-    moduleUrl: 'file:///missing/sciforge-full-trace.js'
+    moduleUrl: pathToFileURL(join(userDataDirectory, 'missing-full-trace.js')).href
   })
 
   try {

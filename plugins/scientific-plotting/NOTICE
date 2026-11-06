@@ -1,0 +1,24 @@
+# NOTICE
+
+SciForge Scientific Plotting consolidates code that previously shipped as three
+separate packages. This plugin carries the implementation; this file records
+where that code came from and under which license, so the move does not silently
+re-license anything.
+
+- `src/worker/` derives from the standalone scientific plotting worker package
+  (Apache-2.0), previously under `packages/workers/` at commit 02e7abb2. The
+  template drawing code is retained; TypeScript orchestration and storage have
+  since been refactored for the native DSH code/run/figure lifecycle.
+- Historical domain runtime and plugin adapter code carried MIT notices before
+  consolidation. Retired bridge, iframe and external-version entrypoints are
+  no longer distributed.
+- `src/review-ui/` retains the existing SciForge controlled annotation surface.
+  New native adapters, execution, workspace storage and associated UI are
+  first-party SciForge code. `icon.svg` is original first-party artwork.
+- Bundled third-party packages retain their own license files in the artifact.
+
+SciForge is the copyright holder of all three, and the repository root is
+licensed Apache-2.0 (see `LICENSE`). This package declares MIT; the first-party
+Apache-2.0 worker sources are carried here under that same ownership. Anyone
+redistributing the worker sources alone should also carry the Apache-2.0 terms
+they were published with.

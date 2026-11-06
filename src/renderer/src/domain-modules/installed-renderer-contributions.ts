@@ -1,3 +1,4 @@
+import { USER_INPUT_PRESENTATION_LOCATION, userInputPresentationContractSchema, type DomainUserInputPresentation } from '@sciforge/domain-sdk/user-input'
 import type { InstalledDomainProcessEntrySet } from '@sciforge/domain-sdk'
 import {
   RENDERER_COMMAND_CONTRIBUTION_KIND,
@@ -30,6 +31,7 @@ import {
   isDomainRendererResearchSummaryValue,
   isDomainRendererComposerContextProvider,
   isDomainRendererWorkbenchSurfaceValue,
+  isDomainRendererWorkbenchGlobalOverlayValue,
   isDomainRendererWorkbenchToolbarActionValue,
   isDomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererCommandHandler,
@@ -129,6 +131,7 @@ export type RendererTranslationHost = Readonly<{
 }>
 
 export type InstalledRendererContributions = Readonly<{
+  userInput?: DomainUserInputPresentation<ReactElement> | null
   commands: WorkbenchCommandRegistry
   rightPanels: WorkbenchRightPanelContributionRegistry
   chatResultPanels: ChatResultPanelContributionRegistry
@@ -290,6 +293,7 @@ export function createInstalledRendererContributions(
     onDispose?: () => void
   }> = []
   const extensions: Array<{ onDispose?: () => void }> = []
+  let userInput: DomainUserInputPresentation<ReactElement> | null = null
 
   for (const installed of entrySet.contributions) {
     if (installed.declaration.kind === RENDERER_CHAT_MESSAGE_CONTRIBUTION_KIND) {
@@ -367,7 +371,7 @@ export function createInstalledRendererContributions(
       )
       if (
         !contract.success ||
-        !isDomainRendererWorkbenchSurfaceValue(installed.value)
+        !isDomainRendererWorkbenchGlobalOverlayValue(installed.value)
       ) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
@@ -543,6 +547,15 @@ export function createInstalledRendererContributions(
       ) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
+      if (installed.contract && typeof installed.contract === 'object' &&
+        'location' in installed.contract && installed.contract.location === USER_INPUT_PRESENTATION_LOCATION) {
+        if (userInput || !userInputPresentationContractSchema.safeParse(installed.contract).success ||
+          !installed.value || typeof installed.value !== 'object' ||
+          !('render' in installed.value) || typeof installed.value.render !== 'function') {
+          throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+        }
+        userInput = installed.value as DomainUserInputPresentation<ReactElement>
+      }
       if (!domainRendererExtensionContractSchema.safeParse(installed.contract).success) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
@@ -714,6 +727,7 @@ export function createInstalledRendererContributions(
 
   let disposed = false
   return Object.freeze({
+    get userInput() { return disposed ? null : userInput },
     commands: workbenchCommands,
     rightPanels,
     chatResultPanels: chatResultPanelRegistry,

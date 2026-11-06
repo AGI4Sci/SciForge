@@ -40,10 +40,14 @@ test('declares every required contribution without a host feature map', () => {
       'main.artifact-consumer:evidence-dag.artifact-consumer',
       'main.action-guard:evidence-dag.write-export-guard',
       'main.capability-eval:evidence-dag.capability-eval',
+      'renderer.workbench-global-overlay:evidence-dag.research-record-overlay',
       'renderer.workbench-right-panel:evidence-dag.workbench-right-panel',
       'renderer.research-summary.v1:evidence-dag.research-summary',
       'renderer.resource-navigation:evidence-dag.resource-navigation',
-      'renderer.i18n-resource:evidence-dag.translations'
+      'renderer.i18n-resource:evidence-dag.translations',
+      'renderer.extension:evidence-dag.research-workspace',
+      'renderer.command:evidence-dag.open-audit',
+      'renderer.workbench-toolbar-action:evidence-dag.audit-toolbar-action'
     ]
   )
   assert.equal(EVIDENCE_DAG_CAPABILITY_FACTORY_CONTRIBUTION.id, 'evidence-dag.capabilities')

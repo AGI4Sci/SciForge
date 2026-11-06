@@ -8,9 +8,24 @@ The package is the single contributor of the generic `main.principal-provider`
 contract. It publishes `sciforge.identity-access` with `local-selection` by
 default. A selected account is promoted to `sciforge-cloud` with
 `cloud-authenticated` only while the current OIDC user matches its cloud link
-and the current login session has freshly confirmed an active cloud Device.
+and the current login session has confirmed an active cloud Device. Temporary
+network failures retain this identity binding and its version so local Agent
+turns and children can continue under their existing permissions. The Principal
+is identity attribution, not proof of current Cloud availability: authenticated
+Cloud transport, Agent authority, and fact signing independently require fresh
+ACTIVE Device validation and fence in-flight operations when it is unavailable.
+A restored connection to the same User and Device does not replace the local
+turn lease. Missing/revoked Devices, explicit authority rejection, invalid
+Device responses, and logout clear the binding.
 Logout or Device revocation advances `identityVersion` and immediately falls
 back to local selection.
+
+Authenticated Cloud commands retry one connection-establishment timeout
+(`UND_ERR_CONNECT_TIMEOUT`) with the exact same payload and idempotency key.
+Both attempts share the existing deadline and authority-cancellation signal.
+Socket failures, response failures, and HTTP business errors are not retried
+by this path; their outcomes may already have been committed. The existing
+401 token-renewal path remains the only authentication recovery path.
 
 Each immutable local account UUID is the opaque local Principal subject;
 display-name and first-run preference edits do not change the authorization
@@ -57,3 +72,7 @@ Windows and Linux it uses the public package-scoped Host secret store; Electron
 KWallet backend on Linux. Vault keys bind the installation and typed secret
 purpose. Missing or insecure platform storage fails closed; there is no
 environment, plaintext file, subprocess, IPC, renderer, or alternate fallback.
+
+### Current user profile service
+
+The Host-mediated sciforge.current-user-profile@1.0.0 service projects only the live cloud user's userId/displayName, signed-out, or unavailable. Its explicit consumer is the SiYuan provider's embedded comment attribution. It exposes no token, email, model configuration, transport command or authentication authority. Profiles are read live instead of cached across account transitions.

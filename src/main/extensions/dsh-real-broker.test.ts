@@ -27,7 +27,9 @@ it.skipIf(!source)('unmodified unitverse registers through real Context/Tools, p
   const contracts = new Map([['dsh-unitverse', contract]])
   const registry = new CapabilityRegistry()
   const broker = new CapabilityBroker(registry)
-  const service = new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, 'data'),
+  const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, 'data'),
     hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
   const caller = { audience: 'agent' as const, callerId: 'synthetic-agent' }
   try {

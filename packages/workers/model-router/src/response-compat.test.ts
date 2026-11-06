@@ -60,6 +60,7 @@ test('rewrites a Responses tool_choice into the chat-completions shape without a
   const body = responsesToChatCompletions({
     model: 'configured-model',
     input: 'hello',
+    tools: [tool('lookup', 'Look something up.')],
     tool_choice: { type: 'function', name: 'lookup' },
   });
 
@@ -75,4 +76,42 @@ test('keeps the plain string tool_choice modes unchanged', () => {
   });
 
   assert.equal(body.tool_choice, 'auto');
+});
+
+test('omits optional tool choice when no callable Chat tools remain and preserves structured output', () => {
+  for (const tools of [undefined, [], [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar' } }],
+    [{ type: 'web_search' }], [{ type: 'namespace', name: 'empty', tools: [] }]]) {
+    for (const tool_choice of [undefined, null, 'auto', 'none']) {
+      const request = {
+        input: 'Return an answer.', tools, tool_choice,
+        outputSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'], additionalProperties: false },
+      };
+      const before = JSON.stringify(request);
+      const body = responsesToChatCompletions(request);
+      assert.equal(Object.hasOwn(body, 'tools'), false);
+      assert.equal(Object.hasOwn(body, 'tool_choice'), false);
+      assert.equal((body.response_format as { type: string }).type, 'json_schema');
+      assert.equal(JSON.stringify(request), before);
+    }
+  }
+});
+
+test('rejects required or named choices instead of silently dropping an unsatisfiable tool obligation', () => {
+  for (const tools of [undefined, [], [{ type: 'custom', name: 'apply_patch' }], [{ type: 'web_search' }]]) {
+    for (const tool_choice of ['required', { type: 'function', name: 'lookup' },
+      { type: 'function', function: { name: 'lookup' } }, { type: 'custom', name: 'lookup' }]) {
+      assert.throws(() => responsesToChatCompletions({ input: 'hello', tools, tool_choice }),
+        /cannot honor required or selected tool_choice without any usable tools/);
+    }
+  }
+});
+
+test('retains none, required and named tool choices when callable tools are available', () => {
+  const tools = [tool('lookup', 'Look something up.')];
+  for (const tool_choice of ['none', 'required']) {
+    assert.equal(responsesToChatCompletions({ input: 'hello', tools, tool_choice }).tool_choice, tool_choice);
+  }
+  const body = responsesToChatCompletions({ input: 'hello', tools, tool_choice: { type: 'function', name: 'lookup' } });
+  assert.deepEqual(body.tool_choice, { type: 'function', function: { name: 'lookup' } });
+  assert.equal((body.tools as ChatTool[]).length, 1);
 });

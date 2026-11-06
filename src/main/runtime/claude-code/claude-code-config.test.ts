@@ -296,6 +296,7 @@ describe('claude-code config launch helpers', () => {
       cwd: '/tmp/workspace',
       model: 'sonnet',
       resume: 'session-1',
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: expect.stringContaining('Task execution guidance:') },
       extraArgs: { allowedTools: 'Edit' }
     })
     expect(launch.sdkOptions.extraArgs).not.toHaveProperty('model')

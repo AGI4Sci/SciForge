@@ -349,7 +349,11 @@ async function verifyArtifactVersionRef(
   try {
     const result = await readPort(workspaceRoot).read({ versionId: expectedRef.versionId })
     if (!result.ok) return { ok: false, issue: result.issue }
-    if (stableJson(result.value.ref) !== stableJson(expectedRef)) {
+    const { artifact, version } = result.value
+    if (stableJson(result.value.ref) !== stableJson(expectedRef) ||
+      artifact.artifactId !== expectedRef.artifactId || version.artifactId !== expectedRef.artifactId || version.versionId !== expectedRef.versionId ||
+      version.storage.contentDigest !== expectedRef.contentDigest || version.storage.byteLength !== expectedRef.byteLength ||
+      stableJson(version.accessPolicy) !== stableJson(expectedRef.accessPolicy)) {
       return {
         ok: false,
         issue: {

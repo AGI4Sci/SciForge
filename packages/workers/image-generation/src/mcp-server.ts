@@ -355,7 +355,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
 
   server.registerTool('image_generation_render', {
     title: 'Render Image Generation Artifact',
-    description: `Requires the complete recipe returned by image_generation_prepare, including recipe.visualPlan. First call visual_generate, then pass its terminal plan.handoff as visualPlan to image_generation_prepare, then use the returned nextCall.arguments here. This applies to simple illustrations too; prompt, mode, and size alone are insufficient. Render a controlled model-owned visual layer and write a SciForge artifact manifest for mandatory visual review. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} On hybrid routes, locked elements remain owned by deterministic composition.`,
+    description: `Requires the complete recipe returned by image_generation_prepare, including recipe.visualPlan. First call visual_generate, then pass its terminal plan.handoff as visualPlan to image_generation_prepare, then use the returned nextCall.arguments here. This applies to simple illustrations too; prompt, mode, and size alone are insufficient. Render a controlled model-owned visual layer and write a SciForge artifact manifest for mandatory visual review. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} On hybrid routes, locked elements remain owned by deterministic composition. A successful hybrid render returns sciforge_discover as nextCall and preserves composite inputs in invocationHandoff; use the discovered operationRef and a caller-persisted operationId with sciforge_invoke rather than inventing a reference.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       recipe: recipeSchema,
@@ -384,15 +384,11 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
       const nextCall = result.ok
         ? hybridReferencePath
           ? {
-              tool: 'scientific_plotting_composite',
+              tool: 'sciforge_discover',
               arguments: {
-                workspaceRoot: request.workspaceRoot,
-                visualPlan: request.recipe.visualPlan,
-                reviewTask: request.recipe.prompt,
-                layers: [
-                  { path: result.outputPath, owner: 'model' },
-                  { path: hybridReferencePath, owner: 'code' }
-                ]
+                capabilityId: 'scientific-plotting.composite',
+                includeSchema: true,
+                limit: 1
               }
             }
           : {
@@ -406,11 +402,27 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
               }
             }
         : undefined
+      const invocationHandoff = result.ok && hybridReferencePath
+        ? {
+            tool: 'sciforge_invoke',
+            capabilityId: 'scientific-plotting.composite',
+            requires: ['discoveredOperationRef', 'callerPersistedOperationId'],
+            arguments: {
+              workspaceRoot: request.workspaceRoot,
+              visualPlan: request.recipe.visualPlan,
+              reviewTask: request.recipe.prompt,
+              layers: [
+                { path: result.outputPath, owner: 'model' },
+                { path: hybridReferencePath, owner: 'code' }
+              ]
+            }
+          }
+        : undefined
       return textResult(
         result.ok
-          ? jsonSummary('Rendered image generation artifact: ' + result.status + '.', { result, nextCall })
+          ? jsonSummary('Rendered image generation artifact: ' + result.status + '.', { result, nextCall, invocationHandoff })
           : jsonSummary('Image generation render failed: ' + result.status + '.', result),
-        { result, ...(nextCall ? { nextCall } : {}) }
+        { result, ...(nextCall ? { nextCall } : {}), ...(invocationHandoff ? { invocationHandoff } : {}) }
       )
     } catch (error) {
       return errorResult('Failed to render image: ' + (error instanceof Error ? error.message : String(error)))

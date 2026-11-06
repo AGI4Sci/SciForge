@@ -198,7 +198,12 @@ def _migrate_legacy_aliases(path: str, *, storage: EvidenceStorage) -> None:
         fd = storage.open_alias_at(parent, os.path.basename(path))
         with os.fdopen(fd, 'rb') as handle:
             opened = os.fstat(handle.fileno())
-            if opened != info:
+            # Opening/reading may update atime, and Windows exposes creation
+            # time differently through pathname and handle stat APIs. Neither
+            # is a file identity or content-version check.
+            if (not stat.S_ISREG(opened.st_mode)
+                    or (opened.st_dev, opened.st_ino, opened.st_nlink, opened.st_size, opened.st_mtime_ns)
+                    != (info.st_dev, info.st_ino, info.st_nlink, info.st_size, info.st_mtime_ns)):
                 raise PermissionError('Evidence Snapshot alias changed')
             raw = handle.read()
         graph = provjson.loads(_decode_snapshot(raw, storage=storage).decode('utf-8'))

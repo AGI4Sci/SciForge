@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-identity-access",
-  "version": "5.0.2",
+  "version": "5.1.1",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -24,7 +24,8 @@
     "./contract": "./src/contract.ts",
     "./definition": "./src/definition.ts",
     "./main": "./src/main/index.ts",
-    "./renderer": "./src/renderer/index.tsx"
+    "./renderer": "./src/renderer/index.tsx",
+    "./current-user-profile": "./src/current-user-profile.ts"
   },
   "files": [
     "src",

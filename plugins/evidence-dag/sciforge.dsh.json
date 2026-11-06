@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-evidence-dag",
+  "entry": "dist/main.mjs",
+  "title": "Evidence DAG",
+  "hostDependencies": ["@deepseek-ai/dsh-tools"],
+  "tools": {
+    "evidence_dag_update": {"id": "evidence-dag.update", "effect": "workspace-write", "scope": "workspace", "tags": ["evidence-dag", "evidence", "provenance"]},
+    "evidence_dag_snapshot_status": {"id": "evidence-dag.snapshot-status", "effect": "read", "readResource": "workspace", "tags": ["evidence-dag", "snapshot", "status"]},
+    "evidence_dag_seal_closure": {"id": "evidence-dag.seal-closure", "effect": "workspace-write", "scope": "workspace", "tags": ["evidence-dag", "snapshot", "closure"]},
+    "evidence_dag_append_sidechain": {"id": "evidence-dag.append-sidechain", "effect": "workspace-write", "scope": "workspace", "tags": ["evidence-dag", "audit"]},
+    "evidence_dag_export_snapshot_products": {"id": "evidence-dag.export-snapshot-products", "effect": "workspace-write", "scope": "workspace", "tags": ["evidence-dag", "export", "snapshot"]},
+    "evidence_dag_poll_artifact_events": {"id": "evidence-dag.poll-artifact-events", "effect": "workspace-write", "scope": "workspace", "tags": ["evidence-dag", "artifacts"]},
+    "evidence_dag_poll_producer_provenance": {"id": "evidence-dag.poll-producer-provenance", "effect": "workspace-write", "scope": "workspace", "tags": ["evidence-dag", "producer", "delivery", "provenance"]}
+  }
+}

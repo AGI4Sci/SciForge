@@ -69,35 +69,15 @@ never evicts an unacknowledged terminal event.
 The current graph derivation and formal-baseline boundary is documented in
 [`ADR-0043`](../../../docs/adr/0043-derive-research-graphs-and-seal-formal-baselines.md).
 
-## Dynamic dataset construction
+## Provider-owned execution
 
-Generated workflows use the versioned template bundle and execution-receipt adapter from
-`@sciforge/domain-sdk/workflow-template`. AI Agent nodes pass a structured `allowedTools` policy
-to the Host; Codex and Claude filter both tool publication and dispatch from that policy. Prompts
-are instructions only and are never parsed as an authorization mechanism.
+Resource nodes use installed package contributions through the generic resource
+executor contract. Workflow starts reject missing providers in reachable, enabled
+resource nodes, including reachable enabled subworkflow/loop calls, before events
+or upstream execution. Disabled and unreachable references do not reject a start.
+The editor, loops, approvals, receipts, and rerun contracts remain
+available independently of any resource domain.
 
-`create-loop.build-dataset` accepts confirmed conversational data requirements
-(objective, sources, optional output schema, quality thresholds, models, and
-release target), then dynamically compiles and saves an editable coordinator
-workflow plus its generation-round workflow. When the caller omits the output
-schema, the first workflow stage designs a bounded schema, a task rubric, a
-Dataset API processing recipe, and an initial generation recipe from the user
-objective.
-
-The generated graph uses existing AI/LLM, loop, condition, code, approval, and
-output nodes to:
-
-- acquire, clean, and integrate real Dataset API artifacts;
-- generate candidates with a Challenger and evaluate them with Weak/Strong
-  Solvers plus a Judge;
-- run a separate task Verifier for leakage, rubric coverage, question quality,
-  verifiability, grounding, evidence coverage, and duplication;
-- analyze the complete rejection trajectory and revise the generation recipe
-  and Challenger prompt before retrying;
-- materialize, validate, and publish the accepted batch as a versioned dataset;
-- write one Markdown audit report containing the designed schema and recipes,
-  node status and retries, Judge and Verifier results, strategy revisions,
-  quality metrics, lineage, artifact hashes, and publication receipt.
-
-This is dynamically constructed from normal Create Loop nodes. It is not a
-built-in preset and does not introduce a separate synthetic-data domain.
+Execution-receipt providers use the public
+`@sciforge/domain-sdk/workflow-template` contract. AI Agent nodes pass a structured
+`allowedTools` policy to the Host; prompts are never authorization mechanisms.

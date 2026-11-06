@@ -31,6 +31,8 @@ async function createService() {
   const userDataPath = await mkdtemp(join(tmpdir(), 'sciforge-chain-'))
   temporaryDirectories.push(userDataPath)
   const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true,
     root: directory,
     userDataPath,
     hostApiVersion: '1.11.0',

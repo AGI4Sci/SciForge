@@ -558,3 +558,18 @@ describe('PiRuntimeService persistence and resume', () => {
     }
   }, 30_000)
 })
+
+it('includes Host user input snapshots and submitted answers in thread history', async () => {
+  const { service, cleanup } = createService({ commands: { get_state: { respond: { success: true, data: {} } } },
+    prompts: [{ respond: { success: true, data: { disposition: 'started' } }, events: turnEvents('done') }] })
+  try {
+    const thread = await service.startThread({ title: 'Decision' })
+    const turn = await service.startTurn(thread.id, { text: 'test' })
+    await collectEvents(service, thread.id, (event) => isTerminal(event))
+    await service.publishSyntheticEvent({ kind: 'item_snapshot', runtimeId: 'pi', threadId: thread.id, turnId: turn.turnId,
+      item: { id: 'host-input-test', turnId: turn.turnId, kind: 'user_input', status: 'success',
+        meta: { userInputStatus: 'submitted', answers: [{ id: 'q', label: 'Answer', value: 'Validated only' }] } } })
+    const page = await service.readThreadPage(thread.id)
+    expect(page.turns[0].items?.find((item) => item.id === 'host-input-test')).toMatchObject({ meta: { userInputStatus: 'submitted', answers: [{ value: 'Validated only' }] } })
+  } finally { await cleanup() }
+})

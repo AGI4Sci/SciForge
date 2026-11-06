@@ -275,6 +275,11 @@ export class CodexPreToolUseGovernanceBridge {
           this.rootDir,
           stored.governanceTurnId
         )).snapshot
+    if (snapshot.allowedTools?.length === 0) {
+      return codexPreToolUseFailureClosedOutput(
+        `tool_policy_denied: ${input.tool_name} is disabled for this tool-free Agent turn.`
+      )
+    }
     if (
       snapshot.allowedTools !== undefined &&
       capabilityAgentToolNames.has(input.tool_name) &&
@@ -291,8 +296,7 @@ export class CodexPreToolUseGovernanceBridge {
       arguments: input.tool_input
     }, {
       workspace,
-      ownedVisualToolsAvailable: snapshot.ownedVisualToolsAvailable,
-      nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending
+      ownedVisualToolsAvailable: snapshot.ownedVisualToolsAvailable
     })
     if (decision.action !== 'deny') return {}
     return {

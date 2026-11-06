@@ -1,3 +1,5 @@
+import { encodeToolArtifactRef } from '../agent-runtime/jsonl-thread-page'
+import { withBoundedToolResults } from '../agent-runtime/model-visible-tool-result'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -18,6 +20,7 @@ import {
 import { CodexRuntimeService, CODEX_SUBSCRIBER_QUEUE_MAX_EVENTS } from './codex-service'
 import { CodexEventStore } from './codex-event-store'
 import { CodexThreadStore } from './codex-thread-store'
+import { createCodexAgentRuntimeAdapter } from './codex-agent-runtime-adapter'
 import {
   CODEX_MAIN_IPC_CHANNELS,
   type CodexAppServerClientEvent,
@@ -48,6 +51,7 @@ vi.mock('../../logger', async (importOriginal) => ({
 
 const catalogFetch = vi.fn<typeof fetch>()
 let testCodexHome: string
+const capabilityTurnServices = new Set<CodexRuntimeService>()
 
 beforeEach(async () => {
   testCodexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-config-test-'))
@@ -58,9 +62,16 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  await Promise.all([...capabilityTurnServices].map(service => service.stop()))
+  capabilityTurnServices.clear()
   vi.unstubAllGlobals()
   await rm(testCodexHome, { recursive: true, force: true })
 })
+
+async function startCapabilityTestTurn(service: CodexRuntimeService, threadId: string, text: string): Promise<void> {
+  capabilityTurnServices.add(service)
+  await expect(service.startTurn({ threadId, text })).resolves.toMatchObject({ ok: true })
+}
 
 async function availableTestRuntime(): Promise<AgentRuntimeDiscoveryResult> {
   return {
@@ -362,6 +373,76 @@ describe('CodexRuntimeService model access selection', () => {
       message: expect.stringContaining('selected Agent runtime')
     })
     expect(createClient).not.toHaveBeenCalled()
+  })
+
+  it('restarts the app-server when a turn tightens the global permission level', async () => {
+    const fullAccess = clientWithQueuedEvents()
+    const requestApproval = clientWithQueuedEvents()
+    const fullAccessClient = fullAccess.client
+    const requestApprovalClient = requestApproval.client
+    const turnStart = deferred<unknown>()
+    vi.mocked(requestApprovalClient.startTurn).mockImplementationOnce(async () => turnStart.promise)
+    const createClient = vi.fn()
+      .mockReturnValueOnce(fullAccessClient)
+      .mockReturnValueOnce(requestApprovalClient)
+    const current = settings()
+    current.agents.codex = {
+      ...(current.agents.codex ?? defaultCodexRuntimeSettings()),
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access'
+    }
+    const service = new CodexRuntimeService({
+      probeRuntime: availableTestRuntime,
+      settings: async () => current,
+      createClient
+    })
+
+    const eventAbort = new AbortController()
+    const events = service.subscribeEvents('thread-1', 0, eventAbort.signal)[Symbol.asyncIterator]()
+    const initialEvent = events.next()
+    await expect(service.startThread({ title: 'Permission boundary' })).resolves.toMatchObject({ ok: true })
+    await expect(initialEvent).resolves.toMatchObject({
+      done: false,
+      value: { runtimeStatus: { phase: 'thread_start_done' } }
+    })
+    const postRestartEvent = events.next()
+    const startingTurn = service.startTurn({
+      threadId: 'thread-1',
+      text: 'Request approval before writing outside the workspace.',
+      permissionLevel: 'request-approval'
+    })
+    await vi.waitFor(() => expect(requestApprovalClient.startTurn).toHaveBeenCalledOnce())
+    const backgroundList = service.listThreads()
+    turnStart.resolve({ turn: { id: 'turn-1' } })
+    const result = await startingTurn
+    await backgroundList
+    expect(result).toMatchObject({ ok: true })
+    await expect(postRestartEvent).resolves.toMatchObject({
+      done: false,
+      value: { runtimeStatus: { phase: 'turn_start_sent' } }
+    })
+
+    expect(createClient).toHaveBeenCalledTimes(2)
+    expect(fullAccessClient.stop).toHaveBeenCalledOnce()
+    expect(requestApprovalClient.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      approvalPolicy: 'on-request',
+      sandboxPolicy: expect.objectContaining({ type: 'workspaceWrite' })
+    }))
+    expect(createClient).toHaveBeenCalledTimes(2)
+    expect(requestApprovalClient.stop).not.toHaveBeenCalled()
+    await expect(service.startTurn({
+      threadId: 'concurrent-full-access-thread',
+      text: 'Run concurrently with full access.',
+      permissionLevel: 'full-access'
+    })).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('while another turn is active')
+    })
+    expect(createClient).toHaveBeenCalledTimes(2)
+    eventAbort.abort()
+    await service.stop()
+    fullAccess.close()
+    requestApproval.close()
   })
 })
 
@@ -1722,6 +1803,61 @@ describe('CodexRuntimeService storage fallback', () => {
     })
   })
 
+  it('rejoins a page-leading assistant stream with its final snapshot and keeps one durable identity across pages', async () => {
+    const storageRoot = await tempRoot()
+    const eventStore = new CodexEventStore({ rootDir: storageRoot })
+    const threadId = 'paged-assistant', turnId = 'turn-1'
+    await eventStore.append(threadId, { threadId, turnId, userMessage: { itemId: 'user-1', text: 'review the result' } })
+    const chunks = Array.from({ length: 300 }, (_, index) => `part-${index} `)
+    let firstCreatedAt = ''
+    for (const [index, text] of chunks.entries()) {
+      const event = await eventStore.append(threadId, { threadId, turnId, deltas: [{ kind: 'agent_message', text }] })
+      if (index === 0) firstCreatedAt = event.createdAt
+    }
+    const text = chunks.join('')
+    await eventStore.append(threadId, { threadId, turnId, deltas: [{ kind: 'agent_message', text, snapshot: true }] })
+    const sourceBefore = await eventStore.read(threadId, { includeAll: true })
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot, probeRuntime: availableTestRuntime, createClient: () => failingClient() })
+    const page = await service.readThreadPage(threadId)
+    expect(page.ok).toBe(true)
+    if (!page.ok) throw new Error(page.message)
+    expect(page.nextCursor).toBeTruthy()
+    expect(page.detail.blocks).toEqual([expect.objectContaining({
+      kind: 'assistant', id: 'agent_message-2-0', turnId, text, snapshot: true, createdAt: firstCreatedAt
+    })])
+    const older = await service.readThreadPage(threadId, { cursor: page.nextCursor! })
+    expect(older.ok).toBe(true)
+    if (!older.ok) throw new Error(older.message)
+    expect(older.detail.blocks.filter(block => block.kind === 'assistant')).toEqual([expect.objectContaining({ id: 'agent_message-2-0', createdAt: firstCreatedAt })])
+    expect(await eventStore.read(threadId, { includeAll: true })).toEqual(sourceBefore)
+  })
+
+  it.each(['snapshot', 'tool'] as const)('does not merge distinct answers across a %s boundary in a partially paged turn', async (boundary) => {
+    const storageRoot = await tempRoot()
+    const eventStore = new CodexEventStore({ rootDir: storageRoot })
+    const threadId = 'paged-distinct', turnId = 'turn-1'
+    await eventStore.append(threadId, { threadId, turnId, userMessage: { itemId: 'user-1', text: 'report two findings' } })
+    const chunks = Array.from({ length: 300 }, (_, index) => `finding-${index} `)
+    for (const text of chunks) await eventStore.append(threadId, { threadId, turnId, deltas: [{ kind: 'agent_message', text }] })
+    const firstText = chunks.join('')
+    if (boundary === 'snapshot') await eventStore.append(threadId, { threadId, turnId, deltas: [{ kind: 'agent_message', text: firstText, snapshot: true }] })
+    else await eventStore.append(threadId, { threadId, turnId, tool: { itemId: 'tool-boundary', summary: 'read a separate result', status: 'success' } })
+    // A genuine later response can include the entire earlier response as its tail.
+    const secondText = `A different response: ${firstText}`
+    const second = await eventStore.append(threadId, { threadId, turnId, deltas: [{ kind: 'agent_message', text: secondText, snapshot: true }] })
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot, probeRuntime: availableTestRuntime, createClient: () => failingClient() })
+    const page = await service.readThreadPage(threadId)
+    expect(page.ok).toBe(true)
+    if (!page.ok) throw new Error(page.message)
+    expect(page.nextCursor).toBeTruthy()
+    const answers = page.detail.blocks.filter(block => block.kind === 'assistant')
+    expect(answers).toHaveLength(2)
+    expect(answers[0].id).toBe('agent_message-2-0')
+    expect(answers[1]).toMatchObject({ id: `agent_message-${second.seq}-0`, text: secondText, snapshot: true })
+    if (boundary === 'snapshot') expect(answers[0]).toMatchObject({ text: firstText, snapshot: true })
+    else expect(page.detail.blocks.some(block => block.kind === 'tool')).toBe(true)
+  })
+
   it('keeps distinct assistant snapshot messages in the same turn instead of overwriting the previous one', async () => {
     const storageRoot = await tempRoot()
     const eventStore = new CodexEventStore({ rootDir: storageRoot })
@@ -2871,6 +3007,225 @@ describe('CodexRuntimeService compatibility operations', () => {
     )
   })
 
+  it('enforces light turn policy for dynamic and native tools before dispatch and across mode changes', async () => {
+    const storageRoot = await tempRoot()
+    const queued = clientWithQueuedEvents()
+    const client = queued.client
+    client.resumeThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId } }))
+    vi.mocked(client.request).mockResolvedValue({ status: 'unsubscribed' })
+    const bridge = new CodexPreToolUseGovernanceBridge({ storageRoot })
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const call = vi.fn(async () => ({ tool: 'sciforge_discover', value: { found: true } }))
+    const capabilityAgentTools: AgentRuntimeToolSurface = {
+      tools: () => [{ type: 'function', name: 'sciforge_discover', description: 'Discover', inputSchema: { type: 'object' } }],
+      call
+    }
+    let firstDispatchPolicy: unknown
+    let turn = 0
+    vi.mocked(client.startTurn).mockImplementation(async (params) => {
+      turn += 1
+      if (turn === 1) {
+        firstDispatchPolicy = await pendingServerRequests?.onToolCallRequest?.({
+          requestId: 'first-dispatch', callId: 'first-dispatch', threadId: params.threadId,
+          turnId: 'policy-turn-1', tool: 'sciforge_discover', arguments: {}
+        })
+      }
+      return { turn: { id: `policy-turn-${turn}` } }
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(), storageRoot, capabilityAgentTools,
+      probeRuntime: availableTestRuntime,
+      createClient: options => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+    try {
+      // The native thread originally advertises tools, as a forked ordinary side thread does.
+      await service.startThread({ threadId: 'policy-side', workspace: '/tmp/policy-workspace' })
+      for (const [index, allowedTools] of [[], undefined, []].entries()) {
+        const turnId = `policy-turn-${index + 1}`
+        await expect(service.startTurn({ threadId: 'policy-side', text: 'Question', allowedTools })).resolves.toMatchObject({ ok: true, turnId })
+        const response = await pendingServerRequests?.onToolCallRequest?.({
+          requestId: turnId, callId: turnId, threadId: 'policy-side', turnId,
+          tool: 'sciforge_discover', arguments: {}
+        })
+        expect(response).toMatchObject(allowedTools ? { success: false, errorCode: 'tool_policy_denied', retryable: false } : { success: true })
+        const native = await bridge.evaluate({
+          hook_event_name: 'PreToolUse', session_id: 'thread-1', turn_id: turnId,
+          tool_name: 'Bash', tool_use_id: `native-${turnId}`, tool_input: { command: 'cat sidebar-probe.txt' }
+        })
+        if (allowedTools) expect(native.hookSpecificOutput?.permissionDecisionReason).toContain('tool_policy_denied')
+        else expect(native).toEqual({})
+        queued.push({ type: 'event', channel: CODEX_MAIN_IPC_CHANNELS.event,
+          payload: { method: 'turn/completed', params: { threadId: 'thread-1', turnId } } })
+        await vi.waitFor(() => expect((service as unknown as { activeTurns: Map<string, string> }).activeTurns.has('policy-side')).toBe(false))
+      }
+      expect(firstDispatchPolicy).toMatchObject({ success: false, errorCode: 'tool_policy_denied' })
+      expect(call).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(client.resumeThread).mock.calls.map(([input]) => input.config)).toEqual([
+        { web_search: 'disabled' }, {}, { web_search: 'disabled' }
+      ])
+      expect(vi.mocked(client.request).mock.calls).toEqual([
+        ['thread/unsubscribe', { threadId: 'thread-1' }],
+        ['thread/unsubscribe', { threadId: 'thread-1' }],
+        ['thread/unsubscribe', { threadId: 'thread-1' }]
+      ])
+      expect(vi.mocked(client.request).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(client.resumeThread).mock.invocationCallOrder[0])
+    } finally { await service.stop() }
+  })
+
+  it('disables hosted tools at creation and never unloads a running turn to change policy', async () => {
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(), storageRoot: await tempRoot(),
+      probeRuntime: availableTestRuntime, createClient: () => client
+    })
+    try {
+      await expect(service.startThread({ allowedTools: [] })).resolves.toMatchObject({ ok: true })
+      expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({ config: { web_search: 'disabled' } }))
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Light', allowedTools: [] })).resolves.toMatchObject({ ok: true })
+      expect(client.request).not.toHaveBeenCalled()
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Deep', allowedTools: ['sciforge_discover'] })).resolves.toMatchObject({
+        ok: false, message: expect.stringContaining('current turn completes')
+      })
+      expect(client.request).not.toHaveBeenCalled()
+      expect(client.stop).not.toHaveBeenCalled()
+    } finally { await service.stop() }
+  })
+
+  it('rejects minimal context without durable audit storage before native creation', async () => {
+    const client = controllableClient()
+    const service = new CodexRuntimeService({ settings: async () => settings(),
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    try {
+      await expect(service.startThread({ contextProfile: 'minimal', sidebarVisibility: 'hidden', allowedTools: [] }))
+        .resolves.toMatchObject({ ok: false, message: expect.stringContaining('durable runtime storage') })
+      expect(client.startThread).not.toHaveBeenCalled()
+    } finally { await service.stop() }
+  })
+
+  it('creates an explicit minimal context without coding instructions or dynamic tools and retains native audit', async () => {
+    const queued = clientWithQueuedEvents()
+    const client = queued.client
+    client.resumeThread = vi.fn()
+    const storageRoot = await tempRoot()
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    try {
+      await expect(service.startThread({ contextProfile: 'minimal', sidebarVisibility: 'hidden', allowedTools: [] }))
+        .resolves.toMatchObject({ ok: true })
+      const params = vi.mocked(client.startThread).mock.calls[0][0]
+      expect(params).toMatchObject({ ephemeral: false, developerInstructions: '', dynamicTools: [],
+        environments: [], selectedCapabilityRoots: [], config: { project_doc_max_bytes: 0,
+          'skills.include_instructions': false, 'features.shell_tool': false, web_search: 'disabled' } })
+      expect(params.baseInstructions).toContain('bounded background analysis agent')
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Supplied data only.',
+        contextProfile: 'minimal', allowedTools: [] })).resolves.toMatchObject({ ok: true })
+      expect(client.request).not.toHaveBeenCalled()
+      expect(client.resumeThread).not.toHaveBeenCalled()
+      const events = await new CodexEventStore({ rootDir: storageRoot }).read('thread-1')
+      expect(JSON.stringify(events)).toContain('Supplied data only.')
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Reuse', contextProfile: 'minimal', allowedTools: [] }))
+        .resolves.toMatchObject({ ok: false, message: expect.stringContaining('recovery or reuse is unsupported') })
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Reuse without profile' }))
+        .resolves.toMatchObject({ ok: false, message: expect.stringContaining('cannot be resumed as a coding session') })
+      expect(client.startTurn).toHaveBeenCalledTimes(1)
+      const policies = service as unknown as { nativeToolFreeThreads: Map<string, unknown>;
+        minimalContextPolicies: Map<string, unknown>; allowedToolsByThread: Map<string, unknown> }
+      expect(policies.allowedToolsByThread.has('thread-1')).toBe(true)
+      queued.push({ type: 'event', channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: { method: 'turn/completed', params: { threadId: 'thread-1', turnId: 'turn-1' } } })
+      await vi.waitFor(() => expect(policies.minimalContextPolicies.size).toBe(0))
+      expect(policies.allowedToolsByThread.has('thread-1')).toBe(false)
+      expect(policies.nativeToolFreeThreads.has('thread-1')).toBe(false)
+      expect(await new CodexThreadStore({ rootDir: storageRoot }).get('thread-1'))
+        .toMatchObject({ contextProfile: 'minimal' })
+    } finally { queued.close(); await service.stop() }
+  })
+
+  it('keeps a minimal-context alias failure terminal without replay or automatic recovery', async () => {
+    const queued = clientWithQueuedEvents()
+    queued.client.resumeThread = vi.fn()
+    const storageRoot = await tempRoot()
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => queued.client })
+    try {
+      await expect(service.startThread({ contextProfile: 'minimal', sidebarVisibility: 'hidden', allowedTools: [] }))
+        .resolves.toMatchObject({ ok: true })
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Supplied evidence only.', contextProfile: 'minimal', allowedTools: [] }))
+        .resolves.toMatchObject({ ok: true, turnId: 'turn-1' })
+      queued.push({ type: 'event', channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: { method: 'turn/failed', params: { threadId: 'thread-1', turnId: 'turn-1',
+          error: { message: 'Model Router requests must use the public router model alias.' } } } })
+      await vi.waitFor(async () => {
+        const events = await new CodexEventStore({ rootDir: storageRoot }).read('thread-1')
+        expect(events.some(item => item.event.runtimeError?.message.includes('public router model alias'))).toBe(true)
+      })
+      expect(queued.client.startTurn).toHaveBeenCalledTimes(1)
+      expect(queued.client.startThread).toHaveBeenCalledTimes(1)
+      expect(queued.client.resumeThread).not.toHaveBeenCalled()
+    } finally { queued.close(); await service.stop() }
+  })
+
+  it('fails minimal context on missing native context without replaying or replacing a full coding thread', async () => {
+    const client = controllableClient()
+    client.resumeThread = vi.fn()
+    vi.mocked(client.startTurn).mockRejectedValue(new Error('thread not found'))
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot: await tempRoot(),
+      probeRuntime: availableTestRuntime, createClient: () => client })
+    try {
+      await service.startThread({ contextProfile: 'minimal', sidebarVisibility: 'hidden', allowedTools: [] })
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Data', contextProfile: 'minimal', allowedTools: [] }))
+        .resolves.toMatchObject({ ok: false })
+      expect(client.resumeThread).not.toHaveBeenCalled()
+      expect(client.startThread).toHaveBeenCalledTimes(1)
+    } finally { await service.stop() }
+  })
+
+  it('fails closed when the provider cannot release a warm thread for tool policy refresh', async () => {
+    const client = controllableClient()
+    client.resumeThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId } }))
+    vi.mocked(client.request).mockResolvedValue({ status: 'notSubscribed' })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(), storageRoot: await tempRoot(),
+      probeRuntime: availableTestRuntime, createClient: () => client
+    })
+    try {
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Light', allowedTools: [] })).resolves.toMatchObject({
+        ok: false, message: expect.stringContaining('cannot safely refresh')
+      })
+      expect(client.startTurn).not.toHaveBeenCalled()
+      expect(client.resumeThread).not.toHaveBeenCalled()
+    } finally { await service.stop() }
+  })
+
+  it('retains the GUI session when its first tool-free turn must rebuild an unmaterialized native thread', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    vi.mocked(client.startThread)
+      .mockResolvedValueOnce({ thread: { id: 'empty-native' } })
+      .mockResolvedValueOnce({ thread: { id: 'restricted-native' } })
+    client.resumeThread = vi.fn(async () => { throw new Error('no rollout found') })
+    vi.mocked(client.request).mockResolvedValue({ status: 'unsubscribed' })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => client
+    })
+    try {
+      await service.startThread({ threadId: 'visible-side', relation: 'side', title: 'Discussion' })
+      await expect(service.startTurn({ threadId: 'visible-side', text: 'Question', allowedTools: [] })).resolves.toMatchObject({
+        ok: true, threadId: 'visible-side'
+      })
+      expect(client.startTurn).toHaveBeenCalledTimes(1)
+      expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'restricted-native' }))
+      expect(vi.mocked(client.startThread).mock.calls[1][0]).toMatchObject({ config: { web_search: 'disabled' } })
+      expect(await new CodexThreadStore({ rootDir: storageRoot }).get('visible-side')).toMatchObject({
+        guiThreadId: 'visible-side', codexThreadId: 'restricted-native', title: 'Discussion', relation: 'side'
+      })
+    } finally { await service.stop() }
+  })
+
   it('advertises only Host-allowed capability tools and routes them with trusted thread workspace context', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
@@ -2913,6 +3268,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     }
     const dynamicTools = startParams.dynamicTools ?? []
     expect(dynamicTools.map((tool) => tool.name)).toEqual([CAPABILITY_AGENT_TOOL_NAMES.discover])
+    await startCapabilityTestTurn(service, 'thread-1', 'Discover capabilities')
 
     await expect(
       pendingServerRequests?.onToolCallRequest?.({
@@ -3009,6 +3365,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       title: 'Principal terminal barrier',
       workspace: '/tmp/capability-workspace'
     })
+    await startCapabilityTestTurn(service, 'principal-terminal-thread', 'Run the capability')
     broadcast.mockImplementation((event) => {
       if (event.tool?.meta?.phase === 'succeeded') principalCurrent = false
     })
@@ -3177,6 +3534,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       title: 'Failed identity',
       workspace: '/tmp/capability-workspace'
     })).resolves.toMatchObject({ ok: true })
+    await startCapabilityTestTurn(service, 'failed-identity-thread', 'Run the capability')
 
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'failed-identity-request',
@@ -3304,7 +3662,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
-      capabilityAgentTools: surface,
+      capabilityAgentTools: withBoundedToolResults(surface, async () => 'stored-tool-result'),
       probeRuntime: availableTestRuntime,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
@@ -3316,6 +3674,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       title: 'Native visual receipts',
       workspace: '/tmp/capability-workspace'
     })
+    await startCapabilityTestTurn(service, 'thread-1', 'Inspect the result')
     const nativeResult = await pendingServerRequests?.onToolCallRequest?.({
       requestId: 'native-request',
       callId: 'native-call',
@@ -3359,6 +3718,16 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
   })
 
+  it('stores a shared result snapshot in the canonical Codex artifact reader', async () => {
+    const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot: await tempRoot(),
+      probeRuntime: availableTestRuntime, createClient: () => controllableClient() })
+    await service.startThread({ title: 'Stored result', workspace: '/tmp/capability-workspace' })
+    const content = JSON.stringify({ inputShape: { pattern: '"\\🧬'.repeat(3000) } })
+    await service.publishSyntheticEvent({ runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', kind: 'item_snapshot',
+      item: { id: 'stored-result', kind: 'tool', status: 'success', meta: { structuredContent: content } } })
+    expect(await service.readToolArtifact('thread-1', encodeToolArtifactRef('stored-result'))).toEqual({ ok: true, content })
+  })
+
   it('roundtrips a complete small byte result through the model-visible production boundary', async () => {
     const bytes = Buffer.from(Array.from({ length: 175 }, (_, index) => index))
     const value = { output: { result: { bytes: bytes.toString('base64'), byteLength: bytes.length } } }
@@ -3374,6 +3743,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       createClient: (options) => { pending = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions; return client }
     })
     await service.startThread({ title: 'Lossless bytes', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Read the bytes')
     const response = await pending?.onToolCallRequest?.({ requestId: 'bytes-request', callId: 'bytes-call', threadId: 'thread-1', turnId: 'turn-1', tool: 'read_bytes', arguments: {} })
     expect(response?.success).toBe(true)
     const item = response?.contentItems[0]
@@ -3414,6 +3784,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       createClient: (options) => { pending = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions; return client }
     })
     await service.startThread({ title: 'Commit schema expansion', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Inspect the commit schema')
     const call = async (tool: string, args: Record<string, unknown>) => {
       const response = await pending?.onToolCallRequest?.({ requestId: `request-${tool}`, callId: `call-${tool}`, threadId: 'thread-1', turnId: 'turn-1', tool, arguments: args })
       expect(response?.success).toBe(true)
@@ -3456,24 +3827,25 @@ describe('CodexRuntimeService compatibility operations', () => {
     let pending: CodexAppServerPendingRequestRegistryOptions | undefined
     const service = new CodexRuntimeService({
       settings: async () => settings(), storageRoot: await tempRoot(),
-      capabilityAgentTools: {
+      capabilityAgentTools: withBoundedToolResults({
         tools: () => [{ type: 'function', name: CAPABILITY_AGENT_TOOL_NAMES.discover, description: 'Discover.', inputSchema: { type: 'object' } }],
         call: async () => ({ tool: CAPABILITY_AGENT_TOOL_NAMES.discover, value: descriptors })
-      }, probeRuntime: availableTestRuntime,
+      }, async () => 'stored-tool-result'), probeRuntime: availableTestRuntime,
       createClient: (options) => { pending = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions; return client }
     })
     await service.startThread({ title: 'Atomic discovery shapes', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Discover schemas')
     const response = await pending?.onToolCallRequest?.({ requestId: 'atomic-request', callId: 'atomic-call', threadId: 'thread-1', turnId: 'turn-1', tool: CAPABILITY_AGENT_TOOL_NAMES.discover, arguments: { includeSchema: true } })
     const item = response?.contentItems[0]
     if (item?.type !== 'inputText') throw new Error('Missing model text')
     expect(Buffer.byteLength(item.text)).toBeLessThanOrEqual(4096)
-    const visible = JSON.parse(item.text)
+    const visible = JSON.parse(item.text).items
     expect(visible).toHaveLength(2)
     for (const [index, descriptor] of visible.entries()) {
       expect(descriptor.operationRef).toBe(descriptors[index].operationRef)
       if (oversize) {
         expect(descriptor).not.toHaveProperty('inputShape')
-        expect(descriptor.schemaOmitted).toContain('Do not invoke')
+        expect(descriptor.schemaPointer).toBe(`/${index}/inputShape`)
       } else {
         expect(descriptor.inputShape).toEqual(shape)
       }
@@ -3514,7 +3886,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
-      capabilityAgentTools: surface,
+      capabilityAgentTools: withBoundedToolResults(surface, async () => 'stored-tool-result'),
       probeRuntime: availableTestRuntime,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
@@ -3523,6 +3895,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
 
     await service.startThread({ title: 'Discovery result budget', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Discover operations')
     const result = await pendingServerRequests?.onToolCallRequest?.({
       requestId: 'discovery-request',
       callId: 'discovery-call',
@@ -3534,7 +3907,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const text = result?.contentItems?.[0]?.type === 'inputText'
       ? result.contentItems[0].text
       : ''
-    const payload = JSON.parse(text) as Array<{ operationRef?: string; title?: string }>
+    const payload = JSON.parse(text).items as Array<{ operationRef?: string; title?: string }>
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(4 * 1_024)
     expect(payload).toHaveLength(5)
     expect(payload.every((item) => item.operationRef && item.title)).toBe(true)
@@ -3568,7 +3941,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
-      capabilityAgentTools: surface,
+      capabilityAgentTools: withBoundedToolResults(surface, async () => 'stored-tool-result'),
       probeRuntime: availableTestRuntime,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
@@ -3577,6 +3950,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
 
     await service.startThread({ title: 'Primitive list result', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Read status')
     const result = await pendingServerRequests?.onToolCallRequest?.({
       requestId: 'primitive-list-request',
       callId: 'primitive-list-call',
@@ -3623,7 +3997,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
-      capabilityAgentTools: surface,
+      capabilityAgentTools: withBoundedToolResults(surface, async () => 'stored-tool-result'),
       probeRuntime: availableTestRuntime,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
@@ -3632,6 +4006,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
 
     await service.startThread({ title: 'Structured list truncation', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Read structured result')
     const result = await pendingServerRequests?.onToolCallRequest?.({
       requestId: 'structured-list-request',
       callId: 'structured-list-call',
@@ -3691,7 +4066,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
-      capabilityAgentTools: surface,
+      capabilityAgentTools: withBoundedToolResults(surface, async () => 'stored-tool-result'),
       probeRuntime: availableTestRuntime,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
@@ -3700,6 +4075,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
 
     await service.startThread({ title: 'Nested artifact refs', workspace: '/tmp/capability-workspace' })
+    await startCapabilityTestTurn(service, 'thread-1', 'Read artifact refs')
     const result = await pendingServerRequests?.onToolCallRequest?.({
       requestId: 'nested-artifact-ref-request',
       callId: 'nested-artifact-ref-call',
@@ -3757,7 +4133,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       storageRoot,
-      capabilityAgentTools: surface,
+      capabilityAgentTools: withBoundedToolResults(surface, async () => 'stored-tool-result'),
       probeRuntime: availableTestRuntime,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
@@ -3769,6 +4145,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       title: 'Native visual failure',
       workspace: '/tmp/capability-workspace'
     })
+    await startCapabilityTestTurn(service, 'thread-1', 'Inspect the visual')
     await expect(
       pendingServerRequests?.onToolCallRequest?.({
         requestId: 'native-failure-request',
@@ -3892,6 +4269,9 @@ describe('CodexRuntimeService compatibility operations', () => {
         mode: 'default',
         settings: { model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, reasoning_effort: null, developer_instructions: null }
       }
+    }))
+    expect(queued.client.startThread).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      developerInstructions: expect.stringContaining('Task execution guidance:')
     }))
     // Children do not get delegation tools, but still need the same shell guidance.
     expect(queued.client.startThread).toHaveBeenNthCalledWith(2, expect.objectContaining({
@@ -4366,7 +4746,12 @@ process.stdout.write(JSON.stringify({
     expect(client.startTurn).not.toHaveBeenCalled()
   })
 
-  it('rematerializes and retries a turn when an old Codex thread uses a stale Model Router alias', async () => {
+  it.each([
+    { nativeAvailable: true, allowedTools: undefined },
+    { nativeAvailable: false, allowedTools: undefined },
+    { nativeAvailable: true, allowedTools: [] as string[] },
+    { nativeAvailable: false, allowedTools: [] as string[] }
+  ])('recovers a router alias without widening tools ($nativeAvailable, $allowedTools)', async ({ nativeAvailable, allowedTools }) => {
     const storageRoot = await tempRoot()
     const threadStore = new CodexThreadStore({ rootDir: storageRoot })
     await threadStore.upsert({
@@ -4376,6 +4761,15 @@ process.stdout.write(JSON.stringify({
       title: 'Stale Codex'
     })
     const queued = clientWithQueuedEvents()
+    let resumeCount = 0
+    vi.mocked(queued.client.request).mockResolvedValue({ status: 'unsubscribed' })
+    queued.client.resumeThread = vi.fn(async () => {
+      resumeCount += 1
+      // The first restricted turn refreshes its policy before the alias failure.
+      if (!nativeAvailable && !(allowedTools && resumeCount === 1)) throw new Error('thread not found')
+      return { thread: { id: 'stale-codex-thread' } }
+    })
+    const retryThreadId = nativeAvailable ? 'stale-codex-thread' : 'replacement-codex-thread'
     vi.mocked(queued.client.startThread).mockResolvedValue({
       thread: { id: 'replacement-codex-thread', cwd: '/tmp/workspace' }
     })
@@ -4397,6 +4791,7 @@ process.stdout.write(JSON.stringify({
       service.startTurn({
         threadId: 'gui-thread-1',
         text: 'hello',
+        allowedTools,
         nativeVisualProofChainPending: true
       })
     ).resolves.toMatchObject({
@@ -4445,28 +4840,36 @@ process.stdout.write(JSON.stringify({
       expect(queued.client.startTurn).toHaveBeenCalledTimes(2)
       expect(modelDeltaDedupeProbe(service).states.size).toBe(0)
     })
+    expect(queued.client.resumeThread).toHaveBeenLastCalledWith(expect.objectContaining({
+      config: allowedTools ? { web_search: 'disabled' } : {}
+    }))
+    if (allowedTools && !nativeAvailable) expect(queued.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      config: { web_search: 'disabled' }
+    }))
+    if (!nativeAvailable) expect(vi.mocked(queued.client.startThread).mock.calls[0][0].dynamicTools ?? []).toEqual([])
     await expect(
       new CodexPreToolUseGovernanceBridge({ storageRoot }).evaluate({
         hook_event_name: 'PreToolUse',
-        session_id: 'replacement-codex-thread',
+        session_id: retryThreadId,
         turn_id: 'turn-retry-not-materialized-yet',
         tool_name: 'Bash',
         tool_use_id: 'call-retry-before-start-response',
         tool_input: { command: 'python inspect.py' },
         cwd: '/tmp/workspace'
       })
-    ).resolves.toMatchObject({
+    ).resolves.toEqual(allowedTools ? {
       hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
+        permissionDecisionReason: expect.stringContaining('tool_policy_denied')
       }
-    })
+    } : {})
     queued.push({
       type: 'event',
       channel: CODEX_MAIN_IPC_CHANNELS.event,
       payload: {
         method: 'turn/completed',
-        params: { threadId: 'replacement-codex-thread', turnId: 'turn-retry' }
+        params: { threadId: retryThreadId, turnId: 'turn-retry' }
       }
     })
     await vi.waitFor(async () => {
@@ -4475,7 +4878,9 @@ process.stdout.write(JSON.stringify({
     })
     queued.close()
 
-    expect(queued.client.startThread).toHaveBeenCalledWith(
+    expect(queued.client.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'stale-codex-thread', model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS }))
+    if (nativeAvailable) expect(queued.client.startThread).not.toHaveBeenCalled()
+    else expect(queued.client.startThread).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/tmp/workspace',
         model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
@@ -4492,7 +4897,7 @@ process.stdout.write(JSON.stringify({
     expect(queued.client.startTurn).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        threadId: 'replacement-codex-thread',
+        threadId: retryThreadId,
         model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
       })
     )
@@ -4506,12 +4911,12 @@ process.stdout.write(JSON.stringify({
       vi.mocked(queued.client.startTurn).mock.calls[0]?.[0].responsesapiClientMetadata
     )
     await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
-      codexThreadId: 'replacement-codex-thread'
+      codexThreadId: retryThreadId
     })
     const events = await new CodexEventStore({ rootDir: storageRoot }).read('gui-thread-1', { includeAll: true })
     expect(events.map((item) => item.event.runtimeStatus?.message).filter(Boolean)).toEqual(
       expect.arrayContaining([
-        'Codex thread used a stale Model Router alias; rebuilding the thread and retrying this turn.',
+        'Codex thread used a stale Model Router alias; restoring its native session and retrying this turn. Original runtime failure: stream disconnected before completion: Model Router requests must use the public router model alias.',
         'Codex turn retried with the managed Model Router alias.'
       ])
     )
@@ -5602,12 +6007,7 @@ process.stdout.write(JSON.stringify({
         tool_input: { command: 'python inspect.py' },
         cwd: '/tmp/workspace'
       })
-    ).resolves.toMatchObject({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
-      }
-    })
+    ).resolves.toEqual({})
 
     await service.stop()
     await expect(
@@ -6201,6 +6601,45 @@ process.stdout.write(JSON.stringify({
       latestTurnStatus: 'completed'
     })
     queued.close()
+  })
+
+  it('reports a new turn as running after a failed predecessor without losing the failure', async () => {
+    const queued = clientWithQueuedEvents()
+    queued.client.startTurn = vi.fn()
+      .mockResolvedValueOnce({ turn: { id: 'failed-turn' } })
+      .mockResolvedValueOnce({ turn: { id: 'next-turn' } })
+    const storageRoot = await tempRoot()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(), storageRoot,
+      probeRuntime: availableTestRuntime, createClient: () => queued.client
+    })
+    capabilityTurnServices.add(service)
+    try {
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'First attempt' })).resolves.toMatchObject({ ok: true })
+      queued.push({
+        type: 'event', channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: { method: 'turn/completed', params: {
+          threadId: 'thread-1', turn: { id: 'failed-turn', status: 'failed', error: { message: 'Login required' } }
+        } }
+      })
+      await vi.waitFor(async () => {
+        await expect(service.readThreadStatus('thread-1')).resolves.toMatchObject({
+          ok: true, status: { latestTurnId: 'failed-turn', latestTurnStatus: 'failed' }
+        })
+      })
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'Retry after login' })).resolves.toMatchObject({ ok: true })
+      await expect(service.readThreadPage('thread-1')).resolves.toMatchObject({
+        ok: true, detail: { latestTurnId: 'next-turn', threadStatus: 'running' }
+      })
+      const adapter = createCodexAgentRuntimeAdapter(service)
+      const page = await adapter.readThreadPage({ settings: settings() }, { runtimeId: 'codex', threadId: 'thread-1' })
+      expect(page.turns).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'failed-turn', status: 'failed' }),
+        expect.objectContaining({ id: 'next-turn', status: 'running' })
+      ]))
+    } finally {
+      queued.close()
+    }
   })
 
   it('replays a provider-completed terminal boundary that was missed before restart', async () => {
@@ -7969,16 +8408,14 @@ process.stdout.write(JSON.stringify({
   })
 
   it('terminates a stalled event subscriber once its queue overflows instead of growing it without bound', async () => {
-    const storageRoot = await tempRoot()
     // controllableClient connects successfully, so the orphaned-turn probe in
     // subscribeEvents returns without discarding clients (a failing client
     // would close all subscribers via discardClientAfterFailure). Without a
-    // stored thread the journal stays empty and persistEvent short-circuits,
-    // keeping every publish on the in-memory broadcast path: the 2_001
-    // publishes below must not depend on disk I/O or event-loop timing.
+    // storage root, persistEvent short-circuits before filesystem lookups. This
+    // test owns queue backpressure; journal replay has separate store coverage.
+    // The 2_001 publishes must stay on the in-memory broadcast path.
     const service = new CodexRuntimeService({
       settings: async () => settings(),
-      storageRoot,
       probeRuntime: availableTestRuntime,
       createClient: () => controllableClient()
     })
@@ -7989,37 +8426,41 @@ process.stdout.write(JSON.stringify({
       phase: 'turn_start_sent'
     })
     const abort = new AbortController()
-    const stalled = service.subscribeEvents('thread-1', 0, abort.signal)[Symbol.asyncIterator]()
-    // The first broadcast parks the generator at its yield; every later event
-    // accumulates in the subscriber queue because the consumer never pulls.
-    const firstDelivery = stalled.next()
-    await publishStatus()
-    await expect(firstDelivery).resolves.toMatchObject({ done: false })
-
-    for (let index = 0; index <= CODEX_SUBSCRIBER_QUEUE_MAX_EVENTS; index += 1) {
-      await publishStatus()
-    }
-
-    // The next pull observes the terminated subscriber: the stream ends so the
-    // client resubscribes and replays the journaled tail.
-    await expect(stalled.next()).resolves.toMatchObject({ done: true })
-    expect(logWarn).toHaveBeenCalledWith(
-      'codex-runtime',
-      expect.stringContaining('slow Codex event subscriber'),
-      expect.objectContaining({ threadId: 'thread-1' })
-    )
-
-    // Terminating one subscriber does not poison later subscriptions.
     const resyncAbort = new AbortController()
-    const resynced = service.subscribeEvents('thread-1', 0, resyncAbort.signal)[Symbol.asyncIterator]()
-    const resyncedDelivery = resynced.next()
-    await publishStatus()
-    await expect(resyncedDelivery).resolves.toMatchObject({
-      done: false,
-      value: expect.objectContaining({ threadId: 'thread-1' })
-    })
-    resyncAbort.abort()
-    abort.abort()
+    const stalled = service.subscribeEvents('thread-1', 0, abort.signal)[Symbol.asyncIterator]()
+    try {
+      // The first broadcast parks the generator at its yield; every later event
+      // accumulates in the subscriber queue because the consumer never pulls.
+      const firstDelivery = stalled.next()
+      await publishStatus()
+      await expect(firstDelivery).resolves.toMatchObject({ done: false })
+
+      for (let index = 0; index <= CODEX_SUBSCRIBER_QUEUE_MAX_EVENTS; index += 1) {
+        await publishStatus()
+      }
+
+      // The next pull observes the terminated subscriber: the stream ends so the
+      // client resubscribes and replays the journaled tail.
+      await expect(stalled.next()).resolves.toMatchObject({ done: true })
+      expect(logWarn).toHaveBeenCalledWith(
+        'codex-runtime',
+        expect.stringContaining('slow Codex event subscriber'),
+        expect.objectContaining({ threadId: 'thread-1' })
+      )
+
+      // Terminating one subscriber does not poison later subscriptions.
+      const resynced = service.subscribeEvents('thread-1', 0, resyncAbort.signal)[Symbol.asyncIterator]()
+      const resyncedDelivery = resynced.next()
+      await publishStatus()
+      await expect(resyncedDelivery).resolves.toMatchObject({
+        done: false,
+        value: expect.objectContaining({ threadId: 'thread-1' })
+      })
+    } finally {
+      resyncAbort.abort()
+      abort.abort()
+      await service.stop()
+    }
   }, 15_000)
 
   it('routes pending app-server requests from backend thread ids to GUI thread subscribers', async () => {
@@ -8822,4 +9263,23 @@ describe('Codex model catalog reasoning admission', () => {
   })
 
 
+})
+
+it('persists Host-owned user input and its answer without a native app-server request', async () => {
+  const storageRoot = await tempRoot()
+  const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+  await upsertMaterializedThread(threadStore, { guiThreadId: 'decision-thread', codexThreadId: 'decision-thread', title: 'Decision' })
+  const service = new CodexRuntimeService({ settings: async () => settings(), storageRoot })
+  try {
+    const requested = await service.publishSyntheticEvent({ kind: 'user_input_requested', runtimeId: 'codex', threadId: 'decision-thread', turnId: 't',
+      requestId: 'host-input-test', questions: [{ id: 'q', header: '', question: 'Choose?', options: [] }] })
+    expect(requested.tool).toMatchObject({ itemId: 'host-input-test', status: 'running', meta: { questions: [{ id: 'q' }] } })
+    const resolved = await service.publishSyntheticEvent({ kind: 'item_snapshot', runtimeId: 'codex', threadId: 'decision-thread', turnId: 't',
+      item: { id: 'host-input-test', turnId: 't', kind: 'user_input', status: 'success',
+        meta: { requestId: 'host-input-test', userInputStatus: 'submitted', questions: [{ id: 'q', header: '', question: 'Choose?', options: [] }], answers: [{ id: 'q', label: 'Answer', value: 'Validated only' }] } } })
+    expect(resolved.tool).toMatchObject({ status: 'success', meta: { userInputStatus: 'submitted', answers: [{ value: 'Validated only' }] } })
+    const store = (service as unknown as { eventStore: CodexEventStore }).eventStore
+    const stored = await store.read('decision-thread')
+    expect(JSON.stringify(stored)).toContain('Validated only')
+  } finally { await service.stop() }
 })

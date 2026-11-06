@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildImageGenerationMcpServerConfig,
+  buildImageGenerationLocalRuntimeMcpServerConfig,
+  buildImageGenerationMcpJsonServerConfig,
+  imageGenerationMcpEnv,
   imageGenerationMcpSettingsChanged,
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
@@ -108,6 +111,108 @@ describe('image generation MCP config', () => {
     expect(JSON.stringify(server)).not.toContain('http://image-provider.example/v1')
   })
 
+  it('passes the local Router to code-only text and vision QA without image credentials', () => {
+    const settings = createSettings()
+    const profile = settings.modelRouter!.profiles.default
+    profile.textReasoner = {
+      apiKey: 'text-upstream-key', baseUrl: 'https://text.example/v1', model: 'text-model'
+    }
+    profile.translators.vision = {
+      apiKey: 'vision-upstream-key', baseUrl: 'https://vision.example/v1', model: 'vision-model'
+    }
+    expect(profile.imageGenerator.apiKey).toBe('')
+    const servers = [
+      buildImageGenerationMcpServerConfig(launch, '/tmp/workspace', settings),
+      buildImageGenerationLocalRuntimeMcpServerConfig(launch, {}, '/tmp/workspace', settings),
+      buildImageGenerationMcpJsonServerConfig(launch, '/tmp/workspace', settings)
+    ]
+    for (const server of servers) {
+      expect(server.env).toEqual({
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
+        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-key',
+        SCIFORGE_MODEL_ROUTER_IMAGE_MODEL: 'sciforge-router'
+      })
+      const serialized = JSON.stringify(server)
+      for (const member of [profile.textReasoner, profile.translators.vision]) {
+        expect(serialized).not.toContain(member.apiKey)
+        expect(serialized).not.toContain(member.baseUrl)
+        expect(serialized).not.toContain(member.model)
+      }
+    }
+  })
+
+  it.each([
+    ['disabled', { enabled: false }],
+    ['missing runtime key', { runtimeApiKey: '' }],
+    ['blank runtime key', { runtimeApiKey: '   ' }],
+    ['non-local endpoint', { baseUrl: 'https://upstream.example/v1' }],
+    ['invalid endpoint', { baseUrl: 'not-a-url' }]
+  ])('fails closed for a %s Router even with image upstream credentials', (_name, patch) => {
+    const settings = createSettings({
+      apiKey: 'image-upstream-key', baseUrl: 'https://image.example/v1', model: 'image-model'
+    }, { componentSegmentationRunnerPath: '/tmp/runner' })
+    Object.assign(settings.modelRouter!, patch)
+    expect(imageGenerationMcpEnv(launch, settings)).toEqual({
+      ELECTRON_RUN_AS_NODE: '1',
+      SCIFORGE_COMPONENT_SEGMENTATION_RUNNER: '/tmp/runner',
+      SCIFORGE_FASTSAM_RUNNER: '/tmp/runner'
+    })
+  })
+
+  it('does not invent credentials when settings are absent', () => {
+    expect(imageGenerationMcpEnv(launch)).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
+    const settings = createSettings()
+    delete settings.modelRouter
+    expect(imageGenerationMcpEnv(launch, settings)).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
+  })
+
+  it.each([
+    ['endpoint', { baseUrl: 'http://localhost:3999/v1' }],
+    ['runtime key', { runtimeApiKey: 'rotated-runtime-key' }],
+    ['public alias', { publicModelAlias: 'new-router-alias' }],
+    ['enablement', { enabled: false }],
+    ['auto-start', { autoStart: false }],
+    ['invalid endpoint', { baseUrl: 'https://upstream.example/v1' }]
+  ])('requests a restart when the authoritative Router %s changes without image credentials', (_name, patch) => {
+    const prev = createSettings()
+    const next = createSettings()
+    Object.assign(next.modelRouter!, patch)
+    expect(imageGenerationMcpSettingsChanged(prev, next)).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(next, prev)).toBe(true)
+  })
+
+  it.each(['textReasoner', 'vision'] as const)('requests a restart for %s configuration changes', (role) => {
+    const prev = createSettings()
+    const next = createSettings()
+    const profile = next.modelRouter!.profiles.default
+    const member = role === 'vision' ? profile.translators.vision : profile.textReasoner
+    Object.assign(member, {
+      apiKey: 'upstream-key', baseUrl: 'https://provider.example/v1', model: 'provider-model'
+    })
+    expect(imageGenerationMcpSettingsChanged(prev, next)).toBe(true)
+    for (const patch of [
+      { apiKey: 'rotated-key' }, { baseUrl: 'https://other.example/v1' },
+      { model: 'other-model' }, { protocol: 'responses' as const }
+    ]) {
+      const changed = structuredClone(next)
+      const changedProfile = changed.modelRouter!.profiles.default
+      const changedMember = role === 'vision' ? changedProfile.translators.vision : changedProfile.textReasoner
+      Object.assign(changedMember, patch)
+      expect(imageGenerationMcpSettingsChanged(next, changed)).toBe(true)
+    }
+    expect(imageGenerationMcpSettingsChanged(next, prev)).toBe(true)
+  })
+
+  it('ignores normalized whitespace and unrelated app settings', () => {
+    const prev = createSettings()
+    const next = createSettings()
+    next.theme = 'dark'
+    next.modelRouter!.runtimeApiKey = '  router-runtime-key  '
+    next.modelRouter!.publicModelAlias = ' sciforge-router '
+    expect(imageGenerationMcpSettingsChanged(prev, next)).toBe(false)
+  })
+
   it('requests a runtime restart when image worker launch env changes', () => {
     const configured = createSettings({
       apiKey: 'old-key',
@@ -116,7 +221,7 @@ describe('image generation MCP config', () => {
     })
 
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings())).toBe(false)
-    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({ model: 'image-model' }))).toBe(false)
+    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({ model: 'image-model' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { componentSegmentationRunnerPath: '/tmp/runner' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { componentSegmentationModelPath: '/tmp/component-model.pt' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { fastSamRunnerPath: '/tmp/legacy-runner' }))).toBe(true)

@@ -47,6 +47,7 @@ export class WorkbenchGlobalOverlayContributionRegistry {
       contribution: Object.freeze({
         id: input.id,
         ...input.contract,
+        ...(input.value.placement ? { placement: input.value.placement } : {}),
         render: (context: DomainRendererWorkbenchGlobalOverlayRenderContext) =>
           input.value.render(context)
       })

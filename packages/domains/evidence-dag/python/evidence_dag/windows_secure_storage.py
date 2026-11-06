@@ -261,15 +261,24 @@ class WindowsEvidenceStorage:
     @staticmethod
     def stat_at(parent, name):
         path = os.path.join(parent, name)
-        handle, identity = open_handle(path, access=0x20080, allow_hardlinks=True)
+        handle, _ = open_handle(path, access=0x20080, allow_hardlinks=True)
         try:
             private(handle, False, verify_only=True)
+            # Compare identities obtained through the same Python API. Modern
+            # Python uses a 64-bit volume serial / 128-bit file ID; the Win32
+            # BY_HANDLE_FILE_INFORMATION tuple above only has a 32-bit serial.
+            fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+            handle = None  # fd now owns the handle, including on fstat failure.
+            opened = os.fstat(fd)
             info = os.stat(native(path), follow_symlinks=False)
-            if (info.st_dev, info.st_ino >> 32, info.st_ino & 0xffffffff) != identity:
+            if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
                 raise PermissionError('Evidence storage file identity changed')
             return info
         finally:
-            kernel.CloseHandle(handle)
+            if handle is not None:
+                kernel.CloseHandle(handle)
+            else:
+                os.close(fd)
 
     @staticmethod
     def open_alias_at(parent, name):

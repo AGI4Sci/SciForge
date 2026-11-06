@@ -932,6 +932,7 @@ export function MarkdownWorkspaceViewer({
                 <WriteMarkdownPreview
                   content={model.markdown}
                   isMarkdown
+                  showLineNumbers
                   filePath={observation?.file.path}
                   workspaceRoot={observation?.file.workspaceRoot}
                   loadWorkspaceImage={loadWorkspaceImage}

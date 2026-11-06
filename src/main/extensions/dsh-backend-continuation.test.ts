@@ -28,7 +28,9 @@ export function apply(ctx, config) {
 `)
     contracts.set(name, { approved: true, permissions: [], hostApiRange: '^1.0.0', dshAuthorization: { packageName: name, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', tools: { config: { id: `${name}.config`, effect: 'compute' } } } })
   }
-  const create = (profile = 'data') => new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, profile), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
+  const create = (profile = 'data') => new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, profile), hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
   return { root, create, contracts }
 }
 

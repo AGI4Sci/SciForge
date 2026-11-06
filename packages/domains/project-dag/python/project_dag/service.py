@@ -1125,6 +1125,7 @@ class Engine:
             rationale=payload.get("rationale", "Human review disposition"),
             confidence=float(payload.get("confidence", 1.0)),
             expected_snapshot_digest=payload.get("expectedSnapshotDigest"),
+            idempotency_key=payload.get("idempotencyKey"),
         )
         return self._project_response(project_key, "human-review", result)
 

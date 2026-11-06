@@ -282,11 +282,24 @@ function shortDigest(value){const text=String(value||'');return text.length>22?`
 </script>
 <script>
 const query=new URLSearchParams(location.search),hash=new URLSearchParams(location.hash.slice(1)),requestedView=query.get('view')==='graph'?'graph':'home',requestedClaimId=String(query.get('claim')||'').trim().slice(0,512),requestedGraphNodeId=opaqueGraphNodeId(query.get('node'));
-const token=hash.get('token')||'',projectKey=query.get('projectKey')||projectKeyFromLabels();
+const token=hash.get('token')||'';
 const state={status:null,graph:null,attention:[],findings:[],selectedClaimId:null,selectedGraphNodeId:null,requestedClaimConsumed:false,requestedGraphNodeConsumed:false,graphFocusMode:'strongest',reviewHeat:true,inspectorOpen:false,graphInspectorDetails:[],graphInspectorLoading:false,graphInspectorError:null,graphInspectorRequest:0,detail:null,whatIfSourceId:null,statusPollTimer:null,previewFeedback:null,pendingPreviewRequests:new Map()};
 document.getElementById('evidence-surface').hidden=false;document.getElementById('graph-surface').hidden=false;
-function projectKeyFromLabels(){const path=query.get('projectRoot')||query.get('workspaceRoot');if(path)return `path:${path}`;const project=query.get('project');return project?`project:${project}`:''}
-async function api(path,options={}){if(!projectKey)throw new Error('缺少 projectKey/workspaceRoot/project');const sep=path.includes('?')?'&':'?',headers={...object(options.headers),Authorization:`Bearer ${token}`,Accept:'application/json'},response=await fetch(`${path}${sep}projectKey=${encodeURIComponent(projectKey)}`,{...options,headers});const body=await response.json();if(!response.ok||!body.ok)throw new Error(body.error?.message||`HTTP ${response.status}`);return body.data}
+async function api(path,options={}){
+  if(!query.get('workspaceRoot')&&!query.get('projectRoot'))throw new Error('缺少 workspaceRoot/projectRoot，请从工作区重新打开页面');
+  const url=new URL(path,location.href);
+  if(url.origin!==location.origin)throw new Error('Project 请求必须使用当前服务');
+  for(const field of ['workspaceRoot','projectRoot','projectKey']){
+    const value=query.get(field);
+    if(!value)continue;
+    if(url.searchParams.getAll(field).some(existing=>existing!==value))throw new Error(`${field} 与当前工作区不一致`);
+    url.searchParams.set(field,value);
+  }
+  const headers={...object(options.headers),Authorization:`Bearer ${token}`,Accept:'application/json'};
+  const response=await fetch(url.pathname+url.search,{...options,headers}),body=await response.json();
+  if(!response.ok||!body.ok)throw new Error(body.error?.message||`HTTP ${response.status}`);
+  return body.data;
+}
 function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]))}
 function pretty(value){return escapeHtml(JSON.stringify(value,null,2))}
 function short(value,size=12){const text=String(value||'');return text.length>size?`${text.slice(0,size)}…`:text||'—'}
@@ -344,8 +357,10 @@ function renderHumanReviewQueue(){
 }
 async function submitHumanReviewDecision(packetId,action){
   const digest=state.graph?.snapshot?.digest;if(!packetId||!digest)return;
+  const attempts=state.reviewDecisionAttempts||(state.reviewDecisionAttempts=new Map()),requestKey=JSON.stringify([packetId,digest,action]);
+  if(!attempts.has(requestKey))attempts.set(requestKey,crypto.randomUUID());
   const buttons=[...document.querySelectorAll('[data-review-decision]')];buttons.forEach(button=>button.disabled=true);
-  try{await api(`/reviews/${encodeURIComponent(packetId)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,expectedSnapshotDigest:digest,actorId:'human:project-dag-ui',rationale:`Human ${action} decision from Project DAG review packet`})});await refresh()}
+  try{await api(`/reviews/${encodeURIComponent(packetId)}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,expectedSnapshotDigest:digest,idempotencyKey:attempts.get(requestKey),actorId:'human:project-dag-ui',rationale:`Human ${action} decision from Project DAG review packet`})});attempts.delete(requestKey);await refresh()}
   catch(error){renderError(error)}finally{buttons.forEach(button=>button.disabled=false)}
 }
 function bindHumanReviewActions(container){for(const group of container.querySelectorAll('[data-review-packet]'))for(const button of group.querySelectorAll('[data-review-decision]'))button.onclick=()=>submitHumanReviewDecision(group.dataset.reviewPacket,button.dataset.reviewDecision)}
@@ -526,8 +541,12 @@ async function pollUpdateStatus(){
 async function refresh(){
   renderError(null);document.getElementById('refresh').disabled=true;
   try{
-    const graph=await api('/graph'),digest=graph.snapshot?.digest;
-    const [status,attention,findings]=await Promise.all([api('/updates/status'),digest?api(`/attention?snapshotDigest=${encodeURIComponent(digest)}`):Promise.resolve([]),api('/findings')]);
+    const graphRequest=api('/graph');
+    const [graph,status,attention,findings]=await Promise.all([
+      graphRequest,api('/updates/status'),
+      graphRequest.then(graph=>graph.snapshot?.digest?api(`/attention?snapshotDigest=${encodeURIComponent(graph.snapshot.digest)}`):[]),
+      api('/findings')
+    ]);
     state.graph=graph;state.status=status;state.attention=attention;state.findings=findings;
     const model=graphModel(graph),requestedNode=model.nodes.find(item=>item.id===requestedGraphNodeId);
     if(!state.requestedGraphNodeConsumed&&requestedNode){state.requestedGraphNodeConsumed=true;state.requestedClaimConsumed=true;state.selectedGraphNodeId=requestedNode.id;state.selectedClaimId=requestedNode.kind==='claim'?requestedNode.id:null;state.inspectorOpen=true}

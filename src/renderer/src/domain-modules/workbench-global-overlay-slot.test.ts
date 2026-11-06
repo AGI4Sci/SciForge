@@ -57,4 +57,20 @@ describe('WorkbenchGlobalOverlayContributionRegistry', () => {
       ownerId: 'other.module'
     })).toThrow('Duplicate renderer contribution "fixture.overlay"')
   })
+
+  it('preserves workspace placement through registration so canvases do not cover window controls', () => {
+    const registry = new WorkbenchGlobalOverlayContributionRegistry()
+    registry.register({
+      id: 'fixture.canvas', ownerId: 'fixture.module',
+      contract: { location: 'workbench.global-overlay', title: 'Canvas' },
+      value: { placement: 'workspace', render: () => null as never }
+    })
+    registry.register({
+      id: 'fixture.annotation', ownerId: 'fixture.module',
+      contract: { location: 'workbench.global-overlay', title: 'Annotation' },
+      value: { render: () => null as never }
+    })
+    expect(registry.resolve('fixture.canvas')?.contribution.placement).toBe('workspace')
+    expect(registry.resolve('fixture.annotation')?.contribution.placement).toBeUndefined()
+  })
 })

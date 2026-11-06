@@ -78,8 +78,16 @@ export type ResumeChildInput = {
 }
 
 export type MultiAgentWaitResult = {
-  record: MultiAgentChildRunRecord
   timedOut: boolean
+  records: MultiAgentChildRunRecord[]
+  changedIds: string[]
+  cursor: string
+  effectiveTimeoutMs: number
+}
+
+/** Meaningful coordination state; timestamps and token-level chatter do not wake parents. */
+export function childObservationRevision(record: MultiAgentChildRunRecord): string {
+  return JSON.stringify([record.attempt, record.status, record.progress?.phase ?? '', record.error?.code ?? ''])
 }
 
 export type MultiAgentRuntimeOptions = {
@@ -107,6 +115,7 @@ export class MultiAgentRuntime {
   private readonly lifecycleControlsByChildId = new Map<string, MultiAgentLifecycleControl>()
   private readonly boundariesByChildId = new Map<string, ReturnType<typeof createExecutionBoundary>>()
   private startGate: Promise<void> = Promise.resolve()
+  private readonly observationListeners = new Set<() => void>()
   private eventSeq = 0
   private disposed = false
   private readonly terminalDeliveries = new Map<string, Promise<void>>()
@@ -343,7 +352,7 @@ export class MultiAgentRuntime {
           updatedAt: heartbeatAt
         })
         const nowMs = Date.now()
-        const notify = forceNotification || lastHeartbeatNotificationMs === 0 ||
+        const notify = forceNotification || childObservationRevision(current) !== childObservationRevision(next) || lastHeartbeatNotificationMs === 0 ||
           nowMs - lastHeartbeatNotificationMs >= this.config.supervisionIntervalMs
         if (notify) {
           lastHeartbeatNotificationMs = nowMs
@@ -687,35 +696,68 @@ export class MultiAgentRuntime {
     return this.options.store.findByThreadId(threadId)
   }
 
-  async waitForChild(
+  async waitForChildren(
     parentThreadId: string,
-    childId: string,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+    childIds: string | readonly string[],
+    options: { timeoutMs?: number; signal?: AbortSignal; afterCursor?: string } = {}
   ): Promise<MultiAgentWaitResult | null> {
-    const current = await this.child(parentThreadId, childId)
-    if (!current) return null
-    if (isTerminalChildStatus(current.status)) return { record: current, timedOut: false }
-    const execution = this.executionsByChildId.get(childId)
-    if (!execution) return { record: current, timedOut: false }
+    const ids = [...new Set(typeof childIds === 'string' ? [childIds] : childIds)]
+    if (!ids.length || ids.length > 32) throw new Error('Wait requires 1–32 child IDs.')
     const timeoutMs = normalizeWaitTimeoutMs(options.timeoutMs)
-    if (timeoutMs === 0) return { record: current, timedOut: true }
+    let previous: Record<string, string> | undefined
+    if (options.signal?.aborted) throw new MultiAgentRuntimeError(createMultiAgentError('child_aborted', 'multi-agent wait was aborted'))
+    if (options.afterCursor) {
+      if (options.afterCursor.length > 32768) throw new Error('Invalid child observation cursor.')
+      const decoded = JSON.parse(Buffer.from(options.afterCursor, 'base64url').toString('utf8'))
+      if (!decoded || decoded.parentThreadId !== parentThreadId || !decoded.states ||
+          typeof decoded.states !== 'object' || Array.isArray(decoded.states) ||
+          Object.keys(decoded.states).length > 32 || Object.values(decoded.states).some((value) => typeof value !== 'string')) {
+        throw new Error('Invalid child observation cursor.')
+      }
+      previous = decoded.states
+    }
     const deadline = startDeadline(timeoutMs)
     const abort = abortPromise(options.signal)
+    let notify = () => {}
+    const listener = () => notify()
+    this.observationListeners.add(listener)
     try {
-      const outcome = await Promise.race([
-        execution.then((record) => ({ kind: 'completed' as const, record })),
-        deadline.promise.then(() => ({ kind: 'timeout' as const })),
-        abort.promise.then(() => ({ kind: 'aborted' as const }))
-      ])
-      if (outcome.kind === 'aborted') {
-        throw new MultiAgentRuntimeError(createMultiAgentError('child_aborted', 'multi-agent wait was aborted'))
-      }
-      if (outcome.kind === 'completed') return { record: outcome.record, timedOut: false }
-      return {
-        record: (await this.child(parentThreadId, childId)) ?? current,
-        timedOut: true
+      let timedOut = timeoutMs === 0
+      for (;;) {
+        // Subscribe before reading to avoid losing a completion during the snapshot.
+        const changed = new Promise<void>((resolve) => { notify = resolve })
+        const snapshots = await Promise.all(ids.map((id) => this.child(parentThreadId, id)))
+        if (snapshots.some((record) => !record)) return null
+        const executions = ids.map((id) => this.executionsByChildId.get(id)).filter(Boolean)
+        // A terminal attempt may still recover, and a final result must finish
+        // event/outbox publication. Expose running until its executor settles.
+        const records = (snapshots as MultiAgentChildRunRecord[]).map((record) =>
+          isTerminalChildStatus(record.status) && this.executionsByChildId.has(record.id)
+            ? { ...record, status: 'running' as const, finishedAt: undefined, summary: undefined }
+            : record)
+        const states = Object.fromEntries(records.map((record) => [record.id, childObservationRevision(record)]))
+        const changedIds = records.filter((record) => previous
+          ? previous[record.id] !== states[record.id]
+          : isTerminalChildStatus(record.status)).map((record) => record.id)
+        const inactive = records.every((record) => !this.executionsByChildId.has(record.id))
+        if (changedIds.length || timedOut || inactive) {
+          return {
+            records, changedIds, timedOut: timedOut && changedIds.length === 0 && !inactive,
+            cursor: Buffer.from(JSON.stringify({ parentThreadId, states })).toString('base64url'),
+            effectiveTimeoutMs: timeoutMs
+          }
+        }
+        const outcome = await Promise.race([
+          changed.then(() => 'changed'),
+          ...executions.map((execution) => execution!.then(() => 'changed', () => 'changed')),
+          deadline.promise.then(() => 'timeout'),
+          abort.promise.then(() => 'aborted')
+        ])
+        if (outcome === 'aborted') throw new MultiAgentRuntimeError(createMultiAgentError('child_aborted', 'multi-agent wait was aborted'))
+        timedOut = outcome === 'timeout'
       }
     } finally {
+      this.observationListeners.delete(listener)
       deadline.cancel()
       abort.dispose()
     }
@@ -756,8 +798,8 @@ export class MultiAgentRuntime {
     const control = this.lifecycleControlsByChildId.get(childId)
     await terminateLifecycleControl(control, 'parent_cancel', 5_000)
     this.boundariesByChildId.get(childId)?.abort(abortError('multi-agent child run was cancelled'))
-    const waited = await this.waitForChild(parentThreadId, childId, { timeoutMs: 5_000 })
-    return waited?.record ?? record
+    const waited = await this.waitForChildren(parentThreadId, childId, { timeoutMs: 5_000 })
+    return waited?.records[0] ?? record
   }
 
   suspendChildExecutionDeadline(childId: string, token: string): boolean {
@@ -963,6 +1005,7 @@ export class MultiAgentRuntime {
     operation: 'upsert' | 'heartbeat' = 'upsert'
   ): Promise<void> {
     await this.options.store.upsert(record)
+    for (const listener of this.observationListeners) listener()
     if (isTerminalChildStatus(record.status)) await this.deliverTerminalEvent(record)
     try {
       await this.options.events?.onChildEvent?.({

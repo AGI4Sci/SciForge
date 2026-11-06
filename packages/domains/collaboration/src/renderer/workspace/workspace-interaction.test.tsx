@@ -14,7 +14,7 @@ import { TaskDrawer } from './task-drawer/TaskDrawer.js'
 import { ProjectBoard } from './project-board/ProjectBoard.js'
 import { ProjectHeader } from './project-header/ProjectHeader.js'
 import type { TaskCardModel } from './workspace-types.js'
-import { canonicalTaskIdForRequirementsModule, dashboardActivityItemSchema } from '@sciforge/collaboration-contracts'
+import { canonicalTaskIdForRequirementsModule, dashboardActivityItemSchema, type HumanNeeded } from '@sciforge/collaboration-contracts'
 import type { WorkspaceViewModel } from './workspace-view-model.js'
 
 const browserWindow = new Window({ url: 'https://sciforge.test/' })
@@ -699,6 +699,7 @@ test('workspace page adopts a sealed delivery without requiring a pre-existing r
   try {
     await tick(); await tick()
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click(mounted.container.querySelector('.collaboration-workspace-task-card-button') as HTMLButtonElement)
     await click(buttonByText(mounted.container, '采纳交付'))
     assert.equal(calls.at(-1)?.id, PROJECT_COORDINATOR_CAPABILITY_IDS.adoptionDecide)
@@ -745,7 +746,7 @@ test('drawer actions render real controls and route offer, answer, delivery, ado
   assert.deepEqual(calls.slice(-2).map((call) => call.input), [{ taskOfferId: 'offer_demo000001', decision: 'accept' }, { taskOfferId: 'offer_demo000001', decision: 'reject' }])
   await mounted.unmount()
 
-  mounted = await mount(<TaskDrawer {...common} card={card({ stateLabel: '等待回答', humanRequestId: 'human_demo000001' })} onHumanAnswer={(answer) => { void coordinator.answerHumanNeeded({ projectId: 'prj_demo000001', humanRequestId: 'human_demo000001', requestRevision: 2, answer }) }} />)
+  mounted = await mount(<TaskDrawer {...common} card={card({ stateLabel: '等待回答', humanRequestId: 'human_demo000001', humanRequest: humanQuestionPageFixture().request })} onHumanAnswer={(answer) => { void coordinator.answerHumanNeeded({ projectId: 'prj_demo000001', humanRequestId: 'human_demo000001', requestRevision: 2, answer }) }} />)
   await setValue(mounted.container.querySelector('input[placeholder="输入回答"]') as HTMLInputElement, 'Use the bounded dataset')
   await click(buttonByText(mounted.container, '发送'))
   assert.equal(calls.at(-1)?.id, PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer)
@@ -832,7 +833,7 @@ test('drawer closes on Escape and project tabs move with arrow keys', async () =
     const list = header.container.querySelector('[role="tablist"]') as HTMLElement
     await act(async () => { list.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
     await act(async () => { list.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })) })
-    assert.deepEqual(tabs, ['requirements', 'settings'])
+    assert.deepEqual(tabs, ['requirements', 'research'])
   } finally { await header.unmount() }
 })
 
@@ -872,6 +873,7 @@ test('the header offers 结项 only when every confirmed module is completed and
   try {
     await tick(); await tick()
     await click(pending.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(pending.container, '工作与协作'))
     assert.equal([...pending.container.querySelectorAll('button')].some((button) => button.textContent?.trim() === '结项'), false)
     assert.match(pending.container.querySelector('.collaboration-workspace-project-header')?.textContent ?? '', /已采纳 1\/2/u)
   } finally { await pending.unmount() }
@@ -882,6 +884,7 @@ test('the header offers 结项 only when every confirmed module is completed and
   try {
     await tick(); await tick()
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click(buttonByText(mounted.container, '结项'))
     const dialog = mounted.container.querySelector('[role="dialog"]') as HTMLElement
     assert.ok(dialog)
@@ -909,6 +912,7 @@ test('a completion conflict stays in the dialog with the summary kept', async ()
   try {
     await tick(); await tick()
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     assert.match(mounted.container.querySelector('.collaboration-workspace-project-header')?.textContent ?? '', /已采纳 2\/2/u)
     await click(buttonByText(mounted.container, '结项'))
     const summary = inputByLabel(mounted.container.querySelector('[role="dialog"]') as HTMLElement, '结项总结') as HTMLTextAreaElement
@@ -1278,6 +1282,7 @@ test('a member who is not the owner still sees and copies their own user ID in t
   try {
     await tick(); await tick()
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     const footer = mounted.container.querySelector('.collaboration-workspace-sidebar-footer') as HTMLElement
     assert.match(footer.textContent ?? '', /usr_work…0001/u)
     assert.equal([...footer.querySelectorAll('button')].some((button) => button.textContent?.trim() === '设置'), false)
@@ -1297,6 +1302,7 @@ async function mountAssignmentPage(workspace: unknown, tasks: readonly unknown[]
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={coordinatorClient} collaborationClient={{ readStatus: async () => status } as never} />)
   await tick(); await tick()
   await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+  await click(buttonByText(mounted.container, '工作与协作'))
   const openCard = (title: string) => click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes(title)) as HTMLButtonElement)
   const drawer = () => mounted.container.querySelector('.collaboration-workspace-task-drawer') as HTMLElement
   return { mounted, openCard, drawer }
@@ -1663,6 +1669,7 @@ test('the mounted page refreshes one Offer gate across board, My Work, Inbox and
   } as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     const cardButton = () => mounted.container.querySelector('.collaboration-workspace-task-card-button') as HTMLButtonElement
     assert.match(cardButton().textContent ?? '', /恢复中/u)
     await click(cardButton())
@@ -1773,6 +1780,7 @@ test('task draft opens its exact standard Session and contribution activation re
   const mounted = await mount(<CollaborationWorkspacePage {...props} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-ask-ai"]') as HTMLButtonElement)
     assert.equal(requests.length, 1)
@@ -1805,6 +1813,7 @@ test('task activity renders typed dispatch acceptance version submission and rev
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => JSON.parse(JSON.stringify(fixture.workspace).replaceAll('prj_demo000001', 'prj_demo00000001')) } as never} collaborationClient={client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     const activity = mounted.container.querySelector('[aria-label="动态"]')!
     for (const [,summary] of [['state', '已派单给成员'], ['state', '成员已接受任务'], ['delivery', '第 1 版已提交'], ['review', '负责人要求返修']]) assert.ok(activity.textContent?.includes(summary!))
@@ -1844,6 +1853,7 @@ test('real page replaces the dirty delivery with the new revision, summary, file
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={fixture.client as never} workspacePreview={{ open: (target) => previews.push(target) }} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     assert.match(mounted.container.textContent ?? '', /第 2 版/u)
     fixture.delivery.draft.changed = true
@@ -1879,6 +1889,7 @@ test('real page refresh discovers a newly prepared local delivery and keeps subm
     await act(async () => { window.dispatchEvent(new window.Event('focus')); await tick(); await tick() })
     assert.match(mounted.container.querySelector('.collaboration-workspace-personal-list')?.textContent ?? '', /待提交交付/u)
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await confirmDelivery(mounted.container)
     assert.match(mounted.container.textContent ?? '', /上传失败：连接中断/u)
@@ -1893,6 +1904,7 @@ test('non-assignees never read or submit another member candidate, and a missing
     const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={fixture.client as never} />)
     try {
       await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+      await click(buttonByText(mounted.container, '工作与协作'))
       await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
       assert.doesNotMatch(mounted.container.textContent ?? '', /确认并提交交付|README 已生成/u)
       if (userId !== 'usr_worker000001') assert.equal(fixture.calls.length, 0)
@@ -1943,6 +1955,7 @@ function sealedDeliveryPreviewFixture(options: Readonly<{ mediaType?: string; fi
 
 async function openFilesPage(container: HTMLElement): Promise<HTMLElement> {
   await click(container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+  await click(buttonByText(container, '工作与协作'))
   await click(buttonByText(container, '文件'))
   const files = container.querySelector('.collaboration-workspace-files-page') as HTMLElement
   assert.ok(files, container.innerHTML)
@@ -1977,6 +1990,7 @@ test('the Owner reads sealed summary metadata and opens the exact file resource 
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={fixture.client as never} collaborationClient={{ readStatus: async () => fixture.status() } as never} resourcePreview={{ open: (target) => { opened.push(target); return true } }} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     const drawer = mounted.container.querySelector('.collaboration-workspace-task-drawer') as HTMLElement
     assert.match(drawer.textContent ?? '', /成员确认的结果说明/u)
@@ -2010,6 +2024,7 @@ test('real requirements page names module dependencies and the board shows pendi
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => workspace } as never} collaborationClient={{ readStatus: async () => snapshot([]) } as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     const board = mounted.container.querySelector('.collaboration-workspace-main-body') as HTMLElement
     assert.match(board.textContent ?? '', /等待 #1 采纳/u)
     await click(buttonByText(mounted.container, '需求'))
@@ -2076,6 +2091,7 @@ for (const kind of ['submit', 'adopt', 'revision', 'reassign'] as const) {
     const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={coordinator as never} collaborationClient={client as never} />)
     try {
       await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+      await click(buttonByText(mounted.container, '工作与协作'))
       await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
       const drawer = mounted.container.querySelector('.collaboration-workspace-task-drawer') as HTMLElement
       if (kind === 'reassign') await setSelectValue(drawer.querySelector('select') as HTMLSelectElement, 'usr_worker000001')
@@ -2152,6 +2168,7 @@ test('real page requirements confirmation remains open while pending and failed,
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => workspace, confirmRequirements: operation.invoke } as never} collaborationClient={{ readStatus: async () => snapshot([]) } as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click(buttonByText(mounted.container, '需求'))
     await click(buttonByText(mounted.container, '确认需求'))
     const dialog = mounted.container.querySelector('[role="dialog"]') as HTMLElement
@@ -2185,6 +2202,7 @@ test('workspace revision form validates instructions, preserves inline failures,
   const instruction = '需要单细胞批次校正方法与效果评估\n请补充对照结果。'
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('返修任务')) as HTMLButtonElement)
     await click(buttonByText(mounted.container, '要求返修'))
     let input = inputByLabel(mounted.container, '返修意见') as HTMLTextAreaElement
@@ -2220,6 +2238,7 @@ test('workspace revision form validates instructions, preserves inline failures,
   const member = await mount(<CollaborationWorkspacePage coordinatorClient={coordinatorClient} collaborationClient={collaborationClient} />)
   try {
     await click(member.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(member.container, '工作与协作'))
     await click([...member.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('返修任务')) as HTMLButtonElement)
     assert.equal(member.container.querySelector('[aria-label="负责人返修意见"] p')?.textContent, instruction)
   } finally { await member.unmount() }
@@ -2232,12 +2251,12 @@ const humanQuestionPrompt = '请确认汇总使用全部样本还是只使用合
 function humanQuestionPageFixture(viewerUserId = 'usr_worker000001') {
   const workspace = confirmedPageWorkspace() as any
   workspace.connection.userId = viewerUserId
-  const request = {
+  const request: HumanNeeded = {
     schemaVersion: 1, revision: 2, createdAt: '2026-10-20T01:00:00.000Z', updatedAt: '2026-10-20T01:00:00.000Z',
     type: 'human_needed', humanRequestId: 'hrq_PageHumanRequest01', projectId: 'prj_demo000001',
     context: { scope: 'worker_execution', taskId: humanQuestionTaskId, executionId: humanQuestionExecutionId },
     targetUserId: 'usr_worker000001', requestedByAgentId: 'agt_demo000001', requiredAssurance: 'verified',
-    prompt: humanQuestionPrompt, confirmableAction: null, status: 'pending', expiresAt: '2026-10-21T00:00:00.000Z'
+    prompt: humanQuestionPrompt, confirmableAction: null, status: 'pending', expiresAt: '2099-10-21T00:00:00.000Z'
   }
   workspace.projects[0].pendingHumanNeeded = [request]
   workspace.projects[0].tasks = [{
@@ -2339,6 +2358,7 @@ test('the Owner and other Members see a read-only waiting label without the ques
       await tick(); await tick()
       assert.equal(inboxNav(mounted.container).querySelector('b'), null, 'another reader gets no answer todo')
       await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+      await click(buttonByText(mounted.container, '工作与协作'))
       assert.match(mounted.container.querySelector('.collaboration-workspace-main-body')?.textContent ?? '', /等待成员回答/u)
       await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('汇总说明')) as HTMLButtonElement)
       assert.match(drawer().textContent ?? '', /Worker 的 Agent 在等成员回答/u)
@@ -2413,6 +2433,7 @@ test('return task is visible only to the assigned Member with a nonterminal exec
       const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={fixture.coordinatorClient} collaborationClient={{ readStatus: async () => snapshot([fixture.dashboard]) } as never} />)
       try {
         await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+        await click(buttonByText(mounted.container, '工作与协作'))
         await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('汇总说明')) as HTMLButtonElement)
         const visible = mounted.container.textContent?.includes('无法完成，退回任务') ?? false
         assert.equal(visible, userId === 'usr_worker000001' && ['accepted_awaiting_runtime', 'running', 'needs_human'].includes(state), `${userId}: ${state}`)
@@ -2478,6 +2499,7 @@ test('member explanation autosaves locally and submission freezes the edited exp
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={fixture.client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await setValue(mounted.container.querySelector('[data-testid="delivery-summary"]') as HTMLTextAreaElement, '我检查过数据边界并补充了结论。')
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); await tick() })
@@ -2494,6 +2516,7 @@ test('empty member explanation autosaves but cannot open submission confirmation
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={fixture.client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await setValue(mounted.container.querySelector('[data-testid="delivery-summary"]') as HTMLTextAreaElement, '')
     assert.equal((mounted.container.querySelector('[data-testid="delivery-submit"]') as HTMLButtonElement).disabled, true)
@@ -2519,6 +2542,7 @@ test('autosave rebases a member explanation on a confirmed AI draft revision con
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await setValue(mounted.container.querySelector('[data-testid="delivery-summary"]') as HTMLTextAreaElement, '成员自己的说明')
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); await tick() })
@@ -2544,6 +2568,7 @@ test('manual editing within the AI replacement autosave debounce preserves the a
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-replace-summary"]') as HTMLButtonElement)
     await setValue(mounted.container.querySelector('[data-testid="delivery-summary"]') as HTMLTextAreaElement, '用户在替换后继续手工编辑')
@@ -2578,6 +2603,7 @@ test('a newer AI suggestion arriving during replacement save stays unresolved wi
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-replace-summary"]') as HTMLButtonElement)
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); await tick() })
@@ -2604,6 +2630,7 @@ test('submission refuses an explanation refreshed after confirmation even when a
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-submit"]') as HTMLButtonElement)
     assert.equal(mounted.container.querySelector('[data-testid="delivery-confirm-summary"]')?.textContent, 'README 已生成并验证')
@@ -2635,6 +2662,7 @@ test('production draft persists explicit materials with explanation through the 
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     const add = mounted.container.querySelector('[data-testid="delivery-add-materials"]') as HTMLButtonElement
     assert.ok(add, 'real draft exposes the material capability')
@@ -2673,6 +2701,7 @@ test('production material import uses exact standard Session and retains partial
     }} as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-add-materials"]') as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-material-upload-tab"]') as HTMLButtonElement)
@@ -2712,6 +2741,7 @@ test('production selected material preview flushes selection then opens exact wo
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={client as never} workspacePreview={{ open: (target) => previews.push(target) }} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-add-materials"]') as HTMLButtonElement)
     await click(mounted.container.querySelector('[data-testid="delivery-material-checkbox"]') as unknown as HTMLButtonElement)
@@ -2729,6 +2759,7 @@ test('missing selected material stays visible and removable after reopening the 
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={{ readWorkspace: async () => fixture.workspace } as never} collaborationClient={fixture.client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     const additional = mounted.container.querySelector('[data-testid="delivery-additional-files"]')!
     assert.match(additional.textContent ?? '', /missing.csv.*文件不可用/su)
@@ -2799,6 +2830,7 @@ test('offline Owner review cannot enqueue adoption or revision and becomes avail
   const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={coordinator as never} collaborationClient={fixture.client as never} />)
   try {
     await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    await click(buttonByText(mounted.container, '工作与协作'))
     await click([...mounted.container.querySelectorAll('.collaboration-workspace-task-card-button')].find((button) => button.textContent?.includes('本机交付任务')) as HTMLButtonElement)
     assert.ok(buttonByText(mounted.container, '采纳交付'))
     assert.ok(buttonByText(mounted.container, '要求返修'))
@@ -2855,5 +2887,143 @@ test('recovery and incomplete lists retain the selected Project until an explici
     await refresh()
     await click(row('旧项目'))
     assert.match(mounted.container.querySelector('.collaboration-workspace-project-header')?.textContent ?? '', /旧项目/u)
+  } finally { await mounted.unmount() }
+})
+
+for (const decision of ['approve', 'reject'] as const) {
+  test(`explicit ${decision} shows the exact action, submits one decision, and follows authoritative progress`, async () => {
+    const fixture = humanQuestionPageFixture()
+    fixture.request.confirmableAction = { actionType: 'workspace.report.write', safeSummary: '更新项目报告 results/report.md，保留原始数据。', effect: 'workspace-write', actionDigest: 'a'.repeat(64) } as any
+    let finish!: () => void
+    let writes = 0
+    const client = { ...fixture.coordinatorClient as any, answerHumanNeeded: async (input: Record<string, unknown>) => {
+      writes++
+      fixture.calls.push({ id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, input })
+      await new Promise<void>(resolve => { finish = resolve })
+      fixture.workspace.projects[0].pendingHumanNeeded = []
+      return fixture.workspace
+    } }
+    const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={client} collaborationClient={{ readStatus: async () => snapshot([fixture.dashboard]) } as never} />)
+    try {
+      assert.match(mounted.container.textContent ?? '', /等待决定/u)
+      await click(mounted.container.querySelector('.collaboration-workspace-personal-row') as HTMLButtonElement)
+      const drawer = () => mounted.container.querySelector('[aria-label="任务详情"]') as HTMLElement
+      assert.match(drawer().textContent ?? '', /更新项目报告 results\/report.md/u)
+      assert.match(drawer().textContent ?? '', /修改工作区文件或数据/u)
+      assert.match(drawer().textContent ?? '', /请求版本 2/u)
+      assert.match(drawer().textContent ?? '', /有效期至/u)
+      assert.ok(drawer().textContent?.includes('a'.repeat(64)))
+      assert.equal(buttonByText(drawer(), '批准该动作').disabled, true)
+      const reason = inputByLabel(drawer(), '决定说明') as HTMLTextAreaElement
+      await setValue(reason, '只针对这份报告，不更改原始数据。')
+      await act(async () => { reason.dispatchEvent(new browserWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }) as unknown as Event); await tick() })
+      assert.equal(writes, 0, 'typing Enter never chooses approve or reject')
+      await click(buttonByText(drawer(), decision === 'approve' ? '批准该动作' : '拒绝该动作'))
+      assert.equal(buttonByText(drawer(), '批准该动作').disabled, true)
+      assert.equal(buttonByText(drawer(), '拒绝该动作').disabled, true)
+      await click(buttonByText(drawer(), '拒绝该动作'))
+      assert.equal(writes, 1)
+      assert.doesNotMatch(drawer().textContent ?? '', /决定已记录/u)
+      await act(async () => { finish(); await tick(); await tick() })
+      assert.deepEqual(fixture.calls[0]?.input, { projectId: fixture.request.projectId, humanRequestId: fixture.request.humanRequestId, requestRevision: 2, answer: '只针对这份报告，不更改原始数据。', decision })
+      assert.match(drawer().textContent ?? '', decision === 'approve' ? /已批准该动作/u : /已拒绝该动作/u)
+      assert.match(drawer().textContent ?? '', /正在等待 Agent 接收/u)
+      assert.doesNotMatch(drawer().textContent ?? '', /Agent 执行中/u)
+      fixture.dashboard.contractExecution = 'running'
+      await act(async () => { window.dispatchEvent(new Event('focus')); await tick(); await tick() })
+      assert.match(drawer().textContent ?? '', /Agent 执行中/u)
+      assert.match(drawer().textContent ?? '', /不代表动作已经完成/u)
+      await click(inboxNav(mounted.container))
+      assert.equal(mounted.container.querySelectorAll('.collaboration-workspace-personal-row').length, 0)
+    } finally { await mounted.unmount() }
+  })
+}
+
+for (const mutation of ['revision', 'digest', 'expired', 'target', 'execution', 'closed'] as const) {
+  test(`human decision refuses ${mutation} drift before writing and refreshes the displayed request`, async () => {
+    const fixture = humanQuestionPageFixture()
+    fixture.request.confirmableAction = { actionType: 'dataset.export', safeSummary: '导出本次已审阅数据', effect: 'external-write', actionDigest: 'a'.repeat(64) } as any
+    const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={fixture.coordinatorClient} collaborationClient={{ readStatus: async () => snapshot([fixture.dashboard]) } as never} />)
+    try {
+      await click(mounted.container.querySelector('.collaboration-workspace-personal-row') as HTMLButtonElement)
+      await setValue(inputByLabel(mounted.container, '决定说明') as HTMLTextAreaElement, '仅批准当前版本')
+      const changed = structuredClone(fixture.request) as any
+      if (mutation === 'revision') changed.revision++
+      if (mutation === 'digest') changed.confirmableAction.actionDigest = 'b'.repeat(64)
+      if (mutation === 'expired') changed.expiresAt = '2000-01-01T00:00:00.000Z'
+      if (mutation === 'target') changed.targetUserId = 'usr_other000001'
+      if (mutation === 'execution') fixture.workspace.projects[0].tasks[0].task.currentExecutionId = 'exe_other000001'
+      fixture.workspace.projects[0].pendingHumanNeeded = mutation === 'closed' ? [] : [changed]
+      await click(buttonByText(mounted.container, '批准该动作'))
+      assert.equal(fixture.calls.length, 0)
+      assert.ok(mounted.container.querySelector('[aria-label="任务详情"] [role="alert"]'))
+      assert.doesNotMatch(mounted.container.textContent ?? '', /决定已记录/u)
+      if (mutation === 'revision' || mutation === 'digest') {
+        assert.equal((inputByLabel(mounted.container, '决定说明') as HTMLTextAreaElement).value, '')
+        assert.equal(buttonByText(mounted.container, '批准该动作').disabled, true)
+      }
+      if (mutation === 'expired') assert.match(mounted.container.textContent ?? '', /请求已过期/u)
+      if (mutation === 'target') assert.equal(mounted.container.querySelector('textarea[aria-label="决定说明"]'), null)
+    } finally { await mounted.unmount() }
+  })
+}
+
+test('a failed explicit decision retains the explanation without claiming receipt or continuation', async () => {
+  const fixture = humanQuestionPageFixture()
+  fixture.request.confirmableAction = { actionType: 'file.delete', safeSummary: '删除临时结果文件', effect: 'destructive', actionDigest: 'c'.repeat(64) } as any
+  fixture.state.fail = true
+  const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={fixture.coordinatorClient} collaborationClient={{ readStatus: async () => snapshot([fixture.dashboard]) } as never} />)
+  try {
+    await click(mounted.container.querySelector('.collaboration-workspace-personal-row') as HTMLButtonElement)
+    assert.match(mounted.container.textContent ?? '', /可能无法撤销/u)
+    await setValue(inputByLabel(mounted.container, '决定说明') as HTMLTextAreaElement, '保留文件用于复查')
+    await click(buttonByText(mounted.container, '拒绝该动作'))
+    assert.equal((inputByLabel(mounted.container, '决定说明') as HTMLTextAreaElement).value, '保留文件用于复查')
+    assert.doesNotMatch(mounted.container.textContent ?? '', /决定已记录/u)
+    assert.equal(buttonByText(mounted.container, '拒绝该动作').disabled, false)
+  } finally { await mounted.unmount() }
+})
+
+test('research landing sends selected adopted evidence to its Coordinator Session and preserves the question on failure', async () => {
+  const workspace = confirmedPageWorkspace()
+  workspace.focusedProjectId = 'prj_research000001'
+  workspace.projects[0].project.projectId = workspace.focusedProjectId
+  const project = workspace.projects[0]
+  project.project.coordinatorAgentId = 'agt_research000001'
+  const summary = '独立对照未复现增益，仍需检验样本构成的影响。'
+  const bundle = { schemaVersion: 2, projectId: workspace.focusedProjectId, taskId: moduleOneTaskId, executionId: 'exe_research000001', contractRevision: 1, resultRevision: 2, summary, outputs: [] }
+  const bytes = new TextEncoder().encode(JSON.stringify(bundle))
+  const object = { objectId: 'obj_research000001', projectId: workspace.focusedProjectId, revision: 2, mediaType: 'application/json', sha256: 'a'.repeat(64), byteCount: bytes.length }
+  const manifest = { projectId: workspace.focusedProjectId, taskId: moduleOneTaskId, executionId: bundle.executionId, resultRevision: 2, deliveryManifestId: 'dmf_research000001', bundleObjectId: object.objectId, objects: [object] }
+  project.tasks = [{ task: { taskId: moduleOneTaskId, title: '独立对照', projectId: workspace.focusedProjectId }, executions: [], delivery: { manifest, receipt: { projectId: workspace.focusedProjectId, taskId: moduleOneTaskId, deliveryManifestId: manifest.deliveryManifestId, integrationReceiptId: 'irc_research000001', disposition: 'adopted' } } }]
+  const coordinator = {
+    readWorkspace: async () => workspace,
+    readSessionProjection: async () => ({ bindings: [{ role: 'coordinator', projectId: workspace.focusedProjectId, principalUserId: workspace.connection.userId, runtimeId: 'codex', threadId: 'research-session', access: 'coordinator', coordinatorAgentId: project.project.coordinatorAgentId, coordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch }] }),
+    openDeliveryObject: async () => ({ resource: {}, object }),
+    describeDeliveryObject: async () => ({ descriptor: { range: { size: bytes.length, maxChunkBytes: bytes.length } } }),
+    readDeliveryObjectRange: async () => ({ dataBase64: Buffer.from(bytes).toString('base64') })
+  }
+  let fail = true
+  const opened: any[] = []
+  const messages: any[] = []
+  const mounted = await mount(<CollaborationWorkspacePage coordinatorClient={coordinator as never} collaborationClient={{ readStatus: async () => snapshot([]) } as never} workbench={{ openSession: async (input: unknown) => { opened.push(input); return true }, sendMessage: async (input: unknown) => { messages.push(input); return fail ? { ok: false, error: { code: 'busy', message: '会话正在运行，请稍后重试' } } : { ok: true } } } as never} />)
+  try {
+    await click(mounted.container.querySelector('.collaboration-workspace-project-row') as HTMLButtonElement)
+    assert.equal(mounted.container.querySelector('[role="tab"][aria-selected="true"]')?.textContent, '研究对话')
+    await setValue(mounted.container.querySelector('#research-question') as HTMLTextAreaElement, '用这个反例检验下一步实验')
+    await click(mounted.container.querySelector('.research-results input') as HTMLButtonElement)
+    const send = mounted.container.querySelector('button[aria-label="开始研究对话"]') as HTMLButtonElement
+    await act(async () => { send.click(); send.click(); await tick(); await tick() })
+    assert.equal(messages.length, 1, mounted.container.querySelector('[role="alert"]')?.textContent ?? mounted.container.textContent ?? '')
+    assert.equal((mounted.container.querySelector('#research-question') as HTMLTextAreaElement).value, '用这个反例检验下一步实验')
+    assert.match(mounted.container.querySelector('[role="alert"]')?.textContent ?? '', /会话正在运行/u)
+    fail = false
+    await click(send)
+    assert.equal(messages.length, 2)
+    assert.equal(messages[1].sessionId, 'research-session')
+    assert.ok(messages[1].text.includes(summary))
+    assert.ok(messages[1].text.includes(manifest.deliveryManifestId))
+    assert.equal(opened[1].returnTo.activation.payload.route, 'research')
+    assert.equal((mounted.container.querySelector('#research-question') as HTMLTextAreaElement).value, '')
   } finally { await mounted.unmount() }
 })

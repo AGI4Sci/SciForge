@@ -3,10 +3,8 @@
  *
  * The whole run goes through the packaged app's own surfaces:
  *   1. the first-run "Model API" form is filled with the local test model config;
- *   2. the two fixture plugins (tests/fixtures/dsh-plugins) are installed the way
- *      the market UI does it — they left the product market, so point the app at
- *      the fixture catalogue: SCIFORGE_TEST_KEY_DIR=<keys> npm run market:fixtures
- *      and pass --index tests/fixtures/dsh-plugins/market/index.json;
+ *   2. the neutral, temporary catalogue from dsh-plugin-market-selftest.mjs is
+ *      installed through the market surface; pass --index <generated-index>;
  *   3. real agent turns are sent in plain language and the thread is read back, so
  *      the tool call (name, arguments, result) is evidence and not an assumption;
  *   4. one case is asked with the plugin disabled, then the app is restarted and the
@@ -39,8 +37,7 @@ const runtimeId = 'dsh'
 // release-owned DSH closure under resources/agent-runtimes; when this checkout has
 // none, the same slot is filled the way a user would fill it (Settings → agents).
 const dshCommand = flag('dsh') ?? process.env.SCIFORGE_TEST_DSH_PATH ?? ''
-// Optional: drive against the generated fixture catalogue instead of the one bundled
-// in the app (the demo plugins are test fixtures now, not market products).
+// Point at the temporary neutral self-test catalogue.
 const indexUrl = flag('index')
 // Where a real `dsh` lives for this test environment. The packaged build ships the
 // release-owned closure under resources/agent-runtimes; when a checkout has none,
@@ -247,7 +244,7 @@ ${PRELUDE}
   } else {
     step('检查配置', { note: 'no Check setup button visible (settings already saved)' })
   }
-  const text = (dialog.innerText || '').replace(/\s+/g, ' ')
+  const text = (dialog?.innerText || '').replace(/\s+/g, ' ')
   step('检查配置', { status: text.slice(text.indexOf('Model access status'), text.indexOf('Model access status') + 360) })
   const patched = await window.sciforge.setSettings({ activeAgentRuntime: 'dsh' })
   const afterRuntime = patched ?? (await window.sciforge.getSettings())
@@ -255,20 +252,25 @@ ${PRELUDE}
   return JSON.stringify({ ok: true, steps })
 })()`
 
-/** Install both plugins through the market surface, exactly like the UI does. */
+/** Install the neutral self-test through the market surface. */
 const PHASE_INSTALL = String.raw`(async () => {
 ${PRELUDE}
   const market = window.sciforge.market
   const view = await market.list()
   if (view.error) fail('market list error: ' + view.error)
-  for (const name of ['@sciforge/plugin-text-stats', '@sciforge/plugin-unit-conversion']) {
+  for (const name of ['@sciforge/plugin-market-selftest']) {
     const entry = view.plugins.find((p) => p.name === name)
     if (!entry) fail(name + ' is not in the catalogue')
-    if (!entry.installed) await market.install({ packageName: name, approvedToolNames: entry.tools.map((t) => t.name) })
+    if (!entry.installed) await market.install({
+      packageName: name,
+      approvalSnapshot: entry.approvalSnapshot,
+      approvedToolNames: entry.tools.map((t) => t.name),
+      approvedPorts: entry.ports
+    })
     else if (!entry.enabled) await market.setEnabled({ packageName: name, enabled: true })
   }
   const after = await market.list()
-  step('两个插件已安装并启用', after.plugins.filter((p) => p.installed).map((p) => ({ name: p.name, enabled: p.enabled, registered: p.capabilities.filter((c) => c.registered).map((c) => c.id) })))
+  step('中性自检插件已安装并启用', after.plugins.filter((p) => p.installed).map((p) => ({ name: p.name, enabled: p.enabled, registered: p.capabilities.filter((c) => c.registered).map((c) => c.id) })))
   const tools = await window.sciforge.agentRuntime.capabilities('${runtimeId}').catch((error) => ({ error: String(error) }))
   step('Agent 运行时声明的工具面', { shape: JSON.stringify(tools).slice(0, 400) })
   return JSON.stringify({ ok: true, steps })
@@ -320,27 +322,27 @@ ${PRELUDE}
   return JSON.stringify({ ok: true, thread, page, steps })
 })()`
 
-/** Deep-walk the transcript for tool calls and text, tolerantly. */
+/** Read AgentRuntimeThreadPage, not arbitrary objects embedded in messages.
+ * dsh-runtime maps ACP toolCallId/title/status/content to item.id/summary/status/detail;
+ * durable-runtime-history.projectTurns replaces snapshots by item.id. Thus each
+ * projected tool item already associates that call with its latest result. ACP
+ * arguments are not retained by this projection and must not be invented here.
+ */
 function analyseTranscript(page, needle) {
+  if (page?.runtimeId !== 'dsh' || !Array.isArray(page.turns)) throw new Error('Expected a DSH AgentRuntimeThreadPage')
   const toolCalls = []
   const texts = []
-  const seen = new Set()
-  const walk = (node) => {
-    if (node === null || node === undefined) return
-    if (typeof node === 'string') { if (node.length > 0) texts.push(node); return }
-    if (typeof node !== 'object') return
-    if (seen.has(node)) return
-    seen.add(node)
-    if (Array.isArray(node)) { for (const item of node) walk(item); return }
-    const name = node.toolName ?? node.tool_name ?? node.tool ?? node.name
-    const args = node.arguments ?? node.args ?? node.input ?? node.parameters
-    const looksLikeTool = typeof name === 'string' && args !== undefined && /[-.]/.test(name) && !['step', 'phase'].includes(name)
-    if (looksLikeTool) {
-      toolCalls.push({ name, args: typeof args === 'string' ? args.slice(0, 400) : JSON.stringify(args).slice(0, 400) })
+  for (const turn of page.turns) {
+    for (const item of turn.items ?? []) {
+      if (typeof item.text === 'string') texts.push(item.text)
+      if (item.kind !== 'tool' || item.toolKind !== 'tool_call') continue
+      let result = null
+      if (typeof item.detail === 'string') {
+        try { result = JSON.parse(item.detail) } catch { /* Missing or non-JSON output cannot prove the self-test succeeded. */ }
+      }
+      toolCalls.push({ id: item.id, turnId: turn.id, name: item.summary, status: item.status, result })
     }
-    for (const value of Object.values(node)) walk(value)
   }
-  walk(page)
   const joined = texts.join('\n')
   return {
     toolCalls,
@@ -349,20 +351,31 @@ function analyseTranscript(page, needle) {
   }
 }
 
+function requireSelftestSuccess(analysis, label) {
+  const calls = analysis.toolCalls.filter((call) => call.name === 'market_selftest_ping')
+  if (calls.length === 0) throw new Error(`${label}: expected self-test tool call missing`)
+  for (const call of calls) {
+    if (call.status !== 'completed') throw new Error(`${label}: self-test tool call ${call.id} did not complete successfully (${call.status})`)
+    if (call.result?.ok !== true
+      || call.result.capability !== 'market-selftest.ping'
+      || call.result.plugin !== '@sciforge/plugin-market-selftest') {
+      throw new Error(`${label}: self-test tool call ${call.id} returned missing or invalid self-test result`)
+    }
+  }
+  return calls
+}
+
+const probeQuestion = '请调用 market-selftest.ping 工具，输入为空对象，并报告工具返回的 capability 字段。'
 const turns = [
-  { id: 'T1', label: '文本统计（第一段）', question: '请用 text-stats 插件统计这段文字的字数、词数和行数，并只根据工具返回的数字回答：SciForge 你好 world', expectTool: 'text-stats', expectNumbers: ['17', '4'] },
-  { id: 'T2', label: '文本统计（第二段）', question: '再用 text-stats 统计另一段：第二段 hello 世界 again，同样只按工具结果回答字数与词数', expectTool: 'text-stats', expectNumbers: null },
-  { id: 'T3', label: '单位换算 100°C → °F', question: '100°C 等于多少华氏度？请用单位换算插件算，不要自己估。', expectTool: 'unit-conversion', expectNumbers: ['212'] },
-  { id: 'T4', label: '单位换算 3 ft → in', question: '3 英尺等于多少英寸？用单位换算插件算。', expectTool: 'unit-conversion', expectNumbers: ['36'] },
-  { id: 'T5', label: '跨维度换算被拒', question: '1 米等于多少千克？用单位换算插件试试。', expectTool: 'unit-conversion', expectNumbers: ['不', '无法', '不能', '不支持', 'incompatible'] },
-  { id: 'T6', label: '禁用后不能调用', question: '再统计一下这段文字的字数：abc def ghi', expectTool: null, expectNumbers: null, disableFirst: '@sciforge/plugin-text-stats' }
+  { id: 'T1', label: '中性能力调用', question: probeQuestion, expectTool: 'market_selftest_ping' },
+  { id: 'T2', label: '禁用后不能调用', question: probeQuestion, expectTool: null, disableFirst: '@sciforge/plugin-market-selftest' }
 ]
 
 const evidenceTurns = []
 try {
   await mkdir('/tmp/sciforge-agent-workspace', { recursive: true })
-  await mkdir(join(profile, 'extensions'), { recursive: true })
   if (has('fresh')) await rm(profile, { recursive: true, force: true })
+  await mkdir(join(profile, 'extensions'), { recursive: true })
   await cp(keyring, join(profile, 'extensions', 'dsh-publisher-keys.json'))
   record('准备隔离 profile 与测试信任', { profile, runtime: runtimeId, modelName: model.model, baseUrlLength: model.baseUrl.length, apiKeyLength: model.apiKey.length })
 
@@ -376,15 +389,16 @@ try {
     if (only && Number(turn.id.slice(1)) > only) break
     if (turn.disableFirst) {
       await evaluate(`window.sciforge.market.setEnabled({ packageName: ${JSON.stringify(turn.disableFirst)}, enabled: false })`)
-      record(`${turn.id}: 禁用 text-stats`, { packageName: turn.disableFirst })
+      record(`${turn.id}: 禁用中性自检插件`, { packageName: turn.disableFirst })
     }
-    const raw = await evaluate(turnScript(turn.question, threadId, turn.label))
+    const raw = await evaluate(turnScript(turn.question, null, turn.label))
     const parsed = JSON.parse(raw)
     threadId = parsed.thread ?? threadId
     for (const entry of parsed.steps) record(entry.step, entry.detail)
     const analysis = analyseTranscript(parsed.page, turn.question.slice(0, 20))
     await writeFile(join(evidenceDir, `${turn.id}-transcript.json`), `${JSON.stringify({ question: turn.question, threadId, page: parsed.page }, null, 2)}\n`)
-    const matchedTools = analysis.toolCalls.filter((call) => String(call.name).includes(turn.expectTool ?? '◆'))
+    const matchedTools = turn.expectTool ? requireSelftestSuccess(analysis, turn.id) : []
+    if (turn.disableFirst && analysis.toolCalls.some((call) => call.name === 'market_selftest_ping')) throw new Error(`${turn.id}: disabled tool was invoked`)
     evidenceTurns.push({ id: turn.id, question: turn.question, toolCalls: analysis.toolCalls, replyTail: analysis.textTail.slice(-800) })
     record(`${turn.id} 结果`, {
       toolCalls: analysis.toolCalls.slice(0, 4).map((call) => call.name),
@@ -393,15 +407,17 @@ try {
     })
   }
 
-  // Restart: the installed plugin must still be usable after a real relaunch.
+  // Re-enable before restart, then prove the enabled state survives relaunch.
+  await evaluate(`window.sciforge.market.setEnabled({ packageName: '@sciforge/plugin-market-selftest', enabled: true })`)
   await stop()
   await launch('restart with plugins installed')
-  const restartTurn = { id: 'T7', label: '重启后仍可调用', question: '重启之后，100°C 是多少华氏度？用单位换算插件再算一次。' }
-  const raw = await evaluate(turnScript(restartTurn.question, threadId, restartTurn.label))
+  const restartTurn = { id: 'T3', label: '重启后仍可调用', question: probeQuestion }
+  const raw = await evaluate(turnScript(restartTurn.question, null, restartTurn.label))
   const parsed = JSON.parse(raw)
   for (const entry of parsed.steps) record(entry.step, entry.detail)
   const analysis = analyseTranscript(parsed.page, null)
-  await writeFile(join(evidenceDir, 'T7-transcript.json'), `${JSON.stringify({ question: restartTurn.question, page: parsed.page }, null, 2)}\n`)
+  await writeFile(join(evidenceDir, 'T3-transcript.json'), `${JSON.stringify({ question: restartTurn.question, page: parsed.page }, null, 2)}\n`)
+  requireSelftestSuccess(analysis, restartTurn.id)
   evidenceTurns.push({ id: restartTurn.id, question: restartTurn.question, toolCalls: analysis.toolCalls, replyTail: analysis.textTail.slice(-800) })
   record(`${restartTurn.id} 结果`, { toolCalls: analysis.toolCalls.slice(0, 4).map((call) => call.name), replyTail: analysis.textTail.slice(-320) })
 

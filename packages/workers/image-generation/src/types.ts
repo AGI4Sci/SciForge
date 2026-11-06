@@ -397,6 +397,12 @@ export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
 export type ImageGenerationReferenceV1 = Readonly<{
   path: string
   contentDigest?: string
+  snapshotPath?: string
+  byteLength?: number
+  mediaType?: string
+  role?: 'image' | 'mask'
+  origin?: 'workspace' | 'derived'
+  derivedFrom?: string[]
 }>
 
 export type ImageGenerationReviewRefV1 = Readonly<{
@@ -415,7 +421,18 @@ export type ImageGenerationModelExecutionV1 = {
   model: {
     /** Public Model Router identity; private provider routing never leaks. */
     id: string
-    version: string
+    version?: string
+  }
+  /** Captured from the submitted request, never reconstructed from the recipe. */
+  requestCapture?: {
+    schemaVersion: 1
+    operation: 'generation' | 'edit'
+    model: string
+    prompt: string
+    promptHash: string
+    parameters: { size: string; n: number; seed?: number; quality?: string; input_fidelity?: string }
+    references: readonly ImageGenerationReferenceV1[]
+    gaps: string[]
   }
   effectivePrompt: string
   effectivePromptHash: string
@@ -599,6 +616,7 @@ export type ImageGenerationCandidateReviewResult =
       status: 'publication_ready' | 'draft_ready' | 'repair_required' | 'needs_context'
       reviewedArtifactPath: string
       reviewedArtifactHash: string
+      reviewedManifest?: { path: string; contentDigest: string }
       reviewedAt: string
       score: ImageGenerationCandidateReviewScore
       semantic: {

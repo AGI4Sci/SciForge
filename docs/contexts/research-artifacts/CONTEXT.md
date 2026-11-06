@@ -13,7 +13,7 @@ A researcher-facing scientific output identified by one stable Artifact identity
 _Avoid_: Research Product store, output folder, latest file
 
 **Research Dossier (科研档案)**:
-A read-only, exact-version presentation of one research checkpoint or scientific compute run, combining the research narrative, sources, outputs, version position, reproduction state, and actionable limitations. It owns no records or current pointer and never substitutes `latest`.
+A read-only, exact-version presentation of one research checkpoint, combining the research narrative, sources, outputs, version position, reproduction state, and actionable limitations. It owns no records or current pointer and never substitutes `latest`. Scientific Compute is retired and is not a current dossier source.
 _Avoid_: plot provenance, evidence graph, chat history
 
 **Scientific Plot Provenance (科学图表数据溯源)**:
@@ -72,7 +72,7 @@ _Avoid_: generic confirmation, DAG approval, runtime permission
 
 - Research Surface navigates among exact owner-provided views without storing a parallel research aggregate.
 - Research Artifact is the user-facing form of a stable Artifact identity at an exact Artifact Version; Artifact Versions remains the sole version authority.
-- Research Dossier reads exact Research Checkpoint or compute-run identities and composes owner projections for a research process.
+- Research Dossier reads exact Research Checkpoint identities and composes owner projections for a research process.
 - Scientific Plot Provenance reads exact Artifact Versions of kind `scientific-plot-render-manifest` and its declared recipe, figure, data, and log dependencies for code/hybrid routes; model-only routes persist the Model Render Receipt in the image-generation manifest for replay and review.
 - Evidence Delta preserves Session history; Evidence DAG is its current interpretation; a Sealed Evidence Closure is the immutable formal baseline for a Claim.
 - The Workspace's one Research Project derives current meaning from one Goal, explicit Project Scope, and exact Evidence inputs; Project Snapshot freezes that meaning only when a formal record needs it.

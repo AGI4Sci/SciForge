@@ -183,3 +183,15 @@ describe('ResourceNavigationContributionRegistry', () => {
     })).toThrow('cannot target right panel fixture.foreign-owner/fixture.foreign-panel')
   })
 })
+
+it('preserves bounded context through the generic resource route and fails closed after removal', () => {
+  const panels = new WorkbenchRightPanelContributionRegistry()
+  registerPanel(panels, 'fixture.context-panel', 'fixture.owner')
+  const registry = new ResourceNavigationContributionRegistry(panels)
+  const registration = registry.register({ id: 'fixture.context', ownerId: 'fixture.owner', contract: { resourceKinds: ['selection'], target: { surface: 'right-panel', contributionId: 'fixture.context-panel' } }, value: { resolve: ({ resource }) => ({ activation: { revision: 1, payload: { resource } } }) } })
+  const input = { sessionId: 'original-session', resource: { resourceKind: 'selection', resourceId: 'exact-node', context: { quote: 'exact', runtimeId: 'owner' } } }
+  expect(resolveResourceNavigation(registry, input)?.activation?.payload).toEqual({ resource: input.resource })
+  expect(resolveResourceNavigation(registry, { ...input, resource: { ...input.resource, context: { quote: 'x'.repeat(32769) } } })).toBeNull()
+  registration.dispose()
+  expect(resolveResourceNavigation(registry, input)).toBeNull()
+})

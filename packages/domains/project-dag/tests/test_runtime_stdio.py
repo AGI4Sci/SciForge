@@ -1,5 +1,6 @@
 """The process protocol is a Project-owned sidecar, not a DSH host."""
 import json
+from contextlib import closing
 import os
 import sqlite3
 import subprocess
@@ -9,6 +10,28 @@ import unittest
 
 
 class RuntimeStdioTests(unittest.TestCase):
+    def test_large_utf8_frame_and_eof_without_newline_after_bad_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.realpath(tmp)
+            evidence = os.path.join(root, 'evidence')
+            os.mkdir(evidence)
+            request = {'id': 12, 'method': 'POST', 'route': '/goals/draft',
+                       'body': {'workspaceRoot': root, 'title': '合成 Goal'}}
+            # Force more than one raw read; EOF, rather than newline, ends the
+            # last frame. Malformed input must not consume the following ID.
+            wire = b'not-json\n' + b' ' * 65535 + json.dumps(request, ensure_ascii=False).encode('utf-8')
+            result = subprocess.run([sys.executable, '-m', 'project_dag.runtime_stdio',
+                                     '--db', os.path.join(root, 'project.db'),
+                                     '--evidence', evidence, '--workspace', root],
+                                    input=wire, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            responses = [json.loads(line) for line in result.stdout.splitlines()]
+            self.assertEqual(len(responses), 2)
+            self.assertFalse(responses[0]['ok'])
+            self.assertEqual(responses[1]['id'], 12)
+            self.assertTrue(responses[1]['ok'], responses[1])
+            self.assertEqual(responses[1]['data']['title'], '合成 Goal')
+
     def test_missing_id_is_rejected_before_any_durable_write(self):
         # A write request without the required envelope id must be refused
         # fail-closed, never executed-and-then-reported-as-failed.
@@ -37,7 +60,7 @@ class RuntimeStdioTests(unittest.TestCase):
                 process.stdin.flush()
                 rejected = json.loads(process.stdout.readline())
                 self.assertFalse(rejected['ok'], rejected)
-                with sqlite3.connect(os.path.join(root, 'project.db')) as db:
+                with closing(sqlite3.connect(os.path.join(root, 'project.db'))) as db:
                     jobs = list(db.execute('SELECT status FROM project_update_job'))
                 self.assertEqual(jobs, [])
                 # A well-formed request afterwards still works: the envelope
@@ -51,6 +74,7 @@ class RuntimeStdioTests(unittest.TestCase):
             finally:
                 process.stdin.close()
                 process.wait(timeout=10)
+                process.stdout.close()
 
 
     def test_status_reads_old_durable_receipt_after_restart(self):

@@ -244,6 +244,7 @@ export type CodexThreadListOptions = {
 }
 
 export type CodexThreadStartPayload = {
+  contextProfile?: 'minimal'
   threadId?: string
   workspace?: string
   workspaceDisplayName?: string
@@ -283,6 +284,7 @@ export type CodexThreadMutationResult =
   | CodexRuntimeFailure
 
 export type CodexTurnStartPayload = {
+  contextProfile?: 'minimal'
   threadId: string
   text: string
   displayText?: string

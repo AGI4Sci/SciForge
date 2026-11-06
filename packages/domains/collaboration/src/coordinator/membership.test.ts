@@ -14,6 +14,7 @@ import {
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import { projectCoordinatorWorkspaceSchema } from './contract.js'
 import { createProjectCoordinatorMembershipPort } from './membership.js'
+import { createProjectCoordinatorRendererClient } from './renderer/project-coordinator-capability-client.js'
 
 function setup(
   execute: AuthenticatedCloudTransport['execute'] = async () => {
@@ -39,7 +40,8 @@ function setup(
     memberUsers: [], workerGroups: [], tasks: [], offers: [], deliveryDrive: null, records: [], pendingHumanNeeded: [], finalSummary: null,
     memberships: invitation ? [{ schemaVersion: 1, revision: 1, createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP,
       type: 'project_membership', projectMembershipId: TEST_IDS.projectMembershipId, projectId: TEST_IDS.projectId,
-      userId: TEST_IDS.secondUserId, state: 'invited', invitedAt: TEST_TIMESTAMP, acceptedAt: null, removedAt: null }] : [] }]
+      userId: TEST_IDS.secondUserId, state: 'invited', authorityEpoch: 1, activatedAt: null,
+      removalRequestedAt: null, removalRequestedByUserId: null, removedAt: null }] : [] }]
   })
   const transport: AuthenticatedCloudTransport = {
     status: () => ({ state: 'ready', baseUrl: 'https://cloud.test', userId: principal, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
@@ -48,9 +50,53 @@ function setup(
     execute
   }
   const port = createProjectCoordinatorMembershipPort({ workspace: { readWorkspace: async () => workspace() }, transport })
-  return { port, stale: () => { projectRevision++ }, notOwner: () => { principal = TEST_IDS.secondUserId },
+  return { port, workspace, stale: () => { projectRevision++ }, notOwner: () => { principal = TEST_IDS.secondUserId },
     pending: () => { invitation = true }, activations: () => activations }
 }
+
+test('local membership revision guards expose recoverable conflicts without dispatching a write', async () => {
+  let writes = 0
+  const fixture = setup(async () => { writes++; throw new Error('Unexpected Cloud write.') })
+  fixture.stale()
+  const input = { projectId: TEST_IDS.projectId, expectedProjectRevision: 1 }
+  await assert.rejects(fixture.port.addMember({ ...input, userId: TEST_IDS.secondUserId }, 'idem_stale_add'),
+    { code: 'revision_conflict' })
+  await assert.rejects(fixture.port.removeMember({ ...input, projectMembershipId: TEST_IDS.projectMembershipId,
+    expectedMembershipRevision: 1 }, 'idem_stale_remove'), { code: 'revision_conflict' })
+  fixture.notOwner()
+  fixture.pending()
+  await assert.rejects(fixture.port.acceptInvitation({ ...input, projectMembershipId: TEST_IDS.projectMembershipId,
+    expectedMembershipRevision: 1 }, 'idem_stale_accept'), { code: 'revision_conflict' })
+  assert.equal(writes, 0)
+})
+
+test('renderer recovers a real local membership guard and writes once with the current revision', async () => {
+  const sentRevisions: unknown[] = []
+  const fixture = setup(async (request) => {
+    sentRevisions.push('expectedProjectRevision' in request.payload ? request.payload.expectedProjectRevision : null)
+    return { contractVersion: 1, status: 200, body: {
+      protocolVersion: '1.0', type: 'rest.collection', requestId: request.payload.requestId,
+      items: fixture.workspace().projects[0]!.memberships
+    } }
+  })
+  fixture.pending()
+  fixture.stale()
+  const revisions: number[] = []
+  const client = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('Not observed.') },
+    invoke: async (contract, input, options) => {
+      if (contract.actionId === 'collaboration.workspace.read') return fixture.workspace() as never
+      assert.equal(contract.actionId, 'collaboration.membership.add')
+      assert.equal(options?.approval?.mode, 'confirmation')
+      const parsed = input as Parameters<typeof fixture.port.addMember>[0]
+      revisions.push(parsed.expectedProjectRevision)
+      return await fixture.port.addMember(parsed, `idem_recovery_${revisions.length}`) as never
+    }
+  })
+  await client.addMember({ projectId: TEST_IDS.projectId, expectedProjectRevision: 1, userId: TEST_IDS.secondUserId })
+  assert.deepEqual(revisions, [1, 2])
+  assert.deepEqual(sentRevisions, [2])
+})
 
 test('membership add preserves the typed Cloud rejection', async () => {
   const { port } = setup(async (request) => ({

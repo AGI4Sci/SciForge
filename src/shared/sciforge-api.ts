@@ -281,9 +281,6 @@ export type SkillListItem = {
 export type SkillListResult =
   | { ok: true; skills: SkillListItem[]; validationErrors: Array<{ root: string; message: string }> }
   | { ok: false; message: string }
-export type ScientificSkillsMcpConfigResult =
-  | { ok: true; config: Record<string, unknown> }
-  | { ok: false; message: string }
 export type BgcDiscoveryMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
@@ -292,75 +289,6 @@ export type ImageGenerationMcpConfigResult =
   | { ok: false; message: string }
 export type PptMasterMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
-  | { ok: false; message: string }
-export type ScientificSkillsInstallRequest = {
-  workspaceRoot: string
-  backend?: 'git' | 'npx'
-  ref?: string
-}
-export type ScientificSkillsInstallResult =
-  | {
-      ok: true
-      status: 'installed' | 'already_installed'
-      backend: 'git' | 'npx'
-      targetPath: string
-      commit?: string
-      provenancePath?: string
-      stdoutTail?: string
-      stderrTail?: string
-    }
-  | {
-      ok: false
-      status:
-        | 'invalid_workspace'
-        | 'invalid_existing_target'
-        | 'clone_failed'
-        | 'verification_failed'
-        | 'npx_failed'
-        | 'not_discovered_after_npx'
-        | 'unexpected_error'
-      backend?: 'git' | 'npx'
-      targetPath?: string
-      message: string
-      stdoutTail?: string
-      stderrTail?: string
-    }
-export type ScientificSkillsStatusResult =
-  | {
-      ok: true
-      installed: boolean
-      skillCount: number
-      fingerprint: string
-      indexedAt: string
-      roots: Array<{
-        path: string
-        source: string
-        exists: boolean
-        skillCount: number
-        error?: string
-      }>
-      validationErrors: Array<{ path: string; message: string }>
-      plottingPack: {
-        total: number
-        installed: number
-        missing: number
-        items: Array<{
-          skillId: string
-          label: string
-          installed: boolean
-          name?: string
-          description?: string
-          entryPath?: string
-          dependencyRisk?: string
-          validationErrors: string[]
-        }>
-      }
-      installHint?: string
-      onDemandPolicy: {
-        mode: 'manual-approval'
-        summary: string
-      }
-    }
   | { ok: false; message: string }
 export type TurnCompleteNotificationPayload = {
   threadId?: string
@@ -508,6 +436,7 @@ export type WorkspacePreviewObserveResult =
   | { ok: true; observation: WorkspaceObservation; capability?: CapabilityResourceBinding }
   | { ok: false; message: string }
 export type WorkspacePreviewReadRangeResult =
+  | import('@sciforge/domain-sdk/workspace-preview').WorkspacePreviewTextReadResult
   | {
       ok: true
       sessionId: string
@@ -558,22 +487,7 @@ export type WorkspacePreviewApplyEditResult =
       capability?: CapabilityResourceBinding
     }
   | { ok: false; message: string }
-export type WorkspacePreviewExportResult =
-  | {
-      ok: true
-      sessionId: string
-      path: string
-      target: WorkspacePreviewExportTarget
-      exportedAt: string
-      audit: {
-        pluginId: string
-        sourcePath: string
-        targetKind: WorkspacePreviewExportTarget['kind']
-        format: string
-        effect: 'source-copy' | 'sidecar-package' | 'annotated-pdf'
-      }
-    }
-  | { ok: false; message: string }
+export type WorkspacePreviewExportResult = import('@sciforge/domain-sdk/workspace-preview').WorkspacePreviewProviderExportResult
 export type WorkspacePreviewInvokeActionResult =
   | (WorkspacePreviewPluginActionResult & { capability?: CapabilityResourceBinding })
   | { ok: false; message: string }
@@ -643,12 +557,9 @@ export type SciForgeApi = {
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   pickFile: (request: WorkspaceFilePickerRequest) => Promise<WorkspacePickResult>
-  buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
   buildBgcDiscoveryMcpConfig: (workspaceRoot?: string) => Promise<BgcDiscoveryMcpConfigResult>
   buildImageGenerationMcpConfig: (workspaceRoot?: string) => Promise<ImageGenerationMcpConfigResult>
   buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
-  getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
-  installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>

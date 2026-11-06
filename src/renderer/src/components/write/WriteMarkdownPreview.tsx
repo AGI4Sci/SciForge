@@ -21,6 +21,8 @@ import {
   Copy
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { rehypePreviewSourceLines } from './preview-line-numbers'
+import './preview-line-numbers.css'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -35,7 +37,7 @@ import {
   transformWriteMarkdownLinkUrl,
   transformWriteMarkdownMediaUrl
 } from '@shared/write-markdown-resource'
-import { MARKDOWN_MATH_KATEX_OPTIONS, normalizeMarkdownMathDelimiters } from '@shared/write-markdown-math'
+import { MARKDOWN_MATH_KATEX_OPTIONS, normalizeMarkdownMathWithSourceLines } from '@shared/write-markdown-math'
 import {
   highlightCodeHtml,
   renderFallbackCodeHtml
@@ -46,7 +48,7 @@ import {
   watchForSystemEditorReturn
 } from '../../lib/system-editor'
 import { useStableCallback } from '../../lib/use-stable-callback'
-import { ImagePreviewLightbox } from '../ImagePreviewLightbox'
+import { ImagePreviewWindow } from '../ImagePreviewWindow'
 import {
   getCachedMarkdownWorkspaceImage,
   loadCachedMarkdownWorkspaceImage,
@@ -64,6 +66,7 @@ export type { WriteMarkdownWorkspaceImageLoader } from './write-markdown-image-c
 type Props = {
   content: string
   isMarkdown: boolean
+  showLineNumbers?: boolean
   filePath?: string | null
   workspaceRoot?: string | null
   previewErrorMessage?: string
@@ -761,6 +764,7 @@ class PreviewErrorBoundary extends Component<PreviewBoundaryProps, PreviewBounda
 function WriteMarkdownPreviewContent({
   content,
   isMarkdown,
+  showLineNumbers = false,
   filePath,
   workspaceRoot,
   loadWorkspaceImage,
@@ -861,11 +865,17 @@ function WriteMarkdownPreviewContent({
 
   useEffect(() => () => stopWatchingSystemEditorReturn(), [stopWatchingSystemEditorReturn])
 
+  const normalizedMarkdown = useMemo(() => normalizeMarkdownMathWithSourceLines(content), [content])
+  const numberedRehypePlugins = useMemo(() => [
+    ...rehypePlugins.slice(0, -1),
+    [rehypePreviewSourceLines, normalizedMarkdown.sourceLines],
+    rehypePlugins[rehypePlugins.length - 1]
+  ] as PluggableList, [normalizedMarkdown])
   const markdownContent = useMemo(
     () => normalizeMarkdownLinkDestinations(
-      normalizeMarkdownImageDestinations(normalizeMarkdownMathDelimiters(content))
+      normalizeMarkdownImageDestinations(normalizedMarkdown.content)
     ),
-    [content]
+    [normalizedMarkdown]
   )
   // The link opener is a host capability whose identity changes with the host,
   // so the memoized component map must invoke it through a stable reference
@@ -918,13 +928,13 @@ function WriteMarkdownPreviewContent({
   if (!isMarkdown) return plainTextFallback(content)
   return (
     <>
-      <div className="ds-markdown write-markdown-preview min-h-full text-ds-ink">
+      <div className={`ds-markdown write-markdown-preview min-h-full text-ds-ink${showLineNumbers ? ' preview-source-lines' : ''}`}>
         <MarkdownWorkspaceImageLoaderContext.Provider value={loadWorkspaceImage}>
           <MarkdownImageRefreshContext.Provider value={imageRefreshContext}>
             <CodeBlockExpansionContext.Provider value={codeBlockExpansionContext}>
               <ReactMarkdown
                 remarkPlugins={remarkPlugins}
-                rehypePlugins={rehypePlugins}
+                rehypePlugins={showLineNumbers ? numberedRehypePlugins : rehypePlugins}
                 urlTransform={writeMarkdownUrlTransform}
                 components={markdownComponents}
               >
@@ -934,7 +944,7 @@ function WriteMarkdownPreviewContent({
           </MarkdownImageRefreshContext.Provider>
         </MarkdownWorkspaceImageLoaderContext.Provider>
       </div>
-      <ImagePreviewLightbox
+      <ImagePreviewWindow
         open={Boolean(imagePreview)}
         src={imagePreview?.src ?? ''}
         alt={imagePreview?.alt ?? ''}

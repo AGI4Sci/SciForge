@@ -1,3 +1,4 @@
+import type { HumanNeeded } from '@sciforge/collaboration-contracts'
 import type { CollaborationOfferAvailability } from '../../contract.js'
 
 export type ProjectStatus = 'draft' | 'active' | 'paused' | 'completed'
@@ -24,6 +25,8 @@ export type TaskCardModel = Readonly<{
   executionId?: string | null
   canReturnExecution?: boolean
   executionFailure?: Readonly<{ code: string; reexecutionInputId?: string }>
+  humanRequest?: HumanNeeded
+  executionState?: string
   humanRequestId?: string
   projectId?: string
   assigneeUserId?: string | null

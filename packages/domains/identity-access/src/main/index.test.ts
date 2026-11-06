@@ -102,6 +102,16 @@ describe('Identity main contributions', () => {
         allowedConsumerModuleIds: ['sciforge.collaboration']
       }
     })
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      serviceId: 'sciforge.current-user-profile', contractVersion: '1.0.0',
+      allowedConsumerModuleIds: ['sciforge.siyuan-content-space-provider']
+    }))
+    const profile = registered.get('sciforge.current-user-profile@1.0.0') as { read(): unknown }
+    expect(profile.read()).toEqual({ state: 'unavailable' })
+    expect(entry.contributions[6]).toMatchObject({
+      id: 'identity-access.current-user-profile', kind: 'main.extension',
+      contract: { serviceId: 'sciforge.current-user-profile', contractVersion: '1.0.0' }
+    })
     const transport = registered.get(
       `${AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID}@${AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION}`
     ) as AuthenticatedCloudTransport

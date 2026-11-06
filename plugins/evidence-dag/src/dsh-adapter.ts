@@ -69,4 +69,10 @@ export async function apply(ctx: Context) {
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args, exec) => { await withWriter(exec.callId, exec.signal, () => writer().pollArtifactEvents(scopeSchema.parse(args))); return { drained: true } },
   }))
+  ctx.tools.register(defineTool({
+    name: 'evidence_dag_poll_producer_provenance', description: 'Deliver exact current-session producer inbox receipts through the canonical Evidence consumer. Reports pending and foreign-owner gaps; never retargets another Session.', parameters,
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+    execute: async (args, exec) => JSON.parse(JSON.stringify(await withWriter(exec.callId, exec.signal, () => writer().pollProducerProvenance(scopeSchema.parse(args))))),
+  }))
+
 }

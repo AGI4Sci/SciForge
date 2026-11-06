@@ -201,11 +201,11 @@ describe('SessionRightPanelDock', () => {
     ).map((element) => element.dataset.sessionRightPanelPane)
     expect(initialOrder).toEqual(['pane-1', 'pane-2'])
     expect(container?.querySelector<HTMLElement>('[data-session-right-panel-pane="pane-1"]')?.style.width)
-      .toBe('')
+      .toBe('340px')
     expect(container?.querySelector<HTMLElement>('[data-session-right-panel-pane="pane-1"]')?.style.maxWidth)
-      .toBe('')
+      .toBe('calc(100% - 11px)')
     expect(container?.querySelector<HTMLElement>('[data-session-right-panel-pane="pane-2"]')?.style.width)
-      .toBe('')
+      .toBe('420px')
 
     await act(async () => {
       root?.render(createElement(SessionRightPanelDock, {
@@ -463,6 +463,20 @@ describe('SessionRightPanelDock', () => {
     expect(panes[0].dataset.sessionRightPanelPane).toBe('pane-1')
     expect(panes[1].dataset.focused).toBe('true')
     expect(panes[1].dataset.rightPanelMode).toBe('file')
+  })
+
+  it('hides resource-only surfaces from default navigation while preserving an opened resource', async () => {
+    const resource = { id: 'fixture.resource', label: 'Exact resource', navigation: 'resource-only' as const }
+    root = createRoot(container as HTMLDivElement)
+    const render = async (mode: SessionRightPanelPane['mode']) => act(async () => root?.render(createElement(SessionRightPanelDock, {
+      workspace: workspace([pane('pane-1', mode, 760)]), active: true,
+      bindings: [{ id: 'file', label: 'Files' }, resource], labels, ...callbacks(),
+      renderPane: () => createElement('div')
+    })))
+    await render('file')
+    expect(container?.querySelector('option[value="fixture.resource"]')).toBeNull()
+    await render('fixture.resource')
+    expect(container?.querySelector('option[value="fixture.resource"]')?.textContent).toBe('Exact resource')
   })
 
   it('does not offer a duplicate pane action for bindings that disallow splitting', async () => {

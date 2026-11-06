@@ -1111,6 +1111,7 @@ test('Coordinator creates Project-scoped HumanNeeded for one explicit Project me
     projectId: TEST_IDS.projectId,
     humanRequestId: needed.humanRequestId,
     context: needed.context,
+    answer: 'Proceed with the lower-risk training plan.',
     answeredByUserId: projectFixture.ownerUserId
   }
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
@@ -1716,3 +1717,32 @@ for (const legacy of [false, true]) {
     })
   }
 }
+
+test('HumanAnswer verifies decision, reviewed revision, explanation and authenticated author before reporting success', async () => {
+  const workspace = workspaceFixture()
+  let receipt = { ...humanAnswerFixture, answeredByUserId: projectFixture.ownerUserId,
+    decision: 'approve' as 'approve' | 'reject' | null, confirmationId: 'cfm_HumanDecision00001' as string | null }
+  const commands: RestRequest[] = []
+  const port = createProjectCoordinatorActionPort({
+    workspace: defineProjectCoordinatorWorkspacePort({ readWorkspace: async () => workspace }),
+    coordinatorCloudCommands: {} as CoordinatorCloudCommandService,
+    transport: {
+      status: () => ({ state: 'ready', baseUrl: 'https://fixture.invalid/', userId: projectFixture.ownerUserId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+      execute: async ({ payload }) => { const command = payload as RestRequest; commands.push(command); return { contractVersion: 1, status: 200, body: entityResponse(command.requestId, receipt) } },
+      stageObject: async () => { throw new Error('unused') }, readObject: async () => { throw new Error('unused') }
+    },
+    state: coordinatorState(), requirementsDispatch: { reconcileProject: async () => undefined },
+    requestId: () => 'req_HumanDecision00001'
+  })
+  const exact = { ...receipt }
+  for (const decision of ['approve', 'reject'] as const) {
+    receipt = { ...exact, decision }
+    const input = { projectId: receipt.projectId, humanRequestId: receipt.humanRequestId, requestRevision: receipt.requestRevision, answer: receipt.answer, decision }
+    await port.answerHumanNeeded(input, `idem_HumanDecision_${decision}`)
+    assert.equal((commands.at(-1) as any).decision, decision)
+    for (const mutation of [{ decision: decision === 'approve' ? 'reject' : 'approve' }, { decision: null, confirmationId: null }, { requestRevision: receipt.requestRevision + 1 }, { answer: 'different explanation' }, { answeredByUserId: TEST_IDS.secondUserId }]) {
+      receipt = { ...exact, decision, ...mutation } as typeof receipt
+      await assert.rejects(port.answerHumanNeeded(input, 'idem_HumanMismatch0001'), /exact Project request answer/u)
+    }
+  }
+})

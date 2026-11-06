@@ -2,6 +2,13 @@
 
 SciForge 的统一用户—手机—Agent 协作领域包。
 
+协作默认保留主区域打开方式，也可从面板标题栏切换到左侧、右侧或底部，与会话并排显示。边缘可拖动或用方向键调整大小，位置与尺寸保存在本机；同侧面板通过标签切换。窄面板内的导航自动改为顶部布局。
+
+13.1.0 在任务详情接通 HumanNeeded 的明确动作批准/拒绝：指定成员审阅动作、影响、
+版本和有效期，填写说明后提交；重读请求并核对回执后显示决定和后续状态。
+Worker 在原 Execution/Session 继续时保留显式决定，普通文字回答不升级为动作授权。
+具体流程、范围与验收入口见 [HumanNeeded 明确动作决定](../../../docs/human-needed-decisions.md)。
+
 包通过标准 domain manifest 提供独立 main 与 renderer 入口。main 入口拥有 Agent
 设备连接、本地 Session 投影、durable inbox/outbox、每 projection 顺序队列、receipt
 ledger 和 Task adapter；renderer 只通过 Capability Broker 调用公开 capability，不使用
@@ -45,6 +52,14 @@ Identity 从 AgentRuntime readiness 观察得到的 capability tags；Runtime �
 Agent、participant、active endpoint locators 及受支持的 managed containers。同步失败记录
 `collaboration.cloud_sync_error`，只有完整同步成功才清除；心跳和 inbox 恢复成功只清除
 `collaboration.connection_error`，保留尚未恢复的资料同步、projection 和 Task 诊断。
+
+协调操作遇到版本冲突或瞬时设备/连接故障时，renderer 重新读取工作区并最多重放一次。
+成员操作的本地版本守卫与 Cloud 拒绝使用同一 `revision_conflict` 原因；renderer 识别
+结构化错误及 broker 的 `details.reasonCode`，不会依赖本地守卫的英文提示来恢复。
+重读失败或返回非 ready 的连接状态时停止重放；重放返回另一种业务拒绝时保留实际错误，
+不把它误报为最初的版本冲突。
+云端不可达、超时、需要登录和需要设备授权分别显示可执行的中文提示；这些错误不额外触发
+renderer 层重试，连接超时的有界恢复由 Identity 的唯一 Cloud 传输路径负责。
 
 Worker availability 只发布本机事实：它复用最近一次成功 heartbeat 返回的精确 Agent revision、
 last-seen 与完整 Runtime capability tags，并从 durable execution journal 计算 active Task count。
@@ -192,6 +207,9 @@ Local Workspaces search filters only its own view. Unarchived sessions and archi
 history are read with separate budgets through the same runtime listing API, so
 archived Cloud history cannot evict ordinary unarchived conversations. An archive
 read failure retains the previous archived catalog while current sessions refresh.
+Session catalogs preserve the runtime's authoritative workspace even under a
+temporary root. Local Workspaces sidebar filtering must not erase that path:
+continuing a private Task Session sends the next turn to its own workspace.
 
 ### 有界刷新
 

@@ -168,9 +168,17 @@ describe('visual production planner', () => {
       'render_truth',
       'prepare_model',
       'render_visual',
+      'discover_composite',
       'deterministic_composite',
       'review_visual'
     ])
+    expect(result.execution.stages.find(({ id }) => id === 'discover_composite')).toMatchObject({
+      tool: 'sciforge_discover', capabilityId: 'scientific-plotting.composite', produces: ['compositeOperation']
+    })
+    expect(result.execution.stages.find(({ id }) => id === 'deterministic_composite')).toMatchObject({
+      tool: 'sciforge_invoke', capabilityId: 'scientific-plotting.composite',
+      consumes: expect.arrayContaining(['compositeOperation', 'operationId', 'handoff'])
+    })
     expect(result.execution.stages.at(-1)?.tool).toBe('image_generation_review_candidate')
   })
 

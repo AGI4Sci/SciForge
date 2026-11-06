@@ -5,7 +5,8 @@ import {
   TEST_HASH, TEST_IDS, TEST_TIMESTAMP, projectFixture
 } from '@sciforge/collaboration-contracts/testing'
 import type { ProjectCoordinatorMembershipAcceptInput, ProjectCoordinatorWorkspace } from '../../coordinator/contract.js'
-import { projectCoordinatorWorkspaceSchema } from '../../coordinator/contract.js'
+import { PROJECT_COORDINATOR_CAPABILITY_IDS, projectCoordinatorWorkspaceSchema } from '../../coordinator/contract.js'
+import { createProjectCoordinatorRendererClient } from '../../coordinator/renderer/project-coordinator-capability-client.js'
 import { createProjectCoordinatorMembershipPort } from '../../coordinator/membership.js'
 import { acceptReviewedInvitation } from './accept-reviewed-invitation.js'
 
@@ -42,7 +43,7 @@ function fixture() {
 const localConflict = () => new Error('Project invitation acceptance lost the exact current Project revision.')
 const cloudConflict = () => new Error('SciForge Cloud request failed: revision_conflict: The resource revision is stale.')
 
-function rig(firstError: Error = localConflict()) {
+function rig(firstError: Error = localConflict(), compose = false) {
   const reviewed = fixture()
   const fresh = fixture()
   fresh.projects[0].project.revision++
@@ -50,7 +51,10 @@ function rig(firstError: Error = localConflict()) {
   let reads = 0
   let secondError: Error | undefined
   const client = {
-    readWorkspace: async () => { reads++; return fresh },
+    readWorkspace: async (input?: { projectId?: string }) => {
+      assert.deepEqual(input, { projectId: TEST_IDS.projectId })
+      reads++; return fresh
+    },
     acceptInvitation: async (input: ProjectCoordinatorMembershipAcceptInput) => {
       calls.push(input)
       if (calls.length === 1) throw firstError
@@ -58,10 +62,21 @@ function rig(firstError: Error = localConflict()) {
       return fresh
     }
   }
+  const renderer = createProjectCoordinatorRendererClient({
+    observe: async () => { throw new Error('not observed') },
+    invoke: async (contract, input, options) => {
+      if (contract.actionId === PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead) {
+        return await client.readWorkspace(input as { projectId?: string }) as never
+      }
+      assert.equal(contract.actionId, PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept)
+      assert.equal(options?.approval?.mode, 'confirmation')
+      return await client.acceptInvitation(input as ProjectCoordinatorMembershipAcceptInput) as never
+    }
+  })
   return {
     reviewed, fresh, calls, reads: () => reads,
     secondError: (cause: Error) => { secondError = cause },
-    accept: () => acceptReviewedInvitation({ client, project: reviewed.projects[0], userId: TEST_IDS.secondUserId, membershipId: TEST_IDS.projectMembershipId })
+    accept: () => acceptReviewedInvitation({ client: compose ? renderer : client, project: reviewed.projects[0], userId: TEST_IDS.secondUserId, membershipId: TEST_IDS.projectMembershipId })
   }
 }
 
@@ -75,6 +90,7 @@ for (const conflict of [localConflict, cloudConflict]) {
 }
 
 const changes: Record<string, (workspace: ProjectCoordinatorWorkspace) => void> = {
+  // Contract fixture only: today's server creates invited Memberships at revision 1.
   'Membership revision': (w) => { w.projects[0].memberships[0].revision++ },
   'Membership removed': (w) => { w.projects[0].memberships[0].state = 'removed' },
   'Membership accepted elsewhere': (w) => { w.projects[0].memberships[0].state = 'active' },
@@ -104,7 +120,52 @@ for (const [name, change] of Object.entries(changes)) {
     await assert.rejects(state.accept(), /项目已更新，请查看后再接受/u)
     assert.equal(state.calls.length, 1)
   })
+  test(`renderer and review helper require review when ${name} changes`, async () => {
+    const state = rig(Object.assign(new Error('项目版本已变化'), {
+      code: 'handler_failed', details: { reasonCode: 'revision_conflict' }
+    }), true)
+    change(state.fresh)
+    await assert.rejects(state.accept(), /项目已更新，请查看后再接受/u)
+    assert.equal(state.calls.length, 1)
+    assert.equal(state.reads(), 1)
+  })
 }
+
+for (const conflict of [
+  localConflict(),
+  Object.assign(new Error('项目版本已变化'), { code: 'handler_failed', details: { reasonCode: 'revision_conflict' } }),
+  Object.assign(new Error('项目版本已变化'), { code: 'revision_conflict' }),
+  Object.assign(cloudConflict(), { code: 'handler_failed' })
+]) {
+  test(`renderer and review helper explicitly resubmit once for ${JSON.stringify(conflict)}`, async () => {
+    const state = rig(conflict, true)
+    await state.accept()
+    assert.deepEqual(state.calls, [
+      { projectId: TEST_IDS.projectId, projectMembershipId: TEST_IDS.projectMembershipId, expectedProjectRevision: 7, expectedMembershipRevision: 1 },
+      { projectId: TEST_IDS.projectId, projectMembershipId: TEST_IDS.projectMembershipId, expectedProjectRevision: 8, expectedMembershipRevision: 1 }
+    ])
+    assert.equal(state.reads(), 1)
+  })
+}
+
+for (const code of ['permission_denied', 'transport_unavailable', 'authority_unverified', 'outcome_unknown', 'cloud_timeout', 'identity_required', 'device_required']) {
+  test(`renderer and review helper preserve ${code} without extra reads or writes`, async () => {
+    const cause = Object.assign(cloudConflict(), { code: 'handler_failed', details: { reasonCode: code } })
+    const state = rig(cause, true)
+    await assert.rejects(state.accept(), error => error === cause)
+    assert.equal(state.calls.length, 1)
+    assert.equal(state.reads(), 0)
+  })
+}
+
+test('renderer and review helper stop after a second conflict and retain its cause', async () => {
+  const state = rig(cloudConflict(), true)
+  const cause = Object.assign(new Error('再次冲突'), { code: 'revision_conflict' })
+  state.secondError(cause)
+  await assert.rejects(state.accept(), error => error instanceof Error && error.cause === cause)
+  assert.equal(state.calls.length, 2)
+  assert.equal(state.reads(), 1)
+})
 
 test('a second conflict stops after exactly two submissions', async () => {
   const state = rig()
@@ -119,6 +180,13 @@ for (const message of ['Cloud timeout: outcome unknown', 'SciForge Cloud request
     const cause = new Error(message)
     const state = rig(cause)
     await assert.rejects(state.accept(), (error) => error === cause)
+    assert.equal(state.calls.length, 1)
+    assert.equal(state.reads(), 0)
+  })
+  test(`renderer and review helper never retry uncertain or denied writes: ${message}`, async () => {
+    const cause = new Error(message)
+    const state = rig(cause, true)
+    await assert.rejects(state.accept(), error => error === cause)
     assert.equal(state.calls.length, 1)
     assert.equal(state.reads(), 0)
   })

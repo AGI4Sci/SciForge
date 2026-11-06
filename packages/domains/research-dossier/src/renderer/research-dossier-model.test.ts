@@ -117,3 +117,9 @@ test('binds exact digest and safe preview path to the selected version', () => {
   assert.equal(previewDestination(descriptor.ref as never),
     `.sciforge/research-dossier/previews/artifact-version-figure-a-2-${'a'.repeat(12)}.png`)
 })
+
+
+test('exact artifact history forwards the owner cursor without combining numeric paging and retains continuation', () => {
+  assert.deepEqual(artifactHistoryInput('artifact:one', 200, 'owner-cursor'), { artifactId: 'artifact:one', limit: 25, cursor: 'owner-cursor' })
+  assert.equal(mergeArtifactHistory({ items: [] }, { items: [], nextBeforeSequence: 100, nextCursor: 'next-owner-cursor' }).nextCursor, 'next-owner-cursor')
+})

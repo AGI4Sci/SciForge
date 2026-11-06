@@ -28,8 +28,21 @@ export type ResearchDossierLoadResultV1 =
   | Readonly<{ ok: false; issue: Readonly<{ code: string; message: string }> }>
 
 export type ResearchDossierBrowseV1 = Readonly<{
+  workspaceRoot: string
+  query?: string
   artifacts: ArtifactVersionListV2
   issues: Readonly<Partial<Record<'artifacts', string>>>
+  streams: readonly ResearchDossierBrowseStreamV1[]
+}>
+
+export type ResearchDossierBrowseStreamV1 = Readonly<{
+  kind: typeof RESEARCH_DOSSIER_BROWSE_ARTIFACT_KINDS[number]
+  nextBeforeSequence?: number
+  nextCursor?: string
+  complete: boolean
+  pagesRead: number
+  scanned: number
+  issue?: string
 }>
 
 export const RESEARCH_DOSSIER_SECONDARY_OWNER_TIMEOUT_MS = 1_500
@@ -63,42 +76,60 @@ type SecondaryOwnerResultV1<T> = Readonly<{
   issue?: string
 }>
 
-/** Load bounded recent targets for the toolbar/legacy-command landing page. */
+/** Read one owner page per unfinished kind. Cursors remain owned by list-v2. */
 export async function loadResearchDossierBrowse(
   client: ResearchDossierCapabilityClient,
-  workspaceRoot: string
+  workspaceRoot: string,
+  previous?: ResearchDossierBrowseV1,
+  query = ''
 ): Promise<ResearchDossierBrowseV1> {
-  const [checkpointArtifactsResult, outputArtifactsResult] = await Promise.allSettled([
-    client.listArtifactVersions(workspaceRoot, {
-      kind: RESEARCH_DOSSIER_BROWSE_ARTIFACT_KINDS[0],
-      currentOnly: true,
-      limit: RESEARCH_DOSSIER_BROWSE_LIMIT
-    }),
-    client.listArtifactVersions(workspaceRoot, {
-      kind: RESEARCH_DOSSIER_BROWSE_ARTIFACT_KINDS[1],
-      currentOnly: true,
-      limit: RESEARCH_DOSSIER_BROWSE_LIMIT
-    })
-  ])
-  const issues: Partial<Record<'artifacts', string>> = {}
-  const artifactItems: ArtifactVersionListV2['items'][number][] = []
-  const artifactIssues: string[] = []
-  for (const result of [checkpointArtifactsResult, outputArtifactsResult]) {
-    if (result.status === 'rejected') {
-      artifactIssues.push(errorMessage(result.reason))
-    } else if (result.value.ok) {
-      artifactItems.push(...result.value.value.items)
-    } else {
-      artifactIssues.push(result.value.issue.message)
-    }
+  if (previous && (previous.workspaceRoot !== workspaceRoot || (previous.query ?? '') !== query.trim())) {
+    throw new Error('History cursor belongs to another workspace. Refresh this workspace first.')
   }
+  const streams: readonly ResearchDossierBrowseStreamV1[] = previous?.streams ?? RESEARCH_DOSSIER_BROWSE_ARTIFACT_KINDS.map(kind => ({
+    kind, complete: false, pagesRead: 0, scanned: 0
+  }))
+  const results = await Promise.allSettled(streams.map(async (stream) => {
+    if (stream.complete) return null
+    return client.listArtifactVersions(workspaceRoot, {
+      kind: stream.kind,
+      currentOnly: false,
+      metadataQuery: query.trim(),
+      limit: RESEARCH_DOSSIER_BROWSE_LIMIT,
+      ...(stream.nextCursor ? { cursor: stream.nextCursor } : stream.nextBeforeSequence ? { beforeSequence: stream.nextBeforeSequence } : {})
+    })
+  }))
+  const issues: Partial<Record<'artifacts', string>> = {}
+  const artifactItems = [...(previous?.artifacts.items ?? [])]
+  const nextStreams = streams.map((stream, index): ResearchDossierBrowseStreamV1 => {
+    const result = results[index]!
+    if (stream.complete) return stream
+    if (result.status === 'rejected') return { ...stream, issue: errorMessage(result.reason) }
+    if (!result.value) return stream
+    if (!result.value.ok) return { ...stream, issue: `${result.value.issue.code}: ${result.value.issue.message}` }
+    const page = result.value.value
+    if ((page.nextCursor && page.nextCursor === stream.nextCursor) || (page.nextBeforeSequence && stream.nextBeforeSequence && page.nextBeforeSequence >= stream.nextBeforeSequence)) {
+      return { ...stream, issue: 'invalid-cursor: History cursor did not advance; refresh required.' }
+    }
+    artifactItems.push(...page.items)
+    return {
+      kind: stream.kind,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      ...(page.nextBeforeSequence ? { nextBeforeSequence: page.nextBeforeSequence } : {}),
+      complete: !page.nextCursor && !page.nextBeforeSequence,
+      pagesRead: stream.pagesRead + 1,
+      scanned: stream.scanned + page.items.length
+    }
+  })
+  const artifactIssues = nextStreams.flatMap(stream => stream.issue ? [stream.issue] : [])
   if (artifactIssues.length) issues.artifacts = [...new Set(artifactIssues)].join(' · ')
   const seenVersionIds = new Set<string>()
   const artifacts: ArtifactVersionListV2 = {
     items: artifactItems
       .sort((left, right) => (
         right.version.sequence - left.version.sequence ||
-        right.version.createdAt.localeCompare(left.version.createdAt)
+        right.version.createdAt.localeCompare(left.version.createdAt) ||
+        left.version.versionId.localeCompare(right.version.versionId)
       ))
       .filter((item) => {
         if (!isResearchDossierBrowseArtifact(item)) return false
@@ -106,9 +137,8 @@ export async function loadResearchDossierBrowse(
         seenVersionIds.add(item.version.versionId)
         return true
       })
-      .slice(0, RESEARCH_DOSSIER_BROWSE_LIMIT)
   }
-  return { artifacts, issues }
+  return { workspaceRoot, query: query.trim(), artifacts, issues, streams: nextStreams }
 }
 
 export async function loadExactResearchDossier(
@@ -126,6 +156,11 @@ export async function loadExactResearchDossier(
       activation.target.versionId
     )
     if (!described.ok) return { ok: false, issue: described.issue }
+    if (described.value.ref.versionId !== activation.target.versionId ||
+      described.value.version.versionId !== activation.target.versionId ||
+      described.value.ref.artifactId !== described.value.artifact.artifactId) {
+      return { ok: false, issue: { code: 'content-mismatch', message: 'The owner returned a different exact Artifact identity.' } }
+    }
     if (
       activation.expectedDigest &&
       activation.expectedDigest !== `sha256:${described.value.ref.contentDigest}`

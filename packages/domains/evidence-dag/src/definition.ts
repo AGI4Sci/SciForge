@@ -45,6 +45,14 @@ export const EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRACT =
   domainPackageDefinition.contributionContracts[
     EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
   ]!
+export const EVIDENCE_DAG_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION = contributionFor(
+  'renderer', 'renderer.workbench-global-overlay'
+)
+export const EVIDENCE_DAG_RENDERER_GLOBAL_OVERLAY_CONTRACT =
+  domainPackageDefinition.contributionContracts[EVIDENCE_DAG_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION.id]!
+export const EVIDENCE_DAG_RENDERER_AUDIT_COMMAND_CONTRIBUTION = contributionFor('renderer', 'renderer.command')
+export const EVIDENCE_DAG_RENDERER_AUDIT_TOOLBAR_CONTRIBUTION = contributionFor('renderer', 'renderer.workbench-toolbar-action')
+export const EVIDENCE_DAG_RENDERER_AUDIT_TOOLBAR_CONTRACT = domainPackageDefinition.contributionContracts[EVIDENCE_DAG_RENDERER_AUDIT_TOOLBAR_CONTRIBUTION.id]!
 export const EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION = contributionFor(
   'renderer',
   'renderer.i18n-resource'
@@ -75,3 +83,6 @@ function contributionFor(process: DomainPackageProcess, kind: string) {
   }
   return contribution
 }
+
+export const EVIDENCE_DAG_RENDERER_RESEARCH_WORKSPACE_CONTRIBUTION = contributionFor('renderer', 'renderer.extension')
+export const EVIDENCE_DAG_RENDERER_RESEARCH_WORKSPACE_CONTRACT = domainPackageDefinition.contributionContracts[EVIDENCE_DAG_RENDERER_RESEARCH_WORKSPACE_CONTRIBUTION.id]!

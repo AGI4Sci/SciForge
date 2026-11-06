@@ -1,8 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, resolve } from 'node:path'
 import { z } from 'zod'
-import type { PluginAdapterContract } from '@sciforge/plugin-sdk'
-import { dshPluginToolGrantSchema } from './dsh-plugin-artifact'
+import { pluginHostServicesSchema, type PluginAdapterContract } from '@sciforge/plugin-sdk'
+import { dshPluginPortOperationsSchema, dshPluginToolGrantSchema } from './dsh-plugin-artifact'
 
 /**
  * Host-owned approval policy for installed DSH runtime plugins.
@@ -30,13 +31,23 @@ export const dshPluginPolicyEntrySchema = z.object({
   integrity: z.string().regex(/^[0-9a-f]{64}$/),
   artifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
   tools: z.record(z.string().trim().min(1).max(128), dshPluginToolGrantSchema),
+  /** G7 exemption recorded with the approved policy entry. */
+  hostServices: pluginHostServicesSchema.optional(),
+  /** Digest-verified requests retained for Host review, never implicit grants. */
+  declaredPorts: dshPluginPortOperationsSchema.optional(),
+  /** Only operations explicitly approved by the user, not artifact declarations. */
+  ports: dshPluginPortOperationsSchema.optional(),
   /** Bare packages the artifact declared as host-provided; the host decides. */
   hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64),
   /** Trusted publisher that signed the artifact; null only for an explicitly allowed unsigned install. */
   publisherId: z.string().trim().min(1).max(128).regex(/^[a-z0-9][a-z0-9._-]*$/).nullable(),
   approvedAt: z.string().trim().min(1).max(64),
   source: z.string().trim().min(1).max(1_024)
-}).strict()
+}).strict().refine((entry) => entry.hostServices !== 'none' || (!entry.ports?.length && !entry.declaredPorts?.length), {
+  path: ['ports'], message: 'hostServices: none conflicts with ports'
+}).refine((entry) => !entry.ports?.length || entry.ports.every((port) => entry.declaredPorts?.includes(port)), {
+  path: ['ports'], message: 'approved ports must be declared'
+})
 
 export const dshPluginPolicySchema = z.object({
   schemaVersion: z.literal(1),
@@ -58,8 +69,9 @@ export async function readDshPluginPolicy(path: string): Promise<DshPluginPolicy
   let raw: string
   try {
     raw = await readFile(path, 'utf8')
-  } catch {
-    return emptyDshPluginPolicy()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyDshPluginPolicy()
+    throw error
   }
   const parsed = dshPluginPolicySchema.safeParse(JSON.parse(raw))
   if (!parsed.success) {
@@ -78,7 +90,13 @@ export async function writeDshPluginPolicy(path: string, policy: DshPluginPolicy
     `${left.packageName}@${left.version}`.localeCompare(`${right.packageName}@${right.version}`)
   )
   await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, `${JSON.stringify({ schemaVersion: 1, approved: entries }, null, 2)}\n`)
+  const temporary = `${path}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, approved: entries }, null, 2)}\n`, { mode: 0o600 })
+    await rename(temporary, path)
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined)
+  }
 }
 
 export function policyEntryFor(
@@ -111,7 +129,7 @@ export function removePolicyEntry(policy: DshPluginPolicy, packageName: string):
  */
 export function policyContracts(policy: DshPluginPolicy): Map<string, PluginAdapterContract> {
   const contracts = new Map<string, PluginAdapterContract>()
-  for (const entry of policy.approved) {
+  for (const entry of dshPluginPolicySchema.parse(policy).approved) {
     contracts.set(
       `${entry.packageName}@${entry.version}`,
       Object.freeze({
@@ -122,6 +140,8 @@ export function policyContracts(policy: DshPluginPolicy): Map<string, PluginAdap
           packageName: entry.packageName,
           packageVersion: entry.version,
           dshRuntimeVersion: entry.dshRuntimeVersion,
+          ...(entry.hostServices !== undefined ? { hostServices: entry.hostServices } : {}),
+          ...(entry.ports !== undefined ? { ports: Object.freeze([...entry.ports]) } : {}),
           tools: entry.tools
         })
       })

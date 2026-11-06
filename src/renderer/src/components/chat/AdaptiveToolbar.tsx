@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode
 } from 'react'
@@ -44,10 +45,14 @@ export function fittingToolbarActions(
 /** One ordered action list drives both the toolbar and its overflow menu. */
 export function AdaptiveToolbar({
   actions,
-  customization
+  customization,
+  presentation = 'adaptive',
+  preserveTextSelection = false
 }: {
   actions: readonly ToolbarAction[]
   customization: ReactElement<{ className?: string }>
+  presentation?: 'adaptive' | 'menu'
+  preserveTextSelection?: boolean
 }): ReactElement {
   const { t } = useTranslation('common')
   const rootRef = useRef<HTMLDivElement>(null)
@@ -55,7 +60,7 @@ export function AdaptiveToolbar({
   const moreRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const pendingFocusRef = useRef<string | null>(null)
-  const [visibleCount, setVisibleCount] = useState(actions.length)
+  const [visibleCount, setVisibleCount] = useState(presentation === 'menu' ? 0 : actions.length)
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({
     left: 0,
@@ -67,6 +72,7 @@ export function AdaptiveToolbar({
   const overflow = hidden.length > 0
 
   useLayoutEffect(() => {
+    if (presentation === 'menu') { setVisibleCount(0); return }
     const root = rootRef.current
     const measure = measureRef.current
     if (!root || !measure) return
@@ -101,7 +107,7 @@ export function AdaptiveToolbar({
     observer.observe(root)
     for (const child of measure.children) observer.observe(child)
     return () => observer.disconnect()
-  }, [actions])
+  }, [actions, presentation])
 
   useLayoutEffect(() => {
     if (pendingFocusRef.current) {
@@ -123,7 +129,7 @@ export function AdaptiveToolbar({
     const update = (): void => {
       const rect = moreRef.current?.getBoundingClientRect()
       if (!rect) return
-      const scale = rect.width / (moreRef.current?.offsetWidth || rect.width)
+      const scale = rect.width / (moreRef.current?.offsetWidth || rect.width) || 1
       setPosition({
         left: Math.max(8, Math.min(rect.left / scale, window.innerWidth / scale - 288)),
         width: Math.min(280, window.innerWidth / scale - 16),
@@ -170,6 +176,10 @@ export function AdaptiveToolbar({
     }
   }, [overflow, open])
 
+  const retainSelection = (event: ReactPointerEvent<HTMLButtonElement>): void => {
+    if (preserveTextSelection && window.getSelection()?.toString()) event.preventDefault()
+  }
+
   const button = (action: ToolbarAction, inMenu: boolean): ReactElement => (
     <button
       key={action.id}
@@ -181,6 +191,7 @@ export function AdaptiveToolbar({
       aria-haspopup={action.popup}
       aria-expanded={action.expanded}
       disabled={action.disabled}
+      onPointerDown={retainSelection}
       onClick={(event) => {
         action.onClick(event)
         if (inMenu && !action.keepOpen) {
@@ -223,6 +234,7 @@ export function AdaptiveToolbar({
           title={t('workbenchToolbarMore')}
           aria-haspopup="dialog"
           aria-expanded={open && overflow}
+          onPointerDown={retainSelection}
           onClick={() => setOpen((value) => !value)}
         >
           <Ellipsis className="h-4 w-4" />

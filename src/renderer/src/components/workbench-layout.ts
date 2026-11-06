@@ -4,6 +4,7 @@ import type {
   DomainRendererWorkbenchSurfaceActivation
 } from '@sciforge/domain-sdk/renderer'
 import { RIGHT_PANEL_MODES } from './chat/WorkbenchTopBar'
+import { useEdgePanel } from './use-edge-panel'
 import {
   subscribeSessionRightPanelDisposals,
   subscribeSessionRightPanelRekeys
@@ -14,6 +15,7 @@ import {
 } from '../lib/browser-storage'
 import {
   SESSION_RIGHT_PANEL_MIN_WIDTH,
+  SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH,
   addSessionRightPanelPane,
   closeSessionRightPanelPane,
   ensureSessionRightPanelWorkspace,
@@ -50,7 +52,6 @@ const LEFT_PANEL_MAX = 480
 export const WORKBENCH_MAIN_SURFACE_MIN_WIDTH = 360
 export const WORKBENCH_RIGHT_PANEL_VISIBLE_CLASS =
   'h-full min-h-0 shrink-0 border-l border-[var(--ds-sidebar-divider)] bg-ds-sidebar'
-const SIDEBAR_HARD_MIN = 180
 const PANEL_RESIZE_HANDLE_WIDTH = 7
 const BOTTOM_PANEL_HEIGHT_DEFAULT = 360
 const BOTTOM_PANEL_HEIGHT_MIN = 220
@@ -125,23 +126,31 @@ export function rightPanelPaneWidthFromPointerDelta(
   )
 }
 
+/** Responsive presentation only; never changes persisted widths or open Sessions. */
+export function workbenchPanelOverlays(containerWidth: number, rightPanelVisible: boolean) {
+  const width = Number.isFinite(containerWidth) ? Math.max(0, containerWidth) : 0
+  const rightMinimum = SESSION_RIGHT_PANEL_MIN_WIDTH + SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH
+  return {
+    left: width < Math.max(720, WORKBENCH_MAIN_SURFACE_MIN_WIDTH + LEFT_PANEL_MIN +
+      PANEL_RESIZE_HANDLE_WIDTH + (rightPanelVisible ? rightMinimum : 0)),
+    right: rightPanelVisible && width < WORKBENCH_MAIN_SURFACE_MIN_WIDTH + rightMinimum
+  }
+}
+
 export function rightPanelPaneMaximumWidth(
   containerWidth: number,
   leftWidth: number,
   options: { leftPanelVisible: boolean }
 ): number {
-  const normalizedContainerWidth = Number.isFinite(containerWidth)
-    ? Math.max(0, containerWidth)
-    : 0
-  const occupiedLeft = options.leftPanelVisible
+  const width = Number.isFinite(containerWidth) ? Math.max(0, containerWidth) : 0
+  const overlays = workbenchPanelOverlays(width, true)
+  const occupiedLeft = options.leftPanelVisible && !overlays.left
     ? PANEL_RESIZE_HANDLE_WIDTH + clampWidth(leftWidth, LEFT_PANEL_MIN, LEFT_PANEL_MAX)
     : 0
-  return Math.max(
-    SESSION_RIGHT_PANEL_MIN_WIDTH,
-    Math.floor(
-      normalizedContainerWidth - occupiedLeft - WORKBENCH_MAIN_SURFACE_MIN_WIDTH - PANEL_RESIZE_HANDLE_WIDTH
-    )
-  )
+  return Math.max(SESSION_RIGHT_PANEL_MIN_WIDTH, Math.floor(
+    width - occupiedLeft - (overlays.right ? 48 : WORKBENCH_MAIN_SURFACE_MIN_WIDTH) -
+    SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH
+  ))
 }
 
 export function fitWorkbenchWidths(
@@ -150,58 +159,22 @@ export function fitWorkbenchWidths(
   rightPaneWidths: readonly number[],
   panels: { leftPanelVisible: boolean }
 ): { left: number; rightDockViewport: number; rightDockContent: number } {
+  const width = Number.isFinite(containerWidth) ? Math.max(0, containerWidth) : 0
   const rightPanelVisible = rightPaneWidths.length > 0
+  const overlays = workbenchPanelOverlays(width, rightPanelVisible)
   const rightDockContent = rightPaneWidths.reduce(
-    (total, width) =>
-      total + PANEL_RESIZE_HANDLE_WIDTH + normalizeRightPanelPaneWidth(width),
-    0
+    (total, paneWidth) => total + SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH + normalizeRightPanelPaneWidth(paneWidth), 0
   )
-  const handleWidth = panels.leftPanelVisible ? PANEL_RESIZE_HANDLE_WIDTH : 0
-  const normalizedContainerWidth = Number.isFinite(containerWidth)
-    ? Math.max(0, containerWidth)
-    : 0
-  const usableWidth = Math.max(0, normalizedContainerWidth - handleWidth)
-  const availableSides = Math.max(
-    0,
-    usableWidth - Math.min(WORKBENCH_MAIN_SURFACE_MIN_WIDTH, usableWidth)
-  )
-
-  if (!panels.leftPanelVisible) {
-    return {
-      left: clampWidth(leftWidth, LEFT_PANEL_MIN, LEFT_PANEL_MAX),
-      rightDockViewport: Math.min(rightDockContent, availableSides),
-      rightDockContent
-    }
-  }
-
-  if (!rightPanelVisible) {
-    const leftFloor = availableSides >= LEFT_PANEL_MIN
-      ? LEFT_PANEL_MIN
-      : Math.min(SIDEBAR_HARD_MIN, availableSides)
-    const leftCeil = Math.min(LEFT_PANEL_MAX, availableSides)
-    return {
-      left: clampWidth(leftWidth, leftFloor, Math.max(leftFloor, leftCeil)),
-      rightDockViewport: 0,
-      rightDockContent
-    }
-  }
-
-  const dockFloor = Math.min(SIDEBAR_HARD_MIN, rightDockContent, availableSides)
-  const leftCapacity = Math.max(0, availableSides - dockFloor)
-  const leftFloor = leftCapacity >= LEFT_PANEL_MIN
-    ? LEFT_PANEL_MIN
-    : Math.min(SIDEBAR_HARD_MIN, leftCapacity)
-  const leftCeil = Math.min(LEFT_PANEL_MAX, leftCapacity)
-  const nextLeft = clampWidth(leftWidth, leftFloor, Math.max(leftFloor, leftCeil))
-
-  return {
-    left: nextLeft,
-    rightDockViewport: Math.min(
-      rightDockContent,
-      Math.max(0, availableSides - nextLeft)
-    ),
-    rightDockContent
-  }
+  const leftDocked = panels.leftPanelVisible && !overlays.left
+  const rightMinimum = rightPanelVisible ? SESSION_RIGHT_PANEL_MIN_WIDTH + SESSION_RIGHT_PANEL_RESIZE_HANDLE_WIDTH : 0
+  const left = leftDocked
+    ? clampWidth(leftWidth, LEFT_PANEL_MIN, Math.min(LEFT_PANEL_MAX,
+      width - PANEL_RESIZE_HANDLE_WIDTH - WORKBENCH_MAIN_SURFACE_MIN_WIDTH - rightMinimum))
+    : clampWidth(leftWidth, LEFT_PANEL_MIN, LEFT_PANEL_MAX)
+  const availableRight = overlays.right
+    ? Math.max(0, width - 48)
+    : Math.max(0, width - (leftDocked ? left + PANEL_RESIZE_HANDLE_WIDTH : 0) - WORKBENCH_MAIN_SURFACE_MIN_WIDTH)
+  return { left, rightDockViewport: Math.min(rightDockContent, availableRight), rightDockContent }
 }
 
 /**
@@ -219,11 +192,13 @@ export function hostSidebarPresentation({
 export function useWorkbenchLayout({
   activeSessionId,
   isRightPanelModeAvailable,
-  preferredHostSidebar = 'expanded'
+  preferredHostSidebar = 'expanded',
+  auxiliarySidePanelVisible = false
 }: {
   activeSessionId: string | null
   isRightPanelModeAvailable?: (mode: string) => boolean
   preferredHostSidebar?: 'expanded' | 'collapsed'
+  auxiliarySidePanelVisible?: boolean
 }) {
   const normalizedActiveSessionId = activeSessionId?.trim() || null
   const [rightPanelWorkspaceMap, setRightPanelWorkspaceMap] =
@@ -247,10 +222,18 @@ export function useWorkbenchLayout({
   const [workbenchContainerWidth, setWorkbenchContainerWidth] = useState(() =>
     typeof window === 'undefined' ? 0 : window.innerWidth
   )
-  const leftSidebarOverlay = workbenchContainerWidth > 0 && workbenchContainerWidth < 720
+  const [centerSurfaceWidth, setCenterSurfaceWidth] = useState<number | null>(null)
+  const centerSurfaceRef = useRef<HTMLDivElement | null>(null)
+  const activeRightPanelWorkspace = normalizedActiveSessionId
+    ? rightPanelWorkspaceMap[normalizedActiveSessionId] ?? null
+    : null
+  const rightPanelVisible = Boolean(activeRightPanelWorkspace?.panes.length)
+  const responsivePanels = workbenchPanelOverlays(workbenchContainerWidth, rightPanelVisible || auxiliarySidePanelVisible)
+  const compactSidebarOverlay = responsivePanels.left
+  const rightPanelOverlay = workbenchPanelOverlays(centerSurfaceWidth ?? workbenchContainerWidth, rightPanelVisible).right
   const [compactSidebarOpen, setCompactSidebarOpen] = useState(false)
   const mainAreaSidebarCollapsed = preferredHostSidebar === 'collapsed'
-  const leftSidebarCollapsed = leftSidebarOverlay
+  const leftSidebarCollapsed = compactSidebarOverlay
     ? !compactSidebarOpen
     : mainAreaSidebarCollapsed
       ? mainAreaSidebarOverride ?? true
@@ -261,13 +244,26 @@ export function useWorkbenchLayout({
     setMainAreaSidebarOverride(null)
   }, [preferredHostSidebar])
   useEffect(() => {
-    if (!leftSidebarOverlay) setCompactSidebarOpen(false)
-  }, [leftSidebarOverlay])
+    if (!compactSidebarOverlay) setCompactSidebarOpen(false)
+  }, [compactSidebarOverlay])
   const shellRef = useRef<HTMLDivElement | null>(null)
   const sidebarOverlayRef = useRef<HTMLDivElement | null>(null)
   const sidebarReturnFocusRef = useRef<HTMLElement | null>(null)
+  const setLeftSidebarExpanded = useCallback((expanded: boolean): void => {
+    if (compactSidebarOverlay) setCompactSidebarOpen(expanded)
+    else if (mainAreaSidebarCollapsed) setMainAreaSidebarOverride(!expanded)
+    else setPreferredLeftSidebarCollapsed(!expanded)
+  }, [compactSidebarOverlay, mainAreaSidebarCollapsed])
+  const leftSidebarEdge = useEdgePanel({
+    storageKey: 'sciforge.layout.leftSidebarBehavior',
+    open: !leftSidebarCollapsed,
+    onOpenChange: setLeftSidebarExpanded,
+    panelRef: sidebarOverlayRef
+  })
+  const leftSidebarOverlay = compactSidebarOverlay || leftSidebarEdge.behavior === 'auto'
+  const leftSidebarModal = compactSidebarOverlay && leftSidebarEdge.behavior !== 'auto'
   useEffect(() => {
-    if (!leftSidebarOverlay || leftSidebarCollapsed) return
+    if (!leftSidebarModal || leftSidebarCollapsed) return
     const panel = sidebarOverlayRef.current
     const shell = shellRef.current
     if (!panel) return
@@ -302,21 +298,17 @@ export function useWorkbenchLayout({
         else if (previousFocus?.isConnected) previousFocus.focus()
       })
     }
-  }, [leftSidebarOverlay, leftSidebarCollapsed])
+  }, [leftSidebarModal, leftSidebarCollapsed])
   const disposedSessionIdsRef = useRef(new Set<string>())
-  const activeRightPanelWorkspace = normalizedActiveSessionId
-    ? rightPanelWorkspaceMap[normalizedActiveSessionId] ?? null
-    : null
   const focusedRightPanelPane = focusedSessionRightPanelPane(activeRightPanelWorkspace)
   const focusedRightPanelMode = focusedRightPanelPane?.mode ?? null
   const focusedFilePreviewTarget = focusedRightPanelPane?.filePreviewTarget ?? null
   const focusedFilePreviewReturnContext =
     focusedRightPanelPane?.filePreviewReturnContext ?? null
   const focusedRightPanelPaneWidth = focusedRightPanelPane?.width ?? null
-  const rightPanelVisible = Boolean(activeRightPanelWorkspace?.panes.length)
   const rightPanelPaneWidths = useMemo(
-    () => focusedRightPanelPane ? [focusedRightPanelPane.width] : [],
-    [focusedRightPanelPane]
+    () => activeRightPanelWorkspace?.panes.map((pane) => pane.width) ?? [],
+    [activeRightPanelWorkspace]
   )
   const horizontalLayout = useMemo(
     () => fitWorkbenchWidths(
@@ -334,7 +326,8 @@ export function useWorkbenchLayout({
     ]
   )
   const leftSidebarWidth = horizontalLayout.left
-  const rightPanelDockViewportWidth = horizontalLayout.rightDockViewport
+  const rightPanelDockViewportWidth = centerSurfaceWidth === null ? horizontalLayout.rightDockViewport
+    : fitWorkbenchWidths(centerSurfaceWidth, 0, rightPanelPaneWidths, { leftPanelVisible: false }).rightDockViewport
   const rightPanelDockContentWidth = horizontalLayout.rightDockContent
   const activeBottomPanelState = normalizedActiveSessionId
     ? bottomPanelBySession[normalizedActiveSessionId]
@@ -501,8 +494,10 @@ export function useWorkbenchLayout({
   }, [preferredLeftSidebarWidth])
 
   useEffect(() => {
-    persistBoolean(LEFT_PANEL_COLLAPSED_KEY, preferredLeftSidebarCollapsed)
-  }, [preferredLeftSidebarCollapsed])
+    if (leftSidebarEdge.behavior !== 'auto') {
+      persistBoolean(LEFT_PANEL_COLLAPSED_KEY, preferredLeftSidebarCollapsed)
+    }
+  }, [preferredLeftSidebarCollapsed, leftSidebarEdge.behavior])
 
   useEffect(() => {
     persistWidth(BOTTOM_PANEL_HEIGHT_KEY, bottomPanelHeight)
@@ -525,12 +520,15 @@ export function useWorkbenchLayout({
       setWorkbenchContainerWidth((current) =>
         current === containerWidth ? current : containerWidth
       )
+      const centerWidth = centerSurfaceRef.current?.clientWidth || null
+      setCenterSurfaceWidth(current => current === centerWidth ? current : centerWidth)
     }
     sync()
     const observer = typeof ResizeObserver === 'undefined' || !shellRef.current
       ? null
       : new ResizeObserver(sync)
     if (shellRef.current) observer?.observe(shellRef.current)
+    if (centerSurfaceRef.current) observer?.observe(centerSurfaceRef.current)
     window.addEventListener('resize', sync)
     return () => {
       observer?.disconnect()
@@ -539,7 +537,7 @@ export function useWorkbenchLayout({
   }, [])
 
   const toggleLeftSidebar = useCallback((): void => {
-    if (leftSidebarOverlay) {
+    if (compactSidebarOverlay) {
       if (!compactSidebarOpen) {
         sidebarReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       }
@@ -549,7 +547,7 @@ export function useWorkbenchLayout({
       // their persisted preference.
       setMainAreaSidebarOverride((current) => !(current ?? true))
     } else setPreferredLeftSidebarCollapsed((current) => !current)
-  }, [compactSidebarOpen, leftSidebarOverlay, mainAreaSidebarCollapsed])
+  }, [compactSidebarOpen, compactSidebarOverlay, mainAreaSidebarCollapsed])
 
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return
@@ -629,9 +627,9 @@ export function useWorkbenchLayout({
     const onMove = (moveEvent: PointerEvent): void => {
       const delta = moveEvent.clientX - startX
       const maximumWidth = rightPanelPaneMaximumWidth(
-        shellRef.current?.clientWidth ?? window.innerWidth,
+        centerSurfaceRef.current?.clientWidth || shellRef.current?.clientWidth || window.innerWidth,
         leftSidebarWidth,
-        { leftPanelVisible: !leftSidebarCollapsed }
+        { leftPanelVisible: !centerSurfaceRef.current?.clientWidth && !leftSidebarCollapsed && !leftSidebarOverlay }
       )
       setRightPanelPaneWidthForSession(
         sessionId,
@@ -656,7 +654,7 @@ export function useWorkbenchLayout({
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
-  }, [leftSidebarCollapsed, leftSidebarWidth, setRightPanelPaneWidthForSession])
+  }, [leftSidebarCollapsed, leftSidebarOverlay, leftSidebarWidth, setRightPanelPaneWidthForSession])
 
   const beginBottomPanelResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0 || !bottomPanelContributionId) return
@@ -753,6 +751,7 @@ export function useWorkbenchLayout({
       focusedHistory.index >= 0 &&
       focusedHistory.index < focusedHistory.entries.length - 1,
     closeBottomPanel,
+    centerSurfaceRef,
     closeRightPanelPaneForSession,
     focusedFilePreviewReturnContext,
     focusedFilePreviewTarget,
@@ -763,12 +762,15 @@ export function useWorkbenchLayout({
     leftSidebarCollapsed,
     leftSidebarWidth,
     leftSidebarOverlay,
+    leftSidebarModal,
+    leftSidebarEdge,
     sidebarOverlayRef,
     navigateRightPanelPaneHistoryForSession,
     placeRightPanelPaneForSession,
     rebindRightPanelPaneForSession,
     rightPanelDockContentWidth,
     rightPanelDockViewportWidth,
+    rightPanelOverlay,
     rightPanelWorkspaces,
     rightPanelVisible,
     setRightPanelPaneWidthForSession,

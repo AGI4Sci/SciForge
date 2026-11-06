@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/sciforge-worker",
-  "version": "0.1.10",
+  "version": "0.1.16",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -27,10 +27,10 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "0.2.24",
+    "@sciforge/domain-sdk": "0.2.35",
     "zod": "^4.4.3",
-    "@sciforge/workspace-host": "0.1.25",
-    "@sciforge/codex-runtime": "0.1.25"
+    "@sciforge/workspace-host": "0.1.31",
+    "@sciforge/codex-runtime": "0.1.30"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -2,7 +2,8 @@ export const EVIDENCE_DAG_TRANSLATION_NAMESPACE = 'common'
 
 export const evidenceDagMessages = {
   en: {
-    rightPanelEvidenceDag: 'Evidence DAG',
+    researchAuditOpen: 'Research audit',
+    rightPanelEvidenceDag: 'Research record & evidence',
     evidenceDagCurrentThread: 'Current session',
     evidenceDagAllThreads: 'Project evidence',
     evidenceDagUpdate: 'Update',
@@ -11,6 +12,7 @@ export const evidenceDagMessages = {
     evidenceDagCollapse: 'Collapse panel',
     evidenceDagLoading: 'Loading Evidence DAG…',
     evidenceDagUnavailable: 'Evidence DAG is unavailable.',
+    evidenceDagWorkspaceRequired: 'This session has no workspace binding. Select a session with a workspace to view evidence.',
     evidenceDagEmpty: 'No committed Evidence snapshot yet.',
     evidenceDagUpdateQueued: 'Update accepted for {{count}} items.',
     evidenceDagCommitted: 'Committed v{{version}}',
@@ -36,7 +38,8 @@ export const evidenceDagMessages = {
     evidenceDagPreviewFailed: 'Unable to verify the evidence provenance.'
   },
   zh: {
-    rightPanelEvidenceDag: '证据 DAG',
+    researchAuditOpen: '科研审计',
+    rightPanelEvidenceDag: '研究记录与证据',
     evidenceDagCurrentThread: '当前会话',
     evidenceDagAllThreads: '项目证据',
     evidenceDagUpdate: '更新',
@@ -45,6 +48,7 @@ export const evidenceDagMessages = {
     evidenceDagCollapse: '收起面板',
     evidenceDagLoading: '正在载入 Evidence DAG…',
     evidenceDagUnavailable: 'Evidence DAG 当前不可用。',
+    evidenceDagWorkspaceRequired: '当前会话未绑定工作区；请选择带工作区的会话以查看证据。',
     evidenceDagEmpty: '尚无已提交的 Evidence 快照。',
     evidenceDagUpdateQueued: '已接收 {{count}} 项更新。',
     evidenceDagCommitted: '已提交 v{{version}}',

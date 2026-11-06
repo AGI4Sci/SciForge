@@ -7,6 +7,7 @@ import type {
 } from '@sciforge/domain-sdk/host'
 import {
   EVIDENCE_DAG_CAPABILITY_IDS,
+  RESEARCH_RECORD_ACTIONS,
   type EvidenceDagCanonicalStatus,
   type EvidenceDagExportSnapshotProductsOutput
 } from './contract.js'
@@ -18,6 +19,12 @@ import {
 import type { EvidenceDagRuntimePort } from './main/runtime.js'
 
 const now = '2026-07-26T06:00:00.000Z'
+const unusedRecords: EvidenceDagRuntimePort['records'] = {
+  view: async () => { throw new Error('Unused in lifecycle fixture') },
+  edit: async () => { throw new Error('Unused in lifecycle fixture') },
+  review: async () => { throw new Error('Unused in lifecycle fixture') },
+  audit: async () => { throw new Error('Unused in lifecycle fixture') }
+}
 const status: EvidenceDagCanonicalStatus = {
   committed: null,
   pending: null,
@@ -52,6 +59,9 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   const runtimeUserDataDirs: string[] = []
   let hostUserDataDirReads = 0
   const createRuntime = (instance: number): EvidenceDagRuntimePort => ({
+    rerunSpec: async () => { throw new Error('Not exercised') },
+    rerunCompare: async () => { throw new Error('Not exercised') },
+    records: unusedRecords,
     activate: async () => {
       calls.push(`${instance}:activate`)
       return () => { calls.push(`${instance}:deactivate`) }
@@ -131,7 +141,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   const capabilities = factory.createDefinitions()
   assert.equal(hostUserDataDirReads, 0)
   assert.deepEqual(runtimeUserDataDirs, [])
-  assert.deepEqual(capabilities.map(({ id }) => id), Object.values(EVIDENCE_DAG_CAPABILITY_IDS))
+  assert.deepEqual(capabilities.map(({ id }) => id), [...Object.values(RESEARCH_RECORD_ACTIONS), ...Object.values(EVIDENCE_DAG_CAPABILITY_IDS)])
   const updateCapability = capabilities.find(
     ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.update
   )
@@ -181,7 +191,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
     occurredAt: now,
     artifacts: []
   })
-  await capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } })
+  await capabilities.find(capability => capability.id === EVIDENCE_DAG_CAPABILITY_IDS.view)!.handler({}, { caller: { workspaceId: '/workspace' } })
   const actionGuard = entry.contributions[3]!.value as DomainMainActionGuard
   assert.deepEqual(actionGuard.actions, ['write.export'])
   assert.deepEqual(await actionGuard.evaluate({
@@ -216,7 +226,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
     userDataDir: '/tmp/evidence-domain-second'
   }
   const secondDispose = await lifecycle.activate(secondContext)
-  await capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } })
+  await capabilities.find(capability => capability.id === EVIDENCE_DAG_CAPABILITY_IDS.view)!.handler({}, { caller: { workspaceId: '/workspace' } })
   entry.contributions[1]!.onDispose?.()
   entry.contributions[1]!.onDispose?.()
   await secondDispose()
@@ -243,6 +253,9 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
     finishActivation = resolve
   })
   const runtime: EvidenceDagRuntimePort = {
+    rerunSpec: async () => { throw new Error('Not exercised') },
+    rerunCompare: async () => { throw new Error('Not exercised') },
+    records: unusedRecords,
     activate: () => {
       calls.push('activate')
       return activationGate
@@ -322,6 +335,9 @@ test('keeps the dedicated system snapshot path read-only and reports no global c
   let snapshotStatusInput: unknown
   let auditQueryInput: unknown
   const runtime: EvidenceDagRuntimePort = {
+    rerunSpec: async () => { throw new Error('Not exercised') },
+    rerunCompare: async () => { throw new Error('Not exercised') },
+    records: unusedRecords,
     activate: async () => () => undefined,
     consume: async () => undefined,
     view: async () => ({ url: 'http://127.0.0.1:3897/', status }),

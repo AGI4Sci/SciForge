@@ -39,10 +39,13 @@ export function MarketCatalog(): ReactElement {
   const [progress, setProgress] = useState<DshMarketProgress | null>(null)
   const [notice, setNotice] = useState<{ tone: 'error' | 'info'; text: string } | null>(null)
   const [confirming, setConfirming] = useState<DshMarketPlugin | null>(null)
+  const [approvedPorts, setApprovedPorts] = useState<readonly string[]>([])
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('all')
 
   const refresh = useCallback(async () => {
+    setConfirming(null)
+    setApprovedPorts([])
     setLoading(true)
     try {
       setView(await window.sciforge.market.list())
@@ -89,6 +92,7 @@ export function MarketCatalog(): ReactElement {
   }, [view, query, category])
 
   const install = useCallback(async (plugin: DshMarketPlugin) => {
+    if (approvedPorts.length !== plugin.ports.length || plugin.ports.some(port => !approvedPorts.includes(port))) return
     setConfirming(null)
     setBusy(plugin.name)
     setNotice(null)
@@ -96,7 +100,9 @@ export function MarketCatalog(): ReactElement {
     try {
       await window.sciforge.market.install({
         packageName: plugin.name,
-        approvedToolNames: plugin.tools.map((tool) => tool.name)
+        approvalSnapshot: plugin.approvalSnapshot,
+        approvedToolNames: plugin.tools.map((tool) => tool.name),
+        approvedPorts: [...approvedPorts]
       })
       setNotice({ tone: 'info', text: t('marketInstallDone', { name: plugin.title }) })
       await refresh()
@@ -106,7 +112,7 @@ export function MarketCatalog(): ReactElement {
       setBusy(null)
       setProgress(null)
     }
-  }, [refresh, t])
+  }, [approvedPorts, refresh, t])
 
   const toggle = useCallback(async (plugin: DshMarketPlugin) => {
     setBusy(plugin.name)
@@ -210,6 +216,11 @@ export function MarketCatalog(): ReactElement {
                 <div className="mt-1 font-mono text-[11px] text-ds-faint">
                   {plugin.name} · {plugin.version} · {formatSize(plugin.sizeBytes)}
                 </div>
+                {plugin.installed && plugin.installedVersion !== null && plugin.installedVersion !== plugin.version ? (
+                  <p className="mt-1 font-mono text-[11px] text-ds-muted">
+                    {t('marketInstalledVersion', { version: plugin.installedVersion })}
+                  </p>
+                ) : null}
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {plugin.categories.map((entry) => (
                     <span key={entry} className="rounded-md bg-ds-subtle px-2 py-0.5 text-[11px] text-ds-muted">{entry}</span>
@@ -228,6 +239,17 @@ export function MarketCatalog(): ReactElement {
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-2">
+                {!plugin.installed || (plugin.installedVersion !== null && plugin.installedVersion !== plugin.version) ? (
+                  <button
+                    type="button"
+                    onClick={() => { setApprovedPorts([]); setConfirming(plugin) }}
+                    disabled={busy === plugin.name}
+                    className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-60"
+                  >
+                    {busy === plugin.name ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />}
+                    {busy === plugin.name ? t('marketInstalling') : plugin.installed ? t('marketInstallVersion', { version: plugin.version }) : t('marketInstall')}
+                  </button>
+                ) : null}
                 {plugin.installed ? (
                   <>
                     <button
@@ -249,17 +271,7 @@ export function MarketCatalog(): ReactElement {
                       {t('marketUninstall')}
                     </button>
                   </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirming(plugin)}
-                    disabled={busy === plugin.name}
-                    className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-60"
-                  >
-                    {busy === plugin.name ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />}
-                    {busy === plugin.name ? t('marketInstalling') : t('marketInstall')}
-                  </button>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -303,16 +315,39 @@ export function MarketCatalog(): ReactElement {
             {confirming?.name === plugin.name ? (
               <div className="mt-4 rounded-xl border border-ds-border-muted bg-ds-subtle p-3">
                 <div className="text-[13px] font-semibold text-ds-ink">{t('marketConfirmInstall')}</div>
+                <div className="mt-2 break-all font-mono text-[12px] text-ds-muted">
+                  {plugin.name}@{plugin.version} · {plugin.publisher ?? 'unsigned'}<br />
+                  SHA-256: {plugin.sha256}<br />
+                  {plugin.approvalSnapshot.entry} · {plugin.hostDependencies.join(', ')}
+                </div>
                 <div className="mt-2 text-[12px] text-ds-muted">{t('marketPermissions')}</div>
                 <ul className="mt-1 flex flex-col gap-1">
                   {plugin.tools.length === 0 ? (
                     <li className="text-[12px] text-ds-muted">{t('marketNoPermissions')}</li>
                   ) : plugin.tools.map((tool) => (
                     <li key={tool.name} className="font-mono text-[12px] text-ds-ink">
-                      {tool.id} <span className="text-ds-muted">({t(effectKey[tool.effect] ?? 'marketEffectRead')})</span>
+                      {tool.name} → {tool.id} <span className="text-ds-muted">({t(effectKey[tool.effect] ?? 'marketEffectRead')}; scope: {tool.scope ?? 'global'}; readResource: {tool.readResource ?? 'none'}; approval: {tool.approval ?? 'none'}; tags: {(tool.tags ?? []).join(', ')})</span>
                     </li>
                   ))}
                 </ul>
+                {plugin.ports.length > 0 ? (
+                  <fieldset className="mt-3 text-[12px] text-ds-ink">
+                    <legend className="font-semibold">{t('marketHostOperations')}</legend>
+                    <p className="mt-1 text-ds-muted">{t('marketHostOperationsHint')}</p>
+                    <label className="mt-2 flex items-center gap-2">
+                      <input type="checkbox" checked={approvedPorts.length === plugin.ports.length}
+                        onChange={event => setApprovedPorts(event.target.checked ? [...plugin.ports] : [])} />
+                      {t('marketApproveAllHostOperations')}
+                    </label>
+                    {plugin.ports.map(port => (
+                      <label key={port} className="mt-1 flex items-center gap-2">
+                        <input type="checkbox" checked={approvedPorts.includes(port)}
+                          onChange={event => setApprovedPorts(current => event.target.checked ? [...current, port] : current.filter(value => value !== port))} />
+                        <span>{t('marketHostOperation')}: <code>{port}</code></span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ) : null}
                 {plugin.hostDependencies.length > 0 ? (
                   <p className="mt-2 text-[12px] text-ds-muted">
                     {t('marketHostDependencies')}: <span className="font-mono">{plugin.hostDependencies.join(', ')}</span>
@@ -329,7 +364,8 @@ export function MarketCatalog(): ReactElement {
                   <button
                     type="button"
                     onClick={() => void install(plugin)}
-                    className="rounded-xl bg-ds-userbubble px-3 py-1.5 text-[12px] font-semibold text-ds-userbubbleFg transition hover:opacity-90"
+                    disabled={approvedPorts.length !== plugin.ports.length || plugin.ports.some(port => !approvedPorts.includes(port))}
+                    className="rounded-xl bg-ds-userbubble px-3 py-1.5 text-[12px] font-semibold text-ds-userbubbleFg transition hover:opacity-90 disabled:opacity-60"
                   >
                     {t('marketApproveAndInstall')}
                   </button>

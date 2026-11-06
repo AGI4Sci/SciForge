@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { memo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -23,6 +23,7 @@ import {
 type Props = {
   /** Shows the icon rail instead of the full sidebar. */
   collapsed?: boolean
+  displayControl?: ReactNode
   excludedWorkspaceKeys?: ReadonlySet<string>
   ownershipReady?: boolean
   navigationSections?: readonly Readonly<{
@@ -138,6 +139,7 @@ export function buildSidebarVisibleContextComponent({
 
 export const Sidebar = memo(function Sidebar({
   collapsed = false,
+  displayControl,
   navigationSections = [],
   mainAreaPages = [],
   onSelectMainAreaPage,
@@ -250,6 +252,7 @@ export const Sidebar = memo(function Sidebar({
       onCollapse={onToggleSidebar}
       footer={
         <div className="space-y-1">
+          {displayControl}
           <SidebarCommandRow {...settingsCommand} variant="footer" />
         </div>
       }

@@ -128,6 +128,8 @@ export const useChatStore = create<ChatState>((set, get) => {
   threadSearch: '',
   showArchivedThreads: false,
   activeThreadId: restoredChatSession.activeThreadId,
+  readOnlyThreadIds: {},
+  conversationSourceNavigation: null,
   ...clearedAgentFocusState(),
   activeThreadGoal: null,
   activeThreadTodos: null,

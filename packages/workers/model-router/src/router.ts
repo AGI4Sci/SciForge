@@ -1,3 +1,4 @@
+import { publicTextPrefixStream } from './public-text-stream';
 import { createHash } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -55,6 +56,8 @@ export interface ModelRouterProviderConfig {
   model: string;
   compatibility?: ProviderCompatibilityConfig;
   maxSupplementRounds?: number;
+  /** Context budget for this provider, independent of the text reasoner. */
+  contextWindow?: number;
 }
 
 export interface ModelRouterScientificTranslatorConfig {
@@ -279,7 +282,7 @@ function modalityDisplayName(modality: ModalityRef): string {
   return modality.title?.trim() || modality.safeRef || modality.id;
 }
 
-/** Drop the largest vision images until the estimated context budget fits. */
+/** Each inspection sends one image and its targeted question, not the full agent history. */
 function pruneOversizeVisionModalities(
   modalities: ModalityRef[],
   contextWindow: number,
@@ -295,18 +298,14 @@ function pruneOversizeVisionModalities(
       },
     };
   }
-  const bySizeDesc = [...modalities].sort((a, b) => (b.byteLength ?? 0) - (a.byteLength ?? 0));
   const keptSet = new Set<ModalityRef>();
   const dropped: DroppedVisionModality[] = [];
-  let usedTokens = 0;
-  for (const modality of bySizeDesc) {
-    const imageTokens = estimateImageTokens(modality);
-    if (usedTokens + imageTokens > budget) {
+  for (const modality of modalities) {
+    if (estimateImageTokens(modality) > budget) {
       dropped.push({ name: modalityDisplayName(modality), bytes: modality.byteLength ?? 0 });
-      continue;
+    } else {
+      keptSet.add(modality);
     }
-    keptSet.add(modality);
-    usedTokens += imageTokens;
   }
   const kept = modalities.filter((m) => keptSet.has(m));
   return kept.length === modalities.length
@@ -749,7 +748,8 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
             response,
             responseId,
             options.config.publicModelAlias ?? 'sciforge-model-router',
-            routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
+            (onTextDelta) => routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
+              onTextDelta,
               config: options.config,
               env,
               fetchImpl,
@@ -792,9 +792,10 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         }
         const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
         const responseRequest = chatCompletionsToResponsesRequest(body, publicModelAlias);
-        const streamedReasoning = { text: '', responseId: makeId('resp') };
+        const streamedReasoning = { text: '', responseId: makeId('resp'), content: newLiveTextState() };
         const resultPromise = routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
           responseId: streamedReasoning.responseId,
+          onTextDelta: body.stream === true ? (text, phase) => writeLiveText(response, streamedReasoning.content, 'chat', streamedReasoning.responseId, publicModelAlias, text, phase) : undefined,
           onReasoningDelta: body.stream === true ? (text) => {
             if (response.destroyed || response.writableEnded) return;
             streamedReasoning.text += text;
@@ -872,7 +873,8 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
             responseId,
             responseModel,
             body,
-            routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
+            (onTextDelta) => routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
+              onTextDelta,
               config: options.config,
               env,
               fetchImpl,
@@ -1717,6 +1719,7 @@ async function routeResponsesRequest(
     upstreamNegotiator: UpstreamProtocolNegotiator;
     preferredProtocol: UpstreamWireProtocol;
     onReasoningDelta?: (text: string) => void;
+  onTextDelta?: (text: string, phase?: string) => void;
     traceSession?: ModelRouterTraceSession;
     responseId?: string;
     providerSignal?: AbortSignal;
@@ -1761,6 +1764,10 @@ async function routeResponsesRequest(
   const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
   const traceRedactionSecrets = [textSecret, visionSecret]
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const publicMessageItems = (items: JsonObject[]) => items.map((item) => item.type === 'message' && Array.isArray(item.content)
+    ? { ...item, status: stringField(item.status) ?? 'completed', role: stringField(item.role) ?? 'assistant', content: item.content.map((part) => isRecord(part) && typeof part.text === 'string'
+      ? { ...part, text: publicProviderOutputText(part.text, profile, publicModelAlias, traceRedactionSecrets) } : part) } as JsonObject
+    : item);
   const usage = emptyResponseUsage();
   const hasToolTranscriptInput = responseInputHasToolTranscript(request.input);
   const previousResponseId = stringField(request.previous_response_id);
@@ -1785,12 +1792,13 @@ async function routeResponsesRequest(
   const toolNameAliases = chatToolNameAliasesFromResponsesTools(requestForTextReasoner.tools);
 
   // Lexical detectors must not become routing truth; final routing must use structured semantic signals and refs-first evidence.
+  const visualIntent = latestVisualUserIntent(request.input);
   const visionModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind === 'vision.image');
   const visionBudgetPrune = visionModalities.length > 0
     ? pruneOversizeVisionModalities(
         visionModalities,
-        profile.contextWindow ?? DEFAULT_PROFILE_CONTEXT_WINDOW,
-        estimateTextTokens(extracted.userText),
+        profile.translators.vision?.contextWindow ?? DEFAULT_PROFILE_CONTEXT_WINDOW,
+        estimateTextTokens(visualIntent || 'Inspect the referenced modality.') + 512,
       )
     : { kept: visionModalities };
   const keptVisionModalities = visionBudgetPrune.kept;
@@ -1801,7 +1809,7 @@ async function routeResponsesRequest(
         `modality_input=${dropped.name}`,
         'status=dropped',
         `reason=context budget exceeded (${dropped.bytes} bytes)`,
-        'instruction=Answer from text-only context; the image was not sent to the vision translator.',
+        'instruction=The image was not inspected. Repeating the same image request will not resolve the budget limit. Use a smaller image or region through the available visual tools once if visual evidence is necessary; otherwise proceed with the available text and state the limitation. Do not repeatedly deliberate about this unchanged status.',
       ].join('\n'));
     }
   }
@@ -1844,11 +1852,10 @@ async function routeResponsesRequest(
     .filter((modality) => !eagerModalities.includes(modality));
   const lazyModalityInspection = lazyModalities.length > 0;
   observations.push(...lazyModalities.map(formatModalityReferenceObservation));
-  const visualIntent = latestVisualUserIntent(request.input);
   const inspect = (target: ModalityRef, control?: Extract<TextControl, { type: 'need_more_modality_info' }>) => inspectModality({
     target,
     control,
-    userInstruction: visualIntent || extracted.userText || 'Inspect the referenced modality.',
+    userInstruction: visualIntent || 'Inspect the referenced modality.',
     profile,
     profileId,
     visionSecret,
@@ -1912,8 +1919,12 @@ async function routeResponsesRequest(
       ? Math.max(0, Math.floor(configuredSupplementRounds ?? 0))
       : (lazyModalityInspection ? 2 : 0);
 
+  const onTextDelta = context.onTextDelta && extracted.modalities.length === 0 && !structuredOutputRequested
+    ? publicTextPrefixStream(context.onTextDelta, [...profileTraceRedactionValues(profile, publicModelAlias), ...traceRedactionSecrets])
+    : undefined;
   while (true) {
       const textResult = await callTextReasoner({
+        onTextDelta,
         // Supplement/control rounds are internal evidence, not public progress.
         onReasoningDelta: extracted.modalities.length === 0 ? context.onReasoningDelta : undefined,
         profile,
@@ -1948,8 +1959,8 @@ async function routeResponsesRequest(
       const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
       const reasoningItems = textResult.outputItems.filter((item) => item.type === 'reasoning');
       if (hasToolCall) {
-        outputText = textResult.outputText;
-        outputItems = textResult.outputItems;
+        outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
+        outputItems = publicMessageItems(textResult.outputItems);
         break;
       }
 
@@ -2002,13 +2013,7 @@ async function routeResponsesRequest(
       }
 
       outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
-      outputItems = textResult.outputItems.map((item) => item.type === 'message'
-        ? compactObject({
-            ...messageOutputItem(outputText, stringField(item.id), stringField(item.phase)),
-            status: stringField(item.status) ?? 'completed',
-            role: stringField(item.role) ?? 'assistant',
-          })
-        : item);
+      outputItems = publicMessageItems(textResult.outputItems);
       break;
   }
 
@@ -2152,6 +2157,9 @@ function validateProfile(profile: ModelRouterProfile) {
 }
 
 function validateProviderConfig(config: ModelRouterProviderConfig, role: string) {
+  if (config.contextWindow !== undefined && (!Number.isFinite(config.contextWindow) || config.contextWindow <= 0)) {
+    throw routerError(400, 'invalid_provider_config', `${role}.contextWindow must be a positive finite token count.`);
+  }
   const issue = providerConfigurationIssue(config);
   if (issue === 'missing') {
     throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" is missing required provider configuration.`);
@@ -3446,6 +3454,7 @@ async function callTextReasoner(options: {
   upstreamNegotiator: UpstreamProtocolNegotiator;
   preferredProtocol: UpstreamWireProtocol;
   onReasoningDelta?: (text: string) => void;
+  onTextDelta?: (text: string, phase?: string) => void;
   traceSession?: ModelRouterTraceSession;
 }) {
   const outputContractInstruction = options.structuredOutput
@@ -3501,6 +3510,7 @@ async function callTextReasoner(options: {
       };
   return await callCanonicalProvider({
     onReasoningDelta: options.onReasoningDelta,
+    onTextDelta: options.onTextDelta,
     provider: options.profile.textReasoner,
     secret: options.secret,
     fetchImpl: options.fetchImpl,
@@ -3531,11 +3541,13 @@ async function callCanonicalProvider(options: {
   upstreamNegotiator: UpstreamProtocolNegotiator;
   preferredProtocol: UpstreamWireProtocol;
   onReasoningDelta?: (text: string) => void;
+  onTextDelta?: (text: string, phase?: string) => void;
   traceSession?: ModelRouterTraceSession;
 }) {
   try {
     const result = await options.upstreamNegotiator.request({
       onReasoningDelta: options.onReasoningDelta,
+    onTextDelta: options.onTextDelta,
       request: options.request,
       baseUrl: options.provider.baseUrl,
       apiKey: options.secret,
@@ -4250,7 +4262,7 @@ function chatMessageContentText(content: unknown): string {
       .map((part) => {
         if (typeof part === 'string') return part;
         if (!isRecord(part)) return '';
-        return stringField(part.text) ?? stringField(part.content) ?? '';
+        return losslessStringField(part.text) ?? losslessStringField(part.content) ?? '';
       })
       .filter(Boolean)
       .join('\n');
@@ -4262,7 +4274,7 @@ function chatMessageContentText(content: unknown): string {
 function responseToChatCompletion(response: JsonObject, request: Record<string, unknown>): JsonObject {
   const output = Array.isArray(response.output) ? response.output.filter(isRecord) as JsonObject[] : [];
   const functionCalls = output.filter((item) => item.type === 'function_call');
-  const outputText = stringField(response.output_text) ?? responseOutputText(output);
+  const outputText = losslessStringField(response.output_text) ?? responseOutputText(output);
   const message = compactObject({
     role: 'assistant',
     content: functionCalls.length && !outputText ? null : outputText,
@@ -4294,7 +4306,7 @@ function responseOutputText(output: JsonObject[]): string {
       const content = Array.isArray(item.content) ? item.content : [];
       return content.map((part) => {
         if (!isRecord(part)) return '';
-        return stringField(part.text) ?? stringField(part.content) ?? '';
+        return losslessStringField(part.text) ?? losslessStringField(part.content) ?? '';
       });
     })
     .filter(Boolean)
@@ -4332,6 +4344,40 @@ function chatCompletionUsageFromResponse(usage: unknown): JsonObject {
   };
 }
 
+type LiveTextState = { text: string; messageId: string; phase?: string };
+function newLiveTextState(): LiveTextState { return { text: '', messageId: makeId('msg') }; }
+
+function writeLiveText(response: ServerResponse, state: LiveTextState, wire: 'responses' | 'chat' | 'messages', responseId: string, model: string, text: string, phase?: string) {
+  if (!text || response.destroyed || response.writableEnded) return;
+  if (!state.text) {
+    state.phase = phase;
+    if (wire === 'responses') {
+      writeSse(response, 'response.output_item.added', { type: 'response.output_item.added', output_index: 0,
+        item: { id: state.messageId, type: 'message', role: 'assistant', status: 'in_progress', ...(phase ? { phase } : {}), content: [] } });
+      writeSse(response, 'response.content_part.added', { type: 'response.content_part.added', item_id: state.messageId, output_index: 0, content_index: 0,
+        part: { type: 'output_text', text: '', annotations: [] } });
+    } else if (wire === 'messages') {
+      writeSse(response, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    }
+  }
+  state.text += text;
+  if (wire === 'responses') writeSse(response, 'response.output_text.delta', { type: 'response.output_text.delta', item_id: state.messageId, output_index: 0, content_index: 0, delta: text });
+  else if (wire === 'messages') writeSse(response, 'content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } });
+  else writeChatCompletionChunk(response, { id: responseId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model,
+    choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }] });
+}
+
+function reconcileLiveText(result: RoutedResponse, state: LiveTextState): RoutedResponse {
+  if (!state.text) return result;
+  const index = result.outputItems.findIndex(item => item.type === 'message');
+  const item = result.outputItems[index];
+  const parts = item && Array.isArray(item.content) ? item.content : [];
+  const text = isRecord(parts[0]) ? losslessStringField(parts[0].text) : undefined;
+  if (!item || !text?.startsWith(state.text)) throw routerError(502, 'stream_output_mismatch', 'The final response disagrees with the streamed text.');
+  // Keep public indices and IDs stable even if reasoning preceded prose upstream.
+  return { ...result, outputItems: [{ ...item, id: state.messageId }, ...result.outputItems.filter((_, i) => i !== index)] };
+}
+
 function sendResponseStream(response: ServerResponse, result: RoutedResponse) {
   beginResponseStream(response, result.responseId, result.model);
   writeResponseStreamResult(response, result);
@@ -4341,11 +4387,12 @@ function sendDeferredResponseStream(
   response: ServerResponse,
   responseId: string,
   model: string,
-  resultPromise: Promise<RoutedResponse>,
+  startResult: (onTextDelta: (text: string, phase?: string) => void) => Promise<RoutedResponse>,
 ) {
+  const streamed = newLiveTextState();
   beginResponseStream(response, responseId, model);
-  void resultPromise.then((result) => {
-    writeResponseStreamResult(response, result);
+  void startResult((text, phase) => writeLiveText(response, streamed, 'responses', responseId, model, text, phase)).then((result) => {
+    writeResponseStreamResult(response, reconcileLiveText(result, streamed), streamed);
   }).catch((error) => {
     const routerError = normalizeRouterError(error);
     writeSse(response, 'response.failed', {
@@ -4366,15 +4413,16 @@ function sendDeferredChatCompletionStream(
   response: ServerResponse,
   request: Record<string, unknown>,
   resultPromise: Promise<RoutedResponse>,
-  streamedReasoning: { text: string },
+  streamedReasoning: { text: string; content: LiveTextState },
 ) {
   response.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
+  response.flushHeaders();
   void resultPromise.then((result) => {
-    const completion = responseToChatCompletion(responseObject(result), request);
+    const completion = responseToChatCompletion(responseObject(reconcileLiveText(result, streamedReasoning.content)), request);
     const choices = Array.isArray(completion.choices) ? completion.choices : [];
     const choice = isRecord(choices[0]) ? choices[0] : {};
     const message = isRecord(choice.message) ? choice.message : {};
@@ -4392,7 +4440,7 @@ function sendDeferredChatCompletionStream(
           reasoning_content: typeof message.reasoning_content === 'string'
             ? message.reasoning_content.slice(streamedReasoning.text.length) || undefined
             : undefined,
-          content: message.content,
+          content: typeof message.content === 'string' ? message.content.slice(streamedReasoning.content.text.length) : message.content,
           tool_calls: Array.isArray(message.tool_calls)
             ? message.tool_calls.filter(isRecord).map((toolCall, index) => ({ index, ...(toolCall as JsonObject) }))
             : undefined,
@@ -4429,11 +4477,12 @@ function sendDeferredAnthropicMessageStream(
   messageId: string,
   model: string,
   request: Pick<AnthropicMessagesRequest, 'model'>,
-  resultPromise: Promise<RoutedResponse>,
+  startResult: (onTextDelta: (text: string, phase?: string) => void) => Promise<RoutedResponse>,
 ) {
+  const streamed = newLiveTextState();
   beginAnthropicMessageStream(response, messageId, model);
-  void resultPromise.then((result) => {
-    writeAnthropicMessageStreamResult(response, messageId, responseToAnthropicMessage(responseObject(result), request));
+  void startResult((text, phase) => writeLiveText(response, streamed, 'messages', messageId, model, text, phase)).then((result) => {
+    writeAnthropicMessageStreamResult(response, messageId, responseToAnthropicMessage(responseObject(reconcileLiveText(result, streamed)), request), streamed);
   }).catch((error) => {
     const routerError = normalizeRouterError(error);
     writeSse(response, 'error', {
@@ -4487,6 +4536,7 @@ function writeAnthropicMessageStreamResult(
   response: ServerResponse,
   messageId: string,
   message: JsonObject,
+  streamed?: LiveTextState,
 ) {
   const content = Array.isArray(message.content) ? message.content : [];
   const stopReason = typeof message.stop_reason === 'string' ? message.stop_reason : 'end_turn';
@@ -4494,7 +4544,7 @@ function writeAnthropicMessageStreamResult(
   content.forEach((block, index) => {
     const contentBlock = isRecord(block) ? block : { type: 'text', text: '' };
     const blockType = typeof contentBlock.type === 'string' ? contentBlock.type : 'text';
-    writeSse(response, 'content_block_start', {
+    if (!(index === 0 && streamed?.text)) writeSse(response, 'content_block_start', {
       type: 'content_block_start',
       index,
       content_block: anthropicStreamStartBlock(contentBlock),
@@ -4505,7 +4555,7 @@ function writeAnthropicMessageStreamResult(
         index,
         delta: {
           type: 'text_delta',
-          text: typeof contentBlock.text === 'string' ? contentBlock.text : '',
+          text: typeof contentBlock.text === 'string' ? contentBlock.text.slice(index === 0 ? streamed?.text.length ?? 0 : 0) : '',
         },
       });
     }
@@ -4557,7 +4607,31 @@ function anthropicStreamStartBlock(contentBlock: JsonObject): JsonObject {
   return contentBlock;
 }
 
-function writeResponseStreamResult(response: ServerResponse, result: RoutedResponse) {
+function writeResponseStreamResult(response: ServerResponse, result: RoutedResponse, streamed?: LiveTextState) {
+  if (streamed?.text) {
+    const output = result.outputItems;
+    const item = output[0]!;
+    const parts = Array.isArray(item.content) ? item.content : [];
+    const part = isRecord(parts[0]) ? parts[0] : {};
+    const text = losslessStringField(part.text) ?? '';
+    const address = { item_id: streamed.messageId, output_index: 0, content_index: 0 };
+    writeSse(response, 'response.output_text.delta', { type: 'response.output_text.delta', ...address, delta: text.slice(streamed.text.length) });
+    writeSse(response, 'response.output_text.done', { type: 'response.output_text.done', ...address, text });
+    writeSse(response, 'response.content_part.done', { type: 'response.content_part.done', ...address, part: part as JsonObject });
+    parts.slice(1).forEach((value, index) => {
+      writeSse(response, 'response.content_part.added', { type: 'response.content_part.added', ...address, content_index: index + 1, part: value });
+      writeSse(response, 'response.content_part.done', { type: 'response.content_part.done', ...address, content_index: index + 1, part: value });
+    });
+    writeSse(response, 'response.output_item.done', { type: 'response.output_item.done', output_index: 0, item });
+    output.slice(1).forEach((value, index) => {
+      writeSse(response, 'response.output_item.added', { type: 'response.output_item.added', output_index: index + 1, item: value });
+      writeSse(response, 'response.output_item.done', { type: 'response.output_item.done', output_index: index + 1, item: value });
+    });
+    writeResponseStreamTerminal(response, result);
+    response.write('data: [DONE]\n\n');
+    response.end();
+    return;
+  }
   let outputIndex = 0;
   const contentIndex = 0;
   const messageItemId = makeId('msg');

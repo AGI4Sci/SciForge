@@ -1,3 +1,4 @@
+import { authenticateWorkspaceMutation, bindWorkspaceMutationIdentity } from '../../services/workspace-mutation-receipt'
 import type { VisibleContextService } from '../../services/visible-context-service'
 import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -240,6 +241,52 @@ function fakeTurnArtifactPublisher(
 const ledgerRuntimes = new Map([['codex', null], ['claude', null], ['dsh', null]] as const)
 
 describe('DSH independent Host authority', () => {
+  it('persists real Host mutations once in the same session and rejects forged, cancelled and cross-session evidence', async () => {
+    const runtimeId = 'dsh' as const
+    const thread = { id: 'mutation-thread', runtimeId, title: 'Mutation', updatedAt: new Date().toISOString() }
+    const adapter = fakeAdapter(runtimeId, thread)
+    const root = await mkdtemp(join(tmpdir(), 'mutation-journal-'))
+    const adapters = new Map([[runtimeId, adapter]])
+    const ledger = new RuntimeContextLedgerService(root, adapters)
+    const host = createAgentRuntimeHost({ settings: () => settings(runtimeId), adapters, services: { contextLedger: ledger }, turnArtifacts: fakeTurnArtifactPublisher() })
+    try {
+      await host.completeInputRecovery({ version: 1, inputs: [] })
+      const handle = await host.startTurn({ runtimeId, threadId: thread.id, text: 'Edit file' })
+      const request = { name: 'sciforge_invoke', context: { runtimeId, threadId: thread.id, turnId: handle.turnId, requestId: 'r', callId: 'call' } }
+      const result = authenticateWorkspaceMutation({ tool: request.name, value: { ok: true } }, '/work/a.txt', Buffer.from('before\n'), Buffer.from('after\n'))
+      bindWorkspaceMutationIdentity(result, request.context)
+      const count = () => vi.mocked(adapter.publishSyntheticEvent!).mock.calls.filter(([, event]) => event.kind === 'item_snapshot' && event.item.toolKind === 'file_change').length
+      await host.persistWorkspaceMutation(request, { ...result })
+      expect(count()).toBe(0)
+      await expect(host.persistWorkspaceMutation({ ...request, context: { ...request.context, threadId: 'other' } }, result)).rejects.toThrow('identity mismatch')
+      await expect(host.persistWorkspaceMutation(request, result, AbortSignal.abort())).rejects.toThrow()
+      await host.persistWorkspaceMutation(request, result)
+      await host.persistWorkspaceMutation(request, result)
+      expect(count()).toBe(1)
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tool_event', toolKind: 'file_change', factSource: 'executor_result', threadId: thread.id, turnId: handle.turnId, detail: expect.stringContaining('-before\\n+after') }))
+    } finally { await host.close(); await rm(root, { recursive: true, force: true }) }
+  })
+  it.each(['codex', 'claude', 'dsh'] as const)('persists %s tool results under the active Principal through the registered journal', async runtimeId => {
+    const thread = { id: 'result-thread', runtimeId, title: 'Result', updatedAt: new Date().toISOString() }
+    const adapter = fakeAdapter(runtimeId, thread)
+    const root = await mkdtemp(join(tmpdir(), 'tool-result-journal-'))
+    const adapters = new Map([[runtimeId, adapter]])
+    const ledger = new RuntimeContextLedgerService(root, adapters)
+    const host = createAgentRuntimeHost({ settings: () => settings(runtimeId), adapters, services: { contextLedger: ledger }, turnArtifacts: fakeTurnArtifactPublisher() })
+    try {
+      await host.completeInputRecovery({ version: 1, inputs: [] })
+      const handle = await host.startTurn({ runtimeId, threadId: thread.id, text: 'Read output' })
+      const value = { payload: 'content'.repeat(1000) }
+      const ref = await host.persistToolResult({ name: 'read', context: { runtimeId, threadId: thread.id, turnId: handle.turnId, requestId: 'r', callId: 'call' } }, { tool: 'read', value })
+      expect(ref.length).toBeGreaterThan(20)
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        runtimeId, threadId: thread.id, turnId: handle.turnId, kind: 'item_snapshot',
+        item: expect.objectContaining({ meta: expect.objectContaining({ structuredContent: JSON.stringify(value), callId: 'call' }) })
+      }))
+      await expect(host.persistToolResult({ name: 'read', context: { runtimeId, threadId: thread.id, turnId: 'forged', requestId: 'r' } }, { tool: 'read', value })).rejects.toThrow()
+    } finally { await host.close(); await rm(root, { recursive: true, force: true }) }
+  })
+
   it.each([
     ['dsh', 'completed'], ['dsh', 'failed'], ['dsh', 'cancelled'],
     ['codex', 'completed'], ['claude', 'completed']
@@ -491,6 +538,18 @@ function fakeAdapter(id: AgentRuntimeId, thread: AgentRuntimeThread): TestAgentR
   return adapter
 }
 
+it('serves metadata-only thread reads without fetching any history page', async () => {
+  const thread = { id: 'metadata-thread', runtimeId: 'codex', title: 'Metadata', updatedAt: new Date().toISOString(), workspace: '/workspace/exact' } as AgentRuntimeThread
+  const adapter = fakeAdapter('codex', thread)
+  const host = createAgentRuntimeHost({ settings: () => settings(), adapters: [adapter] } as Parameters<typeof createAgentRuntimeHost>[0])
+  try {
+    await expect(host.readThreadMetadata({ runtimeId: 'codex', threadId: thread.id })).resolves.toMatchObject({ id: thread.id, workspace: thread.workspace })
+    expect(adapter.listThreads).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ threadId: thread.id }))
+    expect(adapter.readThreadPage).not.toHaveBeenCalled()
+    expect(adapter.readThreadStatus).not.toHaveBeenCalled()
+  } finally { host.dispose() }
+})
+
 it('resolves a cache-cold thread summary by exact identity and keeps its workspace', async () => {
   const thread = {
     id: 'session-thread',
@@ -525,6 +584,35 @@ it('resolves a cache-cold thread summary by exact identity and keeps its workspa
       expect.anything(),
       expect.objectContaining({ search: thread.id })
     )
+  } finally { host.dispose() }
+})
+
+it('coalesces long-turn history fragments so exact item references survive page boundaries', async () => {
+  const thread = { id: 'long-session', runtimeId: 'codex', title: 'Long session', updatedAt: '2026-11-03T00:00:00Z', workspace: '/workspace' } as AgentRuntimeThread
+  const adapter = fakeAdapter('codex', thread)
+  adapter.readThreadPage = vi.fn(async (_context, input) => ({
+    runtimeId: 'codex', threadId: thread.id, latestSeq: 200,
+    turns: input.cursor ? [{
+      id: 'one-turn', threadId: thread.id, status: 'running', items: [
+        { id: 'question', kind: 'user_message', text: 'Preserve failure' },
+        { id: 'tool', kind: 'tool', status: 'running', summary: 'exit 7', createdAt: '2026-11-03T00:00:00Z' }
+      ]
+    }] : [{
+      id: 'one-turn', threadId: thread.id, status: 'completed', items: [
+        { id: 'tool', kind: 'tool', status: 'error', detail: 'exitCode=7', createdAt: '2026-11-03T00:00:01Z' },
+        { id: 'answer', kind: 'assistant_message', text: 'Failure retained' }
+      ]
+    }], nextCursor: input.cursor ? null : 'older'
+  }) as AgentRuntimeThreadPage)
+  const host = createAgentRuntimeHost({ settings: () => settings(), adapters: [adapter] })
+  try {
+    const snapshot = await host.readThreadSnapshot({ runtimeId: 'codex', threadId: thread.id })
+    expect(snapshot.turns).toHaveLength(1)
+    expect(snapshot.turns[0].status).toBe('completed')
+    expect(snapshot.turns[0].items?.map(item => item.id)).toEqual(['question', 'tool', 'answer'])
+    expect(snapshot.turns[0].items?.find(item => item.id === 'tool')).toMatchObject({
+      status: 'error', summary: 'exit 7', detail: 'exitCode=7', createdAt: '2026-11-03T00:00:00Z'
+    })
   } finally { host.dispose() }
 })
 
@@ -1196,6 +1284,30 @@ describe('renderAgentRoutingGuidance', () => {
 const evidenceQueueRoots: string[] = []
 
 describe('AgentRuntimeHost', () => {
+  it('rejects unsupported minimal context before native thread creation', async () => {
+    const adapter = fakeAdapter('claude', { id: 'minimal', runtimeId: 'claude', title: 'Minimal', updatedAt: '' })
+    const host = createAgentRuntimeHost({ settings: async () => settings('claude'), adapters: [adapter] })
+    await expect(host.startThread({ runtimeId: 'claude', contextProfile: 'minimal', mode: 'agent',
+      sidebarVisibility: 'hidden', allowedTools: [] })).rejects.toThrow('does not support context profile minimal')
+    expect(adapter.startThread).not.toHaveBeenCalled()
+  })
+
+  it('keeps explicit minimal context free of inherited memory, visible UI and routing guidance', async () => {
+    const adapter = fakeAdapter('codex', { id: 'minimal', runtimeId: 'codex', title: 'Minimal', updatedAt: '' })
+    adapter.contextProfiles = ['minimal']
+    const retrieveForTurn = vi.fn(async () => ({ text: 'Inherited project memory' }))
+    const bindSurface = vi.fn()
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter],
+      services: { memory: { retrieveForTurn } as never, visibleContext: { bindSurface } as never } })
+    await host.startThread({ runtimeId: 'codex', contextProfile: 'minimal', mode: 'agent',
+      sidebarVisibility: 'hidden', allowedTools: [] })
+    await host.startTurn({ runtimeId: 'codex', threadId: 'minimal', contextProfile: 'minimal', mode: 'agent',
+      text: 'Bounded supplied data.', allowedTools: [], visibleContextSurfaceId: 'unrelated-main-ui' })
+    expect(retrieveForTurn).not.toHaveBeenCalled()
+    expect(bindSurface).not.toHaveBeenCalled()
+    expect(adapter.startTurn).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      contextProfile: 'minimal', text: 'Bounded supplied data.', allowedTools: [] }))
+  })
   afterEach(async () => {
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
@@ -1325,6 +1437,55 @@ describe('AgentRuntimeHost', () => {
       expect.anything(),
       expect.objectContaining({ kind: 'work_lifecycle', state: 'needs_attention', workId: records[0]?.workId })
     )
+  })
+
+  it.each(
+    (['codex', 'claude', 'dsh'] as const).flatMap((runtimeId) =>
+      (['delivered', 'needs_continuation'] as const).map((auditState) => ({ runtimeId, auditState }))
+    )
+  )('audits completed $runtimeId work as $auditState without unsupported subagent controls', async ({ runtimeId, auditState }) => {
+    const root = await mkdtemp(join(tmpdir(), 'work-without-subagents-'))
+    const thread: AgentRuntimeThread = {
+      id: 'work-without-subagents', runtimeId, title: 'Work', updatedAt: '2026-09-25T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter(runtimeId, thread)
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'turn_lifecycle', runtimeId, threadId: thread.id,
+        turnId: `${runtimeId}-turn`, state: 'completed', createdAt: '2026-09-25T00:00:01.000Z'
+      } satisfies AgentRuntimeEvent
+    })
+    const workStore = new InMemoryWorkRecordStore()
+    const workAudit = vi.fn(async () => ({ state: auditState, reason: 'Host audited deliverables' }))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings(runtimeId), adapters: [adapter],
+      subagentStoreRoot: root, workStore, workAudit,
+      getPrincipalContext: () => ({ identityVersion: 1, principal: null })
+    })
+    try {
+      expect(adapter.subagents).toBeUndefined()
+      await host.startTurn({ runtimeId, threadId: thread.id, text: 'Finish the deliverable' })
+      // An explicit unsupported operation must still reject; automatic delivery
+      // reconciliation must not make that operation on behalf of ordinary work.
+      await expect(host.subagentTools()!.call({
+        name: 'subagent_status', arguments: {},
+        context: { runtimeId, threadId: thread.id, turnId: `${runtimeId}-turn`, requestId: 'unsupported-status' }
+      })).rejects.toThrow(`AgentRuntimeAdapter ${runtimeId} does not implement subagent controls.`)
+      for await (const _event of host.subscribeEvents({ runtimeId, threadId: thread.id })) { /* consume terminal */ }
+      const [record] = await workStore.list({ threadId: thread.id })
+      expect(workAudit).toHaveBeenCalledOnce()
+      expect(record).toMatchObject({
+        deliveryState: auditState, error: 'Host audited deliverables', childIds: [],
+        turnDiagnostics: [{ turnId: `${runtimeId}-turn`, terminalState: 'completed' }]
+      })
+      expect(adapter.publishSyntheticEvent).not.toHaveBeenCalledWith(
+        expect.anything(), expect.objectContaining({ kind: 'work_lifecycle', state: 'needs_attention' })
+      )
+      expect(adapter.startTurn).toHaveBeenCalledOnce()
+    } finally {
+      await host.close()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('reconciles a terminal provider turn only once when UI and recovery observers race', async () => {
@@ -1562,9 +1723,15 @@ describe('AgentRuntimeHost', () => {
         turnId: 'parent-turn'
       }
     })).resolves.toMatchObject({
-      value: { status: 'completed', terminal: true }
+      value: { children: [{ status: 'completed', terminal: true }] }
     })
     expect(subagents.spawn).toHaveBeenCalledOnce()
+    await host.startTurn({ runtimeId: 'claude', threadId: 'parent-thread', text: 'Continue.', displayText: 'Continue.' })
+    const dispatched = vi.mocked(adapter.startTurn).mock.calls.at(-1)?.[1]
+    expect(dispatched?.displayText).toBe('Continue.')
+    expect(dispatched?.text).toContain('Persisted subagent index')
+    expect(dispatched?.text).toContain(childId)
+    expect(dispatched?.text).not.toContain('child complete')
     expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.objectContaining({ settings: expect.objectContaining({ activeAgentRuntime: 'claude' }) }),
       expect.objectContaining({
@@ -1595,6 +1762,56 @@ describe('AgentRuntimeHost', () => {
       }
     })).resolves.toMatchObject({ value: { deleted: true } })
     expect(lifecycle.filter((event) => event.kind === 'after-persistent-child-turn')).toHaveLength(1)
+  })
+
+  it('steers the parent for phase changes while leaving repeated heartbeats in the UI', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'child-heartbeat-'))
+    const thread = { id: 'parent-thread', runtimeId: 'codex' as const, title: 'Parent', updatedAt: '2026-09-25T00:00:00.000Z' }
+    const adapter = fakeAdapter('codex', thread)
+    vi.mocked(adapter.capabilities).mockResolvedValue({ ...capabilities('codex'), controls: { ...capabilities('codex').controls, steer: true } })
+    vi.mocked(adapter.snapshot).mockResolvedValue({ ...thread, latestSeq: 0, latestTurnId: 'parent-turn', latestTurnStatus: 'running' })
+    let report!: NonNullable<import('./adapter').AgentRuntimeSubagentSpawnInput['reportProgress']>
+    let finish!: () => void
+    adapter.subagents = {
+      spawn: vi.fn(async (_context, input) => {
+        report = input.reportProgress!
+        await input.onSpawned({ runtime: 'codex', threadId: 'child-thread', turnId: 'child-turn' })
+        await new Promise<void>((resolve) => { finish = resolve })
+        return { summary: 'Complete' }
+      }),
+      resume: vi.fn(),
+      inspect: vi.fn(async () => ({ state: 'active' as const, observedAt: new Date().toISOString() })),
+      message: vi.fn(async () => ({ established: true })), cancel: vi.fn(), delete: vi.fn()
+    }
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter], subagentStoreRoot: root })
+    const tools = host.subagentTools()!
+    const identity = { runtimeId: 'codex' as const, threadId: 'parent-thread', turnId: 'parent-turn' }
+    try {
+      const started = await host.withHostToolRequestPrincipalLease(identity, () => tools.call({
+        name: 'delegate_task', arguments: { prompt: 'Work' }, context: { requestId: 'spawn', ...identity }
+      }))
+      const childId = (started.value as { childId: string }).childId
+      await report({ phase: 'working', message: 'One' })
+      expect(adapter.steerTurn).toHaveBeenCalledTimes(1)
+      await report({ phase: 'working', message: 'Two' })
+      expect(adapter.steerTurn).toHaveBeenCalledTimes(1)
+      await report({ phase: 'validating', message: 'Checking outputs' })
+      expect(adapter.steerTurn).toHaveBeenCalledTimes(2)
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        kind: 'child_event', child: expect.objectContaining({ metadata: expect.objectContaining({ progress: expect.objectContaining({ phase: 'validating' }) }) })
+      }))
+      finish()
+      await tools.call({ name: 'subagent_wait', arguments: { childId, timeoutMs: 1000 }, context: { requestId: 'wait', ...identity } })
+      // The wait observes terminal state before its delivery receipt is written.
+      // Await publication before deleting the filesystem sink on Windows.
+      await vi.waitFor(() => expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        kind: 'child_event', child: expect.objectContaining({ status: 'completed' })
+      })))
+    } finally {
+      finish?.()
+      host.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it.each(['completed', 'cancelled', 'exhausted'] as const)('reconciles persisted children and wakes only eligible parent work (%s)', async (outcome) => {
@@ -1758,7 +1975,7 @@ describe('AgentRuntimeHost', () => {
       name: 'subagent_wait',
       arguments: { childId, timeoutMs: 1_000 },
       context: { requestId: 'wait-child-principal-after-parent', ...parentIdentity }
-    })).resolves.toMatchObject({ value: { status: 'completed', terminal: true } })
+    })).resolves.toMatchObject({ value: { children: [{ status: 'completed', terminal: true }] } })
     expect(host.principalForToolRequest({
       runtimeId: 'codex',
       threadId: 'principal-child-thread',
@@ -1843,7 +2060,7 @@ describe('AgentRuntimeHost', () => {
         turnId: 'parent-turn'
       }
     })).resolves.toMatchObject({
-      value: { status: 'completed', terminal: true, summary: 'Codex child completed' }
+      value: { children: [{ status: 'completed', terminal: true, summary: 'Codex child completed' }] }
     })
 
     expect(spawn).toHaveBeenCalledOnce()
@@ -2052,6 +2269,130 @@ describe('AgentRuntimeHost', () => {
     expect(host.hasActiveTurns()).toBe(false)
     dispose()
     host.dispose()
+  })
+
+  it.each(['allowed', 'denied'] as const)('keeps forceHuman capability approval pending under Full Access until the UI resolves %s', async (uiDecision) => {
+    const thread = {
+      id: 'force-human-thread', runtimeId: 'codex' as const, title: 'Human confirmation',
+      updatedAt: '2026-11-05T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const host = createAgentRuntimeHost({
+      settings: async () => settingsWithRuntimePermission('codex', 'codex', 'full-access'),
+      adapters: [adapter]
+    })
+    const approvals: DomainRemoteCapabilityApproval[] = []
+    const unsubscribe = host.subscribeRemoteCapabilityApprovals((approval) => { approvals.push(approval) })
+    let settled = false
+    try {
+      const decision = host.requestCapabilityApproval({
+        context: { runtimeId: 'codex', threadId: thread.id, turnId: 'turn', callId: 'call', requestId: 'request' },
+        actionId: 'workspace.write', invocationId: 'force-human-invocation', mode: 'confirmation',
+        title: 'Confirm write', description: 'Requires an explicit human decision.', effect: 'workspace-write', input: {}
+      }, { forceHuman: true })
+      void decision.then(() => { settled = true })
+      await vi.waitFor(() => expect(approvals.map(({ state }) => state)).toEqual(['pending']))
+      const pending = approvals[0]!
+      expect(pending).toMatchObject({ threadId: thread.id, turnId: 'turn' })
+      expect(settled).toBe(false)
+      await expect(host.refreshLivePermissionPolicy()).resolves.toBe(0)
+      expect(settled).toBe(false)
+      expect(approvals.map(({ state }) => state)).toEqual(['pending'])
+      await host.resolveApproval({ runtimeId: 'codex', threadId: thread.id, approvalId: pending.approvalId, decision: uiDecision })
+      await expect(decision).resolves.toBe(uiDecision)
+      expect(approvals.map(({ state }) => state)).toEqual(['pending', uiDecision === 'allowed' ? 'approved' : 'denied'])
+    } finally {
+      unsubscribe()
+      host.dispose()
+    }
+  })
+
+  it('cancels a pending forceHuman capability approval on abort under Full Access', async () => {
+    const thread = {
+      id: 'force-human-abort-thread', runtimeId: 'codex' as const, title: 'Cancelled confirmation',
+      updatedAt: '2026-11-05T00:00:00.000Z'
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settingsWithRuntimePermission('codex', 'codex', 'full-access'),
+      adapters: [fakeAdapter('codex', thread)]
+    })
+    const approvals: DomainRemoteCapabilityApproval[] = []
+    const unsubscribe = host.subscribeRemoteCapabilityApprovals((approval) => { approvals.push(approval) })
+    const abort = new AbortController()
+    try {
+      const decision = host.requestCapabilityApproval({
+        context: { runtimeId: 'codex', threadId: thread.id, turnId: 'turn', callId: 'call', requestId: 'request' },
+        actionId: 'workspace.write', invocationId: 'force-human-abort', mode: 'confirmation',
+        title: 'Confirm write', description: 'Requires human confirmation.', effect: 'workspace-write', input: {}
+      }, { forceHuman: true, signal: abort.signal })
+      await vi.waitFor(() => expect(approvals.map(({ state }) => state)).toEqual(['pending']))
+      abort.abort()
+      await expect(decision).resolves.toBe('cancelled')
+      expect(approvals.map(({ state }) => state)).toEqual(['pending', 'cancelled'])
+      await expect(host.resolveApproval({
+        runtimeId: 'codex', threadId: thread.id, approvalId: approvals[0]!.approvalId, decision: 'allowed'
+      })).rejects.toThrow('no longer pending')
+    } finally {
+      unsubscribe()
+      host.dispose()
+    }
+  })
+
+  it.each(['codex', 'claude'] as const)('resolveCapabilitySandboxMode honors live %s sandbox settings', async (runtimeId) => {
+    const thread = { id: 'sandbox-thread', runtimeId, title: 'Sandbox', updatedAt: '2026-11-05T00:00:00.000Z' }
+    let currentSettings = settings(runtimeId)
+    const host = createAgentRuntimeHost({ settings: async () => currentSettings, adapters: [fakeAdapter(runtimeId, thread)] })
+    const context = { runtimeId, threadId: thread.id, turnId: 'turn', requestId: 'sandbox' }
+    try {
+      for (const sandboxMode of ['read-only', 'workspace-write', 'danger-full-access'] as const) {
+        currentSettings = {
+          ...currentSettings,
+          agents: {
+            ...currentSettings.agents,
+            [runtimeId]: { ...currentSettings.agents[runtimeId], approvalPolicy: sandboxMode === 'danger-full-access' ? 'never' : 'on-request', sandboxMode }
+          }
+        }
+        await expect(host.resolveCapabilitySandboxMode(context)).resolves.toBe(sandboxMode)
+      }
+    } finally {
+      host.dispose()
+    }
+  })
+
+  it.each([
+    { configured: 'read-only', permissionLevel: 'request-approval', expected: 'workspace-write' },
+    { configured: 'read-only', permissionLevel: 'full-access', expected: 'danger-full-access' },
+    { configured: 'danger-full-access', permissionLevel: 'request-approval', expected: 'workspace-write' }
+  ] as const)('resolveCapabilitySandboxMode applies $permissionLevel turn policy over $configured', async ({ configured, permissionLevel, expected }) => {
+    const thread = { id: 'sandbox-override-thread', runtimeId: 'codex' as const, title: 'Sandbox override', updatedAt: '2026-11-05T00:00:00.000Z' }
+    const config = settings()
+    config.agents.codex = { ...getCodexRuntimeSettings(config), sandboxMode: configured, approvalPolicy: configured === 'danger-full-access' ? 'never' : 'on-request' }
+    const host = createAgentRuntimeHost({ settings: async () => config, adapters: [fakeAdapter('codex', thread)] })
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: thread.id, text: 'Execute with turn policy', permissionLevel })
+      await expect(host.resolveCapabilitySandboxMode({
+        runtimeId: 'codex', threadId: thread.id, turnId: 'codex-turn', requestId: 'sandbox-turn'
+      })).resolves.toBe(expected)
+      await expect(host.resolveCapabilitySandboxMode({
+        runtimeId: 'codex', threadId: thread.id, turnId: 'another-turn', requestId: 'sandbox-other-turn'
+      })).resolves.toBe(configured)
+    } finally {
+      host.dispose()
+    }
+  })
+
+  it('resolveCapabilitySandboxMode conservatively uses workspace-write for DSH without sandbox settings', async () => {
+    const thread = { id: 'dsh-sandbox-thread', runtimeId: 'dsh' as const, title: 'DSH sandbox', updatedAt: '2026-11-05T00:00:00.000Z' }
+    const base = settings('dsh')
+    const config = { ...base, agents: { ...base.agents, dsh: defaultDshRuntimeSettings() } }
+    const host = createAgentRuntimeHost({ settings: async () => config, adapters: [fakeAdapter('dsh', thread)] })
+    try {
+      await expect(host.resolveCapabilitySandboxMode({
+        runtimeId: 'dsh', threadId: thread.id, turnId: 'dsh-turn', requestId: 'sandbox-dsh'
+      })).resolves.toBe('workspace-write')
+    } finally {
+      host.dispose()
+    }
   })
 
   it('re-evaluates an approval that was already pending when Full Access is selected', async () => {
@@ -2350,6 +2691,28 @@ describe('AgentRuntimeHost', () => {
         await host.resolveApproval({ runtimeId: 'codex', threadId: 'parent', approvalId: capabilityRequest.approvalId, decision: 'denied' })
       }
       await expect(capabilityDecision).resolves.toBe(permissionLevel === 'full-access' ? 'allowed' : 'denied')
+      await expect(host.resolveCapabilitySandboxMode({
+        runtimeId: 'codex', threadId: 'child', turnId: 'child-turn', requestId: 'child-sandbox'
+      })).resolves.toBe(permissionLevel === 'full-access' ? 'danger-full-access' : 'workspace-write')
+      if (permissionLevel === 'full-access') {
+        let forcedSettled = false
+        const forcedDecision = host.requestCapabilityApproval({
+          context: { runtimeId: 'codex', threadId: 'child', turnId: 'child-turn', callId: 'forced-call', requestId: 'forced-call' },
+          actionId: 'fixture.external.write', invocationId: 'forced-child-invocation', mode: 'confirmation',
+          title: 'Confirm child write', description: 'Requires human confirmation.', effect: 'external-write', input: {}
+        }, { forceHuman: true })
+        void forcedDecision.then(() => { forcedSettled = true })
+        await vi.waitFor(() => expect(capabilityRequests.some((approval) => approval.invocationId === 'forced-child-invocation')).toBe(true))
+        const forcedRequest = capabilityRequests.find((approval) => approval.invocationId === 'forced-child-invocation')!
+        expect(forcedRequest).toMatchObject({ threadId: 'parent', turnId: 'codex-turn', state: 'pending' })
+        // Flush the asynchronous parent-policy path that auto-settled the
+        // preceding ordinary child request before checking explicit consent.
+        await new Promise<void>((resolve) => { setImmediate(resolve) })
+        expect(forcedSettled).toBe(false)
+        expect(capabilityRequests.filter((approval) => approval.invocationId === 'forced-child-invocation')).toHaveLength(1)
+        await host.resolveApproval({ runtimeId: 'codex', threadId: 'parent', approvalId: forcedRequest.approvalId, decision: 'denied' })
+        await expect(forcedDecision).resolves.toBe('denied')
+      }
       unsubscribe()
       finish()
       await host.subagentTools()!.call({ name: 'subagent_wait', arguments: { childId: (started.value as { childId: string }).childId, timeoutMs: 1000 }, context: { ...identity, requestId: 'wait' } })
@@ -2719,6 +3082,133 @@ describe('AgentRuntimeHost', () => {
     await events.return?.()
     dispose()
     host.dispose()
+  })
+
+  it('keeps capability confirmations pending when a stricter per-turn permission overrides Full Access', async () => {
+    const thread = {
+      id: 'turn-strict-thread',
+      runtimeId: 'codex' as const,
+      title: 'Strict per-turn permission',
+      updatedAt: '2026-10-30T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const host = createAgentRuntimeHost({
+      settings: async () => settingsWithRuntimePermission('codex', 'codex', 'full-access'),
+      adapters: [adapter]
+    })
+    const published: DomainRemoteCapabilityApproval[] = []
+    const dispose = host.subscribeRemoteCapabilityApprovals((approval) => { published.push(approval) })
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: thread.id, text: 'Governed write', permissionLevel: 'request-approval' })
+      const decision = host.requestCapabilityApproval({
+        context: { requestId: 'request', runtimeId: 'codex', threadId: thread.id, turnId: 'codex-turn', callId: 'call' },
+        actionId: 'test.write', invocationId: 'invocation', mode: 'confirmation',
+        title: 'Write', description: 'Write a resource', effect: 'workspace-write', input: {}
+      })
+      await vi.waitFor(() => expect(published.filter((approval) => approval.state === 'pending')).toHaveLength(1))
+      const pending = published.find((approval) => approval.state === 'pending')!
+      expect(pending).toMatchObject({ threadId: thread.id, turnId: 'codex-turn' })
+      await host.resolveApproval({ runtimeId: 'codex', threadId: thread.id, approvalId: pending.approvalId, decision: 'denied' })
+      await expect(decision).resolves.toBe('denied')
+    } finally {
+      dispose()
+      host.dispose()
+    }
+  })
+
+  it('auto-allows capability work when a per-turn Full Access override replaces a stricter global setting', async () => {
+    const thread = {
+      id: 'turn-full-access-thread',
+      runtimeId: 'codex' as const,
+      title: 'Full Access per-turn permission',
+      updatedAt: '2026-10-30T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const host = createAgentRuntimeHost({
+      settings: async () => settingsWithRuntimePermission('codex', 'codex', 'request-approval'),
+      adapters: [adapter]
+    })
+    const published: DomainRemoteCapabilityApproval[] = []
+    const dispose = host.subscribeRemoteCapabilityApprovals((approval) => { published.push(approval) })
+    let decision: Promise<'allowed' | 'denied' | 'cancelled'> | undefined
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: thread.id, text: 'One-shot governed write', permissionLevel: 'full-access' })
+      decision = host.requestCapabilityApproval({
+        context: { requestId: 'request', runtimeId: 'codex', threadId: thread.id, turnId: 'codex-turn', callId: 'call' },
+        actionId: 'test.write', invocationId: 'invocation', mode: 'confirmation',
+        title: 'Write', description: 'Write a resource', effect: 'workspace-write', input: {}
+      })
+      const outcome = await Promise.race([
+        decision,
+        new Promise<'still-pending'>((resolve) => { setTimeout(() => resolve('still-pending'), 250) })
+      ])
+      expect(outcome).toBe('allowed')
+      expect(published).toEqual([])
+    } finally {
+      dispose()
+      host.dispose()
+      await decision?.catch(() => undefined)
+    }
+  })
+
+  it('keeps native provider approvals pending when a stricter per-turn permission overrides Full Access', async () => {
+    const thread = {
+      id: 'native-strict-thread',
+      runtimeId: 'codex' as const,
+      title: 'Native strict per-turn permission',
+      updatedAt: '2026-10-30T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    adapter.resolveApproval = vi.fn(async () => undefined)
+    let releaseApprovals!: () => void
+    const approvalsReleased = new Promise<void>((resolve) => { releaseApprovals = resolve })
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      await approvalsReleased
+      yield {
+        kind: 'approval_requested',
+        runtimeId: 'codex',
+        threadId: thread.id,
+        turnId: 'codex-turn',
+        itemId: 'native-strict-item',
+        approvalId: 'native-strict-request',
+        summary: 'A command approval arriving under a strict per-turn override',
+        toolName: 'command execution',
+        meta: {
+          codexRequestKind: 'approval',
+          codexRequestMethod: 'item/commandExecution/requestApproval'
+        }
+      } satisfies AgentRuntimeEvent
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settingsWithRuntimePermission('codex', 'codex', 'full-access'),
+      adapters: [adapter]
+    })
+    const published: DomainRemoteCapabilityApproval[] = []
+    const dispose = host.subscribeRemoteCapabilityApprovals((approval) => { published.push(approval) })
+    const abort = new AbortController()
+    const events = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: thread.id,
+      signal: abort.signal
+    })[Symbol.asyncIterator]()
+    try {
+      await host.startTurn({ runtimeId: 'codex', threadId: thread.id, text: 'Governed command', permissionLevel: 'request-approval' })
+      releaseApprovals()
+      await expect(events.next()).resolves.toMatchObject({
+        value: { kind: 'approval_requested', approvalId: 'native-strict-request' }
+      })
+      await vi.waitFor(() => expect(published.map(({ state }) => state)).toEqual(['pending']))
+      expect(adapter.resolveApproval).not.toHaveBeenCalled()
+      await expect(host.refreshLivePermissionPolicy()).resolves.toBe(0)
+      expect(published.map(({ state }) => state)).toEqual(['pending'])
+    } finally {
+      releaseApprovals()
+      abort.abort()
+      await events.return?.()
+      dispose()
+      host.dispose()
+    }
   })
 
   it('cancels pending capability confirmations on abort, terminal turns, and disposal', async () => {
@@ -4756,7 +5246,8 @@ describe('AgentRuntimeHost', () => {
       })
       const host = createAgentRuntimeHost({
         settings: async () => settings(runtimeId),
-        adapters: [adapter]
+        adapters: [adapter],
+        nativeVisualToolsAvailable: () => true
       })
       const text = '准确截取论文中的方法总览图。'
 
@@ -4764,7 +5255,8 @@ describe('AgentRuntimeHost', () => {
         runtimeId,
         threadId,
         text,
-        displayText: text
+        displayText: text,
+        executionIntent: visualExecutionIntent()
       })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
@@ -4781,15 +5273,6 @@ describe('AgentRuntimeHost', () => {
       expect(events.filter((event) => (
         event.kind === 'assistant_delta' && event.itemId === 'verified-answer'
       ))).toHaveLength(1)
-      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          code: EXECUTION_PUBLICATION_PENDING_CODE,
-          severity: 'info',
-          threadId,
-          turnId
-        })
-      )
       expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -4873,7 +5356,8 @@ describe('AgentRuntimeHost', () => {
       })
       const host = createAgentRuntimeHost({
         settings: async () => settings(runtimeId),
-        adapters: [adapter]
+        adapters: [adapter],
+        nativeVisualToolsAvailable: () => true
       })
 
       await host.startTurn({
@@ -4936,7 +5420,8 @@ describe('AgentRuntimeHost', () => {
       } satisfies TestThreadSnapshot))
       const host = createAgentRuntimeHost({
         settings: async () => settings(runtimeId),
-        adapters: [adapter]
+        adapters: [adapter],
+        nativeVisualToolsAvailable: () => true
       })
 
       await expect(host.readThreadSnapshot({ runtimeId, threadId })).resolves.toMatchObject({
@@ -5150,7 +5635,7 @@ describe('AgentRuntimeHost', () => {
     expect(adapterAuxiliary).not.toHaveBeenCalled()
   })
 
-  it('starts a runtime handoff by creating a target thread and preserving display text', async () => {
+  it.each([false, true])('enrolls the handoff target before turn boundaries (GUI-owned=%s)', async guiOwned => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -5184,9 +5669,12 @@ describe('AgentRuntimeHost', () => {
       id: 'claude-handoff-thread',
       runtimeId: 'claude' as const,
       title: 'Claude handoff',
+      workspace: '/tmp/workspace',
       updatedAt: '2026-06-10T00:00:00.000Z'
     }
     const claude = fakeAdapter('claude', claudeTargetThread)
+    const targetCaps = await claude.capabilities({ settings: settings('claude') })
+    vi.mocked(claude.capabilities).mockResolvedValue({ ...targetCaps, storage: { ...targetCaps.storage, guiOwnedThreads: guiOwned } })
     vi.mocked(claude.startTurn).mockResolvedValue({
       threadId: 'claude-handoff-thread',
       turnId: 'claude-turn'
@@ -5205,6 +5693,7 @@ describe('AgentRuntimeHost', () => {
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [codex, claude],
+      turnArtifacts: fakeTurnArtifactPublisher(),
       services: { contextLedger, visibleContext: {
         transferPreparedSurfaceBinding, claimSurfaceBinding
       } as unknown as VisibleContextService }
@@ -5235,6 +5724,11 @@ describe('AgentRuntimeHost', () => {
       }
     })).rejects.toThrow(/payload\.sourceRuntimeId must match the top-level runtimeId/)
 
+    const beforeTurn = vi.fn(async () => {
+      expect(claude.startThread).toHaveBeenCalledOnce()
+      expect(await host.readThreadSnapshot({ runtimeId: 'claude', threadId: claudeTargetThread.id })).toMatchObject({ workspace: '/tmp/workspace' })
+    })
+    host.subscribeRequiredBeforeTurn(beforeTurn)
     await expect(host.auxiliary({
       runtimeId: 'codex',
       operation: 'startRuntimeHandoff',
@@ -5272,6 +5766,8 @@ describe('AgentRuntimeHost', () => {
         title: 'Claude handoff'
       })
     )
+    expect(beforeTurn).toHaveBeenCalledOnce()
+    expect(vi.mocked(claude.startThread).mock.calls[0]?.[1].threadId).toBe(guiOwned ? 'codex-thread' : undefined)
     expect(transferPreparedSurfaceBinding).toHaveBeenCalledWith(
       'codex:codex-thread', 'source-binding', 'claude:claude-handoff-thread'
     )
@@ -5634,83 +6130,6 @@ describe('AgentRuntimeHost', () => {
     }
   })
 
-  it('records shared context state for noop compact runtimes', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.capabilities).mockResolvedValue({
-      ...capabilities('codex'),
-      controls: {
-        ...capabilities('codex').controls,
-        compact: 'noop'
-      },
-      context: {
-        state: { available: true },
-        compaction: { available: true, degraded: true },
-        goalResume: { available: false, reason: 'unsupported' }
-      }
-    })
-    const cleanupCompaction = vi.fn(async () => undefined)
-    adapter.compactThread = cleanupCompaction
-    vi.mocked(adapter.snapshot).mockResolvedValue({
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 3,
-      items: [
-        { id: 'u1', kind: 'user_message', text: 'Please inspect the workspace.' },
-        { id: 'a1', kind: 'assistant_message', text: 'I found the runtime contract.' },
-        { id: 't1', kind: 'tool', summary: 'rg agent-runtime-contract' }
-      ]
-    })
-    const contextState = new RuntimeContextStateService()
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('codex'),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    await host.compactThread({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      reason: 'manual cleanup'
-    })
-
-    expect(contextState.get({
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    })).toMatchObject({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      rawHistoryItems: 3,
-      effectiveHistoryItems: 2,
-      summarySource: 'heuristic',
-      triggerReason: 'manual cleanup',
-      summary: expect.stringContaining('Please inspect the workspace.')
-    })
-    expect(contextState.get({
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    })).toMatchObject({
-      replacedTokens: expect.any(Number),
-      sourceDigest: expect.any(String),
-      digestMarker: expect.stringContaining('runtime:compaction_digest'),
-      sourceItemIds: ['u1', 'a1']
-    })
-    expect(cleanupCompaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        runtimeId: 'codex',
-        threadId: 'codex-thread',
-        reason: 'manual cleanup'
-      })
-    )
-  })
-
   it('rejects context state auxiliary writes whose payload runtimeId belongs to another owner', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
@@ -5727,15 +6146,6 @@ describe('AgentRuntimeHost', () => {
 
     await expect(host.auxiliary({
       runtimeId: 'codex',
-      operation: 'recordContextCompaction',
-      payload: {
-        runtimeId: 'claude',
-        threadId: 'codex-thread',
-        summary: 'wrong owner'
-      }
-    })).rejects.toThrow(/payload\.runtimeId must match the top-level runtimeId/)
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
       operation: 'updateGoalResumeState',
       payload: {
         runtimeId: 'claude',
@@ -5748,261 +6158,6 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread'
     })).toBeNull()
-  })
-
-  it('summarizes noop compaction through Model Router when model summaries are enabled', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.capabilities).mockResolvedValue({
-      ...capabilities('codex'),
-      controls: {
-        ...capabilities('codex').controls,
-        compact: 'noop'
-      }
-    })
-    vi.mocked(adapter.snapshot).mockResolvedValue({
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 2,
-      items: [
-        { id: 'u1', kind: 'user_message', text: 'Keep every runtime on the shared contract.' },
-        { id: 'a1', kind: 'assistant_message', text: 'The host owns noop compaction.' }
-      ]
-    })
-    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<{
-      ok: boolean
-      status: number
-      text: () => Promise<string>
-    }>>(async () => ({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({ output_text: 'Model generated compact summary.' })
-    }))
-    vi.stubGlobal('fetch', fetchImpl)
-    const contextState = new RuntimeContextStateService()
-    const base = settings('codex')
-    const host = createAgentRuntimeHost({
-      settings: async () => ({
-        ...base,
-        modelRouter: {
-          ...defaultModelRouterSettings(),
-          baseUrl: 'http://127.0.0.1:4545/v1',
-          publicModelAlias: 'router-summary-model',
-          runtimeApiKey: 'runtime-secret'
-        },
-        agents: {
-          ...base.agents,
-          sciforge: {
-            ...base.agents.sciforge,
-            contextCompaction: {
-              ...base.agents.sciforge.contextCompaction,
-              summaryMode: 'model',
-              summaryMaxTokens: 321,
-              summaryTimeoutMs: 1_234
-            }
-          }
-        }
-      }),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    await host.compactThread({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      reason: 'manual cleanup'
-    })
-
-    expect(fetchImpl).toHaveBeenCalledWith(
-      'http://127.0.0.1:4545/v1/responses',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({
-          Authorization: 'Bearer runtime-secret'
-        }),
-        body: expect.any(String)
-      })
-    )
-    const request = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined
-    const body = JSON.parse(String(request?.body)) as Record<string, unknown>
-    expect(body).toMatchObject({
-      model: 'router-summary-model',
-      max_tokens: 321,
-      metadata: {
-        schemaVersion: 'sciforge.trace.correlation.v1',
-        route: 'model-router.responses',
-        source: 'agent-runtime-host',
-        operation: 'context_compaction_summary',
-        runtimeId: 'codex',
-        threadId: 'codex-thread',
-        sourceDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
-      }
-    })
-    expect(String(body.input)).toContain('Keep every runtime on the shared contract.')
-    expect(contextState.get({
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    })).toMatchObject({
-      summary: expect.stringContaining('Model generated compact summary.'),
-      summarySource: 'model',
-      triggerReason: 'manual cleanup',
-      rawHistoryItems: 2,
-      effectiveHistoryItems: 2,
-      sourceDigest: expect.any(String),
-      sourceItemIds: ['u1']
-    })
-  })
-
-  it('falls back to heuristic noop compaction without calling Model Router when the runtime API key is missing', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.capabilities).mockResolvedValue({
-      ...capabilities('codex'),
-      controls: {
-        ...capabilities('codex').controls,
-        compact: 'noop'
-      }
-    })
-    vi.mocked(adapter.snapshot).mockResolvedValue({
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 2,
-      items: [
-        { id: 'u1', kind: 'user_message', text: 'Do not call Model Router without a runtime key.' },
-        { id: 'a1', kind: 'assistant_message', text: 'Fallback summary should still be recorded.' }
-      ]
-    })
-    const fetchImpl = vi.fn(() => {
-      throw new Error('fetch should not be called without a runtime API key')
-    })
-    vi.stubGlobal('fetch', fetchImpl)
-    const contextState = new RuntimeContextStateService()
-    const base = settings('codex')
-    const host = createAgentRuntimeHost({
-      settings: async () => ({
-        ...base,
-        modelRouter: {
-          ...defaultModelRouterSettings(),
-          baseUrl: 'http://127.0.0.1:4545/v1',
-          publicModelAlias: 'router-summary-model',
-          runtimeApiKey: ''
-        },
-        agents: {
-          ...base.agents,
-          sciforge: {
-            ...base.agents.sciforge,
-            contextCompaction: {
-              ...base.agents.sciforge.contextCompaction,
-              summaryMode: 'model'
-            }
-          }
-        }
-      }),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    await expect(host.compactThread({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      reason: 'manual cleanup'
-    })).resolves.toBeUndefined()
-    expect(fetchImpl).not.toHaveBeenCalled()
-    expect(contextState.get({
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    })).toMatchObject({
-      summarySource: 'heuristic',
-      triggerReason: 'manual cleanup; model_summary_fallback',
-      summary: expect.stringContaining('Do not call Model Router without a runtime key.'),
-      sourceDigest: expect.any(String),
-      sourceItemIds: ['u1']
-    })
-  })
-
-  it('falls back to heuristic noop compaction when Model Router summaries fail', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.capabilities).mockResolvedValue({
-      ...capabilities('codex'),
-      controls: {
-        ...capabilities('codex').controls,
-        compact: 'noop'
-      }
-    })
-    vi.mocked(adapter.snapshot).mockResolvedValue({
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 2,
-      items: [
-        { id: 'u1', kind: 'user_message', text: 'Use a visible fallback summary.' },
-        { id: 'a1', kind: 'assistant_message', text: 'Router failed, but compact still completes.' }
-      ]
-    })
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: false,
-      status: 503,
-      text: async () => 'router unavailable'
-    })))
-    const contextState = new RuntimeContextStateService()
-    const base = settings('codex')
-    const host = createAgentRuntimeHost({
-      settings: async () => ({
-        ...base,
-        modelRouter: {
-          ...defaultModelRouterSettings(),
-          baseUrl: 'http://127.0.0.1:4545/v1',
-          publicModelAlias: 'router-summary-model',
-          runtimeApiKey: 'runtime-secret'
-        },
-        agents: {
-          ...base.agents,
-          sciforge: {
-            ...base.agents.sciforge,
-            contextCompaction: {
-              ...base.agents.sciforge.contextCompaction,
-              summaryMode: 'model'
-            }
-          }
-        }
-      }),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    await expect(host.compactThread({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      reason: 'manual cleanup'
-    })).resolves.toBeUndefined()
-    expect(contextState.get({
-      runtimeId: 'codex',
-      threadId: 'codex-thread'
-    })).toMatchObject({
-      summarySource: 'heuristic',
-      triggerReason: 'manual cleanup; model_summary_fallback',
-      summary: expect.stringContaining('Use a visible fallback summary.'),
-      sourceDigest: expect.any(String),
-      sourceItemIds: ['u1']
-    })
   })
 
   it('tracks successful goal resume attempts across resumed sessions', async () => {
@@ -6184,76 +6339,6 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
-  it('does not report noop compaction success without the shared context service', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.capabilities).mockResolvedValue({
-      ...capabilities('codex'),
-      controls: {
-        ...capabilities('codex').controls,
-        compact: 'noop'
-      }
-    })
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('codex'),
-      adapters: [adapter]
-    })
-
-    await expect(host.compactThread({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      reason: 'manual cleanup'
-    })).rejects.toThrow('shared context compaction')
-  })
-
-  it('injects shared compacted context summaries into later runtime turns', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    const contextState = new RuntimeContextStateService()
-    contextState.recordCompaction({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      summary: 'Earlier work found the host owns shared compaction.',
-      summarySource: 'heuristic',
-      rawHistoryItems: 12,
-      effectiveHistoryItems: 3,
-      replacedTokens: 2048,
-      sourceDigest: 'digest-2048'
-    })
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('codex'),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    await host.startTurn({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      text: 'Continue the migration.',
-      displayText: 'Continue the migration.'
-    })
-
-    expect(adapter.startTurn).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        text: expect.stringContaining('Shared compacted context summary for this thread:'),
-        displayText: 'Continue the migration.'
-      })
-    )
-    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(dispatched?.text).toContain('Earlier work found the host owns shared compaction.')
-    expect(dispatched?.text).toContain('source_digest=digest-2048')
-    expect(dispatched?.text).toContain('Continue the migration.')
-  })
-
   it('excludes discarded summaries and directives after editing history in the same session', async () => {
     const thread: AgentRuntimeThread = {
       id: 'codex-thread', runtimeId: 'codex', title: 'Original session',
@@ -6285,7 +6370,7 @@ describe('AgentRuntimeHost', () => {
     expect(dispatched?.text).not.toContain('DISCARDED_')
   })
 
-  it('injects bounded runtime context ledger constraints into same-runtime continuation turns', async () => {
+  it('keeps the observational ledger out of same-runtime continuation prompts', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -6334,242 +6419,44 @@ describe('AgentRuntimeHost', () => {
     expect(adapter.startTurn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        text: expect.stringContaining('Runtime context ledger for this thread:'),
+        text: 'Continue.',
         displayText: 'Continue.'
       })
     )
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(dispatched?.text).toContain('Objective: Finish the host-mediated runtime migration.')
-    expect(dispatched?.text).toContain('Use native runtime history; do not replay the GUI transcript.')
-    expect(dispatched?.text).toContain('src/main/runtime/agent-runtime/host.ts')
-    expect(dispatched?.text).toContain('Recent tail digest: tail-digest-1')
-    expect(dispatched?.text).toContain('This is user/runtime context data for semantic continuity')
-    expect(dispatched?.text).toContain('Continue.')
+    expect(dispatched?.text).toBe('Continue.')
   })
 
-  it('auto-compacts long noop-runtime threads before dispatching the next turn', async () => {
-    const adapter = fakeAdapter('codex', {
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z'
-    })
-    vi.mocked(adapter.capabilities).mockResolvedValue({
-      ...capabilities('codex'),
-      controls: {
-        ...capabilities('codex').controls,
-        compact: 'noop'
-      }
-    })
-    const cleanupCompaction = vi.fn(async () => undefined)
-    adapter.compactThread = cleanupCompaction
-    vi.mocked(adapter.snapshot).mockResolvedValue({
-      id: 'codex-thread',
-      runtimeId: 'codex',
-      title: 'Codex',
-      updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 5,
-      items: [
-        { id: 'u1', kind: 'user_message', text: 'Map the shared runtime contract.' },
-        { id: 'a1', kind: 'assistant_message', text: 'Found the host dispatch path.' },
-        { id: 'u2', kind: 'user_message', text: 'Keep compaction generic.' },
-        { id: 'a2', kind: 'assistant_message', text: 'Moved the algorithm into host shared code.' },
-        { id: 'u3', kind: 'user_message', text: 'Continue.' }
-      ]
-    })
-    const contextState = new RuntimeContextStateService()
-    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-host-'))
-    const contextLedger = new RuntimeContextLedgerService(dataDir, ledgerRuntimes)
-    await contextLedger.acceptDirective({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      id: 'directive-before-compaction',
-      text: 'Modify the document using only the resources currently visible.'
-    })
-    const base = settings('codex')
-    const host = createAgentRuntimeHost({
-      settings: async () => ({
-        ...base,
-        agents: {
-          ...base.agents,
-          sciforge: {
-            ...base.agents.sciforge,
-            contextCompaction: {
-              ...base.agents.sciforge.contextCompaction,
-              defaultSoftThreshold: 10,
-              defaultHardThreshold: 20
-            }
-          }
-        }
-      }),
-      adapters: [adapter],
-      services: { contextState, contextLedger }
-    })
-
-    await host.startTurn({
-      runtimeId: 'codex',
-      threadId: 'codex-thread',
-      text: 'Run the next step.'
-    })
-
-    const state = contextState.get({ runtimeId: 'codex', threadId: 'codex-thread' })
-    expect(state).toMatchObject({
-      rawHistoryItems: 5,
-      summarySource: 'heuristic',
-      sourceDigest: expect.any(String),
-      sourceItemIds: expect.arrayContaining(['u1'])
-    })
-    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(dispatched?.text).toContain('Shared compacted context summary for this thread:')
-    expect(dispatched?.text).toContain('Map the shared runtime contract.')
-    expect(dispatched?.text).not.toContain('Modify the document using only the resources currently visible.')
-    expect(dispatched?.text).toContain('Run the next step.')
-    expect(dispatched?.displayText).toBe('Run the next step.')
-    expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        kind: 'compaction_event',
-        runtimeId: 'codex',
-        threadId: 'codex-thread',
-        status: 'success',
-        auto: true,
-        summary: expect.stringContaining('Map the shared runtime contract.'),
-        sourceDigest: state.sourceDigest
-      })
-    )
-    expect(cleanupCompaction).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        runtimeId: 'codex',
-        threadId: 'codex-thread',
-        reason: state.triggerReason
-      })
-    )
-  })
-
-  it.each(['codex', 'claude', 'dsh'] as const)(
-    'keeps long-history compaction and goal resume state consistent for %s runtime contract',
-    async (runtimeId) => {
+  it.each(['codex', 'claude', 'dsh', 'pi'] as const)(
+    'keeps history and compaction owned by the %s adapter', async (runtimeId) => {
       const threadId = `${runtimeId}-thread`
-      const resumedThreadId = `${runtimeId}-resumed`
       const adapter = fakeAdapter(runtimeId, {
-        id: threadId,
-        runtimeId,
-        title: runtimeId,
-        updatedAt: '2026-06-10T00:00:00.000Z'
-      })
-      vi.mocked(adapter.capabilities).mockResolvedValue({
-        ...capabilities(runtimeId),
-        controls: {
-          ...capabilities(runtimeId).controls,
-          compact: 'noop',
-          resumeSession: true
-        }
-      })
-      vi.mocked(adapter.snapshot).mockResolvedValue({
-        id: threadId,
-        runtimeId,
-        title: runtimeId,
-        updatedAt: '2026-06-10T00:00:00.000Z',
-        latestSeq: 5,
-        items: [
-          { id: `${runtimeId}-u1`, kind: 'user_message', text: 'Map the shared runtime contract.' },
-          { id: `${runtimeId}-a1`, kind: 'assistant_message', text: 'Found the host dispatch path.' },
-          { id: `${runtimeId}-u2`, kind: 'user_message', text: 'Keep compaction generic.' },
-          { id: `${runtimeId}-a2`, kind: 'assistant_message', text: 'Moved the algorithm into host shared code.' },
-          { id: `${runtimeId}-u3`, kind: 'user_message', text: 'Continue.' }
-        ]
-      })
-      adapter.resumeSession = vi.fn(async () => ({
-        threadId: resumedThreadId,
-        sessionId: threadId
-      }))
-      vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
-        yield {
-          kind: 'goal_event',
-          runtimeId,
-          threadId,
-          objective: `Finish ${runtimeId} migration`,
-          status: 'active'
-        } satisfies AgentRuntimeEvent
-        yield {
-          kind: 'turn_lifecycle',
-          runtimeId,
-          threadId,
-          turnId: `${runtimeId}-turn`,
-          state: 'aborted',
-          message: 'interrupted by user'
-        } satisfies AgentRuntimeEvent
+        id: threadId, runtimeId, title: runtimeId, updatedAt: '2026-06-10T00:00:00.000Z'
       })
       const contextState = new RuntimeContextStateService()
-      const base = settings(runtimeId)
+      contextState.recordCompaction({ runtimeId, threadId, summary: 'Retained by the native runtime.', summarySource: 'runtime' })
+      const nativeCompact = vi.fn(async () => undefined)
+      adapter.compactThread = nativeCompact
+      vi.mocked(adapter.capabilities).mockResolvedValue({
+        ...capabilities(runtimeId),
+        controls: { ...capabilities(runtimeId).controls, compact: 'native' }
+      })
       const host = createAgentRuntimeHost({
-        settings: async () => ({
-          ...base,
-          agents: {
-            ...base.agents,
-           sciforge: {
-              ...base.agents.sciforge,
-              contextCompaction: {
-                ...base.agents.sciforge.contextCompaction,
-                defaultSoftThreshold: 10,
-                defaultHardThreshold: 20
-              }
-            }
-          }
-        }),
-        adapters: [adapter],
-        services: { contextState }
+        settings: async () => settings(runtimeId), adapters: [adapter], services: { contextState }
       })
-
-      await host.startTurn({
-        runtimeId,
-        threadId,
-        text: 'Run the next step.'
+      await host.startTurn({ runtimeId, threadId, text: 'Continue.' })
+      expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1].text).toBe('Continue.')
+      expect(nativeCompact).not.toHaveBeenCalled()
+      await host.compactThread({ runtimeId, threadId })
+      expect(nativeCompact).toHaveBeenCalledTimes(1)
+      expect(adapter.publishSyntheticEvent).not.toHaveBeenCalled()
+      vi.mocked(adapter.capabilities).mockResolvedValue({
+        ...capabilities(runtimeId),
+        controls: { ...capabilities(runtimeId).controls, compact: 'unsupported' }
       })
-      const events: AgentRuntimeEvent[] = []
-      for await (const event of host.subscribeEvents({ runtimeId, threadId })) {
-        events.push(event)
-      }
-      await expect(host.resumeSession({
-        runtimeId,
-        sessionId: threadId,
-        maxResumeCount: 3
-      })).resolves.toEqual({
-        threadId: resumedThreadId,
-        sessionId: threadId
-      })
-
-      const sourceState = contextState.get({ runtimeId, threadId })
-      expect(sourceState).toMatchObject({
-        summarySource: 'heuristic',
-        sourceDigest: expect.any(String),
-        goalResume: {
-          objective: `Finish ${runtimeId} migration`,
-          status: 'blocked',
-          resumeCount: 0,
-          lastFailureReason: 'interrupted by user'
-        }
-      })
-      expect(contextState.get({ runtimeId, threadId: resumedThreadId }).goalResume).toMatchObject({
-        objective: `Finish ${runtimeId} migration`,
-        status: 'active',
-        resumeCount: 1
-      })
-      expect(events.map((event) => event.kind)).toEqual(['goal_event', 'turn_lifecycle'])
-      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          kind: 'compaction_event',
-          runtimeId,
-          threadId,
-          auto: true,
-          sourceDigest: sourceState.sourceDigest
-        })
-      )
-      const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-      expect(dispatched?.text).toContain('Shared compacted context summary for this thread:')
-      expect(dispatched?.text).toContain('Run the next step.')
+      await expect(host.compactThread({ runtimeId, threadId })).rejects.toThrow(/compact/)
+      expect(nativeCompact).toHaveBeenCalledTimes(1)
+      expect(contextState.get({ runtimeId, threadId }).summary).toBe('Retained by the native runtime.')
     }
   )
 
@@ -6811,7 +6698,7 @@ describe('AgentRuntimeHost', () => {
     expect(adapterAuxiliary).not.toHaveBeenCalled()
   })
 
-  it('injects shared memory consistently before dispatching turns to every runtime', async () => {
+  it.each([undefined, [] as string[]])('injects scoped shared memory with tool policy %j before dispatching to every runtime', async (allowedTools) => {
     const dataDir = await mkdtemp(join(tmpdir(), 'sciforge-host-memory-'))
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-host-memory-workspace-'))
     const otherWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-host-memory-other-'))
@@ -6949,7 +6836,8 @@ describe('AgentRuntimeHost', () => {
         runtimeId,
         threadId: `${runtimeId}-thread`,
         text: 'Please run runtime tests.',
-        workspace: workspaceRoot
+        workspace: workspaceRoot,
+        ...(allowedTools ? { allowedTools } : {})
       })
     }
 
@@ -6962,6 +6850,7 @@ describe('AgentRuntimeHost', () => {
         })
       )
       const input = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+      expect(input?.allowedTools).toEqual(allowedTools)
       expect(input?.text).toContain('User prefers verbose technical answers.')
       expect(input?.text).toContain('Workspace uses Vitest for runtime tests.')
       expect(input?.text).toContain('Project memory for runtime tests.')
@@ -8151,6 +8040,59 @@ describe('AgentRuntimeHost', () => {
     host.dispose()
   })
 
+  it('preserves a bound workspace spelling through durable completed-turn materialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'turn-workspace-spelling-'))
+    evidenceQueueRoots.push(root)
+    const authoritativeWorkspace = join(root, 'workspace')
+    const boundWorkspace = process.platform === 'win32'
+      ? authoritativeWorkspace.replace(/\\/g, '/')
+      : `${authoritativeWorkspace}/./`
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex',
+      workspace: authoritativeWorkspace, updatedAt: '2026-11-03T00:00:00.000Z'
+    })
+    vi.mocked(codex.snapshot).mockResolvedValue({
+      id: 'codex-thread', runtimeId: 'codex', title: 'Codex',
+      workspace: authoritativeWorkspace, updatedAt: '2026-11-03T00:00:00.000Z',
+      latestSeq: 7,
+      turns: [{
+        id: 'turn-1', threadId: 'codex-thread', status: 'completed',
+        items: [{ id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'done' }]
+      }]
+    })
+    const outbox = new TurnArtifactOutbox(root)
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [codex] })
+    const consume = vi.fn(async () => undefined)
+    const handoff = new TurnArtifactHandoffService({
+      outbox, consumers: [{ consume }],
+      materialize: (intent) => host.materializeCompletedTurnArtifact(intent)
+    })
+    handoff.attachLifecycleSettlementConsumer(async () => undefined)
+    try {
+      const start = await outbox.registerStart({
+        runtimeId: 'codex', threadId: 'codex-thread', clientDirectiveId: 'directive-1',
+        inputDigest: `sha256:${'a'.repeat(64)}`, workspaceRoot: boundWorkspace,
+        principal: null, principalContext: { identityVersion: 0, principal: null }
+      })
+      await outbox.markStartDispatching(start)
+      await outbox.bindStart(start, { ...start, turnId: 'turn-1' })
+      await outbox.completeWatch({
+        ...start, turnId: 'turn-1', sequence: 7, occurredAt: '2026-11-03T00:00:01.000Z'
+      })
+      await expect(handoff.flushThread('codex', 'codex-thread')).resolves.toBeUndefined()
+      expect(consume).toHaveBeenCalledWith(expect.objectContaining({ workspaceRoot: boundWorkspace }))
+      expect(outbox.recordsForThread('codex', 'codex-thread')).toEqual([])
+      // Reopening the journal must retain the acknowledged boundary, without rewriting history.
+      const restored = new TurnArtifactOutbox(root)
+      await restored.load()
+      expect(restored.recordsForThread('codex', 'codex-thread')).toEqual([])
+      expect(restored.unresolvedCapturesForThread('codex', 'codex-thread')).toEqual([])
+    } finally {
+      await handoff.close()
+      await host.dispose()
+    }
+  })
+
   it('fails closed when a completed-turn intent is partial or crosses workspaces', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
@@ -8807,7 +8749,7 @@ describe('AgentRuntimeHost', () => {
     expect(policyEvent?.kind === 'error' ? policyEvent.detail : undefined).not.toContain('surface.inspect')
   })
 
-  it('denies command execution while the native visual proof chain is pending', async () => {
+  it('allows independent command execution while the native visual proof chain is pending', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -8851,14 +8793,9 @@ describe('AgentRuntimeHost', () => {
     }
     await Promise.resolve()
 
-    expect(codex.interruptTurn).toHaveBeenCalled()
-    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        kind: 'error',
-        code: 'runtime_execution_policy_denied',
-        detail: expect.stringContaining('sciforge_look')
-      })
+    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).not.toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ code: 'runtime_execution_policy_denied' })
     )
   })
 
@@ -11444,6 +11381,38 @@ it('keeps ordinary Session output pending until its required observer persists t
 
 
 describe('read-only message metadata projection', () => {
+  it.each([true, false])('projects automated directives as system details, preserving human input (native: %s)', async (native) => {
+    const root = await mkdtemp(join(tmpdir(), 'control-projection-'))
+    const ref = { runtimeId: 'codex' as const, threadId: 'control-thread' }
+    const thread = { id: ref.threadId, runtimeId: ref.runtimeId, title: 'Control', updatedAt: new Date().toISOString() }
+    const adapter = fakeAdapter('codex', thread)
+    const ledger = new RuntimeContextLedgerService(root, ledgerRuntimes)
+    await ledger.acceptDirective({ ...ref, id: 'control-automated', text: 'Progress data' })
+    await ledger.beginDirectiveDelivery({ ...ref, id: 'control-automated' })
+    await ledger.finishDirectiveDelivery({ ...ref, id: 'control-automated', delivery: 'delivered', turnId: 'turn' })
+    vi.mocked(adapter.snapshot).mockResolvedValue({ ...thread, latestSeq: 1, turns: [{ id: 'turn', threadId: ref.threadId, status: 'completed', items: [
+      { id: 'human', kind: 'user_message', text: 'Explain subagent progress heartbeat' },
+      ...(native ? [{ id: 'native-control', kind: 'user_message' as const, text: 'Progress data' }] : [])
+    ] }] })
+    const host = createAgentRuntimeHost({ settings: () => settings(), adapters: [adapter], services: { contextLedger: ledger } })
+    try {
+      const page = await host.readThreadPage({ ...ref, limit: 20 })
+      expect(page.turns[0].items?.filter(item => item.kind === 'user_message')).toEqual([
+        expect.objectContaining({ id: 'human', text: 'Explain subagent progress heartbeat' })
+      ])
+      expect(page.turns[0].items?.find(item => item.kind === 'system')).toMatchObject({ text: 'Runtime control update', detail: 'Progress data' })
+      adapter.subscribeEvents = vi.fn(async function* () {
+        yield { ...ref, turnId: 'turn', seq: 1, kind: 'user_message' as const, itemId: 'native-control', text: 'Progress data' }
+        yield { ...ref, turnId: 'turn', seq: 2, kind: 'item_snapshot' as const, item: { id: 'native-control', kind: 'user_message' as const, text: 'Progress data' } }
+      })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents(ref)) events.push(event)
+      expect(events).toHaveLength(2)
+      for (const event of events) expect(event).toMatchObject({ kind: 'item_snapshot', item: { kind: 'system', detail: 'Progress data' } })
+
+    } finally { host.dispose(); await rm(root, { recursive: true, force: true }) }
+  })
+
   it.each([true, false])('keeps canonical input identity and native presentation fields over caller metadata (existing item: %s)', async (hasNativeItem) => {
     const root = await mkdtemp(join(tmpdir(), 'message-metadata-collision-'))
     const ref = { runtimeId: 'codex' as const, threadId: 'metadata-thread' }
@@ -11667,4 +11636,48 @@ describe('startup queued-input reconciliation', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+})
+
+it.each<AgentRuntimeId>(['codex', 'claude', 'dsh', 'pi'])('routes Host user input through the canonical %s runtime event and response path', async (runtimeId) => {
+  const thread = { id: 'decision-thread', runtimeId, title: 'Decision', updatedAt: '2026-10-31T00:00:00Z', status: 'running' as const }
+  const adapter = fakeAdapter(runtimeId, thread)
+  adapter.readThreadStatus = vi.fn(async () => ({ ...thread, latestSeq: 0, latestTurnId: 'decision-turn', latestTurnStatus: 'running' }))
+  const events: AgentRuntimeEvent[] = []
+  adapter.publishSyntheticEvent = vi.fn(async (_context, event) => { events.push(event); return event })
+  adapter.snapshot = vi.fn(async () => ({ ...thread, latestSeq: events.length,
+    latestTurnId: 'decision-turn', latestTurnStatus: 'running' as const,
+    turns: [{ id: 'decision-turn', threadId: thread.id, status: 'running' as const,
+      items: events.filter((event) => event.kind === 'item_snapshot').slice(-1).flatMap((event) =>
+        event.kind === 'item_snapshot' ? [event.item] : []) }] }))
+  const host = createAgentRuntimeHost({ settings: () => settings(runtimeId), adapters: [adapter] })
+  try {
+    const result = host.requestUserInput({ questions: [{ id: 'q', header: '', question: 'Choose?', options: [] }] },
+      { requestId: 'tool-request', runtimeId, threadId: thread.id, turnId: 'decision-turn', callId: 'call' })
+    await vi.waitFor(() => expect(events.some((event) => event.kind === 'user_input_requested')).toBe(true))
+    const event = events.find((event) => event.kind === 'user_input_requested')!
+    if (event.kind !== 'user_input_requested') throw new Error('missing question')
+    await vi.waitFor(() => expect(events.some((event) => event.kind === 'item_snapshot')).toBe(true))
+    const ref = { runtimeId, threadId: thread.id }
+    // A renderer reload/switch reads the canonical history before answering.
+    expect((await host.readThreadPage(ref)).turns[0].items).toEqual([
+      expect.objectContaining({ kind: 'user_input', status: 'running', id: event.requestId })
+    ])
+    await expect(host.resolveUserInput({ ...ref, requestId: event.requestId, answers: [] })).rejects.toThrow()
+    expect(events.some((event) => event.kind === 'user_input_resolved')).toBe(false)
+    await host.resolveUserInput({ runtimeId, threadId: thread.id, requestId: event.requestId,
+      answers: [{ id: 'q', label: 'Answer', value: 'Use the validated dataset' }] })
+    await expect(result).resolves.toMatchObject({ status: 'submitted', answers: [{ value: 'Use the validated dataset' }] })
+    expect(events.at(-1)).toMatchObject({ kind: 'item_snapshot', item: { meta: { userInputStatus: 'submitted' } } })
+    expect((await host.readThreadPage(ref)).turns[0].items).toEqual([
+      expect.objectContaining({ kind: 'user_input', status: 'success', meta: expect.objectContaining({ userInputStatus: 'submitted' }) })
+    ])
+    const cancelled = host.requestUserInput({ questions: [{ id: 'q', header: '', question: 'Choose again?', options: [] }] },
+      { requestId: 'second-call', runtimeId, threadId: thread.id, turnId: 'decision-turn', callId: 'call-2' })
+    await vi.waitFor(() => expect(events.filter((event) => event.kind === 'user_input_requested')).toHaveLength(2))
+    const second = events.filter((event) => event.kind === 'user_input_requested').at(-1)!
+    if (second.kind !== 'user_input_requested') throw new Error('missing question')
+    await host.auxiliary({ runtimeId, operation: 'cancelUserInput', payload: { threadId: thread.id, requestId: second.requestId } })
+    await expect(cancelled).resolves.toEqual({ status: 'cancelled', answers: [] })
+
+  } finally { host.dispose() }
 })

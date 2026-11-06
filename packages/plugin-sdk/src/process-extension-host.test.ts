@@ -334,7 +334,7 @@ export function apply(ctx) {
     })
     assert.deepEqual(authorized, {
       packageName: 'example', version: '1.0.0', generation: state.generation,
-      capabilityId: 'example.consumer.execute', effect: 'workspace-write',
+      capabilityId: 'example.consumer.execute', effect: 'workspace-write', lane: 'ordinary-session',
       caller: { callerId: 'caller-original' },
       ordinarySession: { runtimeId: 'runtime-original', threadId: 'thread-original', sessionId: 'session-original' },
       context: { marker: 'context-original', runtimeId: 'raw-context-runtime', nested: [{ marker: 'nested-original' }] },
@@ -565,7 +565,7 @@ test('Host ports bridge binds connection identity and round-trips structured res
       }
     })
     const runtime = host.runtime('fixture')!
-    const okResult = await runtime.invoke('fixture.ports', { operation: 'artifacts.read', input: { a: 1 }, workspaceRoot: '/ws/one' }) as { output: Record<string, unknown> }
+    const okResult = await runtime.invoke('fixture.ports', { operation: 'artifacts.read', input: { a: 1 }, workspaceRoot: '/ws/one' }, undefined, undefined, undefined, undefined, { authority: { caller: { workspaceId: '/ws/one' } }, services: [] }) as { output: Record<string, unknown> }
     assert.equal(okResult.output.ok, true)
     assert.deepEqual(okResult.output.value, { operation: 'artifacts.read', workspaceBound: '/ws/one', identity: { pluginId: 'fixture', version: '2.3.4' } })
     assert.equal(seen.length, 1)
@@ -573,13 +573,11 @@ test('Host ports bridge binds connection identity and round-trips structured res
     assert.deepEqual(seen[0].request.identity, { pluginId: 'fixture', version: '2.3.4' })
     assert.equal(seen[0].boundWorkspace, '/ws/one')
     assert.equal(seen[0].request.input && (seen[0].request.input as { a: number }).a, 1)
-    const errorResult = await runtime.invoke('fixture.ports', { operation: 'boom', input: {}, workspaceRoot: '/ws/one' }) as { output: Record<string, unknown> }
+    const errorResult = await runtime.invoke('fixture.ports', { operation: 'boom', input: {}, workspaceRoot: '/ws/one' }, undefined, undefined, undefined, undefined, { authority: { caller: { workspaceId: '/ws/one' } }, services: [] }) as { output: Record<string, unknown> }
     assert.deepEqual(errorResult.output, { ok: false, code: 'execution_failed', message: 'structured boom' })
-    // Without an in-flight workspace binding the runner omits boundWorkspace.
-    const unboundResult = await runtime.invoke('fixture.ports', { operation: 'artifacts.read', input: {} }) as { output: Record<string, unknown> }
-    assert.equal(unboundResult.output.ok, true)
-    assert.equal(seen.length, 3)
-    assert.equal(seen[2].boundWorkspace, undefined)
+    // A workspace-scoped named provider cannot use an unbound fallback lane.
+    await assert.rejects(runtime.invoke('fixture.ports', { operation: 'artifacts.read', input: {} }), /requires a workspace-scoped caller/)
+    assert.equal(seen.length, 2)
     await host.dispose('fixture')
   } finally {
     await host.disposeAll().catch(() => undefined)
@@ -595,11 +593,158 @@ test('Host ports bridge fails closed when no handler is configured', async () =>
     await writeFile(entryPath, portsModuleSource)
     await host.replace({ pluginId: 'fixture', packageName: 'fixture', version: '1.0.0', entryPath })
     const runtime = host.runtime('fixture')!
-    const result = await runtime.invoke('fixture.ports', { operation: 'artifacts.read', input: {}, workspaceRoot: '/ws/one' }) as { output: Record<string, unknown> }
+    const result = await runtime.invoke('fixture.ports', { operation: 'artifacts.read', input: {}, workspaceRoot: '/ws/one' }, undefined, undefined, undefined, undefined, { authority: { caller: { workspaceId: '/ws/one' } }, services: [] }) as { output: Record<string, unknown> }
     assert.deepEqual(result.output, { ok: false, code: 'ports_unavailable', message: 'Host ports bridge is not available for this extension.' })
     await host.dispose('fixture')
   } finally {
     await host.disposeAll().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('the Host-bound workspace lane is authorized without inventing a Session, and denial starts no effect', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-process-workspace-authorization-'))
+  const seen: DshToolAuthorizationRequest[] = []
+  let deny = false
+  const host = new ProcessExtensionHost({
+    resolveDshToolGrants: () => ({ note: { id: 'example.note', effect: 'workspace-write', scope: 'workspace' } }),
+    authorizeDshTool: (request) => {
+      seen.push(request)
+      if (deny) throw new Error('workspace access denied by the Host')
+    },
+  })
+  try {
+    const entryPath = join(directory, 'note.mjs')
+    await writeFile(entryPath, `
+import { defineTool } from '@deepseek-ai/dsh-tools'
+export const inject = ['tools']
+export function apply(ctx) {
+  ctx.tools.register(defineTool({ name: 'note', description: 'note',
+    parameters: { workspaceRoot: { type: 'string' }, text: { type: 'string' } },
+    output: { schema: { type: 'object', properties: { workspaceRoot: { type: 'string' } }, additionalProperties: false }, render: () => [] },
+    execute: async (args) => ({ workspaceRoot: args.workspaceRoot }) }))
+}
+`)
+    const spawn = t.mock.method(ChildProcess.prototype as ChildProcess & { spawn: (...args: unknown[]) => unknown }, 'spawn')
+    const state = await host.replace({ pluginId: 'note', packageName: 'example-note', version: '1.0.0', entryPath })
+    const child = spawn.mock.calls[0].this as ChildProcess
+    const send = t.mock.method(child, 'send')
+    const runtime = host.runtime('example-note')!
+
+    const caller = { authority: { caller: { workspaceId: '/ws/one' } }, services: [] }
+    await assert.rejects(runtime.invoke('example.note', { workspaceRoot: '/ws/one', __sciforgeHostWorkspace: 'host' }, state.generation), /requires a workspace-scoped caller/)
+    await assert.rejects(runtime.invoke('example.note', { workspaceRoot: '/ws/foreign' }, state.generation, undefined, undefined, undefined, caller), /rejects a workspaceRoot/)
+    assert.equal(send.mock.callCount(), 0)
+    assert.equal(seen.length, 0)
+    const result = await runtime.invoke('example.note', { text: 'hello' }, state.generation, undefined, undefined, undefined, caller)
+    assert.deepEqual(result, { output: { workspaceRoot: '/ws/one' } })
+    assert.equal(send.mock.callCount(), 1)
+    assert.deepEqual(seen.map((request) => request.lane), ['workspace'])
+
+    deny = true
+    await assert.rejects(
+      runtime.invoke('example.note', { workspaceRoot: '/ws/one', text: 'denied' }, state.generation, undefined, undefined, undefined, caller),
+      (error: unknown) => error instanceof ProcessExtensionHostError && /workspace access denied/u.test(error.message)
+    )
+    // Authorization failed before dispatch: the child never saw a second call.
+    assert.equal(send.mock.callCount(), 1)
+  } finally {
+    t.mock.restoreAll()
+    await host.disposeAll()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('an authorization that resolves after a hot replace does not dispatch to the retired runtime', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-process-workspace-replaced-'))
+  let release!: () => void
+  let started!: () => void
+  const authorizationStarted = new Promise<void>((resolve) => { started = resolve })
+  const authorizationRelease = new Promise<void>((resolve) => { release = resolve })
+  const host = new ProcessExtensionHost({
+    resolveDshToolGrants: () => ({ note: { id: 'example.note', effect: 'workspace-write', scope: 'workspace' } }),
+    authorizeDshTool: async () => {
+      started()
+      await authorizationRelease
+    },
+  })
+  try {
+    const entryPath = join(directory, 'note.mjs')
+    await writeFile(entryPath, `
+import { defineTool } from '@deepseek-ai/dsh-tools'
+export const inject = ['tools']
+export function apply(ctx) {
+  ctx.tools.register(defineTool({ name: 'note', description: 'note',
+    parameters: { workspaceRoot: { type: 'string' } },
+    output: { schema: { type: 'object', additionalProperties: false }, render: () => [] },
+    execute: async () => ({}) }))
+}
+`)
+    const spawn = t.mock.method(ChildProcess.prototype as ChildProcess & { spawn: (...args: unknown[]) => unknown }, 'spawn')
+    const state = await host.replace({ pluginId: 'note', packageName: 'example-note', version: '1.0.0', entryPath })
+    const first = spawn.mock.calls[0].this as ChildProcess
+    const send = t.mock.method(first, 'send')
+    const runtime = host.runtime('example-note')!
+    const pending = runtime.invoke('example.note', {}, state.generation, undefined, undefined, undefined, { authority: { caller: { workspaceId: '/ws/one' } }, services: [] })
+    await authorizationStarted
+    // A hot replace commits a new runtime while this one is still active.
+    const replaced = await host.replace({ pluginId: 'note', packageName: 'example-note', version: '1.0.0', entryPath })
+    assert.notEqual(replaced.generation, state.generation)
+    release()
+    await assert.rejects(pending, (error: unknown) => error instanceof ProcessExtensionHostError && error.code === 'stale_generation')
+    const invokes = send.mock.calls.filter((call) =>
+      (call.arguments[0] as { payload?: { command?: string } } | undefined)?.payload?.command === 'invoke')
+    assert.equal(invokes.length, 0)
+  } finally {
+    t.mock.restoreAll()
+    await host.disposeAll()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('an authorization that resolves after the runtime changed does not dispatch', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-process-workspace-stale-'))
+  let release!: () => void
+  let started!: () => void
+  const authorizationStarted = new Promise<void>((resolve) => { started = resolve })
+  const authorizationRelease = new Promise<void>((resolve) => { release = resolve })
+  const host = new ProcessExtensionHost({
+    resolveDshToolGrants: () => ({ note: { id: 'example.note', effect: 'workspace-write', scope: 'workspace' } }),
+    authorizeDshTool: async () => {
+      started()
+      await authorizationRelease
+    },
+  })
+  try {
+    const entryPath = join(directory, 'note.mjs')
+    await writeFile(entryPath, `
+import { defineTool } from '@deepseek-ai/dsh-tools'
+export const inject = ['tools']
+export function apply(ctx) {
+  ctx.tools.register(defineTool({ name: 'note', description: 'note',
+    parameters: { workspaceRoot: { type: 'string' } },
+    output: { schema: { type: 'object', additionalProperties: false }, render: () => [] },
+    execute: async () => ({}) }))
+}
+`)
+    const spawn = t.mock.method(ChildProcess.prototype as ChildProcess & { spawn: (...args: unknown[]) => unknown }, 'spawn')
+    const state = await host.replace({ pluginId: 'note', packageName: 'example-note', version: '1.0.0', entryPath })
+    const child = spawn.mock.calls[0].this as ChildProcess
+    const send = t.mock.method(child, 'send')
+    const runtime = host.runtime('example-note')!
+    const pending = runtime.invoke('example.note', {}, state.generation, undefined, undefined, undefined, { authority: { caller: { workspaceId: '/ws/one' } }, services: [] })
+    await authorizationStarted
+    // The runtime goes away while the Host is still authorizing.
+    await host.dispose('example-note')
+    release()
+    await assert.rejects(pending, (error: unknown) => error instanceof ProcessExtensionHostError && error.code === 'stale_generation')
+    // Disposal itself talks to the child; what must never appear is an invoke.
+    const invokes = send.mock.calls.filter((call) =>
+      (call.arguments[0] as { payload?: { command?: string } } | undefined)?.payload?.command === 'invoke')
+    assert.equal(invokes.length, 0)
+  } finally {
+    t.mock.restoreAll()
+    await host.disposeAll()
     await rm(directory, { recursive: true, force: true })
   }
 })

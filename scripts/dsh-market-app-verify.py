@@ -8,10 +8,13 @@ broker.
 
 Phases (run in order against one isolated app instance):
 
-  install   list → refuse an over-granting approval list → install each published
-            plugin → progress → extensions list → call each capability with two
-            different inputs → a boundary input must be refused → disable (the
-            capability must stop working) → re-enable (it must work again)
+  install   list → refuse an over-granting approval list → install each indexed
+            plugin → progress → extensions list → call with reviewed fixture inputs
+            and verify the declared result; multiple inputs must differ and an
+            optional boundary case must be refused → disable (the capability must
+            stop working) → re-enable (the original result must be restored)
+            The default fixture uses one empty input for the neutral self-test;
+            --fixtures supplies separately reviewed inputs for another catalogue.
   restart   call each capability again after a real app restart (proves the
             installation survived and stays usable) → uninstall → the capability
             must be gone
@@ -34,11 +37,16 @@ from pathlib import Path
 BRIDGE = 'http://127.0.0.1:5174/invoke'
 RENDERER_ORIGIN = 'http://127.0.0.1:5173'
 CLIENT = 'dsh-market-verifier'
-FIXTURES = json.loads((Path(__file__).resolve().parent / 'dsh-market-app-fixtures.json').read_text(encoding='utf-8'))
+FIXTURES = {}
 
 
 class Refused(Exception):
-    """The call was refused — expected for calls that must fail."""
+    """A structured application refusal; transport failures stay distinct."""
+
+    def __init__(self, message, *, code=None, category=None):
+        super().__init__(message)
+        self.code = code
+        self.category = category
 
 
 def invoke(channel, payload, instance):
@@ -57,7 +65,15 @@ def invoke(channel, payload, instance):
         with urllib.request.urlopen(request, timeout=600) as response:
             envelope = json.loads(response.read())
     except urllib.error.HTTPError as error:
-        raise Refused(f'{channel}: HTTP {error.code} {error.read()[:300]!r}') from error
+        body = json.loads(error.read())
+        if (channel == 'capability:invoke' and error.code == 403 and body == {
+                'ok': False, 'message': 'Dev browser capability transport could not resolve the requested capability.'}):
+            action_id = payload['request']['actionId']
+            raise Refused(f'Capability {action_id} is not registered.',
+                          code='unknown_capability', category='rejected') from error
+        if error.code == 500 and body.get('ok') is False and isinstance(body.get('message'), str):
+            raise Refused(f'{channel}: {body["message"]}') from error
+        raise RuntimeError(f'{channel}: HTTP {error.code} {body!r}') from error
     if not envelope.get('ok'):
         raise Refused(f'{channel}: {envelope.get("message")}')
     return envelope.get('payload')
@@ -83,7 +99,7 @@ def call_capability(capability_id, payload, instance):
     }, instance)
     if not envelope.get('ok'):
         error = envelope.get('error') or {}
-        raise Refused(f"{error.get('code')}: {error.get('message')}")
+        raise Refused(error.get('message'), code=error.get('code'), category=error.get('category'))
     return envelope['payload']
 
 
@@ -124,9 +140,15 @@ class Runner:
                 invoke('market:install', {
                     'packageName': plugin['name'],
                     'approvedToolNames': [*tool_names, 'extra.tool'],
+                    'approvalSnapshot': plugin['approvalSnapshot'],
+                    'approvedPorts': plugin['ports'],
                 }, self.instance)
-            except Refused:
-                pass
+            except Refused as error:
+                approved = ', '.join(sorted(set([*tool_names, 'extra.tool'])))
+                declared = ', '.join(sorted(tool_names))
+                expected = f'market:install: Approving {approved} does not match what {plugin["name"]} declares ({declared}).'
+                if str(error) != expected:
+                    raise SystemExit(f'授权列表被非预期原因拒绝: {error}') from error
             else:
                 all_refused = False
                 raise SystemExit(f'{plugin["name"]}: 应用接受了与声明不符的授权列表')
@@ -141,6 +163,8 @@ class Runner:
             result = invoke('market:install', {
                 'packageName': plugin['name'],
                 'approvedToolNames': tool_names,
+                'approvalSnapshot': plugin['approvalSnapshot'],
+                'approvedPorts': plugin['ports'],
             }, self.instance)
             self.step('应用内市场安装并启用', result)
 
@@ -174,30 +198,33 @@ class Runner:
         if fixture is None:
             raise SystemExit(f'缺少 {tool["id"]} 的调用夹具，无法验证真实使用')
 
+        if not fixture.get('ok'):
+            raise SystemExit(f'{tool["id"]}: 调用夹具必须至少包含一组输入')
         outputs = []
         for payload in fixture['ok']:
             output = call_capability(tool['id'], payload, self.instance)['output']
             if not output.get('ok'):
                 raise SystemExit(f'{tool["id"]}: 调用失败 {json.dumps(output, ensure_ascii=False)[:200]}')
-            outputs.append(output['result'])
-        if json.dumps(outputs[0], sort_keys=True) == json.dumps(outputs[1], sort_keys=True):
+            outputs.append(output.get('result', output))
+        if len(outputs) > 1 and json.dumps(outputs[0], sort_keys=True) == json.dumps(outputs[1], sort_keys=True):
             raise SystemExit(f'{tool["id"]}: 两组输入得到完全相同的输出，说明输出没有跟着输入走')
         for key, value in (fixture.get('expect') or {}).items():
             if outputs[0].get(key) != value:
                 raise SystemExit(f'{tool["id"]}: {key} 期望 {value}，实际 {outputs[0].get(key)}')
-        self.step('真实调用跟随输入变化', {
+        self.step('真实调用符合输入契约', {
             'capabilityId': tool['id'],
             'inputs': [json.dumps(item, ensure_ascii=False) for item in fixture['ok']],
             'outputs': [json.dumps(item, ensure_ascii=False)[:200] for item in outputs],
         })
 
-        output = call_capability(tool['id'], expand(fixture['boundary']), self.instance)['output']
-        if output.get('ok') is not False:
-            raise SystemExit(f'{tool["id"]}: 边界输入被接受：{json.dumps(output, ensure_ascii=False)[:200]}')
-        code = (output.get('error') or {}).get('code')
-        if code != fixture.get('boundaryCode'):
-            raise SystemExit(f'{tool["id"]}: 边界拒绝码期望 {fixture.get("boundaryCode")}，实际 {code}')
-        self.step('边界输入被明确拒绝', {'capabilityId': tool['id'], 'error': output['error']})
+        if 'boundary' in fixture:
+            output = call_capability(tool['id'], expand(fixture['boundary']), self.instance)['output']
+            if output.get('ok') is not False:
+                raise SystemExit(f'{tool["id"]}: 边界输入被接受：{json.dumps(output, ensure_ascii=False)[:200]}')
+            code = (output.get('error') or {}).get('code')
+            if code != fixture.get('boundaryCode'):
+                raise SystemExit(f'{tool["id"]}: 边界拒绝码期望 {fixture.get("boundaryCode")}，实际 {code}')
+            self.step('边界输入被明确拒绝', {'capabilityId': tool['id'], 'error': output['error']})
 
         disabled = invoke('market:set-enabled', {'packageName': plugin['name'], 'enabled': False}, self.instance)
         if disabled['enabled'] is not False:
@@ -211,9 +238,11 @@ class Runner:
         again = call_capability(tool['id'], fixture['ok'][0], self.instance)['output']
         if not again.get('ok'):
             raise SystemExit(f'{plugin["name"]}: 重新启用后调用失败 {json.dumps(again, ensure_ascii=False)[:200]}')
+        if again.get('result', again) != outputs[0]:
+            raise SystemExit(f'{plugin["name"]}: 重新启用后结果与初次调用不符')
         self.step('重新启用后恢复可用', {
             'enabled': True,
-            'sameResultAsFirstRun': json.dumps(again['result'], sort_keys=True) == json.dumps(outputs[0], sort_keys=True),
+            'sameResultAsFirstRun': json.dumps(again.get('result', again), sort_keys=True) == json.dumps(outputs[0], sort_keys=True),
         })
 
     def refusal_text(self, capability_id, payload, message):
@@ -221,10 +250,11 @@ class Runner:
         try:
             result = call_capability(capability_id, payload, self.instance)
         except Refused as error:
-            return str(error)
-        if result['output'].get('ok') is not False:
-            raise SystemExit(message)
-        return json.dumps(result['output'], ensure_ascii=False)[:200]
+            if (error.code == 'unknown_capability' and error.category == 'rejected'
+                    and str(error) == f'Capability {capability_id} is not registered.'):
+                return str(error)
+            raise SystemExit(f'非预期拒绝: {error}') from error
+        raise SystemExit(f'{message}；预期宿主返回 unknown_capability，实际 {json.dumps(result, ensure_ascii=False)[:200]}')
 
     def restart_phase(self):
         plugins = invoke('market:list', {}, self.instance)['plugins']
@@ -242,9 +272,12 @@ class Runner:
             output = call_capability(tool['id'], fixture['ok'][0], self.instance)['output']
             if not output.get('ok'):
                 raise SystemExit(f'{plugin["name"]}: 重启后调用失败 {json.dumps(output, ensure_ascii=False)[:200]}')
+            for key, value in (fixture.get('expect') or {}).items():
+                if output.get('result', output).get(key) != value:
+                    raise SystemExit(f'{tool["id"]}: 重启后结果不符合契约 {key}')
             self.step('重启后仍已安装且可完成真实任务', {
                 'packageName': plugin['name'], 'installed': True, 'enabled': True,
-                'capabilityId': tool['id'], 'result': json.dumps(output['result'], ensure_ascii=False)[:200],
+                'capabilityId': tool['id'], 'result': json.dumps(output.get('result', output), ensure_ascii=False)[:200],
             })
 
         for plugin in plugins:
@@ -265,9 +298,12 @@ class Runner:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--instance', required=True)
+    parser.add_argument('--fixtures', type=Path, default=Path(__file__).resolve().parent / 'dsh-market-app-fixtures.json')
     parser.add_argument('--phase', choices=['install', 'restart'], default='install')
     options = parser.parse_args()
 
+    global FIXTURES
+    FIXTURES = json.loads(options.fixtures.read_text(encoding='utf-8'))
     runner = Runner(options.instance)
     if options.phase == 'install':
         runner.install_phase()

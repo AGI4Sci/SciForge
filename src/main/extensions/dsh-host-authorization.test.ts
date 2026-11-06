@@ -282,7 +282,9 @@ it('native unscoped candidates without engines or sidecars require exact host ve
   }
   await build(plugin, '1.0.0')
   await build(candidate, '2.0.0')
-  const service = new DevelopmentExternalPluginService({ root: plugins, userDataPath: join(root, 'data'),
+  const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: plugins, userDataPath: join(root, 'data'),
     hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
   try {
     await service.initialize()
@@ -308,7 +310,9 @@ it('native unscoped candidates without engines or sidecars require exact host ve
     expect((await service.applyCandidate(name)).version).toBe('2.0.0')
     await service.dispose()
     contracts.set(name, authorization('1.0.0'))
-    const restarted = new DevelopmentExternalPluginService({ root: plugins, userDataPath: join(root, 'data'),
+    const restarted = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: plugins, userDataPath: join(root, 'data'),
       hostApiVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
     try {
       await restarted.initialize()

@@ -53,6 +53,21 @@ export function createCodexPreToolUseHookDefinition(options: {
   const emergencyDenyWindowsJson = JSON.stringify(codexPreToolUseFailureClosedOutput(
     'SciForge hook launcher command failed before the supervisor returned a response.'
   ))
+  // Codex can run commandWindows through either cmd or the selected PowerShell.
+  // Keep the outer command free of shell syntax; encode the trusted launcher so
+  // paths, quotes and the deny fallback have identical semantics in both shells.
+  const windowsScript = [
+    "$ErrorActionPreference = 'Stop'",
+    'try {',
+    "$env:ELECTRON_RUN_AS_NODE = '1'",
+    // Capture stdout to make PowerShell wait for GUI-subsystem executables such
+    // as Electron too, and never mix a partial response with the deny fallback.
+    `$output = & ${powershellQuote(executable)} ${powershellQuote(entry)} | Out-String`,
+    'if ($LASTEXITCODE -eq 0) { [Console]::Out.WriteLine(($output -join [Environment]::NewLine)) }',
+    `else { [Console]::Out.WriteLine(${powershellQuote(emergencyDenyWindowsJson)}) }`,
+    `} catch { [Console]::Out.WriteLine(${powershellQuote(emergencyDenyWindowsJson)}) }`,
+    'exit 0'
+  ].join('\n')
   return {
     sourcePath: join(options.codexHome, 'hooks.json'),
     command: [
@@ -65,11 +80,7 @@ export function createCodexPreToolUseHookDefinition(options: {
       '||',
       `{ status=$?; printf ${shellQuote(`${emergencyDenyFormat}\n`)} "$status"; }`
     ].join(' '),
-    commandWindows: [
-      `(set "ELECTRON_RUN_AS_NODE=1"&& ${windowsQuote(executable)} ${windowsQuote(entry)})`,
-      '||',
-      `echo ${emergencyDenyWindowsJson}`
-    ].join(' ')
+    commandWindows: `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(windowsScript, 'utf16le').toString('base64')}`
   }
 }
 
@@ -153,9 +164,11 @@ export async function probeCodexPreToolUseHook(options: {
   const platform = options.platform ?? process.platform
   const result = await runBoundedProcess({
     command: platform === 'win32'
-      ? options.definition.commandWindows
+      ? 'powershell.exe'
       : options.definition.command,
-    args: [],
+    args: platform === 'win32'
+      ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', options.definition.commandWindows]
+      : [],
     input: JSON.stringify(input),
     cwd: options.cwd,
     env: {
@@ -163,7 +176,7 @@ export async function probeCodexPreToolUseHook(options: {
       ...options.env,
       [CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV]: options.storageRoot
     },
-    shell: true,
+    shell: platform !== 'win32',
     timeoutMs: options.timeoutMs ?? CODEX_PRE_TOOL_USE_PROBE_TIMEOUT_MS,
     spawnProcess: options.spawnProcess
   })
@@ -346,8 +359,8 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`
 }
 
-function windowsQuote(value: string): string {
-  return `"${value.replace(/"/gu, '""')}"`
+function powershellQuote(value: string): string {
+  return `'${value.replace(/'/gu, "''")}'`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

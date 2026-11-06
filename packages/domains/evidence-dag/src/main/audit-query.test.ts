@@ -18,8 +18,46 @@ import {
   EvidenceDeltaChain
 } from './evidence-delta.js'
 import { EvidenceFileStorage } from './secure-storage.js'
+import { OwnerAuditIndex } from './audit-index.js'
 
 const createdAt = '2026-09-01T00:00:00.000Z'
+
+test('owner revision cache sees material changes after 1100 events, isolates exact refs and invalidates replacement/removal', () => {
+  const chain = new EvidenceDeltaChain('codex:scale')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] } })
+  appendAuditRecord(chain, closure.closureDigest, 'scale-audit', { ref: pinnedRef })
+  const chains = new Map([['codex:scale', chain]]), index = new OwnerAuditIndex()
+  const subject = { artifactVersionRef: pinnedRef }
+  const initial = index.query(chains, subject, '/workspace')
+  assert.equal(initial.review.impacts[0].status, 'no-recorded-impact')
+  const warm = index.query(chains, subject, '/workspace')
+  assert.equal(warm.review.coverageDetails?.scannedDeltas, 0)
+  assert.equal(warm.review.coverageDetails?.indexRevision, initial.review.coverageDetails?.indexRevision)
+  for (let n = 0; n < 1101; n++) chain.append({ scope: { runtimeId: 'codex', threadId: 'codex:scale', workspaceRoot: '/workspace', operationId: `scale-${n}`, kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: `scale-event-${n}`, payload: n === 1100 ? { targetRecordId: 'paper', relation: 'corrects', reason: 'later material correction' } : {} })
+  const changed = index.query(chains, subject, '/workspace')
+  assert.equal(changed.review.impacts[0].status, 'requires-review')
+  assert.equal(changed.review.impacts[0].changes[0].reason, 'later material correction')
+  assert.ok(changed.review.coverageDetails!.indexRevision > initial.review.coverageDetails!.indexRevision)
+  assert.equal(changed.review.coverageDetails?.indexedDeltas, 1102)
+  assert.equal(index.query(chains, subject, '/other-workspace').evaluation.records.length, 0)
+  for (const ref of [{ ...pinnedRef, artifactId: 'artifact:other' }, { ...pinnedRef, contentDigest: 'd'.repeat(64) }]) assert.equal(index.query(chains, { artifactVersionRef: ref }, '/workspace').evaluation.records.length, 0)
+  chains.set('codex:scale', new EvidenceDeltaChain('codex:scale'))
+  assert.equal(index.query(chains, subject).evaluation.records.length, 0)
+  chains.set('codex:scale', chain)
+  assert.equal(index.query(chains, subject).evaluation.records.length, 1)
+  chains.clear()
+  assert.equal(index.query(chains, subject).evaluation.records.length, 0)
+})
+
+test('bounded scientific graph traversal cannot produce a green impact result', () => {
+  const chain = new EvidenceDeltaChain('codex:bounded')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }], huge: Array.from({ length: 10001 }, () => ({ value: 'x' })) } })
+  appendAuditRecord(chain, closure.closureDigest, 'bounded-audit', { ref: pinnedRef })
+  const result = new OwnerAuditIndex().query(new Map([['codex:bounded', chain]]), { artifactVersionRef: pinnedRef })
+  assert.equal(result.review.bounded, true)
+  assert.equal(result.review.impacts[0].status, 'unknown')
+  assert.ok(result.review.coverageDetails!.reasons.length)
+})
 
 const pinnedRef: ArtifactVersionRefV1 = {
   artifactId: 'artifact:test',
@@ -155,7 +193,7 @@ test('by artifactVersionRef returns membership- and payload-referencing sidechai
     chain: chainC,
     requiredExternalRefs: [pinnedRef.versionId]
   })
-  const viaPolicy = appendAuditRecord(chainC, closureC.closureDigest, 'record-policy')
+  appendAuditRecord(chainC, closureC.closureDigest, 'record-policy')
   // Chain B: unrelated content must stay out.
   const chainB = new EvidenceDeltaChain('codex:thread-b')
   const { closure: closureB } = sealChainHead({ chain: chainB })
@@ -187,7 +225,7 @@ test('by artifactVersionRef returns membership- and payload-referencing sidechai
 
   assert.deepEqual(
     [...result.records.map((record) => record.recordId)].sort(),
-    ['record-membership', 'record-payload', 'record-policy']
+    ['record-membership', 'record-payload']
   )
   assert.equal(result.freshness, 'pending')
   assert.equal(result.complete, false)
@@ -282,13 +320,15 @@ test('auditQuery invokes no write path', async (t) => {
 
   const writeText = t.mock.method(EvidenceFileStorage.prototype, 'writeText', () => undefined)
   try {
-    const chains = await store.auditChains()
-    const byClosure = evaluate(chains, { closureDigest: closure.closureDigest })
+    const byClosure = (await store.queryAudit({ closureDigest: closure.closureDigest })).evaluation
     assert.deepEqual(byClosure.records.map((record) => record.recordId), ['record-readonly'])
-    const byThread = evaluate(chains, { threadId: 'codex:thread-a' })
+    const byThread = (await store.queryAudit({ threadId: 'codex:thread-a' })).evaluation
     assert.equal(byThread.records.length, 1)
-    const byRef = evaluate(chains, { artifactVersionRef: pinnedRef })
+    const byRef = (await store.queryAudit({ artifactVersionRef: pinnedRef })).evaluation
     assert.equal(byRef.records.length, 1)
+    const reloaded = await new EvidenceDagDeltaStore(join(userDataDir, 'deltas.json')).queryAudit({ artifactVersionRef: pinnedRef })
+    assert.equal(reloaded.evaluation.records.length, 1)
+    assert.equal(reloaded.review.coverageDetails?.indexedChains, 1)
     assert.equal(writeText.mock.callCount(), 0)
   } finally {
     t.mock.restoreAll()
@@ -323,10 +363,8 @@ test('unknown subjects return empty records with explicit completeness gaps', ()
   assert.deepEqual(unknownRef.gapCodes, ['source_unavailable:checkpoint'])
 })
 
-test('the cross-thread scan is bounded and reports scan_bounded when truncated', () => {
-  // Budget: one unit per closure, member delta, and sidechain examined. The
-  // first chain consumes the whole budget on member-delta payloads, so the
-  // referencing sidechain in the second chain is never examined.
+test('exact index skips unrelated history without hiding later referencing records', () => {
+  // Unrelated historical deltas are indexed once and consume no result budget.
   const filler = new EvidenceDeltaChain('codex:thread-filler')
   const fillerDeltas: string[] = []
   for (let index = 0; index < EVIDENCE_DAG_AUDIT_SCAN_LIMIT - 3; index += 1) {
@@ -386,10 +424,222 @@ test('the cross-thread scan is bounded and reports scan_bounded when truncated',
 
   const result = evaluate([filler, holder], { artifactVersionRef: pinnedRef })
 
-  // closure(filler) + filler member deltas + filler sidechain exhaust the
-  // budget before the holder chain's records are examined.
-  assert.deepEqual(result.records, [])
-  assert.equal(result.freshness, 'unknown')
+  // The owner sees the later holder even beyond the old scan limit.
+  assert.deepEqual(result.records.map(record => record.recordId), ['record-holder-referenced'])
+  assert.equal(result.freshness, 'pending')
   assert.equal(result.complete, false)
-  assert.deepEqual(result.gapCodes, ['source_unavailable:checkpoint', 'scan_bounded'])
+  assert.deepEqual(result.gapCodes, ['source_unavailable:checkpoint'])
+})
+
+test('warm production owner indexes only a one-delta suffix and keeps unrelated chain cached', t => {
+  const chain = new EvidenceDeltaChain('codex:suffix'), other = new EvidenceDeltaChain('codex:other')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] } })
+  appendAuditRecord(chain, closure.closureDigest, 'suffix-record', { ref: pinnedRef })
+  sealChainHead({ chain: other })
+  const append = (n: number, target = chain) => target.append({ scope: { runtimeId: 'codex', threadId: target.head.threadId, workspaceRoot: '/workspace', operationId: `suffix-${n}`, kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: `suffix-event-${n}`, payload: {} })
+  for (let n = 0; n < 1100; n++) append(n)
+  const index = new OwnerAuditIndex(), chains = new Map([[chain.head.threadId, chain], [other.head.threadId, other]])
+  const subject = { threadId: chain.head.threadId }
+  index.query(chains, subject)
+  const suffix = t.mock.method(chain, 'auditSuffix'), otherSuffix = t.mock.method(other, 'auditSuffix')
+  append(1101)
+  t.mock.method(chain, 'list', () => { throw new Error('query copied history') })
+  t.mock.method(chain, 'closures', () => { throw new Error('query copied closures') })
+  t.mock.method(chain, 'sidechainRecords', () => { throw new Error('query copied records') })
+  const changed = index.query(chains, subject)
+  assert.equal(changed.review.coverageDetails?.scannedDeltas, 1)
+  assert.equal(changed.review.coverageDetails?.extractionNodes, 1)
+  assert.equal(suffix.mock.callCount(), 1)
+  assert.equal(otherSuffix.mock.callCount(), 0)
+  assert.equal(suffix.mock.calls[0].arguments[0].deltas, 1101)
+  const read = chain.auditSuffix({ deltas: 0, closures: 0, records: 0 }, 1).deltas[0]
+  assert.throws(() => { (read.payload as Record<string, unknown>).injected = true }, TypeError)
+  append(5000, other)
+  const cached = index.query(chains, subject)
+  assert.equal(cached.review.coverageDetails?.queryNodes, 0)
+  assert.equal(cached.evaluation.records.length, 1)
+})
+
+test('bootstrap advances in bounded suffixes and incomplete identity extraction cannot claim absence', () => {
+  const chain = new EvidenceDeltaChain('codex:bootstrap')
+  for (let n = 0; n < 2200; n++) chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: `boot-${n}`, kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: `bootstrap-${n}`, payload: {} })
+  const index = new OwnerAuditIndex(), chains = new Map([[chain.head.threadId, chain]])
+  const first = index.query(chains, { artifactVersionRef: pinnedRef })
+  assert.equal(first.review.coverageDetails?.scannedDeltas, 2048)
+  assert.equal(first.review.coverageDetails?.indexedDeltas, 2048)
+  assert.equal(first.review.coverageDetails?.totalRelevantDeltas, 2200)
+  assert.ok(first.review.coverageDetails?.reasons.includes('index-bootstrap-incomplete'))
+  assert.ok(first.evaluation.gapCodes.includes('scan_bounded'))
+  const second = index.query(chains, { threadId: chain.head.threadId })
+  assert.equal(second.review.coverageDetails?.scannedDeltas, 152)
+  assert.equal(second.review.coverageDetails?.indexedDeltas, 2200)
+  const hidden = new EvidenceDeltaChain('codex:hidden')
+  sealChainHead({ chain: hidden, payload: { huge: Array.from({ length: 10001 }, () => 0), hidden: { ref: pinnedRef } } })
+  const result = new OwnerAuditIndex().query(new Map([[hidden.head.threadId, hidden]]), { artifactVersionRef: pinnedRef })
+  assert.ok(result.evaluation.gapCodes.includes('scan_bounded'))
+  assert.equal(result.review.bounded, true)
+})
+
+test('scientific graph uses one total query budget across many records', () => {
+  const chain = new EvidenceDeltaChain('codex:shared-budget')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1', controls: ['comparison'] }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }], assessments: Array.from({ length: 150 }, () => ({ id: 'unrelated' })) } })
+  for (let n = 0; n < 90; n++) appendAuditRecord(chain, closure.closureDigest, `budget-record-${n}`, { ref: pinnedRef })
+  const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { artifactVersionRef: pinnedRef })
+  assert.equal(result.review.coverageDetails?.queryNodes, 10000)
+  assert.equal(result.review.bounded, true)
+  assert.ok(result.review.coverageDetails!.omittedRecords > 0)
+  assert.ok(result.review.impacts.every(impact => impact.status !== 'no-recorded-impact'))
+})
+
+test('lifecycle source aliases require exact artifact/version/digest and ambiguous events remain unknown', () => {
+  for (const event of [
+    { artifactId: 'artifact:other', contentDigest: pinnedRef.contentDigest, expected: 'no-recorded-impact' },
+    { artifactId: pinnedRef.artifactId, contentDigest: 'd'.repeat(64), expected: 'no-recorded-impact' },
+    { artifactId: pinnedRef.artifactId, contentDigest: pinnedRef.contentDigest, expected: 'requires-review' },
+    { artifactId: pinnedRef.artifactId, expected: 'unknown' },
+    { expected: 'unknown' }
+  ]) {
+    const chain = new EvidenceDeltaChain('codex:lifecycle')
+    const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] } })
+    appendAuditRecord(chain, closure.closureDigest, 'lifecycle-record', { ref: pinnedRef })
+    const { expected, ...identity } = event
+    chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: 'lifecycle', kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: 'lifecycle-event', payload: { eventId: 'evt:1', type: 'availability-changed', versionId: pinnedRef.versionId, ...identity } })
+    const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { artifactVersionRef: pinnedRef })
+    assert.equal(result.review.impacts[0].status, expected)
+  }
+})
+
+test('conflicting full-ref metadata produces an explicit identity gap and unknown impact', () => {
+  const chain = new EvidenceDeltaChain('codex:metadata')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] } })
+  appendAuditRecord(chain, closure.closureDigest, 'metadata-record', { ref: pinnedRef })
+  const index = new OwnerAuditIndex(), chains = new Map([[chain.head.threadId, chain]])
+  for (const ref of [{ ...pinnedRef, byteLength: 10 }, { ...pinnedRef, accessPolicy: { ...pinnedRef.accessPolicy, allowExport: true } }]) {
+    const result = index.query(chains, { artifactVersionRef: ref })
+    assert.ok(result.evaluation.gapCodes.includes('identity_metadata_conflict'))
+    assert.equal(result.review.impacts[0].status, 'unknown')
+  }
+})
+
+test('unknown-root legacy records and cross-workspace records never leak to scoped queries', () => {
+  const legacy = new EvidenceDeltaChain('codex:legacy-scope')
+  const snapshot = { threadId: legacy.head.threadId, version: 1, digest: `sha256:${'d'.repeat(64)}`, inputWatermark: '1', schemaVersion: 'evidence.v3', extractorVersion: 'extractor.v3', verifierVersion: 'verifier.v3', artifactDigests: [], createdAt }
+  legacy.importLegacyRoot({ snapshot, snapshotBytes: Buffer.from(JSON.stringify(snapshot)), ancestry: 'proven' })
+  const closure = legacy.seal(evidenceDagClosurePolicyV1Schema.parse({ version: 'EvidenceClosurePolicyV1', targetClaimIds: ['claim:legacy'], expectedHeadDigest: legacy.head.headDigest, barrierWatermark: '1', edgeFamilies: [], directions: ['inbound'], maxDepth: 0, termination: 'depth', expandEquivalent: false, expandRefinement: false, cycleHandling: 'allow', unknownEdgeHandling: 'ignore', requiredRecords: [], requiredExternalRefs: [] }))
+  appendAuditRecord(legacy, closure.closureDigest, 'private-legacy', { ref: pinnedRef })
+  assert.equal(evaluate([legacy], { threadId: legacy.head.threadId }, '/workspace').records.length, 0)
+  assert.equal(new OwnerAuditIndex().query(new Map([[legacy.head.threadId, legacy]]), { artifactVersionRef: pinnedRef }, '/workspace').evaluation.records.length, 0)
+  const chain = new EvidenceDeltaChain('codex:foreign')
+  const { closure: scoped } = sealChainHead({ chain })
+  appendAuditRecord(chain, scoped.closureDigest, 'foreign-record', { ref: pinnedRef })
+  assert.equal(evaluate([chain], { artifactVersionRef: pinnedRef }, '/foreign').records.length, 0)
+})
+
+test('canonical store query uses suffix append and discards a failed persisted append', async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'audit-store-suffix-')))
+  const store = new EvidenceDagDeltaStore(join(directory, 'deltas.json'))
+  const input = { scope: { runtimeId: 'codex', threadId: 'codex:store-suffix', operationId: 'store-1', workspaceRoot: directory, kind: 'turn' as const }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: 'store-suffix-1', payload: {} }
+  await store.append(input)
+  const subject = { threadId: input.scope.threadId }
+  await store.queryAudit(subject, directory)
+  await store.append({ ...input, idempotencyKey: 'store-suffix-2' })
+  const added = await store.queryAudit(subject, directory)
+  assert.equal(added.review.coverageDetails?.scannedDeltas, 1)
+  assert.equal(added.review.coverageDetails?.indexedDeltas, 2)
+  const write = t.mock.method(EvidenceFileStorage.prototype, 'writeText', () => { throw new Error('persist interrupted') })
+  await assert.rejects(store.append({ ...input, idempotencyKey: 'store-suffix-3' }), /persist interrupted/)
+  write.mock.restore()
+  const rolledBack = await store.queryAudit(subject, directory)
+  assert.equal(rolledBack.review.coverageDetails?.indexedDeltas, 2)
+  assert.equal(rolledBack.review.coverageDetails?.scannedDeltas, 2)
+  assert.equal((await new EvidenceDagDeltaStore(join(directory, 'deltas.json')).queryAudit(subject, directory)).review.coverageDetails?.indexedDeltas, 2)
+})
+
+test('deep extraction and large record projections stay bounded without a false complete result', () => {
+  const chain = new EvidenceDeltaChain('codex:deep')
+  let deep: unknown = { ref: pinnedRef }
+  for (let depth = 0; depth < 90; depth++) deep = { nested: deep }
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], deep } })
+  appendAuditRecord(chain, closure.closureDigest, 'large-record', { ref: pinnedRef, huge: 'x'.repeat(700000) })
+  const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { threadId: chain.head.threadId })
+  assert.equal(result.evaluation.records.length, 0)
+  assert.equal(result.evaluation.complete, false)
+  assert.ok(result.evaluation.gapCodes.includes('scan_bounded'))
+  assert.equal(result.review.bounded, true)
+})
+
+test('missing exact material identity and absent relation stay unknown', () => {
+  for (const payload of [
+    { claims: [{ id: 'claim:1' }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] },
+    { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }] }
+  ]) {
+    const chain = new EvidenceDeltaChain('codex:unknown')
+    const { closure } = sealChainHead({ chain, payload })
+    appendAuditRecord(chain, closure.closureDigest, 'unknown-record')
+    const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { threadId: chain.head.threadId })
+    assert.equal(result.review.impacts[0].status, 'unknown')
+  }
+})
+
+test('bootstrap work is globally capped across chains and a second index does not count old work', () => {
+  const chains = new Map<string, EvidenceDeltaChain>()
+  for (let c = 0; c < 2; c++) {
+    const chain = new EvidenceDeltaChain(`codex:global-${c}`)
+    chains.set(chain.head.threadId, chain)
+    for (let n = 0; n < 1100; n++) chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: `global-${n}`, kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: `global-${n}`, payload: {} })
+  }
+  const index = new OwnerAuditIndex()
+  assert.equal(index.query(chains, { artifactVersionRef: pinnedRef }).review.coverageDetails?.scannedDeltas, 2048)
+  assert.equal(index.query(chains, { artifactVersionRef: pinnedRef }).review.coverageDetails?.scannedDeltas, 152)
+  const reused = new OwnerAuditIndex().query(chains, { threadId: 'codex:global-0' })
+  assert.equal(reused.review.coverageDetails?.scannedDeltas, 0)
+  assert.equal(reused.review.coverageDetails?.extractionNodes, 0)
+})
+
+test('a shared version-string graph node cannot guess between complete artifact identities', () => {
+  const chain = new EvidenceDeltaChain('codex:collision')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: pinnedRef.versionId, ref: pinnedRef }, { id: pinnedRef.versionId, ref: { ...pinnedRef, artifactId: 'artifact:other' } }], edges: [{ source: pinnedRef.versionId, target: 'claim:1', family: 'supports' }] } })
+  appendAuditRecord(chain, closure.closureDigest, 'collision-record')
+  chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: 'collision', kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: 'collision-event', payload: { eventId: 'event:collision', type: 'availability-changed', versionId: pinnedRef.versionId, artifactId: pinnedRef.artifactId, contentDigest: pinnedRef.contentDigest } })
+  const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { threadId: chain.head.threadId })
+  assert.equal(result.review.impacts[0].status, 'unknown')
+})
+
+test('canonical lifecycle event detail retains previous exact identity for source aliases', async () => {
+  const { artifactVersionLifecycleEventV1Schema } = await import('@sciforge/domain-artifact-versions/contract')
+  const chain = new EvidenceDeltaChain('codex:canonical-detail')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] } })
+  appendAuditRecord(chain, closure.closureDigest, 'canonical-detail-record', { ref: pinnedRef })
+  const event = artifactVersionLifecycleEventV1Schema.parse({ schemaVersion: 1, eventId: 'artifact-event:canonical-detail', sequence: 1, type: 'artifact-content-changed', artifactId: pinnedRef.artifactId, versionId: 'artifact-version:new', previousVersionId: pinnedRef.versionId, createdAt, detail: { previousContentDigest: pinnedRef.contentDigest, contentDigest: 'd'.repeat(64) } })
+  chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: 'canonical-detail', kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: 'canonical-detail-event', payload: { lifecycleEvents: [event] } })
+  const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { artifactVersionRef: pinnedRef })
+  assert.equal(result.review.impacts[0].status, 'requires-review')
+  assert.equal(result.review.impacts[0].changes[0].reason, 'artifact-content-changed')
+})
+
+test('canonical new-version digest never substitutes for missing previous-version digest', async () => {
+  const { artifactVersionLifecycleEventV1Schema } = await import('@sciforge/domain-artifact-versions/contract')
+  const chain = new EvidenceDeltaChain('codex:canonical-missing-detail')
+  const { closure } = sealChainHead({ chain, payload: { claims: [{ id: 'claim:1' }], sources: [{ id: 'paper', ref: pinnedRef }], edges: [{ source: 'paper', target: 'claim:1', family: 'supports' }] } })
+  appendAuditRecord(chain, closure.closureDigest, 'canonical-missing-detail-record', { ref: pinnedRef })
+  const event = artifactVersionLifecycleEventV1Schema.parse({ schemaVersion: 1, eventId: 'artifact-event:canonical-missing-detail', sequence: 1, type: 'artifact-content-changed', artifactId: pinnedRef.artifactId, versionId: 'artifact-version:new', previousVersionId: pinnedRef.versionId, createdAt, detail: { contentDigest: pinnedRef.contentDigest } })
+  chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: 'canonical-missing-detail', kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: 'canonical-missing-detail-event', payload: { lifecycleEvents: [event] } })
+  const result = new OwnerAuditIndex().query(new Map([[chain.head.threadId, chain]]), { artifactVersionRef: pinnedRef })
+  assert.equal(result.review.impacts[0].status, 'unknown')
+  assert.equal(result.review.bounded, true)
+})
+
+test('an exact closure not reached by cold bootstrap reports omitted coverage', () => {
+  const chain = new EvidenceDeltaChain('codex:cold-closure')
+  for (let n = 0; n < 2050; n++) chain.append({ scope: { runtimeId: 'codex', threadId: chain.head.threadId, workspaceRoot: '/workspace', operationId: `cold-${n}`, kind: 'turn' }, requestedWatermark: '1', schemaVersion: 'evidence.delta.v1', extractorVersion: 'test', verifierVersion: 'test', idempotencyKey: `cold-closure-${n}`, payload: {} })
+  const { closure } = sealChainHead({ chain })
+  appendAuditRecord(chain, closure.closureDigest, 'cold-closure-record')
+  const index = new OwnerAuditIndex(), chains = new Map([[chain.head.threadId, chain]])
+  const first = index.query(chains, { closureDigest: closure.closureDigest }, '/workspace')
+  assert.equal(first.review.bounded, true)
+  assert.ok(first.review.coverageDetails?.reasons.includes('index-bootstrap-incomplete'))
+  assert.ok(first.evaluation.gapCodes.includes('scan_bounded'))
+  assert.equal(first.evaluation.records.length, 0)
+  const second = index.query(chains, { closureDigest: closure.closureDigest }, '/workspace')
+  assert.equal(second.evaluation.records.length, 1)
 })

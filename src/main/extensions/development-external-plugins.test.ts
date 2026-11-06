@@ -2,6 +2,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ProcessExtensionRuntime } from '@sciforge/plugin-sdk'
 import { DevelopmentExternalPluginService } from './development-external-plugins'
 import { CapabilityRegistry } from '../capabilities/registry'
 import { domainExtensionListResultSchema } from '../ipc/app-ipc-schemas'
@@ -22,6 +23,8 @@ async function createService(): Promise<DevelopmentExternalPluginService> {
   const userDataPath = await mkdtemp(join(tmpdir(), 'sciforge-pr1-external-'))
   temporaryDirectories.push(userDataPath)
   const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
     root,
     userDataPath,
     hostApiVersion: '1.11.0',
@@ -48,6 +51,37 @@ afterEach(async () => {
 })
 
 describe('development external plugin service', () => {
+  it('reads exact approved Host service ports from live merged contracts and rejects stale identity', async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), 'sciforge-port-contract-'))
+    temporaryDirectories.push(userDataPath)
+    const packageName = '@sciforge/plugin-port-fixture'
+    const key = `${packageName}@1.0.0`
+    const authorization = { packageName, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', ports: ['agent-threads.read'] }
+    const contract = { hostApiRange: '^1.0.0', permissions: [], approved: true, dshAuthorization: authorization }
+    const contracts = new Map([[key, contract]])
+    const service = new DevelopmentExternalPluginService({ root, userDataPath, hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toEqual(['agent-threads.read'])
+    expect(Object.isFrozen(service.approvedHostServicePorts(packageName, '1.0.0'))).toBe(true)
+    expect(service.approvedHostServicePorts(packageName, '1.0.1')).toBeUndefined()
+    contracts.set(key, { ...contract, approved: false })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toBeUndefined()
+    contracts.set(key, { ...contract, dshAuthorization: { ...authorization, packageName: '@other/plugin' } })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toBeUndefined()
+    contracts.set(key, { ...contract, dshAuthorization: { ...authorization, packageVersion: '1.0.1' } })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toBeUndefined()
+    contracts.set(key, { ...contract, dshAuthorization: { ...authorization, dshRuntimeVersion: '0.2.0-rc.3' } })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toBeUndefined()
+    contracts.set(key, contract)
+    await service.registerInstalledContract({ ...contract, dshAuthorization: { ...authorization, ports: ['other.read'] } })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toEqual(['other.read'])
+    contracts.delete(key)
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toEqual(['other.read'])
+    await service.registerInstalledContract({ ...contract, dshAuthorization: { ...authorization, ports: [] } })
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toEqual([])
+    await expect(service.registerInstalledContract({ ...contract, dshAuthorization: { ...authorization, dshRuntimeVersion: '0.2.0-rc.3' } })).rejects.toThrow(/this host runs/)
+    expect(service.approvedHostServicePorts(packageName, '1.0.0')).toEqual([])
+    await service.dispose()
+  })
   it('projects DSH package names into IPC-safe module and publisher IDs', async () => {
     const service = await createService()
     const summaries = await service.list()
@@ -77,6 +111,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -135,19 +171,32 @@ describe('development external plugin service', () => {
     await service.dispose()
   })
 
-  it('binds a workspace-scoped extension input to the caller workspace', async () => {
+  it('rejects foreign roots before invocation and binds only the authenticated caller workspace', async () => {
     const service = await createService()
-    const registry = new CapabilityRegistry()
-    service.attachCapabilityRegistry(registry)
-    await service.setEnabled('@sciforge/migration-p5-ws-scope', true)
-    const definition = registry.require('fixture.ws.echo')
-    const caller = { caller: { workspaceId: '/caller/workspace' } } as never
-    const rebound = await definition.handler({ workspaceRoot: '/foreign/path' }, caller)
-    expect(rebound.output).toEqual({ workspaceRoot: '/caller/workspace' })
-    const matching = await definition.handler({ workspaceRoot: '/caller/workspace' }, caller)
-    expect(matching.output).toEqual({ workspaceRoot: '/caller/workspace' })
-    await service.setEnabled('@sciforge/migration-p5-ws-scope', false)
-    await service.dispose()
+    const invoke = vi.spyOn(ProcessExtensionRuntime.prototype, 'invoke')
+    try {
+      const registry = new CapabilityRegistry()
+      await service.attachCapabilityRegistry(registry)
+      await service.setEnabled('@sciforge/migration-p5-ws-scope', true)
+      const definition = registry.require('fixture.ws.echo')
+      const caller = { caller: { workspaceId: '/caller/workspace' } } as never
+      invoke.mockClear()
+      await expect(definition.handler({ workspaceRoot: '/foreign/path' }, caller))
+        .rejects.toThrow('rejects a workspaceRoot outside the authenticated caller workspace')
+      expect(invoke).not.toHaveBeenCalled()
+      await expect(definition.handler({ workspaceRoot: '/caller/workspace' }, { caller: {} } as never))
+        .rejects.toThrow('requires a workspace-scoped caller')
+      expect(invoke).not.toHaveBeenCalled()
+
+      const omitted = await definition.handler({}, caller)
+      expect(omitted.output).toEqual({ workspaceRoot: '/caller/workspace' })
+      const matching = await definition.handler({ workspaceRoot: '/caller/workspace' }, caller)
+      expect(matching.output).toEqual({ workspaceRoot: '/caller/workspace' })
+      expect(invoke).toHaveBeenCalledTimes(2)
+    } finally {
+      invoke.mockRestore()
+      await service.dispose()
+    }
   })
 
   it('registers typed P2/P3/P4 adapters and keeps each discover contract separate', async () => {
@@ -353,6 +402,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -392,6 +443,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -459,6 +512,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -504,6 +559,8 @@ describe('development external plugin service', () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'p1-perm-'))
     temporaryDirectories.push(userDataPath)
     const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
       root,
       userDataPath,
       hostApiVersion: '1.11.0',
@@ -616,6 +673,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async (version: string) => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -723,6 +782,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -794,6 +855,8 @@ describe('development external plugin service', () => {
     temporaryDirectories.push(userDataPath)
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -833,6 +896,8 @@ describe('development external plugin service', () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'p2-agent-flow-'))
     temporaryDirectories.push(userDataPath)
     const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
       root,
       userDataPath,
       hostApiVersion: '1.11.0',
@@ -898,6 +963,8 @@ describe('development external plugin service', () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'p2-agent-check-failure-'))
     temporaryDirectories.push(userDataPath)
     const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
       root,
       userDataPath,
       hostApiVersion: '1.11.0',
@@ -933,6 +1000,8 @@ describe('development external plugin service', () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'p2-agent-tamper-'))
     temporaryDirectories.push(userDataPath)
     const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
       root,
       userDataPath,
       hostApiVersion: '1.11.0',
@@ -972,6 +1041,8 @@ describe('development external plugin service', () => {
     const runner = vi.fn(async () => ({ ok: true, output: 'ok' }))
     const create = async () => {
       const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
         root,
         userDataPath,
         hostApiVersion: '1.11.0',
@@ -1016,6 +1087,8 @@ describe('development external plugin service', () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'p1-agent-apply-failure-'))
     temporaryDirectories.push(userDataPath)
     const service = new DevelopmentExternalPluginService({
+    // Fixture Host authority: this suite is not about workspace access.
+    authorizeWorkspace: () => true,
       root,
       userDataPath,
       hostApiVersion: '1.11.0',

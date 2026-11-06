@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -74,13 +75,13 @@ test('unresponsive cancel has an independent budget and waits for actual child e
 test('invalid timeout budgets are rejected before spawning a child', () => {
   for (const key of ['requestTimeoutMs', 'promptTimeoutMs', 'cancelTimeoutMs', 'approvalTimeoutMs'] as const) {
     for (const value of [0, -1, NaN, Infinity, 2 ** 31]) {
-      assert.throws(() => createDshRuntimeAdapter({ executable: process.execPath, stateDirectory: process.env.TMPDIR!, verifyDeployment: async () => {}, [key]: value }), /runtime_timeout_invalid/, `${key}=${value}`)
+      assert.throws(() => createDshRuntimeAdapter({ executable: process.execPath, stateDirectory: tmpdir(), verifyDeployment: async () => {}, [key]: value }), /runtime_timeout_invalid/, `${key}=${value}`)
     }
   }
 })
 
 test('a long prompt budget does not relax session lifecycle timeouts', async () => {
-  const barrier = join(process.env.TMPDIR!, `lifecycle-budget-${process.pid}-${Date.now()}`)
+  const barrier = join(tmpdir(), `lifecycle-budget-${process.pid}-${Date.now()}`)
   const s = await setup({ requestTimeoutMs: 300, promptTimeoutMs: 3000, executableArgs: [fixture, '--barrier-resume', '--barrier-file', `${barrier}.started`, '--release-file', `${barrier}.release`], getAuthorizedMcpServers: async () => [{ name: 'host', type: 'http', url: 'http://127.0.0.1:1/mcp', headers: [] }] })
   try {
     const thread = await s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root })
@@ -90,7 +91,7 @@ test('a long prompt budget does not relax session lifecycle timeouts', async () 
 })
 
 test('responsive cancellation waits for the prompt barrier and preserves the connection', async () => {
-  const barrier = join(process.env.TMPDIR!, `cancel-budget-${process.pid}-${Date.now()}`)
+  const barrier = join(tmpdir(), `cancel-budget-${process.pid}-${Date.now()}`)
   const s = await setup({ requestTimeoutMs: 350, promptTimeoutMs: 3000, cancelTimeoutMs: 1500, executableArgs: [fixture, '--barrier-cancel', '--barrier-file', `${barrier}.started`, '--release-file', `${barrier}.release`] })
   let stream
   try {
@@ -129,7 +130,7 @@ test('reconnect remounts the same session after a child disconnect rather than t
   } finally { await stream?.stop(); await s.cleanup() }
 })
 test('cancellation during real stdio MCP resume keeps startup busy until the old turn settles', async () => {
-  const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-acp-barrier-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-acp-barrier-'))
   const barrier = join(root, 'resume.started')
   const release = join(root, 'resume.release')
   const s = await setup({ stateDirectory: root, requestTimeoutMs: 5000, executableArgs: [fixture, '--barrier-resume', '--barrier-file', barrier, '--release-file', release], getAuthorizedMcpServers: async () => [{ name: 'host', type: 'http', url: 'http://127.0.0.1:1/mcp', headers: [] }] })
@@ -152,7 +153,7 @@ test('cancellation during real stdio MCP resume keeps startup busy until the old
 })
 
 async function setup(extra: Partial<DshRuntimeOptions> = {}) {
-  const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-acp-test-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-acp-test-'))
   const adapter = createDshRuntimeAdapter({
     executable: process.execPath, executableArgs: [fixture], stateDirectory: root,
     // Fixture only: a trusted deployment reviewer must validate the real composed config.
@@ -484,6 +485,7 @@ test('Windows command shims launch through the command processor with metacharac
   assert.deepEqual(resolveDshLaunchInvocation('C:\\dsh\\dsh.exe', ['acp'], 'win32'), { command: 'C:\\dsh\\dsh.exe', args: ['acp'] })
   const shim = resolveDshLaunchInvocation('C:\\npm\\dsh.cmd', ['acp', '--patch', 'p'], 'win32', 'C:\\Windows\\System32\\cmd.exe')
   assert.equal(shim.command, 'C:\\Windows\\System32\\cmd.exe')
+  assert.equal(shim.windowsVerbatimArguments, true)
   assert.deepEqual(shim.args, ['/d', '/c', '""C:\\npm\\dsh.cmd" "acp" "--patch" "p""'])
   assert.throws(() => resolveDshLaunchInvocation('C:\\npm\\d&sh.cmd', [], 'win32'), /runtime_path_invalid/)
   assert.throws(() => resolveDshLaunchInvocation('C:\\npm\\dsh.cmd', ['a&b'], 'win32'), /runtime_start_failed/)
@@ -524,13 +526,13 @@ test('a derived patch applies the Host model router route on top of install defa
   })
   try {
     const probe = await s.adapter.probe(context)
-    assert.equal(probe.available, true)
+    assert.equal(probe.available, true, JSON.stringify(probe.failure))
     const thread = await s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root })
     assert.ok(thread.id)
   } finally { await s.cleanup() }
 })
 test('the launched composition enables the shell only under the switch', async () => {
-  const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-exec-switch-'))
+  const root = await mkdtemp(join(tmpdir(), 'dsh-exec-switch-'))
   let off: string | undefined
   let on: string | undefined
   const offAdapter = createDshRuntimeAdapter({ executable: process.execPath, executableArgs: [fixture], stateDirectory: root,

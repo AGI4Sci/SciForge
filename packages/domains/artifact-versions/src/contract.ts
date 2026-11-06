@@ -524,6 +524,7 @@ export const artifactVersionObserveInputV1Schema = z.object({
 
 export const artifactVersionReadInputV1Schema = z.object({
   versionId: versionIdSchema,
+  expectedRef: artifactVersionRefV1Schema.optional(),
   maxBytes: z.number().int().positive().max(64 * 1024 * 1024).optional()
 }).strict()
 export const artifactVersionReadV1Schema = z.object({
@@ -574,6 +575,8 @@ export const artifactVersionDescribeResultV2Schema = artifactVersionResultV1Sche
 
 export const artifactVersionListInputV1Schema = z.object({
   artifactId: artifactIdSchema.optional(),
+  /** Exact reverse dependency lookup, filtered before pagination and access projection. */
+  dependencyTarget: artifactVersionRefV1Schema.optional(),
   beforeSequence: z.number().int().positive().optional(),
   limit: z.number().int().min(1).max(500).optional()
 }).strict()
@@ -596,6 +599,8 @@ export const artifactVersionListInputV2Schema = z.object({
   intent: artifactVersionIntentV1Schema.optional(),
   retention: artifactVersionRetentionV1Schema.optional(),
   availability: artifactVersionAvailabilityV1Schema.optional(),
+  metadataQuery: z.string().trim().max(256).optional(),
+  cursor: z.string().min(1).max(4096).optional(),
   currentOnly: z.boolean().optional(),
   beforeSequence: z.number().int().positive().optional(),
   limit: z.number().int().min(1).max(500).optional()
@@ -609,7 +614,8 @@ export const artifactVersionHistoryItemV2Schema = z.object({
 }).strict()
 export const artifactVersionListV2Schema = z.object({
   items: z.array(artifactVersionHistoryItemV2Schema).max(500),
-  nextBeforeSequence: z.number().int().positive().optional()
+  nextBeforeSequence: z.number().int().positive().optional(),
+  nextCursor: z.string().min(1).max(4096).optional()
 }).strict()
 export const artifactVersionListResultV2Schema = artifactVersionResultV1Schema(
   artifactVersionListV2Schema

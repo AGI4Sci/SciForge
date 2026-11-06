@@ -36,7 +36,7 @@ export function SidebarTitlebarToggleButton({
       aria-label={ariaLabel ?? title}
       className={cx('ds-titlebar-sidebar-toggle ds-no-drag', className)}
     >
-      {children ?? <PanelLeft className="h-[13px] w-[13px]" strokeWidth={1.55} />}
+      {children ?? <PanelLeft className="h-4 w-4" strokeWidth={1.55} />}
     </button>
   )
 }
@@ -69,7 +69,7 @@ export function SidebarFrame({
         </div>
       </div>
 
-      {children}
+      <div className="ds-sidebar-body flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
 
       {footer ? (
         <div className="ds-no-drag mt-2 border-t border-[var(--ds-sidebar-divider)] px-1.5 pt-3">
@@ -182,8 +182,9 @@ export function SidebarCommandRow({
       disabled={disabled}
       title={disabled ? disabledHint : undefined}
       onClick={onClick}
+      aria-current={active ? 'page' : undefined}
       className={cx(
-        'flex min-h-[34px] w-full items-center gap-2.5 rounded-[8px] px-3 py-1.5 text-[13px] font-normal transition',
+        'ds-sidebar-command flex min-h-[38px] w-full items-center gap-2.5 rounded-[8px] px-3 py-2 text-[15px] font-medium leading-5 transition',
         disabled
           ? 'cursor-not-allowed text-[#a8a8a8] opacity-55'
           : active
@@ -227,7 +228,7 @@ export function SidebarSectionHeader({
 }: SidebarSectionHeaderProps): ReactElement {
   return (
     <div className="flex items-center justify-between px-2.5 pb-2 pt-5">
-      <span className="min-w-0 truncate text-[12px] font-normal text-[#9aa5b5] dark:text-white/35">
+      <span className="min-w-0 truncate text-[13px] font-medium text-ds-muted">
         {label}
       </span>
       {actions ? <div className="flex shrink-0 items-center gap-0.5">{actions}</div> : null}
@@ -313,7 +314,7 @@ export function SidebarSearchField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-8 w-full rounded-[8px] border border-transparent bg-[var(--ds-sidebar-field-bg)] pl-7 pr-7 text-[13px] text-[#1f1f1f] outline-none transition placeholder:text-[#9aa5b5] focus:bg-[var(--ds-sidebar-field-focus)] dark:text-white"
+        className="h-9 w-full rounded-[8px] border border-transparent bg-[var(--ds-sidebar-field-bg)] pl-7 pr-7 text-[14px] text-[#1f1f1f] outline-none transition placeholder:text-[#9aa5b5] focus:bg-[var(--ds-sidebar-field-focus)] dark:text-white"
       />
       {value.trim() ? (
         <button
@@ -385,7 +386,7 @@ export function SidebarTreeRow({
   return (
     <div
       className={cx(
-        'group relative flex w-full items-center overflow-hidden rounded-[8px] text-[13px] font-normal transition',
+        'ds-sidebar-tree-row group relative flex w-full items-center overflow-hidden rounded-[8px] text-[14px] font-normal transition',
         outlined
           ? 'bg-[var(--ds-sidebar-row-active)] text-[#1f1f1f] shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] dark:text-white'
           : active
@@ -394,6 +395,7 @@ export function SidebarTreeRow({
         className
       )}
       title={title}
+      data-sidebar-active={active ? 'true' : undefined}
       onContextMenu={onContextMenu}
     >
       {rail ? (
@@ -410,6 +412,7 @@ export function SidebarTreeRow({
         onClick={onClick}
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-current={active ? 'page' : undefined}
         className={cx(
           'flex min-w-0 flex-1 text-left disabled:cursor-not-allowed',
           buttonClassName ?? 'items-center gap-2 px-2.5 py-2'

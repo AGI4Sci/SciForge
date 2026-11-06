@@ -28,7 +28,7 @@ export function TaskCard({
 }
 
 export function stateTone(label: string): string {
-  if (label === '等待回答' || label === '等待成员回答' || label === '返修中') return 'tone-warning'
+  if (label === '等待决定' || label === '等待成员决定' || label === '等待回答' || label === '等待成员回答' || label === '返修中') return 'tone-warning'
   if (label === '待你接受' || label === '待你采纳' || label === '待提交交付') return 'tone-accent'
   return 'tone-neutral'
 }

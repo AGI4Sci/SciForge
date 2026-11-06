@@ -76,20 +76,23 @@ test('resolves exact artifact resources to the dossier Versions page', () => {
   })
 })
 
-test('passes generic Research summary contributions through the host', () => {
+test('reads published contributions after entry construction and keeps stable snapshots', () => {
   let listCalls = 0
+  let published = false
   const host = {
     capabilityInvoker: {},
     contributions: {
       list: (kind: string) => {
         listCalls += 1
-        return kind === 'renderer.research-summary.v1'
+        return published && kind === 'renderer.research-summary.v1'
           ? [{ id: 'fixture.summary', kind, packageName: '@fixture/summary', owner: { moduleId: 'fixture.summary' }, contract: { slot: 'status', label: 'Status', order: 1, scopeKinds: ['workspace'], resourceKinds: [] }, value: { provide: () => ({ status: 'unavailable' }) } }]
           : []
       }
     }
   } as unknown as DomainRendererHost
   const entry = createDomainRendererEntry(host)
+  assert.equal(listCalls, 0)
+  published = true
   const panel = entry.contributions.find(
     ({ id }) => id === RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
   )?.value as ResearchDossierRightPanelContribution
@@ -102,7 +105,7 @@ test('passes generic Research summary contributions through the host', () => {
     surfaceId: 'surface-dossier-a'
   }) as ReactElement<{ researchSummaries?: readonly unknown[] }>
   assert.equal((rendered.props.researchSummaries as unknown[] | undefined)?.length, 1)
-  panel.render({
+  const rerendered = panel.render({
     active: true,
     className: 'dossier-panel',
     focused: true,
@@ -110,7 +113,8 @@ test('passes generic Research summary contributions through the host', () => {
     session: { id: 'session-1' },
     surfaceId: 'surface-dossier-a'
   })
-  assert.equal(listCalls, 1)
+  assert.equal((rerendered as ReactElement<{ researchSummaries?: readonly unknown[] }>).props.researchSummaries, rendered.props.researchSummaries)
+  assert.equal(listCalls, 2)
 })
 
 test('one distinct toolbar action opens the session-owned dossier panel', async () => {

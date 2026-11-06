@@ -432,3 +432,21 @@ function canonicalReadFactory(
 const unusedReadFactory = (): ArtifactVersionReadPortV1 => ({
   read: async () => { throw new Error('must not read without an explicit ref') }
 })
+
+test('read response echo cannot authorize conflicting version storage or policy', async () => {
+  for (const conflict of ['byteLength', 'policy', 'artifact'] as const) {
+    const client = createEvidenceArtifactVersionClient(
+      () => ({ commit: async () => { throw new Error('must not commit') } }),
+      scope => ({ read: async input => {
+        const response = await canonicalReadFactory()(scope).read(input)
+        if (!response.ok) return response
+        if (conflict === 'byteLength') response.value.version.storage.byteLength++
+        if (conflict === 'policy') response.value.version.accessPolicy = { ...accessPolicy, allowExport: false }
+        if (conflict === 'artifact') response.value.version.artifactId = 'artifact:other'
+        return response
+      } })
+    )
+    const [item] = await client.pinTrace([{ artifactVersionRef: ref }], context)
+    assert.equal((item.evidenceArtifactVersions as { status: string }).status, 'failed')
+  }
+})

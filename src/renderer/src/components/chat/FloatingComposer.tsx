@@ -44,7 +44,7 @@ import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
 import type { AgentRuntimeContextState, AgentRuntimeModelCatalog } from '@shared/agent-runtime-contract'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
-import type { AgentProviderCapabilities, AttachmentReference, ReviewTarget } from '../../agent/types'
+import type { AgentProviderCapabilities, AttachmentReference, ChatBlock, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
@@ -239,6 +239,7 @@ type Props = {
 type SkillCommand = NonNullable<Props['skillCommands']>[number]
 
 const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
+const EMPTY_HISTORY_BLOCKS: ChatBlock[] = []
 const EMPTY_ATTACHMENTS: AttachmentReference[] = []
 const EMPTY_FILE_REFERENCES: ComposerFileReference[] = []
 const EMPTY_COMMENT_REFERENCES: ComposerCommentReference[] = []
@@ -823,7 +824,11 @@ export function FloatingComposer({
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
-  const storeBlocks = useChatStore((s) => s.blocks)
+  const storeBlocks = useChatStore((s) =>
+    threadIdOverride === undefined || threadIdOverride === s.activeThreadId
+      ? s.blocks
+      : threadIdOverride ? s.sideConversations[threadIdOverride]?.blocks ?? EMPTY_HISTORY_BLOCKS : EMPTY_HISTORY_BLOCKS
+  )
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
   const threads = useChatStore((s) => s.threads)
   const compactActiveThread = useChatStore((s) => s.compactActiveThread)
@@ -959,6 +964,7 @@ export function FloatingComposer({
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
   const remembersComposerInput = !compact && !disableThreadManagementCommands
+  const canRecallInputHistory = remembersComposerInput || Boolean(disableThreadManagementCommands && threadIdOverride)
   const composerDraftKey = composerDraftContextKey({
     threadId: activeThreadId,
     workspaceRoot: effectiveWorkspaceRoot
@@ -1748,7 +1754,7 @@ export function FloatingComposer({
       }
     }
 
-    if (!composing && remembersComposerInput && draft.navigateHistory(event)) {
+    if (!composing && canRecallInputHistory && draft.navigateHistory(event)) {
       event.preventDefault()
       return
     }

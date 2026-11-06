@@ -1,3 +1,4 @@
+import type { DomainMainUserInputHost } from './user-input.js'
 import { z } from 'zod'
 import type { SessionAdmissionEvent, SessionOutputEvent, SessionHumanInputEvent, SessionHumanDecisionLease, SessionAdmissionLease } from './session-admission.js'
 
@@ -49,6 +50,7 @@ import type {
   WorkspaceHostArtifact,
   WorkspaceHostOpenRemoteSessionInput
 } from './workspace-host.js'
+export * from './owned-python-launch.js'
 export * from './agent-execution.js'
 export * from './agent-routing.js'
 export * from './external-navigation.js'
@@ -395,7 +397,16 @@ export type DomainMainTurnLifecycleEventsHost = Readonly<{
   readDurableTurnBoundarySnapshot: () => Promise<DomainMainDurableTurnBoundarySnapshot>
 }>
 
+/** A bounded projection of the existing runtime history, not a new transcript store. */
+export type DomainAgentThreadPage = DomainAgentThreadDetail & Readonly<{ nextCursor: string | null }>
+
 export type DomainMainAgentThreadsHost = Readonly<{
+  /** Exact metadata lookup without loading the transcript. Missing workspace stays unknown. */
+  readMetadata?: (input: Readonly<{ runtimeId: string; threadId: string }>) => Promise<DomainAgentThread>
+  /** Host validates the requested workspace before and after the bounded page read. */
+  readPage?: (input: Readonly<{
+    runtimeId: string; threadId: string; workspaceRoot: string; cursor?: string; limit?: number
+  }>) => Promise<DomainAgentThreadPage>
   list: (input?: DomainAgentThreadListInput) => Promise<readonly DomainAgentThread[]>
   read: (input: Readonly<{
     runtimeId: string
@@ -926,6 +937,8 @@ export type DomainWorkbenchExactResource = Readonly<{
    * it through the Host before use; this value never carries a capability.
    */
   resourceRef?: string | undefined
+  /** Bounded JSON presentation context only; never grants capability or session authority. */
+  context?: DomainPackageJsonValue | undefined
   integrity?: Readonly<{
     algorithm: 'sha256'
     expectedDigest: string
@@ -1016,6 +1029,8 @@ export type DomainRendererWorkspaceHost = Readonly<{
 export type DomainRendererWorkbenchHost = Readonly<{
   /** Open the exact owned Session in the standard Workbench, never another active Session. */
   openSession?: (input: DomainWorkbenchOpenSessionInput) => Promise<boolean>
+  /** Open a native side conversation without changing the active main Session. */
+  openSideConversation?: (input: DomainWorkbenchOpenSideConversationInput) => Promise<string | null>
   canOpenResource?: (resourceKind: string) => boolean
   openResource?: (input: DomainWorkbenchOpenResourceInput) => boolean
   openRightPanel: (input: DomainWorkbenchOpenRightPanelInput) => void
@@ -1026,9 +1041,39 @@ export type DomainRendererWorkbenchHost = Readonly<{
   ) => Promise<DomainRendererWorkbenchSendMessageResult>
 }>
 
+export type DomainWorkbenchSideChatMode = 'light' | 'deep'
+
+/** Source data for a focused discussion, not executable instructions. */
+export type DomainWorkbenchSideConversationContext = Readonly<{
+  id: string
+  title: string
+  text: string
+  sourceRefs?: readonly Readonly<{
+    label: string
+    uri?: string
+    threadId?: string
+    turnId?: string
+    itemId?: string
+  }>[]
+}>
+
+export type DomainWorkbenchOpenSideConversationInput = Readonly<{
+  runtimeId: string
+  parentThreadId: string
+  workspaceRoot?: string
+  title?: string
+  chatMode?: DomainWorkbenchSideChatMode
+  context?: DomainWorkbenchSideConversationContext
+  /** Omit to open a draft without asking the model. */
+  question?: string
+}>
+
 export type DomainWorkbenchMainAreaReturnTarget = Readonly<{
   contributionId: string
   label: string
+  /** Defaults to main-area. Other surfaces retain their owning Session. */
+  presentation?: 'main-area' | 'right-panel' | 'global-overlay'
+  session?: Readonly<{ runtimeId: string; threadId: string }>
   activation?: DomainRendererWorkbenchSurfaceActivation
 }>
 
@@ -1036,7 +1081,13 @@ export type DomainWorkbenchOpenSessionInput = Readonly<{
   runtimeId: string
   threadId: string
   focusComposer?: boolean
-  /** Presentation-only return action owned by an installed main-area contribution. */
+  workspaceRoot?: string
+  /** Exact transcript coordinates; the Host reports bounded lookup failures in the timeline. */
+  turnId?: string
+  itemId?: string
+  /** Viewing must not dispatch queued inputs or resume incomplete work. Coordinates imply readOnly. */
+  readOnly?: boolean
+  /** Presentation-only return action owned by an installed renderer contribution. */
   returnTo?: DomainWorkbenchMainAreaReturnTarget
 }>
 
@@ -1125,6 +1176,7 @@ export type DomainMainCapabilityInvocationContext = Readonly<{
  * validation when the definition enters its registry.
  */
 export type DomainMainHost = Readonly<{
+  userInput?: DomainMainUserInputHost
   humanActions?: DomainMainHumanActionsHost
   getUserDataDir: () => string
   /** Native UI attachment target derived from the active UI capability invocation.

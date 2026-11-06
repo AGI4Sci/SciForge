@@ -13,7 +13,7 @@ import { getProvider } from '../../agent/registry'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { useChatStore } from '../../store/chat-store'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
-import { ImagePreviewLightbox } from '../ImagePreviewLightbox'
+import { ImagePreviewWindow } from '../ImagePreviewWindow'
 import { registerVisibleContextVisualTarget } from '../../lib/visible-context'
 
 export type TimelineImageReference = {
@@ -1415,7 +1415,7 @@ function TimelineImageTile({
             {metadata}
           </figcaption>
         ) : null}
-        <ImagePreviewLightbox
+        <ImagePreviewWindow
           open={previewOpen}
           src={src}
           alt={title}

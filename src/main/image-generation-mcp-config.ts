@@ -148,18 +148,9 @@ export function imageGenerationMcpSettingsChanged(prev: AppSettingsV1, next: App
     return true
   }
 
-  const a = getModelRouterSettings(prev).profiles.default.imageGenerator
-  const b = getModelRouterSettings(next).profiles.default.imageGenerator
-  const aConfigured = Boolean(a.apiKey.trim() && a.baseUrl.trim() && a.model.trim())
-  const bConfigured = Boolean(b.apiKey.trim() && b.baseUrl.trim() && b.model.trim())
-
-  if (aConfigured !== bConfigured) return true
-  if (!aConfigured && !bConfigured) return false
-
   return (
-    a.apiKey.trim() !== b.apiKey.trim() ||
-    a.baseUrl.trim() !== b.baseUrl.trim() ||
-    a.model.trim() !== b.model.trim()
+    JSON.stringify(getModelRouterSettings(prev)) !== JSON.stringify(getModelRouterSettings(next)) ||
+    JSON.stringify(resolveMcpModelRouterSettings(prev)) !== JSON.stringify(resolveMcpModelRouterSettings(next))
   )
 }
 
@@ -179,12 +170,25 @@ export function imageGenerationMcpEnv(
     env[COMPONENT_SEGMENTATION_MODEL_ENV] = imageGeneration.componentSegmentationModelPath.trim()
     env[FASTSAM_MODEL_ENV] = imageGeneration.componentSegmentationModelPath.trim()
   }
-  const imageGenerator = getModelRouterSettings(settings).profiles.default.imageGenerator
-  if (!imageGenerator.apiKey.trim() || !imageGenerator.baseUrl.trim() || !imageGenerator.model.trim()) return env
-  const router = resolveRuntimeModelRouterSettings(settings)
-  if (!router.baseUrl || !router.apiKey || !router.model) return env
+  // QA uses the same local Router for text and vision even when image generation
+  // is not configured. Role readiness remains authoritative in the Router.
+  const router = resolveMcpModelRouterSettings(settings)
+  if (!router) return env
   env.SCIFORGE_MODEL_ROUTER_BASE_URL = router.baseUrl
   env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = router.apiKey
   env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = router.model
   return env
+}
+
+function resolveMcpModelRouterSettings(
+  settings: AppSettingsV1
+): ReturnType<typeof resolveRuntimeModelRouterSettings> | undefined {
+  if (!getModelRouterSettings(settings).enabled) return undefined
+  try {
+    const router = resolveRuntimeModelRouterSettings(settings)
+    return router.baseUrl && router.apiKey && router.model ? router : undefined
+  } catch {
+    // Invalid upstream URLs must never become a direct-provider fallback.
+    return undefined
+  }
 }

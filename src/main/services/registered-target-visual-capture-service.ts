@@ -123,12 +123,13 @@ function intersection(
 function drawRedactions(context: CanvasContext, rects: readonly VisualCaptureBounds[]): void {
   context.fillStyle = REDACTION_COLOR
   for (const rect of rects) {
-    context.fillRect(
-      Math.floor(rect.x),
-      Math.floor(rect.y),
-      Math.ceil(rect.width),
-      Math.ceil(rect.height)
-    )
+    const left = clamp(Math.floor(rect.x), 0, context.canvas.width)
+    const top = clamp(Math.floor(rect.y), 0, context.canvas.height)
+    const right = clamp(Math.ceil(rect.x + rect.width), 0, context.canvas.width)
+    const bottom = clamp(Math.ceil(rect.y + rect.height), 0, context.canvas.height)
+    if (right > left && bottom > top) {
+      context.fillRect(left, top, right - left, bottom - top)
+    }
   }
 }
 

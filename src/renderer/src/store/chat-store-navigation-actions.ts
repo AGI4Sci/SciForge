@@ -310,7 +310,7 @@ export function createNavigationActions(
       ) {
         try {
           await withRuntimeProbeTimeout(
-            get().selectThread(restoredActiveThreadId),
+            get().selectThread(restoredActiveThreadId, { readOnly: Boolean(get().readOnlyThreadIds?.[restoredActiveThreadId]) }),
             'Restored thread'
           )
           if (!isCurrentProbe()) return
@@ -665,7 +665,9 @@ export function createNavigationActions(
       ].map(thread => [`${thread.runtimeId ?? ''}\u0000${thread.id}`, thread])).values()]
       const threads = rawThreads.map((thread) => ({
         ...thread,
-        workspace: normalizeWorkspaceRoot(thread.workspace)
+        // Sidebar eligibility must not erase the runtime's authoritative path:
+        // domain-owned Sessions may legitimately live in temporary directories.
+        workspace: thread.workspace?.trim()
       }))
       const sddThreadRegistry = readSddThreadRegistry()
       const hiddenCodeWorkspaceRoots = get().hiddenCodeWorkspaceRoots ?? []

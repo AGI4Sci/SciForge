@@ -78,7 +78,8 @@ export function createDomainAgentExecutionHost(input: Readonly<{
 }>): DomainMainAgentExecutionHost {
   const pollIntervalMs = Math.max(10, input.pollIntervalMs ?? 1_000)
   const prepareRuntimeSession = async (
-    rawRequest: Parameters<NonNullable<DomainMainAgentExecutionHost['prepareSession']>>[0]
+    rawRequest: Parameters<NonNullable<DomainMainAgentExecutionHost['prepareSession']>>[0],
+    contextProfile?: 'minimal'
   ) => {
     const request = domainMainAgentExecutionSessionRequestSchema.parse(rawRequest)
     const runtimeId = requireSupportedRuntimeId(
@@ -86,6 +87,7 @@ export function createDomainAgentExecutionHost(input: Readonly<{
     )
     const thread = await input.runtime.startThread({
       runtimeId,
+      ...(contextProfile ? { contextProfile } : {}),
       ...(request.workspaceRoot ? { workspace: request.workspaceRoot } : {}),
       ...(request.workspaceDisplayName ? { workspaceDisplayName: request.workspaceDisplayName } : {}),
       ...(request.title ? { title: request.title } : {}),
@@ -132,7 +134,7 @@ export function createDomainAgentExecutionHost(input: Readonly<{
             ...(request.allowedTools !== undefined ? { allowedTools: request.allowedTools } : {}),
             interaction: request.interaction,
             mode: request.mode
-          })
+          }, request.contextProfile)
       const runtimeId = prepared?.runtimeId ?? requireSupportedRuntimeId(request.runtimeId!)
       const thread = prepared?.thread ?? await input.runtime.readThreadSnapshot({
         runtimeId,
@@ -196,6 +198,7 @@ export function createDomainAgentExecutionHost(input: Readonly<{
         }
         const starting = input.runtime.startTurn({
           runtimeId,
+          ...(request.contextProfile ? { contextProfile: request.contextProfile } : {}),
           threadId: thread.id,
           text: request.prompt,
           ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),

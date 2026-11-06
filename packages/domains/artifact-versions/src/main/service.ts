@@ -1349,6 +1349,9 @@ class ArtifactVersionWorkspaceStore {
       const index = await this.#load()
       const version = requiredVersion(index, input.versionId)
       assertVersionAccess(version, access)
+      if (input.expectedRef) {
+        assertExactVersionRef(input.expectedRef, versionRef(version, locationFor(index, version.versionId)))
+      }
       const bytes = await this.#readVersionBytes(index, version)
       const maximum = input.maxBytes ?? 64 * 1024 * 1024
       if (bytes.byteLength > maximum) {
@@ -1470,11 +1473,19 @@ class ArtifactVersionWorkspaceStore {
       if (input.artifactId && !artifacts.has(input.artifactId)) {
         throw domainError('artifact-not-found', `Artifact not found: ${input.artifactId}`)
       }
+      if (input.dependencyTarget) {
+        const target = requiredVersion(index, input.dependencyTarget.versionId)
+        assertVersionAccess(target, access)
+        assertExactVersionRef(input.dependencyTarget, versionRef(target, locationFor(index, target.versionId)))
+      }
       const limit = input.limit ?? 100
       const candidates = index.versions
         .filter((version) => !input.artifactId || version.artifactId === input.artifactId)
         .filter((version) => !input.beforeSequence || version.sequence < input.beforeSequence)
         .filter((version) => canAccessVersion(version, access))
+        .filter((version) => !input.dependencyTarget || version.dependencies.some((dependency) =>
+          sameExactVersionRef(dependency.target, input.dependencyTarget!)
+        ))
         .sort((left, right) => right.sequence - left.sequence)
       const page = candidates.slice(0, limit)
       return artifactVersionListV1Schema.parse({
@@ -1507,13 +1518,38 @@ class ArtifactVersionWorkspaceStore {
       if (input.artifactId && !artifacts.has(input.artifactId)) {
         throw domainError('artifact-not-found', `Artifact not found: ${input.artifactId}`)
       }
+      const query = input.metadataQuery?.trim().toLowerCase() ?? ''
+      const binding = sha256(JSON.stringify([this.#workspaceKey, access.audience, access.callerId,
+        input.artifactId, input.kind, input.intent, input.retention, input.availability, Boolean(input.currentOnly), query]))
+      let upper = index.versions.reduce((maximum, version) => Math.max(maximum, version.sequence), 0)
+      let before = input.beforeSequence
+      if (input.cursor) {
+        try {
+          const cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'))
+          if (cursor.binding !== binding || !Number.isSafeInteger(cursor.upper) || cursor.upper < 0 ||
+              !Number.isSafeInteger(cursor.before) || cursor.before <= 0 || input.beforeSequence !== undefined) throw new Error('cursor')
+          upper = cursor.upper; before = cursor.before
+        } catch { throw domainError('invalid-input', 'History cursor does not match this workspace, caller or query. Restart the search.') }
+      }
+      const snapshotCurrent = new Map<string, { versionId: string; sequence: number }>()
+      if (input.currentOnly) for (const version of index.versions) {
+        if (version.sequence <= upper && canAccessVersion(version, access) &&
+            version.sequence > (snapshotCurrent.get(version.artifactId)?.sequence ?? -1)) {
+          snapshotCurrent.set(version.artifactId, version)
+        }
+      }
       const limit = input.limit ?? 100
       const candidates = index.versions
         .filter((version) => !input.artifactId || version.artifactId === input.artifactId)
         .filter((version) => !input.kind || artifacts.get(version.artifactId)?.kind === input.kind)
         .filter((version) => !input.intent || version.intent === input.intent)
         .filter((version) => !input.retention || version.storage.mode === input.retention)
-        .filter((version) => !input.beforeSequence || version.sequence < input.beforeSequence)
+        .filter((version) => version.sequence <= upper && (!before || version.sequence < before))
+        .filter((version) => !query || JSON.stringify({
+          label: artifacts.get(version.artifactId)?.label, artifactId: version.artifactId,
+          kind: artifacts.get(version.artifactId)?.kind, versionId: version.versionId,
+          metadata: version.metadata
+        }).toLowerCase().includes(query))
         .filter((version) => canAccessVersion(version, access))
         .filter((version) => {
           if (!input.availability) return true
@@ -1522,11 +1558,7 @@ class ArtifactVersionWorkspaceStore {
         })
         .filter((version) => {
           if (!input.currentOnly) return true
-          return projectArtifactForAccess(
-            index,
-            artifacts.get(version.artifactId)!,
-            access
-          ).currentVersionId === version.versionId
+          return snapshotCurrent.get(version.artifactId)?.versionId === version.versionId
         })
         .sort((left, right) => right.sequence - left.sequence)
       const page = candidates.slice(0, limit)
@@ -1550,7 +1582,7 @@ class ArtifactVersionWorkspaceStore {
           }
         }),
         ...(candidates.length > limit && page.length
-          ? { nextBeforeSequence: page.at(-1)!.sequence }
+          ? { nextBeforeSequence: page.at(-1)!.sequence, nextCursor: Buffer.from(JSON.stringify({ binding, upper, before: page.at(-1)!.sequence })).toString('base64url') }
           : {})
       })
     })
@@ -3951,4 +3983,20 @@ function messageOf(error: unknown): string {
 
 function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === 'ENOENT'
+}
+
+function sameExactVersionRef(left: ArtifactVersionRefV1, right: ArtifactVersionRefV1): boolean {
+  return left.artifactId === right.artifactId && left.versionId === right.versionId &&
+    left.contentDigest === right.contentDigest && left.byteLength === right.byteLength &&
+    left.mediaType === right.mediaType && left.retention === right.retention &&
+    left.availability === right.availability &&
+    left.accessPolicy.visibility === right.accessPolicy.visibility &&
+    left.accessPolicy.allowExport === right.accessPolicy.allowExport &&
+    JSON.stringify(left.accessPolicy.principals) === JSON.stringify(right.accessPolicy.principals)
+}
+
+function assertExactVersionRef(expected: ArtifactVersionRefV1, actual: ArtifactVersionRefV1): void {
+  if (!sameExactVersionRef(expected, actual)) {
+    throw domainError('content-mismatch', 'The exact Artifact Version reference does not match the stored version.')
+  }
 }

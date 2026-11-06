@@ -15,7 +15,7 @@ import type { PrincipalContextSnapshot } from '@sciforge/domain-sdk/principal'
 type DeviceMode = 'active' | 'missing' | 'revoked'
 
 describe('CloudIdentityRuntime HTTP integration', () => {
-  it('removes Cloud Principal authority for missing, revoked, enrollment-error, and offline Device states', async () => {
+  it('preserves local identity across network loss while fencing Cloud I/O and revoking real identity changes', async () => {
     const signer = await createRsaSigner()
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-cloud-runtime-http-'))
     const installationSeed = 'installation-device-http-1'
@@ -23,6 +23,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     let deviceMode: DeviceMode = 'active'
     let enrollmentFails = false
     let deviceNetworkFails = false
+    let deviceResponseInvalid = false
     let refreshRotation = 0
     let currentRefreshToken = 'refresh-token-http-integration-before-restart'
     let refreshTokenRevoked = false
@@ -135,6 +136,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
           return
         }
         if (url.pathname === '/v1/me/devices') {
+          if (deviceResponseInvalid) { sendJson(response, 200, { devices: 'invalid' }); return }
           if (deviceNetworkFails) {
             request.socket.destroy()
             return
@@ -231,6 +233,7 @@ describe('CloudIdentityRuntime HTTP integration', () => {
     const principalSnapshots: PrincipalContextSnapshot[] = []
     const authorityInvalidations: IdentityAuthorityInvalidation[] = []
     const disposePrincipal = principal.subscribe((snapshot) => principalSnapshots.push(snapshot))
+    const attemptedCommands: RequestInit[] = []
     const runtime = await CloudIdentityRuntime.create({
       userDataDir,
       appRoot: userDataDir,
@@ -242,6 +245,17 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       privateVault,
       externalNavigation,
       appVersion: '0.2.17',
+      fetchImpl: async (url, init) => {
+        if (String(url) === `${baseUrl}/v1/commands`) {
+          attemptedCommands.push(init!)
+          if (attemptedCommands.length === 1) {
+            throw new TypeError('fetch failed', {
+              cause: Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' })
+            })
+          }
+        }
+        return fetch(url, init)
+      },
       onAuthorityInvalidated: (reason) => authorityInvalidations.push(reason)
     })
 
@@ -314,6 +328,8 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         status: 'paused'
       }])
       expect(commandIdempotencyKeys).toEqual(['idem_IdentityTransport0001'])
+      expect(attemptedCommands).toHaveLength(2)
+      expect(attemptedCommands[0]).toBe(attemptedCommands[1])
       const stageInput = { request: { protocolVersion: '1.0' as const, type: 'object.stage' as const,
         requestId: 'req_IdentityObject0001', idempotencyKey: 'idem_IdentityObject0001',
         projectId: object.projectId, taskId: 'tsk_CloudTask000001', executionId: 'exe_CloudExecution01',
@@ -434,13 +450,29 @@ describe('CloudIdentityRuntime HTTP integration', () => {
         principalVersion
       )
 
+      const localTurnLease = principal.snapshot()
+      const publishedBeforeOutage = principalSnapshots.length
+      const commandsBeforeOutage = commandPayloads.length
+      const objectsBeforeOutage = objectRequests
       deviceNetworkFails = true
       await expect(runtime.refreshDevices()).resolves.toMatchObject({
         device: { state: 'error' },
         error: { source: 'device' }
       })
-      expect(principal.current()?.assurance).toBe('local-selection')
-      expectLatestPrincipal(principalSnapshots, 'local-selection', principalVersion)
+      expect(principal.snapshot()).toEqual(localTurnLease)
+      expect(principalSnapshots).toHaveLength(publishedBeforeOutage)
+      expect(runtime.authenticatedCloudTransportStatus()).toMatchObject({
+        state: 'unavailable', reasonCode: 'authority_unverified'
+      })
+      await expect(runtime.executeAuthenticatedCloud({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: { protocolVersion: '1.0', requestId: 'req_OfflineLocalTurn0001', type: 'project.list', limit: 50 }
+      })).rejects.toMatchObject({ code: 'authority_unverified' })
+      await expect(runtime.stageAuthenticatedCloudObject(stageInput)).rejects.toMatchObject({ code: 'transport_unavailable' })
+      expect(commandPayloads).toHaveLength(commandsBeforeOutage)
+      expect(objectRequests).toBe(objectsBeforeOutage)
+      expect(principal.snapshot()).toEqual(localTurnLease)
       expect(authorityInvalidations.at(-1)).toMatchObject({
         code: 'device_unverified', message: 'Connection interrupted. Reconnecting to verify this device.'
       })
@@ -448,6 +480,28 @@ describe('CloudIdentityRuntime HTTP integration', () => {
       deviceMode = 'active'
       await runtime.refreshDevices()
       expect(principal.current()?.assurance).toBe('cloud-authenticated')
+
+      expect(principal.snapshot()).toEqual(localTurnLease)
+      expect(principalSnapshots).toHaveLength(publishedBeforeOutage)
+      // Reconnection restores Cloud access through revalidation, without
+      // replacing the Principal inherited by local turns and their children.
+      await expect(runtime.executeAuthenticatedCloud({
+        contractVersion: 1,
+        operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
+        payload: { protocolVersion: '1.0', requestId: 'req_RestoredLocalTurn001', type: 'project.list', limit: 50 }
+      })).resolves.toBeDefined()
+      expect(commandPayloads).toHaveLength(commandsBeforeOutage + 1)
+      deviceResponseInvalid = true
+      await expect(runtime.refreshDevices()).resolves.toMatchObject({
+        device: { state: 'error', reasonCode: 'response_invalid' }
+      })
+      expect(principal.snapshot()).not.toEqual(localTurnLease)
+      expect(principal.current()?.assurance).toBe('local-selection')
+      deviceResponseInvalid = false
+      await runtime.refreshDevices()
+      expect(principal.current()?.assurance).toBe('cloud-authenticated')
+      expect(principal.snapshot().identityVersion).toBeGreaterThan(localTurnLease.identityVersion)
+
 
       const firstRotatedRefreshToken = currentRefreshToken
       expect(refreshRotation).toBe(3)

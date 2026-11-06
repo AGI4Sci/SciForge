@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@sciforge/plugin-workspace-note",
+  "entry": "dist/main.js",
+  "title": "Workspace note fixture",
+  "summary": {
+    "zh": "中立测试夹具：把宿主绑定的工作区写进一个文件。",
+    "en": "Neutral fixture: writes the host-bound workspace into a file."
+  },
+  "categories": [
+    "fixture"
+  ],
+  "hostDependencies": [
+    "@deepseek-ai/dsh-tools"
+  ],
+  "tools": {
+    "workspace_note_write": {
+      "id": "workspace-note.write",
+      "effect": "workspace-write",
+      "scope": "workspace",
+      "tags": [
+        "fixture",
+        "workspace"
+      ]
+    },
+    "workspace_note_probe": {
+      "id": "workspace-note.probe",
+      "effect": "compute",
+      "scope": "workspace",
+      "tags": [
+        "fixture",
+        "workspace"
+      ]
+    },
+    "workspace_note_report": {
+      "id": "workspace-note.report",
+      "effect": "compute",
+      "tags": [
+        "fixture",
+        "workspace"
+      ]
+    }
+  }
+}

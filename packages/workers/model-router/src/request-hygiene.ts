@@ -4,15 +4,9 @@ import { isStructuredOutputContractField } from './response-compat';
 
 type JsonRecord = Record<string, unknown>;
 
-const MAX_TOOL_OUTPUT_CHARS = 6_000;
 const MAX_ARGUMENT_STRING_CHARS = 6_000;
 const MAX_ARGUMENT_ARRAY_ITEMS = 32;
 const ARGUMENT_ARRAY_PREVIEW_ITEMS = 6;
-const HANDOFF_STRING_PREVIEW_CHARS = 384;
-const HANDOFF_ARRAY_PREVIEW_ITEMS = 12;
-const HANDOFF_OBJECT_PREVIEW_KEYS = 24;
-const HANDOFF_PREVIEW_DEPTH = 3;
-const HANDOFF_MAX_SERIALIZED_CHARS = 2_400;
 const MARKER_KEY = '__sciforge_request_hygiene__';
 const OMITTED_SHELL_COMMAND =
   'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
@@ -22,49 +16,13 @@ export function hygienizeModelRequestBody(body: Record<string, unknown>): Record
     path: [],
     root: body,
     source: 'model_request',
-    visualGenerateCallIds: collectVisualGenerateCallIds(body),
-    seenToolOutputs: new Map(),
   }) as Record<string, unknown>;
 }
 
-/**
- * Route handoffs are only meaningful when the corresponding tool call was the
- * canonical image-generation planner.  Keep the call ids in the request
- * envelope so an unrelated tool result cannot smuggle a routeLocked object
- * into the compact model history summary.
- */
-function collectVisualGenerateCallIds(body: Record<string, unknown>): ReadonlySet<string> {
-  const ids = new Set<string>();
-  collectVisualGenerateCallIdsFromValue(body, ids, 0);
-  return ids;
-}
-
-function collectVisualGenerateCallIdsFromValue(value: unknown, ids: Set<string>, depth: number): void {
-  if (depth > 8 || value === null || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    for (const entry of value) collectVisualGenerateCallIdsFromValue(entry, ids, depth + 1);
-    return;
-  }
-  const record = value as JsonRecord;
-  if (record.type === 'function_call' && record.name === 'visual_generate') {
-    const callId = stringField(record.call_id);
-    if (callId) ids.add(callId);
-  }
-  if (record.role === 'assistant' && Array.isArray(record.tool_calls)) {
-    for (const toolCall of record.tool_calls) {
-      if (!isRecord(toolCall)) continue;
-      const functionCall = isRecord(toolCall.function) ? toolCall.function : toolCall;
-      if (functionCall.name !== 'visual_generate') continue;
-      const callId = stringField(toolCall.id) || stringField(toolCall.call_id);
-      if (callId) ids.add(callId);
-    }
-  }
-  for (const entry of Object.values(record)) {
-    collectVisualGenerateCallIdsFromValue(entry, ids, depth + 1);
-  }
-}
-
 function hygienizeValue(value: unknown, context: HygieneContext): unknown {
+  // Result ownership belongs to the runtime/tool delivery layer. Preserve exact
+  // payloads, including nested text blocks, pagination and repeated receipts.
+  if (isToolOutputContext(context)) return value;
   if (typeof value === 'string') {
     if (isOpaqueResponsesContinuationState(context)) return value;
     if (context.key === 'arguments') return hygienizeToolArguments(value, sourceForContext(context, 'tool_call.arguments'));
@@ -81,12 +39,9 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (!isRecord(value)) return value;
   if (isStructuredImagePart(value)) return value;
 
-  const role = stringField(value.role);
+  const role = stringField(value.role) || (context.role === 'tool' ? context.role : '');
   const recordType = stringField(value.type) || context.recordType;
-  const callId = stringField(value.call_id) || stringField(value.tool_call_id);
-  const routeHandoffAllowed = (recordType === 'function_call_output' || role === 'tool')
-    && Boolean(callId)
-    && context.visualGenerateCallIds?.has(callId);
+  const callId = stringField(value.call_id) || stringField(value.tool_call_id) || stringField(value.tool_use_id) || context.callId || '';
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
     const path = [...context.path, key];
@@ -96,9 +51,7 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
       root: context.root,
       role,
       recordType,
-      routeHandoffAllowed,
-      visualGenerateCallIds: context.visualGenerateCallIds,
-      seenToolOutputs: context.seenToolOutputs,
+      callId,
       source: sourceForRecordEntry(context, role, key),
     });
     Object.defineProperty(out, key, {
@@ -168,48 +121,7 @@ function isShellHistoryPlaceholder(value: string): boolean {
 }
 
 function hygienizeText(value: string, context: HygieneContext): string {
-  const source = sourceForContext(context, context.source);
-  if (isToolOutputContext(context)) {
-    // A model request commonly contains the same tool result in several
-    // historical items (or mirrored protocol fields). Keep the first result
-    // available for context and replace later copies with a stable reference.
-    // The digest is deterministic, so the reference remains useful for trace
-    // lookup without carrying the full payload through every model request.
-    const digest = sha256Digest(value);
-    const previous = context.seenToolOutputs?.get(digest);
-    if (previous) return duplicateToolOutputMarker(source, digest, value.length);
-    context.seenToolOutputs?.set(digest, source);
-  }
-  if (isToolOutputContext(context) && value.length > MAX_TOOL_OUTPUT_CHARS) {
-    return markerText(
-      'tool_message.content',
-      'large_tool_output',
-      value,
-      safeToolOutputSummary(value, context.routeHandoffAllowed === true),
-    );
-  }
-  const replaced = replaceEncodedPayloads(value, source);
-  if (isToolOutputContext(context) && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
-    return markerText(
-      'tool_message.content',
-      'large_tool_output',
-      value,
-      safeToolOutputSummary(replaced, context.routeHandoffAllowed === true),
-    );
-  }
-  return replaced;
-}
-
-function duplicateToolOutputMarker(source: string, digest: string, originalChars: number): string {
-  return [
-    '[sciforge request_hygiene',
-    `source=${source}`,
-    'reason=duplicate_tool_output',
-    `outputRef=tool-output:${digest}`,
-    `digest=${digest}`,
-    `original_chars=${originalChars}`,
-    ']',
-  ].join(' ');
+  return replaceEncodedPayloads(value, sourceForContext(context, context.source));
 }
 
 function isToolOutputContext(context: HygieneContext): boolean {
@@ -272,118 +184,6 @@ function safeSummary(value: string): string {
   return `${normalized.slice(0, 220)} ... ${normalized.slice(-120)}`;
 }
 
-/**
- * Tool output is folded before it is sent back to a model. Keep a compact
- * route-locked handoff when one is present so the next model turn can carry
- * on with the declared plan instead of guessing a new route. This is shape
- * based rather than tied to a particular tool or domain identifier: any
- * object carrying a plan id, route, and an explicit route lock is eligible.
- */
-function safeToolOutputSummary(value: string, allowRouteHandoff: boolean): string {
-  const replaced = replaceEncodedPayloads(value, 'tool_message.content');
-  const parsed = parseStructuredToolOutput(replaced);
-  const handoff = allowRouteHandoff ? findRouteLockedHandoff(parsed) : undefined;
-  if (!handoff) return safeSummary(replaced);
-
-  const compact = compactHandoff(handoff);
-  const handoffText = JSON.stringify(compact);
-  return `route_locked_handoff=${handoffText}; text_preview=${safeSummary(replaced)}`;
-}
-
-function parseStructuredToolOutput(value: string): unknown | undefined {
-  const parsed = parseJson(value);
-  if (parsed !== undefined) return parsed;
-
-  // MCP text results commonly prefix a pretty-printed JSON payload with a
-  // short title (for example, "Visual production plan: ready."). Try a small
-  // bounded number of object starts to tolerate a title containing braces,
-  // while avoiding an untrusted brace-heavy output causing quadratic parsing.
-  let attempts = 0;
-  for (let index = value.indexOf('{'); index >= 0 && attempts < 8; index = value.indexOf('{', index + 1)) {
-    attempts += 1;
-    const candidate = parseJson(value.slice(index));
-    if (candidate !== undefined) return candidate;
-  }
-  return undefined;
-}
-
-function findRouteLockedHandoff(value: unknown, depth = 0, visited = { count: 0 }): JsonRecord | undefined {
-  if (!isRecord(value) || depth > HANDOFF_PREVIEW_DEPTH || visited.count >= 256) return undefined;
-  visited.count += 1;
-  if (isVisualGenerateResult(value)) {
-    return value.handoff as JsonRecord;
-  }
-  for (const entry of Object.values(value)) {
-    const found = findRouteLockedHandoff(entry, depth + 1, visited);
-    if (found) return found;
-  }
-  return undefined;
-}
-
-function isVisualGenerateResult(value: JsonRecord): boolean {
-  if (value.ok !== true || (value.status !== 'ready' && value.status !== 'budget_exhausted')) return false;
-  if (value.routeLocked !== true || !isRecord(value.handoff) || !isRecord(value.execution) || !isRecord(value.failPolicy)) return false;
-  const handoff = value.handoff;
-  if (
-    typeof handoff.planId !== 'string'
-    || !handoff.planId.trim()
-    || handoff.routeLocked !== true
-    || !['code', 'model', 'hybrid'].includes(handoff.route as string)
-    || handoff.fallbackPolicy !== 'fail_closed'
-  ) return false;
-  const execution = value.execution;
-  const failPolicy = value.failPolicy;
-  return execution.route === handoff.route
-    && Array.isArray(execution.stages)
-    && isRecord(execution.nextCall)
-    && failPolicy.mode === 'fail_closed'
-    && failPolicy.crossRouteFallback === false
-    && failPolicy.routeChangeRequiresNewPlan === true;
-}
-
-function compactHandoff(value: JsonRecord): JsonRecord {
-  // Keep the three routing keys first. Remaining fields are copied in their
-  // original order with bounded values so the summary remains safe to replay.
-  const preferredKeys = ['planId', 'route', 'routeLocked'];
-  const keys = [
-    ...preferredKeys.filter((key) => Object.hasOwn(value, key)),
-    ...Object.keys(value).filter((key) => !preferredKeys.includes(key)).slice(0, HANDOFF_OBJECT_PREVIEW_KEYS)
-  ];
-  const out: JsonRecord = {};
-  for (const key of keys) {
-    const entry = compactHandoffValue(value[key]);
-    if (entry === undefined) continue;
-    const candidate = { ...out, [key]: entry };
-    if (JSON.stringify(candidate).length > HANDOFF_MAX_SERIALIZED_CHARS && !preferredKeys.includes(key)) continue;
-    Object.defineProperty(out, key, {
-      configurable: true,
-      enumerable: true,
-      value: entry,
-      writable: true,
-    });
-  }
-  return out;
-}
-
-function compactHandoffValue(value: unknown, depth = 0): unknown {
-  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    if (value.length <= HANDOFF_STRING_PREVIEW_CHARS) return value;
-    return `${value.slice(0, HANDOFF_STRING_PREVIEW_CHARS - 16)} ...[truncated]`;
-  }
-  if (depth >= HANDOFF_PREVIEW_DEPTH) return '[nested value omitted]';
-  if (Array.isArray(value)) {
-    return value.slice(0, HANDOFF_ARRAY_PREVIEW_ITEMS).map((entry) => compactHandoffValue(entry, depth + 1));
-  }
-  if (!isRecord(value)) return undefined;
-  return Object.fromEntries(
-    Object.entries(value)
-      .slice(0, HANDOFF_OBJECT_PREVIEW_KEYS)
-      .map(([key, entry]) => [key, compactHandoffValue(entry, depth + 1)])
-      .filter(([, entry]) => entry !== undefined)
-  );
-}
-
 function sourceForRecordEntry(context: HygieneContext, role: string, key: string): string {
   if (key === 'content' && role) return `${role}_message.content`;
   if (key === 'text') return `${role ? `${role}_message` : 'message'}.text`;
@@ -428,12 +228,10 @@ function stringField(value: unknown) {
 
 type HygieneContext = {
   key?: string;
+  callId?: string;
   path: readonly string[];
   root: Record<string, unknown>;
   role?: string;
   recordType?: string;
-  routeHandoffAllowed?: boolean;
-  visualGenerateCallIds?: ReadonlySet<string>;
-  seenToolOutputs?: Map<string, string>;
   source: string;
 };

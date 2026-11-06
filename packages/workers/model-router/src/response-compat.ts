@@ -125,11 +125,16 @@ export function responsesToChatCompletions(
   const text = isRecord(request.text) ? request.text : undefined;
   const reasoningEffort = stringValue(request.reasoning_effort) || (reasoning ? stringValue(reasoning.effort) : '');
   const structuredOutput = chatStructuredOutputFormat(request);
+  const tools = responsesToolsToChatTools(request.tools, toolAliases);
+  const toolChoice = responseToolChoiceToChatToolChoice(request.tool_choice, toolAliases);
+  if (!tools?.length && toolChoice !== undefined && toolChoice !== null && toolChoice !== 'auto' && toolChoice !== 'none') {
+    throw new RangeError('Chat Completions cannot honor required or selected tool_choice without any usable tools.');
+  }
   return compactJsonObject({
     model: stringValue(request.model) || options.defaultModel || '',
     messages: responsesInputToMessages(request, toolAliases),
-    tools: responsesToolsToChatTools(request.tools, toolAliases),
-    tool_choice: responseToolChoiceToChatToolChoice(request.tool_choice, toolAliases),
+    tools,
+    tool_choice: tools?.length ? toolChoice : undefined,
     temperature: request.temperature,
     top_p: request.top_p,
     max_tokens: request.max_output_tokens ?? request.max_tokens,
@@ -169,6 +174,7 @@ export function chatCompletionToResponse(
   const output = toolCalls.length > 0
     ? [
       ...reasoningItems,
+      ...(parsedDsmlToolCalls.length === 0 && responseTextFromMessage(message) ? [messageOutputItem(responseTextFromMessage(message))] : []),
       ...toolCalls.map((toolCall) => chatToolCallToResponseItem(toolCall, toolNameAliases, reasoningContent)),
     ]
     : responseTextFromMessage(message)
@@ -187,7 +193,7 @@ export function chatCompletionToResponse(
     model: stringValue(request.model) || stringValue(completion.model) || '',
     status: incompleteReason ? 'incomplete' : 'completed',
     output,
-    output_text: toolCalls.length > 0 ? '' : responseTextFromMessage(message),
+    output_text: parsedDsmlToolCalls.length > 0 ? '' : responseTextFromMessage(message),
     usage,
     ...(finishReason
       ? { terminal_details: { protocol: 'chat-completions', finish_reason: finishReason } }

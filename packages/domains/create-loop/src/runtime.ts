@@ -66,8 +66,10 @@ import {
 } from './workflow-settings.js'
 import {
   createLoopResourceExecutionResultSchema,
+  missingCreateLoopWorkflowResourceProvider,
   type CreateLoopResourceExecutor
 } from './resource-executor.js'
+import { workflowCallTrigger, workflowReachableNodeIds } from './workflow-execution-graph.js'
 
 const SCHEMA_VERSION = 3
 const SCHEDULER_POLL_MS = 30_000
@@ -288,8 +290,7 @@ export class CreateLoopRuntime {
     const state = await this.#load()
     const workflow = state.settings.workflows.find((candidate) => candidate.id === workflowId)
     if (!workflow) return { ok: false, message: 'Workflow not found.' }
-    const trigger = workflow.nodes.find((node) => node.type === 'manual-trigger') ??
-      workflow.nodes.find((node) => node.type.endsWith('-trigger'))
+    const trigger = workflowCallTrigger(workflow)
     if (!trigger) return { ok: false, message: 'Workflow has no trigger node.' }
     const frozenWorkflow: WorkflowV1 = {
       ...structuredClone(workflow),
@@ -557,6 +558,13 @@ export class CreateLoopRuntime {
     callerWorkspaceRoot = '',
     metadata?: RunExecutionMetadata
   ): Promise<WorkflowRunResult> {
+    const missingProvider = missingCreateLoopWorkflowResourceProvider(
+      workflow,
+      triggerNodeId,
+      (await this.#load()).settings.workflows,
+      this.#resourceExecutors
+    )
+    if (missingProvider) return { ok: false, message: missingProvider }
     let resolvedWorkspaceRoot: string
     try {
       resolvedWorkspaceRoot = await this.#resolveRunWorkspaceRoot(
@@ -1419,8 +1427,7 @@ export class CreateLoopRuntime {
         if (!target || target.id === workflow.id) {
           throw new Error('Subworkflow target is missing or recursively references itself.')
         }
-        const trigger = target.nodes.find((candidate) => candidate.type === 'manual-trigger') ??
-          target.nodes.find((candidate) => candidate.type.endsWith('-trigger'))
+        const trigger = workflowCallTrigger(target)
         if (!trigger) throw new Error('Subworkflow target has no trigger.')
         const output = await this.#executeGraph(
           target,
@@ -1440,8 +1447,7 @@ export class CreateLoopRuntime {
         if (!target || target.id === workflow.id) {
           throw new Error('Loop body is missing or recursively references itself.')
         }
-        const trigger = target.nodes.find((candidate) => candidate.type === 'manual-trigger') ??
-          target.nodes.find((candidate) => candidate.type.endsWith('-trigger'))
+        const trigger = workflowCallTrigger(target)
         if (!trigger) throw new Error('Loop body has no trigger.')
         const maxIterations = Math.min(100, Math.max(1, node.config.maxIterations))
         if (node.config.mode === 'foreach') {
@@ -2137,22 +2143,6 @@ function runtimeWorkflowFromSnapshot(
     lastMessage: '',
     runs: []
   }
-}
-
-function workflowReachableNodeIds(workflow: WorkflowV1, triggerNodeId: string): Set<string> {
-  const reachable = new Set<string>()
-  const queue = [triggerNodeId]
-  while (queue.length > 0) {
-    const nodeId = queue.shift()!
-    if (reachable.has(nodeId)) continue
-    reachable.add(nodeId)
-    for (const connection of workflow.connections) {
-      if (connection.source === nodeId && !reachable.has(connection.target)) {
-        queue.push(connection.target)
-      }
-    }
-  }
-  return reachable
 }
 
 function clone<T>(value: T): T {

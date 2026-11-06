@@ -1,4 +1,12 @@
 import type { DomainRendererCapabilityInvoker } from '@sciforge/domain-sdk/host'
+import { z } from 'zod'
+import {
+  RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS,
+  researchAuditSubjectSchema,
+  researchAuditEvidenceAuditQueryOutputSchema,
+  type ResearchAuditEvidenceAuditQueryOutput,
+  type ArtifactVersionRefV1 as AuditArtifactVersionRefV1
+} from '@sciforge/domain-sdk/research-audit'
 import {
   ARTIFACT_VERSIONS_CAPABILITY_IDS,
   artifactVersionBundleExportInputV2Schema,
@@ -64,6 +72,12 @@ import {
 } from '@sciforge/domain-research-checkpoints/contract'
 
 const contracts = Object.freeze({
+  evidenceAudit: {
+    actionId: RESEARCH_AUDIT_READ_PORT_CAPABILITY_IDS.evidenceAuditQuery,
+    effect: 'read' as const,
+    inputSchema: z.object({ subject: researchAuditSubjectSchema }).strict(),
+    outputSchema: researchAuditEvidenceAuditQueryOutputSchema
+  },
   describeArtifact: {
     actionId: ARTIFACT_VERSIONS_CAPABILITY_IDS.describeV2,
     effect: 'read' as const,
@@ -151,6 +165,8 @@ const contracts = Object.freeze({
 })
 
 export type ResearchDossierCapabilityClient = Readonly<{
+  capabilityInvoker?: DomainRendererCapabilityInvoker
+  queryEvidenceAudit(workspaceRoot: string, ref: AuditArtifactVersionRefV1): Promise<ResearchAuditEvidenceAuditQueryOutput>
   describeArtifactVersion(
     workspaceRoot: string,
     versionId: string
@@ -213,6 +229,12 @@ export function createResearchDossierCapabilityClient(
   invoker: DomainRendererCapabilityInvoker
 ): ResearchDossierCapabilityClient {
   return Object.freeze({
+    capabilityInvoker: invoker,
+    queryEvidenceAudit: (workspaceRoot, ref) => invoker.invoke(
+      contracts.evidenceAudit,
+      { subject: { artifactVersionRef: ref } },
+      { workspaceId: workspaceRoot }
+    ),
     describeArtifactVersion: (workspaceRoot, versionId) => invoker.invoke(
       contracts.describeArtifact,
       { versionId },

@@ -126,6 +126,30 @@ function declaredPatchPaths(packageJson) {
   return list.map((item) => assertCanonicalArtifactPath(String(item).replace(/^\.\//, ''), 'dsh.bundle.patch'))
 }
 
+const RESERVED_DISCOVERY_TAGS = new Set([
+  'dsh-tool', 'dsh-workspace-read', 'dsh-workspace-opener', 'managed-mcp', 'native', 'sensitive-input'
+])
+const DISCOVERY_TAG_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}._-]*$/u
+
+function normalizeDiscoveryTags(toolName, input) {
+  if (input === undefined) return undefined
+  if (!Array.isArray(input)) throw new Error(`Tool ${toolName} tags must be an array.`)
+  const tags = []
+  for (const raw of input) {
+    if (typeof raw !== 'string' || !raw.trim()) throw new Error(`Tool ${toolName} tags must be non-empty strings.`)
+    const tag = raw.trim()
+    if (tag.length > 64 || !DISCOVERY_TAG_PATTERN.test(tag)) {
+      throw new Error(`Tool ${toolName} tag ${JSON.stringify(raw)} is invalid.`)
+    }
+    if (RESERVED_DISCOVERY_TAGS.has(tag.toLowerCase())) {
+      throw new Error(`Tool ${toolName} tag ${tag} is reserved.`)
+    }
+    if (!tags.includes(tag)) tags.push(tag)
+  }
+  if (tags.length > 16) throw new Error(`Tool ${toolName} declares more than 16 tags.`)
+  return tags
+}
+
 /** Validates the plugin's own declaration file and returns the tool grant table. */
 export function normalizeDeclaration(declaration, { packageName, entry }) {
   if (declaration === undefined) return { tools: {}, hostDependencies: [], categories: [], title: undefined, summary: undefined }
@@ -138,6 +162,30 @@ export function normalizeDeclaration(declaration, { packageName, entry }) {
   }
   if (declaration.entry !== undefined && declaration.entry !== entry) {
     throw new Error(`sciforge.dsh.json entry must match package.json entry (${entry}).`)
+  }
+  let hostServices = declaration.hostServices
+  if (hostServices !== undefined && hostServices !== 'none') {
+    if (!Array.isArray(hostServices) || hostServices.length === 0 || hostServices.length > 32) {
+      throw new Error('sciforge.dsh.json hostServices must be "none" or an array of 1 to 32 service names.')
+    }
+    hostServices = hostServices.map((service) => {
+      if (typeof service !== 'string' || !service.trim() || service.trim().length > 128) {
+        throw new Error('sciforge.dsh.json hostServices entries must be non-empty strings of at most 128 characters.')
+      }
+      return service.trim()
+    })
+    if (new Set(hostServices).size !== hostServices.length) throw new Error('sciforge.dsh.json hostServices must be unique.')
+  }
+  const ports = declaration.ports
+  if (ports !== undefined) {
+    if (!Array.isArray(ports) || ports.length > 64 || ports.some((port) =>
+      typeof port !== 'string' || port.length < 3 || port.length > 128 || !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/.test(port))) {
+      throw new Error('sciforge.dsh.json ports must be at most 64 canonical operation ids of at most 128 characters.')
+    }
+    if (new Set(ports).size !== ports.length) throw new Error('sciforge.dsh.json port operations must be unique.')
+    if (declaration.hostServices === 'none' && ports.length) {
+      throw new Error('sciforge.dsh.json hostServices: none conflicts with requested ports.')
+    }
   }
   const tools = {}
   for (const [name, grant] of Object.entries(declaration.tools ?? {})) {
@@ -157,10 +205,26 @@ export function normalizeDeclaration(declaration, { packageName, entry }) {
     if (grant.readResource !== undefined && (grant.readResource !== 'workspace' || grant.effect !== 'read')) {
       throw new Error(`Tool ${name} readResource must be "workspace" on a read grant.`)
     }
+    if (grant.approval !== undefined && !['none', 'confirmation'].includes(grant.approval)) {
+      throw new Error(`Tool ${name} approval ${String(grant.approval)} is not an approved level.`)
+    }
+    const tags = normalizeDiscoveryTags(name, grant.tags)
+    if (grant.scope !== undefined && grant.scope !== 'workspace') {
+      throw new Error(`Tool ${name} scope must be "workspace" when declared.`)
+    }
+    if (grant.scope === 'workspace' && grant.readResource !== undefined) {
+      throw new Error(`Tool ${name} cannot combine scope: "workspace" with readResource.`)
+    }
+    if ((grant.effect === 'workspace-write' || grant.effect === 'destructive') && grant.scope !== 'workspace') {
+      throw new Error(`Tool ${name} must declare scope: "workspace" for the ${grant.effect} effect.`)
+    }
     tools[name] = {
       id: grant.id,
       effect: grant.effect,
-      ...(grant.readResource !== undefined ? { readResource: grant.readResource } : {})
+      ...(grant.approval !== undefined ? { approval: grant.approval } : {}),
+      ...(grant.readResource !== undefined ? { readResource: grant.readResource } : {}),
+      ...(grant.scope !== undefined ? { scope: grant.scope } : {}),
+      ...(tags !== undefined ? { tags } : {})
     }
   }
   const hostDependencies = [...new Set((declaration.hostDependencies ?? []).map((dep) => {
@@ -171,7 +235,28 @@ export function normalizeDeclaration(declaration, { packageName, entry }) {
     if (!/^[a-z][a-z0-9-]*$/.test(String(category))) throw new Error(`Category ${String(category)} must be a lowercase slug.`)
     return category
   }))].sort()
-  return { tools, hostDependencies, categories, title: declaration.title, summary: declaration.summary }
+  // `ui.entry` lets a formal DSH plugin own a renderer surface; the host serves it
+  // from the installed directory through the sandboxed plugin frame.
+  let ui
+  if (declaration.ui !== undefined) {
+    if (!declaration.ui || typeof declaration.ui !== 'object' || Array.isArray(declaration.ui)) {
+      throw new Error('sciforge.dsh.json ui must be an object.')
+    }
+    const entry = declaration.ui.entry
+    if (typeof entry !== 'string' || !entry.trim()) throw new Error('sciforge.dsh.json ui.entry must be a non-empty relative path.')
+    if (entry.startsWith('/') || entry.split(/[\\/]/).some((part) => part === '..')) {
+      throw new Error('sciforge.dsh.json ui.entry must stay inside the plugin directory.')
+    }
+    const stateVersion = declaration.ui.stateVersion
+    if (stateVersion !== undefined && (!Number.isSafeInteger(stateVersion) || stateVersion < 0)) {
+      throw new Error('sciforge.dsh.json ui.stateVersion must be a non-negative integer.')
+    }
+    ui = { entry: entry.trim(), ...(stateVersion === undefined ? {} : { stateVersion }) }
+  }
+  return { tools, hostDependencies, categories, title: declaration.title, summary: declaration.summary,
+    ...(ports !== undefined ? { ports: [...ports].sort() } : {}),
+    ...(hostServices !== undefined ? { hostServices } : {}),
+    ...(ui === undefined ? {} : { ui }) }
 }
 
 export async function packDshPlugin(options) {
@@ -192,7 +277,7 @@ export async function packDshPlugin(options) {
 
   const payloadPaths = new Set(['package.json', entry])
   for (const patch of declaredPatchPaths(packageJson)) payloadPaths.add(patch)
-  for (const optional of ['sciforge.adapter.json', 'README.md']) {
+  for (const optional of ['sciforge.adapter.json', 'sciforge.dsh.json', 'README.md']) {
     try {
       const info = await stat(join(sourceDir, optional))
       if (info.isFile()) payloadPaths.add(optional)
@@ -246,6 +331,8 @@ export async function packDshPlugin(options) {
     dsh: Object.fromEntries(Object.entries(dsh).filter(([, value]) => value !== undefined)),
     ...(packageJson.engines?.dsh ? { engines: { dsh: packageJson.engines.dsh } } : {}),
     hostDependencies: normalized.hostDependencies,
+    ...(normalized.hostServices !== undefined ? { hostServices: normalized.hostServices } : {}),
+    ...(normalized.ports !== undefined ? { ports: normalized.ports } : {}),
     tools: normalized.tools,
     files
   }
@@ -322,6 +409,8 @@ export async function packDshPlugin(options) {
     fileCount: sortedPaths.length,
     tools: normalized.tools,
     hostDependencies: normalized.hostDependencies,
+    ...(normalized.hostServices !== undefined ? { hostServices: normalized.hostServices } : {}),
+    ...(normalized.ports !== undefined ? { ports: normalized.ports } : {}),
     ...(signature
       ? { signature: { keyId: signature.keyId, publisherId: signature.publisherId, algorithm: signature.algorithm } }
       : { signature: null }),
@@ -375,6 +464,7 @@ async function verifyArtifact(artifactPath, keyringPath) {
     fileCount: Object.keys(result.manifest.files).length,
     tools: result.manifest.tools,
     hostDependencies: result.manifest.hostDependencies,
+    ...(result.manifest.ports !== undefined ? { ports: result.manifest.ports } : {}),
     signed: result.signatureBytes !== undefined
   }
   if (!keyringPath) return summary

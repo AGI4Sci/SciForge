@@ -9,7 +9,7 @@ import {
 import { createPortal } from 'react-dom'
 import { Bot, Brain, Check, ChevronDown, ChevronRight, ExternalLink, Gauge, Loader2, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { AgentRuntimeId } from '@shared/app-settings'
+import { normalizeAgentRuntimeId, type AgentRuntimeId } from '@shared/app-settings'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
 import type { AgentRuntimeModelCatalog } from '@shared/agent-runtime-contract'
 import { agentRuntimeTurnControls } from '@shared/agent-runtime-turn-controls'
@@ -64,13 +64,14 @@ type Props = {
   onOpenModelAccess?: () => void
 }
 
-export const COMPOSER_RUNTIME_IDS = ['codex', 'claude', 'dsh'] as const satisfies readonly AgentRuntimeId[]
+const RUNTIME_OPTIONS = {
+  codex: { labelKey: 'composerRuntimeCodex', shortLabelKey: 'composerRuntimeCodexShort', chipLabelKey: 'composerRuntimeChipCodex' },
+  claude: { labelKey: 'composerRuntimeClaude', shortLabelKey: 'composerRuntimeClaudeShort', chipLabelKey: 'composerRuntimeChipClaude' },
+  dsh: { labelKey: 'composerRuntimeDsh', shortLabelKey: 'composerRuntimeDshShort', chipLabelKey: 'composerRuntimeChipDsh' },
+  pi: { labelKey: 'composerRuntimePi', shortLabelKey: 'composerRuntimePiShort', chipLabelKey: 'composerRuntimeChipPi' }
+} satisfies Record<AgentRuntimeId, { labelKey: string; shortLabelKey: string; chipLabelKey: string }>
 
-const RUNTIME_OPTIONS: Array<{ id: (typeof COMPOSER_RUNTIME_IDS)[number]; labelKey: string; shortLabelKey: string }> = [
-  { id: 'codex', labelKey: 'composerRuntimeCodex', shortLabelKey: 'composerRuntimeCodexShort' },
-  { id: 'claude', labelKey: 'composerRuntimeClaude', shortLabelKey: 'composerRuntimeClaudeShort' },
-  { id: 'dsh', labelKey: 'composerRuntimeDsh', shortLabelKey: 'composerRuntimeDshShort' }
-]
+export const COMPOSER_RUNTIME_IDS = Object.keys(RUNTIME_OPTIONS) as AgentRuntimeId[]
 
 export type ComposerRuntimeSectionState = {
   /** Whether the section offers switching right now. */
@@ -101,7 +102,7 @@ export function composerRuntimeSectionState(args: {
   }
   return {
     interactive: !args.runtimeLocked,
-    visibleRuntimeIds: RUNTIME_OPTIONS.map((option) => option.id),
+    visibleRuntimeIds: [...COMPOSER_RUNTIME_IDS],
     noteKey: args.runtimeLocked ? 'composerRuntimeCodexPlanLocked' : null
   }
 }
@@ -218,12 +219,12 @@ export function FloatingComposerModelPicker({
     return groups
   }, [composerModelGroups, modelOptions, t])
   const runtimeEnabled = Boolean(onActiveAgentRuntimeChange)
-  const currentRuntime = normalizeComposerRuntimeId(activeAgentRuntime)
+  const currentRuntime = normalizeAgentRuntimeId(activeAgentRuntime)
   // Turn-control intersection: a level is only selectable when the model side
   // has evidence AND the runtime can actually transfer it. An explicit “off”
   // additionally requires the runtime to express an off/disabled state.
   const turnControls = agentRuntimeTurnControls(currentRuntime)
-  const currentRuntimeLabel = t(runtimeShortLabelKey(currentRuntime))
+  const currentRuntimeLabel = t(RUNTIME_OPTIONS[currentRuntime].shortLabelKey)
   const discoveredCapabilityOptions = composerModelControlOptions(composerModel, modelCatalog)
   // 'auto'/empty resolves to the first declared entry: the router really serves
   // that entry for the default selection, so discovery follows it.
@@ -285,7 +286,7 @@ export function FloatingComposerModelPicker({
     runtimeLocked,
     runtimeSessionLocked
   })
-  const runtimeChipLabel = runtimeEnabled ? t(runtimeChipLabelKey(currentRuntime)) : ''
+  const runtimeChipLabel = runtimeEnabled ? t(RUNTIME_OPTIONS[currentRuntime].chipLabelKey) : ''
   const reasoningChipLabel = currentReasoning
     ? currentReasoningLabel
     : (reasoningEnabled ? t('composerReasoningUpstreamDefault') : '')
@@ -491,18 +492,17 @@ export function FloatingComposerModelPicker({
             <div className="rounded-xl border border-ds-border-muted bg-ds-main/30 px-2 py-2">
               <div className="flex flex-col gap-1">
                 {runtimeSection.visibleRuntimeIds.map((runtimeId) => {
-                  const option = RUNTIME_OPTIONS.find((candidate) => candidate.id === runtimeId)
-                  if (!option) return null
-                  const canSwitch = runtimeSection.interactive || (runtimeLocked && option.id === 'codex')
+                  const option = RUNTIME_OPTIONS[runtimeId]
+                  const canSwitch = runtimeSection.interactive || (runtimeLocked && runtimeId === 'codex')
                   return (
                     <PickerRow
-                      key={option.id}
-                      selected={currentRuntime === option.id}
+                      key={runtimeId}
+                      selected={currentRuntime === runtimeId}
                       title={t(option.labelKey)}
                       disabled={!canSwitch}
                       onClick={() => {
                         if (!canSwitch) return
-                        onActiveAgentRuntimeChange?.(option.id)
+                        onActiveAgentRuntimeChange?.(runtimeId)
                         setMenuOpen(false)
                       }}
                     />
@@ -937,11 +937,6 @@ function currentBodyZoom(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
-export function normalizeComposerRuntimeId(value: unknown): AgentRuntimeId {
-  if (value === 'codex' || value === 'claude' || value === 'dsh') return value
-  return 'codex'
-}
-
 function formatDiscoveryCheckedAt(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -951,21 +946,6 @@ function formatDiscoveryCheckedAt(value: string): string {
     hour: '2-digit',
     minute: '2-digit'
   })
-}
-
-function runtimeShortLabelKey(value: AgentRuntimeId): string {
-  return RUNTIME_OPTIONS.find((option) => option.id === value)?.shortLabelKey ?? 'composerRuntimeCodexShort'
-}
-
-function runtimeChipLabelKey(value: AgentRuntimeId): string {
-  switch (value) {
-    case 'claude':
-      return 'composerRuntimeChipClaude'
-    case 'dsh':
-      return 'composerRuntimeChipDsh'
-    default:
-      return 'composerRuntimeChipCodex'
-  }
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -1,3 +1,4 @@
+import './preview-line-numbers.css'
 import {
   useCallback,
   useDeferredValue,
@@ -721,7 +722,7 @@ export function WriteDocxViewer({
         <div className="mx-auto my-8 min-h-[calc(100%-4rem)] w-[min(780px,calc(100%-48px))] rounded-sm border border-ds-border-muted bg-white px-16 py-14 shadow-sm dark:bg-ds-card">
           {committedParagraphs.length > 0 ? (
             editMode ? (
-              <article className="ds-selectable-text whitespace-pre-wrap">
+              <article className="ds-selectable-text whitespace-pre-wrap preview-source-lines">
                 {draftParagraphs.map((paragraph) => (
                   <p
                     key={paragraph.id}
@@ -730,6 +731,7 @@ export function WriteDocxViewer({
                       else editableParagraphRefs.current.delete(paragraph.index)
                     }}
                     data-docx-paragraph-index={paragraph.index}
+                    data-preview-line-number={`¶${paragraph.index + 1}`}
                     contentEditable
                     suppressContentEditableWarning
                     spellCheck
@@ -741,11 +743,12 @@ export function WriteDocxViewer({
                 ))}
               </article>
             ) : (
-              <article className="ds-selectable-text whitespace-pre-wrap">
+              <article className="ds-selectable-text whitespace-pre-wrap preview-source-lines">
                 {committedParagraphs.map((paragraph) => (
                   <p
                     key={paragraph.id}
                     data-docx-paragraph-index={paragraph.index}
+                    data-preview-line-number={`¶${paragraph.index + 1}`}
                     className={paragraphClassName(paragraph.style)}
                   >
                     {renderParagraphText(paragraph)}

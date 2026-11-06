@@ -6,7 +6,6 @@ import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   DEFAULT_SANDBOX_MODE,
   type AppSettingsV1,
-  type LocalRuntimeContextCompactionSettingsV1,
   type LocalRuntimeHistoryHygieneSettingsV1,
   type LocalRuntimeMcpSearchSettingsV1,
   type RuntimeGuardSettingsPatchV1,
@@ -51,8 +50,7 @@ export function defaultLocalRuntimeSettings(
     tokenEconomy: defaultLocalRuntimeTokenEconomySettings(),
     insecure: false,
     mcpSearch: defaultLocalRuntimeMcpSearchSettings(),
-    storage: defaultLocalRuntimeStorageSettings(),
-    contextCompaction: defaultLocalRuntimeContextCompactionSettings()
+    storage: defaultLocalRuntimeStorageSettings()
   }
 }
 
@@ -92,17 +90,6 @@ export function defaultLocalRuntimeStorageSettings(): LocalRuntimeStorageSetting
   return {
     backend: 'hybrid',
     sqlitePath: ''
-  }
-}
-
-export function defaultLocalRuntimeContextCompactionSettings(): LocalRuntimeContextCompactionSettingsV1 {
-  return {
-    defaultSoftThreshold: 16_000,
-    defaultHardThreshold: 24_000,
-    summaryMode: 'heuristic',
-    summaryTimeoutMs: 15_000,
-    summaryMaxTokens: 1_200,
-    summaryInputMaxBytes: 96 * 1024
   }
 }
 
@@ -206,11 +193,6 @@ export function mergeLocalRuntimeSettings(
     ...currentStorage,
     ...(runtimePatch?.storage ?? {})
   })
-  const currentContextCompaction = normalizeLocalRuntimeContextCompactionSettings(current.contextCompaction)
-  const nextContextCompaction = normalizeLocalRuntimeContextCompactionSettings({
-    ...currentContextCompaction,
-    ...(runtimePatch?.contextCompaction ?? {})
-  })
   const sandboxMode = runtimePatch?.sandboxMode ?? current.sandboxMode
   return {
     ...current,
@@ -223,8 +205,7 @@ export function mergeLocalRuntimeSettings(
     tokenEconomyMode: nextTokenEconomy.enabled,
     tokenEconomy: nextTokenEconomy,
     mcpSearch: nextMcpSearch,
-    storage: nextStorage,
-    contextCompaction: nextContextCompaction
+    storage: nextStorage
   }
 }
 
@@ -256,9 +237,6 @@ function supportedLocalRuntimePatch(
   }
   if (isPlainObject(source.storage)) {
     next.storage = source.storage as LocalRuntimeSettingsPatchV1['storage']
-  }
-  if (isPlainObject(source.contextCompaction)) {
-    next.contextCompaction = source.contextCompaction as LocalRuntimeSettingsPatchV1['contextCompaction']
   }
   return Object.keys(next).length > 0 ? next : undefined
 }
@@ -346,24 +324,6 @@ function normalizeLocalRuntimeStorageSettings(
       ? input.backend
       : defaults.backend,
     sqlitePath: typeof input?.sqlitePath === 'string' ? input.sqlitePath.trim() : defaults.sqlitePath
-  }
-}
-
-function normalizeLocalRuntimeContextCompactionSettings(
-  input: Partial<LocalRuntimeContextCompactionSettingsV1> | undefined
-): LocalRuntimeContextCompactionSettingsV1 {
-  const defaults = defaultLocalRuntimeContextCompactionSettings()
-  const defaultSoftThreshold = boundedPositiveInt(input?.defaultSoftThreshold, defaults.defaultSoftThreshold)
-  const requestedHardThreshold = boundedPositiveInt(input?.defaultHardThreshold, defaults.defaultHardThreshold)
-  return {
-    defaultSoftThreshold,
-    defaultHardThreshold: Math.max(defaultSoftThreshold, requestedHardThreshold),
-    summaryMode: input?.summaryMode === 'model' || input?.summaryMode === 'heuristic'
-      ? input.summaryMode
-      : defaults.summaryMode,
-    summaryTimeoutMs: boundedPositiveInt(input?.summaryTimeoutMs, defaults.summaryTimeoutMs, 120_000),
-    summaryMaxTokens: boundedPositiveInt(input?.summaryMaxTokens, defaults.summaryMaxTokens, 16_000),
-    summaryInputMaxBytes: boundedPositiveInt(input?.summaryInputMaxBytes, defaults.summaryInputMaxBytes, 8 * 1024 * 1024)
   }
 }
 

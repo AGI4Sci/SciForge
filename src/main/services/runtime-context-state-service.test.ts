@@ -2,6 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RuntimeContextStateService } from './runtime-context-state-service'
 
 describe('RuntimeContextStateService', () => {
+  it('does not overwrite continuation state with a lifecycle label', () => {
+    const service = new RuntimeContextStateService()
+    const identity = { runtimeId: 'codex' as const, threadId: 'native' }
+    service.recordCompaction({ ...identity, summary: 'Verified artifact A; remaining check B.' })
+    service.observeEvent({ ...identity, kind: 'compaction_event', status: 'success', summary: 'Native compaction completed' })
+    expect(service.peek(identity)?.summary).toBe('Verified artifact A; remaining check B.')
+  })
   afterEach(() => {
     vi.useRealTimers()
   })
@@ -45,7 +52,8 @@ describe('RuntimeContextStateService', () => {
       threadId: 'thread-1',
       itemId: 'compact-1',
       status: 'success',
-      summary: 'Short summary',
+      summary: 'Compaction complete',
+      contextSummary: 'Short summary',
       detail: 'token pressure',
       auto: false,
       messagesBefore: 12,

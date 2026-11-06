@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { withBoundedToolResults } from './model-visible-tool-result'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createAgentRuntimeMcpToolLease } from './agent-runtime-mcp-tool-lease'
@@ -28,6 +30,21 @@ async function connect(lease: Awaited<ReturnType<typeof createAgentRuntimeMcpToo
 }
 
 describe('canonical per-turn MCP tool lease', () => {
+  it('sends verified images as real MCP image blocks after bounded artifact projection', async () => {
+    const data = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVR4nGNgQAcAABIAAXfx+gAAAAAASUVORK5CYII='
+    const bytes = Buffer.from(data, 'base64')
+    const value = { output: { mimeType: 'image/png', dataUrl: `data:image/png;base64,${data}`, digest: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length, width: 2, height: 2, integrityVerified: true }, notes: 'details '.repeat(2000) }
+    const persist = vi.fn(async () => 'image-artifact')
+    const tools = withBoundedToolResults({ ...surface(), call: async () => ({ tool: definition.name, value }) }, persist)
+    const lease = await createAgentRuntimeMcpToolLease({ surface: tools, context, signal: new AbortController().signal, assertCurrent() {}, imageInputAllowed: true })
+    cleanup.push(() => lease.close())
+    const client = await connect(lease)
+    const response = await client.callTool({ name: definition.name, arguments: {} })
+    expect(response.content).toEqual([expect.objectContaining({ type: 'text' }), { type: 'image', data, mimeType: 'image/png' }])
+    expect(JSON.stringify((response.content as unknown[])[0])).not.toContain(data)
+    expect(persist).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ value }))
+  })
+
   it('publishes and invokes only canonical tools with host-captured identity and a live signal', async () => {
     const tools = surface()
     const assertCurrent = vi.fn()

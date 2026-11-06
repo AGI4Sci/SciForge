@@ -114,18 +114,18 @@ describe('FloatingComposerModelPicker execution-environment section', () => {
   it('offers every runtime while the session is unbound', () => {
     expect(
       composerRuntimeSectionState({ currentRuntime: 'codex', runtimeLocked: false, runtimeSessionLocked: false })
-    ).toEqual({ interactive: true, visibleRuntimeIds: ['codex', 'claude', 'dsh'], noteKey: null })
+    ).toEqual({ interactive: true, visibleRuntimeIds: ['codex', 'claude', 'dsh', 'pi'], noteKey: null })
   })
 
   it('collapses to a read-only bound runtime once the session is locked', () => {
     expect(
-      composerRuntimeSectionState({ currentRuntime: 'claude', runtimeLocked: false, runtimeSessionLocked: true })
-    ).toEqual({ interactive: false, visibleRuntimeIds: ['claude'], noteKey: 'composerRuntimeSessionLocked' })
+      composerRuntimeSectionState({ currentRuntime: 'pi', runtimeLocked: false, runtimeSessionLocked: true })
+    ).toEqual({ interactive: false, visibleRuntimeIds: ['pi'], noteKey: 'composerRuntimeSessionLocked' })
   })
 
   it('keeps the Codex-plan lock as a note instead of an interactive switch', () => {
     expect(
       composerRuntimeSectionState({ currentRuntime: 'codex', runtimeLocked: true, runtimeSessionLocked: false })
-    ).toEqual({ interactive: false, visibleRuntimeIds: ['codex', 'claude', 'dsh'], noteKey: 'composerRuntimeCodexPlanLocked' })
+    ).toEqual({ interactive: false, visibleRuntimeIds: ['codex', 'claude', 'dsh', 'pi'], noteKey: 'composerRuntimeCodexPlanLocked' })
   })
 })

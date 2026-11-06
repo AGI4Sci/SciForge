@@ -138,47 +138,32 @@ test('turn artifacts are used only when top-level artifacts are empty', () => {
   assert.deepEqual(fromTop.changes.map((change) => change.id), ['top'])
 })
 
-test('more than 5000 changes truncate to the LAST 5000', () => {
+test('large change corpus retains the newest bounded suffix with explicit reasons', () => {
   const snapshot = projectSessionChangeSnapshot('s', manyChangesSession(5_001))
   assert.equal(snapshot.truncated, true)
-  assert.equal(snapshot.changes.length, 5_000)
-  assert.equal(snapshot.changes[0]?.id, 'bulk-1')
+  assert.equal(snapshot.changes.length > 0 && snapshot.changes.length <= 5_000, true)
   assert.equal(snapshot.changes.at(-1)?.id, 'bulk-5000')
+  assert.equal(snapshot.truncationReasons.includes('change-count-limit'), true)
+  assert.equal(snapshot.truncationReasons.includes('snapshot-byte-limit'), true)
+  assert.equal(Buffer.byteLength(JSON.stringify(snapshot)) <= 262_144, true)
 })
 
-test('a patch over 2MB is rejected by the contract, exactly like the static module', () => {
-  // The truncation marker is 31 characters while truncatePatch reserves only
-  // 30, so a truncated patch lands at 2,000,001 characters and the snapshot
-  // schema rejects it. This is the static module's observed behaviour; the
-  // plugin keeps it byte-exact (fixing it is a contract change, not part of
-  // the runtime-plugin migration).
-  assert.throws(
-    () => projectSessionChangeSnapshot('s', hugePatchSession()),
-    (error: unknown) => {
-      assert.match(
-        (error as Error).message,
-        /Too big: expected string to have <=2000000 characters/u
-      )
-      return true
-    }
-  )
+test('huge patches are bounded in UTF-8 bytes with original size and truncation reason', () => {
+  const snapshot = projectSessionChangeSnapshot('s', hugePatchSession())
+  const change = snapshot.changes[0]!
+  assert.equal(Buffer.byteLength(change.patch) <= 65_536, true)
+  assert.equal(change.patchBytes > 2_000_000, true)
+  assert.equal(change.patchTruncated, true)
+  assert.equal(snapshot.truncated, true)
+  assert.deepEqual(snapshot.truncationReasons, ['patch-byte-limit'])
 })
 
-test('revision passes short watermarks through and hashes long or empty ones', () => {
-  const short = projectSessionChangeSnapshot('s', { watermark: 'wm-7', artifacts: [] })
-  assert.equal(short.revision, 'wm-7')
-  const long = projectSessionChangeSnapshot('s', {
-    watermark: 'w'.repeat(300),
-    artifacts: [{ kind: 'tool', toolKind: 'file_change', id: 'a', detail: DIFF_A }]
-  })
-  assert.match(long.revision, /^changes-[0-9a-f]{1,8}$/u)
-  const empty = projectSessionChangeSnapshot('s', { watermark: '', artifacts: [] })
-  assert.match(empty.revision, /^changes-[0-9a-f]{1,8}$/u)
-  assert.notEqual(long.revision, empty.revision)
-  // Deterministic for identical inputs.
-  const again = projectSessionChangeSnapshot('s', {
-    watermark: 'w'.repeat(300),
-    artifacts: [{ kind: 'tool', toolKind: 'file_change', id: 'a', detail: DIFF_A }]
-  })
-  assert.equal(again.revision, long.revision)
+test('all revisions are content hashes, stable but invalidated by source edits', () => {
+  const source = { watermark: 'wm-7', artifacts: [{ kind: 'tool', toolKind: 'file_change', id: 'a', detail: DIFF_A }] }
+  const first = projectSessionChangeSnapshot('s', source)
+  assert.match(first.revision, /^changes-[a-f0-9]{64}$/)
+  assert.equal(projectSessionChangeSnapshot('s', source).revision, first.revision)
+  assert.notEqual(projectSessionChangeSnapshot('s', { ...source, artifacts: [{ ...source.artifacts[0], detail: DIFF_B }] }).revision, first.revision)
+  assert.notEqual(projectSessionChangeSnapshot('other-session', source).revision, first.revision)
+  assert.match(projectSessionChangeSnapshot('s', { watermark: '', artifacts: [] }).revision, /^changes-[a-f0-9]{64}$/)
 })

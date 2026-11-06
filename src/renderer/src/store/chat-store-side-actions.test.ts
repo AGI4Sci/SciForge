@@ -356,6 +356,84 @@ describe('chat-store-side-actions', () => {
     expect(provider.subscribeMock).toHaveBeenCalledWith('side_thr_main', 0, expect.anything(), expect.anything())
   })
 
+  it('defaults to a tool-free side turn and pins its parent runtime and memory workspace', async () => {
+    const { actions, state, provider } = buildHarness()
+    state.threads[0].runtimeId = 'codex'
+    state.threads[0].workspace = '/parent-workspace'
+    state.activeAgentRuntime = 'claude'
+    const id = (await actions.spawnSideConversation('Explain this result.'))!
+    expect(state.sideConversations[id].chatMode).toBe('light')
+    expect(provider.sendMock).toHaveBeenCalledWith(id, 'Explain this result.', expect.objectContaining({
+      runtimeId: 'codex', workspace: '/parent-workspace', allowedTools: []
+    }))
+    expect(state.activeThreadId).toBe('thr_main')
+  })
+
+  it('changes mode only between turns while preserving the same side context and thread', async () => {
+    const { actions, state, provider } = buildHarness()
+    const context = { id: 'node-1', title: 'A result', text: 'The observed exit code was 7.' }
+    const id = (await actions.spawnSideConversation(undefined, { context }))!
+    actions.setSideChatMode(id, 'deep')
+    await actions.sendSideMessage(id, 'Inspect it.')
+    expect(provider.sendMock.mock.calls[0][1]).toContain(context.text)
+    expect(provider.sendMock.mock.calls[0][2]).not.toHaveProperty('allowedTools')
+    expect(provider.sendMock.mock.calls[0][2]).toMatchObject({ displayText: 'Inspect it.' })
+    actions.setSideChatMode(id, 'light')
+    expect(state.sideConversations[id].chatMode).toBe('deep')
+    state.sideConversations[id].busy = false
+    actions.setSideChatMode(id, 'light')
+    await actions.sendSideMessage(id, 'Summarize without more work.')
+    expect(provider.sendMock.mock.calls[1][2]).toMatchObject({ allowedTools: [] })
+    expect(state.sideConversations[id].context).toEqual(context)
+    expect(provider.forkMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens an exact non-active parent and resumes its side stream after hiding', async () => {
+    const { actions, state, provider } = buildHarness()
+    state.threads.push({ ...state.threads[0], id: 'other', runtimeId: 'codex', workspace: '/other' })
+    const id = (await actions.spawnSideConversation(undefined, {
+      parentThreadId: 'other', runtimeId: 'codex', workspaceRoot: '/other',
+      context: { id: 'record-1', title: 'Record', text: 'Source snapshot' }
+    }))!
+    expect(state.activeThreadId).toBe('thr_main')
+    expect(state.sideConversations[id].parentThreadId).toBe('other')
+    actions.setSidePanelOpen(false)
+    const subscriptions = provider.subscribeMock.mock.calls.length
+    actions.setSidePanelOpen(true)
+    expect(provider.subscribeMock.mock.calls.length).toBe(subscriptions + 1)
+    expect(await actions.spawnSideConversation(undefined, { parentThreadId: 'other', runtimeId: 'claude' })).toBeNull()
+  })
+
+  it('supplies the actual parent snapshot when native fork is unavailable', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, fork: false, sideConversations: false }
+    provider.threadDetail = { latestSeq: 3, blocks: [
+      { kind: 'user', id: 'u1', text: 'Keep the failed comparison.' },
+      { kind: 'assistant', id: 'a1', text: 'Batch B did not reproduce the gain.' }
+    ] }
+    const id = (await actions.spawnSideConversation('What changed?'))!
+    expect(provider.getDetailMock).toHaveBeenCalledWith('thr_main')
+    expect(provider.createMock).toHaveBeenCalledWith(expect.objectContaining({ parentThreadId: 'thr_main', relation: 'side' }))
+    expect(provider.sendMock.mock.calls[0][1]).toContain('Batch B did not reproduce the gain.')
+    expect(provider.sendMock.mock.calls[0][2]).toMatchObject({ allowedTools: [], displayText: 'What changed?' })
+    expect(state.sideConversations[id].context?.sourceRefs).toEqual([
+      { label: 'Parent conversation snapshot', threadId: 'thr_main' }
+    ])
+  })
+
+  it('keeps a queued light question tool-free when the active runtime or mode changes later', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation('First question'))!
+    await actions.sendSideMessage(id, 'Next question')
+    expect(state.sideConversations[id].queuedMessages?.[0]).toMatchObject({ chatMode: 'light' })
+    expect(admissionMock.acceptQueuedInput).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ allowedTools: [], chatMode: 'light' }) }))
+    state.sideConversations[id].chatMode = 'deep'
+    const subscription = provider.subscribeMock.mock.calls.at(-1) as [string, number, ThreadEventSink, AbortSignal]
+    subscription[2].onTurnComplete()
+    await flushPromises()
+    expect(provider.sendMock).toHaveBeenLastCalledWith(id, 'Next question', expect.objectContaining({ allowedTools: [] }))
+  })
+
   it('spawns PDF annotation side conversations without opening the regular side panel', async () => {
     const { actions, state, provider } = buildHarness()
 
@@ -438,6 +516,7 @@ describe('chat-store-side-actions', () => {
       title: 'PDF: selected text',
       mode: 'agent',
       workspace: '/tmp',
+      parentThreadId: 'thr_main',
       relation: 'side',
       threadSource: 'pdf_annotation',
       sidebarVisibility: 'hidden'
@@ -863,6 +942,24 @@ describe('chat-store-side-actions', () => {
     )
   })
 
+
+  it('source viewing blocks side-queue completion dispatch without dropping the queued input', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: false }
+    provider.threadDetail = { blocks: [], latestSeq: 4, threadStatus: 'running', latestTurnId: 'turn-child' }
+    const id = (await actions.attachSideConversation({ threadId: 'child-thread', parentThreadId: 'thr_main', source: 'child_agent' }))!
+    await actions.sendSideMessage(id, 'pending child experiment')
+    const queued = state.sideConversations[id].queuedMessages
+    expect(queued).toHaveLength(1)
+    state.readOnlyThreadIds = { [id]: true }
+    const subscription = provider.subscribeMock.mock.calls.at(-1) as [string, number, ThreadEventSink, AbortSignal]
+    subscription[2].onTurnComplete()
+    await flushPromises()
+    expect(provider.sendMock).not.toHaveBeenCalled()
+    expect(state.sideConversations[id].queuedMessages).toEqual(queued)
+    expect(state.sideConversations[id].busy).toBe(false)
+  })
+
   it('automatically sends the next queued child message after turn completion', async () => {
     const { actions, state, provider } = buildHarness()
     provider.capabilities = { ...provider.capabilities, steer: false }
@@ -1087,6 +1184,68 @@ describe('chat-store-side-actions', () => {
     expect(state.sideConversations[id].lastSeq).toBe(9)
   })
 
+  it.each(['snapshot-first', 'completion-first'] as const)('reconciles streamed side text with its canonical snapshot (%s)', async (order) => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = (provider.subscribeMock.mock.calls.at(-1) as [string, number, ThreadEventSink, AbortSignal])[2]
+    dispatchAgentRuntimeEvent({ kind: 'assistant_delta', threadId: id, itemId: 'answer-1', text: 'MEMORY_', seq: 1 }, sink)
+    dispatchAgentRuntimeEvent({ kind: 'assistant_delta', threadId: id, itemId: 'answer-1', text: 'SIDE_1103', seq: 2 }, sink)
+    expect(state.sideConversations[id].liveAssistant).toBe('MEMORY_SIDE_1103')
+    if (order === 'completion-first') sink.onTurnComplete()
+    const snapshot = { kind: 'item_snapshot' as const, threadId: id, turnId: 'turn-1', seq: 3,
+      item: { id: 'answer-1', kind: 'assistant_message' as const, text: 'MEMORY_SIDE_1103' } }
+    dispatchAgentRuntimeEvent(snapshot, sink)
+    if (order === 'snapshot-first') sink.onTurnComplete()
+    dispatchAgentRuntimeEvent({ ...snapshot, seq: 4 }, sink)
+    expect(state.sideConversations[id].liveAssistant).toBe('')
+    expect(state.sideConversations[id].blocks.filter(block => block.kind === 'assistant')).toEqual([
+      expect.objectContaining({ id: 'answer-1', text: 'MEMORY_SIDE_1103' })
+    ])
+    expect(state.sideConversations[id].busy).toBe(false)
+    expect(state.blocks).toEqual([])
+  })
+
+  it('reconciles provisional side messages without collapsing equal canonical messages from separate items', async () => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = (provider.subscribeMock.mock.calls.at(-1) as [string, number, ThreadEventSink, AbortSignal])[2]
+    dispatchAgentRuntimeEvent({ kind: 'assistant_delta', threadId: id, itemId: 'answer-1', text: 'same text', seq: 1 }, sink)
+    sink.onTool({ itemId: 'tool-1', summary: 'read source', status: 'success' })
+    dispatchAgentRuntimeEvent({ kind: 'assistant_delta', threadId: id, itemId: 'answer-2', text: 'same text', seq: 2 }, sink)
+    dispatchAgentRuntimeEvent({ kind: 'item_snapshot', threadId: id, seq: 3,
+      item: { id: 'answer-1', kind: 'assistant_message', text: 'same text' } }, sink)
+    expect(state.sideConversations[id].liveAssistant).toBe('same text')
+    dispatchAgentRuntimeEvent({ kind: 'item_snapshot', threadId: id, seq: 4,
+      item: { id: 'answer-2', kind: 'assistant_message', text: 'same text' } }, sink)
+    sink.onTurnComplete()
+    expect(state.sideConversations[id].blocks.map(block => block.id)).toEqual(['answer-1', 'tool-1', 'answer-2'])
+    expect(state.sideConversations[id].liveAssistant).toBe('')
+  })
+
+  it.each(['snapshot-first', 'completion-first'] as const)('keeps actual Codex per-event delta IDs in one streamed segment (%s)', async order => {
+    const { actions, state, provider } = buildHarness()
+    const id = (await actions.spawnSideConversation())!
+    const sink = (provider.subscribeMock.mock.calls.at(-1) as [string, number, ThreadEventSink, AbortSignal])[2]
+    // Captured 2026-11-03: native deltas have no itemId; the Codex adapter
+    // maps each event seq to agent_message-${seq}-0, not one stable message ID.
+    const captured = [[5, 'light'], [7, '-memory'], [8, '-'], [9, '526'], [10, '7']] as const
+    let streamed = ''
+    for (const [seq, text] of captured) {
+      dispatchAgentRuntimeEvent({ kind: 'assistant_delta', threadId: id, itemId: `agent_message-${seq}-0`, text, seq }, sink)
+      streamed += text
+      expect(state.sideConversations[id].blocks.filter(block => block.kind === 'assistant')).toEqual([])
+      expect(state.sideConversations[id].liveAssistant).toBe(streamed)
+    }
+    if (order === 'completion-first') sink.onTurnComplete()
+    dispatchAgentRuntimeEvent({ kind: 'item_snapshot', threadId: id, turnId: 'turn-captured', seq: 11,
+      item: { id: 'agent_message-11-0', kind: 'assistant_message', text: 'light-memory-5267' } }, sink)
+    if (order === 'snapshot-first') sink.onTurnComplete()
+    expect(state.sideConversations[id].liveAssistant).toBe('')
+    expect(state.sideConversations[id].blocks.filter(block => block.kind === 'assistant')).toEqual([
+      expect.objectContaining({ id: 'agent_message-11-0', text: 'light-memory-5267' })
+    ])
+  })
+
   it('closing the side panel aborts regular side subscriptions but keeps side state', async () => {
     const { actions, state, provider } = buildHarness()
     const id = (await actions.spawnSideConversation())!
@@ -1174,11 +1333,12 @@ describe('chat-store-side-actions', () => {
     expect(subscriptions.get(childId)?.aborted).toBe(false)
   })
 
-  it('does not resubscribe sides of other parents when the panel reopens', async () => {
+  it('does not resubscribe unselected sides of other parents when the panel reopens', async () => {
     const { actions, state, provider } = buildHarness()
     const id = (await actions.spawnSideConversation())!
     // Move the side under a different parent, as if the user switched threads.
     state.sideConversations[id] = { ...state.sideConversations[id], parentThreadId: 'thr_other' }
+    state.sidePanel.activeSideId = null
     actions.setSidePanelOpen(false)
     provider.subscribeMock.mockClear()
 

@@ -66,7 +66,7 @@ Once a structured-output contract is active, the provider's output is schema-own
 
 The router never strips output-schema constraints to satisfy a narrower provider subset. If an upstream rejects a constraint it does not implement, that validation response is terminal; callers retain their original contract instead of receiving a response generated against a weaker schema.
 
-When a Responses request negotiates to Anthropic Messages, reasoning effort maps to enabled thinking with a budget bounded by the output-token limit. Invalid constraints fail explicitly. Native Anthropic thinking controls, including adaptive controls, remain native on Messages requests and fail explicitly when another protocol cannot represent them. Response finish reasons, stop reasons, and stop sequences are retained through the canonical response and mapped only where the client protocol can represent them.
+When a Responses request negotiates to Anthropic Messages, reasoning effort maps to enabled thinking with a budget bounded by the output-token limit. Invalid constraints fail explicitly. Native Anthropic thinking controls remain unchanged on Messages requests. For OpenAI Responses and Chat Completions, adaptive thinking uses the upstream default when no effort is provided; `output_config.effort` maps to `reasoning.effort` or `reasoning_effort` without changing the requested level. Structured output remains attached during this conversion. Fixed token budgets, conflicting efforts, unknown controls, and levels excluded by the connection declaration fail explicitly before dispatch. Response finish reasons, stop reasons, and stop sequences are retained through the canonical response and mapped only where the client protocol can represent them.
 
 Streaming Chat Completions delivers public reasoning deltas progressively for direct text requests over Responses, Chat Completions, and Anthropic Messages upstreams. Trace capture observes the same byte stream without buffering it first. Final text and tool calls remain buffered until canonical conversion and validation finish; modality supplement/control rounds remain internal. Responses and Messages client streams still emit their normalized results after completion. Byte-transparent Plan Gateway traffic uses its own transport contract.
 
@@ -161,3 +161,22 @@ to disable cache reads and writes. A request may override it with
 the matching cached observation before inspection and stores only a successful
 new observation; failures never restore the rejected evidence. `bypass` neither
 reads nor writes cache entries. These controls apply to each image in the request.
+
+## Runtime-owned history and visual requests
+
+The model router preserves tool results exactly, including text, nested SDK
+content blocks, repeated results, and pagination/recovery references. It does
+not summarize or deduplicate results already owned by a native runtime or the
+Host's bounded result-delivery layer. Native runtime output limits and context
+compaction remain authoritative. Request hygiene still handles oversized
+historical arguments and pasted encoded user payloads; it does not rewrite
+opaque native continuation state.
+
+`profiles.<id>.contextWindow` describes the text reasoner's operating budget.
+`profiles.<id>.translators.vision.contextWindow` independently bounds a visual
+request (default 16384 tokens). Each visual request contains one image and the
+current visual question, not the full tool transcript. Independent images do
+not compete for one aggregate image budget. Existing derived previews and
+content-addressed inspection caching remain the canonical visual path;
+original workspace files are not resized or rewritten. A missing visual result
+cannot be reported as successful visual verification.

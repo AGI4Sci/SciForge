@@ -53,6 +53,8 @@ export function listMainWorkspacePreviewPluginContributions(
 function providerFunctionsAreValid(provider: Record<string, unknown>): boolean {
   return [
     'validateFile',
+    'readText',
+    'renderVisual',
     'observe',
     'invokeAction',
     'prepareArtifact',

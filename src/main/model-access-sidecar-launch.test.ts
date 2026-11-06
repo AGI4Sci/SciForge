@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { resolveModelAccessSidecarProcessLaunch } from './model-access-sidecar-launch'
 
 describe('model access sidecar process launch', () => {
@@ -13,7 +13,7 @@ describe('model access sidecar process launch', () => {
       env: { KEEP: 'yes' }
     })).toEqual({
       command: '/opt/electron',
-      args: ['--env-file-if-exists=.env', join('/repo/sciforge', nodeEntry), '--quiet'],
+      args: ['--env-file-if-exists=.env', posix.join('/repo/sciforge', nodeEntry), '--quiet'],
       cwd: '/repo/sciforge',
       env: { KEEP: 'yes', ELECTRON_RUN_AS_NODE: '1' }
     })
@@ -31,7 +31,7 @@ describe('model access sidecar process launch', () => {
 
     expect(launch).toEqual({
       command: '/tools/node.exe',
-      args: ['--env-file-if-exists=.env', join('/repo/sciforge', nodeEntry), '--quiet'],
+      args: ['--env-file-if-exists=.env', posix.join('/repo/sciforge', nodeEntry), '--quiet'],
       cwd: '/repo/sciforge',
       env: { KEEP: 'yes' }
     })

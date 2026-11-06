@@ -57,6 +57,7 @@ export {
 } from './upstream-drivers';
 export {
   type ProviderCompatibilityConfig,
+  type ProviderChatReasoningControl,
   type ProviderCompatibilityProfile,
   type ProviderSchemaPatternPolicy,
   type ProviderWireProtocol,

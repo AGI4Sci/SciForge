@@ -5,6 +5,47 @@
  * cannot be installed yet.
  */
 
+import { z } from 'zod'
+
+/** The complete reviewed identity and grants; validated again against signed bytes. */
+export const dshMarketApprovalToolSchema = z.object({
+  name: z.string().trim().min(1).max(128),
+  id: z.string().trim().min(1).max(192),
+  effect: z.enum(['read', 'compute', 'workspace-write', 'external-write', 'destructive']),
+  approval: z.enum(['none', 'confirmation']).optional(),
+  scope: z.literal('workspace').optional(),
+  readResource: z.literal('workspace').optional(),
+  tags: z.array(z.string().trim().min(1).max(64)).max(16).optional()
+}).strict()
+export const dshMarketApprovalSnapshotSchema = z.object({
+  packageName: z.string().trim().min(1).max(214),
+  version: z.string().trim().min(1).max(64),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  publisher: z.string().trim().min(1).max(128).nullable(),
+  entry: z.string().trim().min(1).max(1024),
+  tools: z.array(dshMarketApprovalToolSchema).max(64),
+  ports: z.array(z.string().trim().min(1).max(256)).max(32),
+  hostDependencies: z.array(z.string().trim().min(1).max(214)).max(64)
+}).strict()
+export type DshMarketApprovalSnapshot = z.infer<typeof dshMarketApprovalSnapshotSchema>
+
+export function normalizeDshMarketApproval(value: DshMarketApprovalSnapshot): DshMarketApprovalSnapshot {
+  const snapshot = dshMarketApprovalSnapshotSchema.parse(value)
+  const tools = snapshot.tools.map(tool => ({
+    name: tool.name, id: tool.id, effect: tool.effect,
+    approval: tool.effect === 'external-write' || tool.effect === 'destructive' ? 'confirmation' as const : tool.approval ?? 'none' as const,
+    ...(tool.scope ? { scope: tool.scope } : {}),
+    ...(tool.readResource ? { readResource: tool.readResource } : {}),
+    tags: [...(tool.tags ?? [])].sort()
+  })).sort((a, b) => a.name.localeCompare(b.name))
+  if (new Set(tools.map(tool => tool.name)).size !== tools.length
+    || new Set(snapshot.ports).size !== snapshot.ports.length
+    || new Set(snapshot.hostDependencies).size !== snapshot.hostDependencies.length) {
+    throw new Error('Approval snapshot contains duplicate grants or dependencies.')
+  }
+  return { ...snapshot, tools, ports: [...snapshot.ports].sort(), hostDependencies: [...snapshot.hostDependencies].sort() }
+}
+
 export type DshMarketToolEffect =
   | 'read'
   | 'compute'
@@ -16,6 +57,10 @@ export type DshMarketTool = Readonly<{
   name: string
   id: string
   effect: DshMarketToolEffect
+  approval?: 'none' | 'confirmation'
+  scope?: 'workspace'
+  readResource?: 'workspace'
+  tags?: readonly string[]
 }>
 
 export type DshMarketCapability = Readonly<{
@@ -27,6 +72,7 @@ export type DshMarketCapability = Readonly<{
 }>
 
 export type DshMarketPlugin = Readonly<{
+  approvalSnapshot: DshMarketApprovalSnapshot
   name: string
   title: string
   version: string
@@ -34,6 +80,8 @@ export type DshMarketPlugin = Readonly<{
   tools: readonly DshMarketTool[]
   /** How to actually use it: the capabilities, and whether they are live right now. */
   capabilities: readonly DshMarketCapability[]
+  /** Requested Host operations, shown for explicit installation approval. */
+  ports: readonly string[]
   hostDependencies: readonly string[]
   publisher: string | null
   sizeBytes: number
@@ -89,8 +137,11 @@ export type DshMarketInstallResult = Readonly<{
 
 export type DshMarketInstallInput = Readonly<{
   packageName: string
+  approvalSnapshot: DshMarketApprovalSnapshot
   /** Exactly the tools the user approved; the host refuses anything else. */
   approvedToolNames: readonly string[]
+  /** Only Host operations explicitly checked by the user. */
+  approvedPorts?: readonly string[]
 }>
 
 export type DshMarketPackageInput = Readonly<{ packageName: string }>

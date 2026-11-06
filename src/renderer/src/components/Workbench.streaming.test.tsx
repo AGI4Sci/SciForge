@@ -52,6 +52,7 @@ vi.mock('./workbench-layout', () => ({
     focusedRightPanelPane: null,
     focusRightPanelPaneForSession: vi.fn(),
     leftSidebarCollapsed: false,
+    leftSidebarEdge: { behavior: 'pinned', edgeVisible: false, edgeProps: {}, panelProps: {}, setBehavior: vi.fn() },
     leftSidebarWidth: 280,
     leftSidebarOverlay: false,
     sidebarOverlayRef: { current: null },

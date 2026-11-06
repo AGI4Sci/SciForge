@@ -7,7 +7,6 @@ import {
 } from 'react'
 import type { SciForgeReproSpecV1 } from '@sciforge/domain-sdk/reproducibility'
 import type {
-  CreateDatasetLoopInput,
   WorkflowApprovalDecision,
   WorkflowCodeLanguage,
   WorkflowRunComparatorV1,
@@ -27,8 +26,6 @@ export type CreateLoopRuntimeBridge = Readonly<{
   getSettings: () => Promise<CreateLoopRendererSettings>
   setSettings: (patch: Readonly<{ workflow?: WorkflowSettingsPatchV1 }>) =>
     Promise<CreateLoopRendererSettings>
-  buildDataset: (input: CreateDatasetLoopInput) =>
-    ReturnType<CreateLoopCapabilityClient['buildDataset']>
   getWorkflowStatus: () => ReturnType<CreateLoopCapabilityClient['status']>
   runWorkflow: (workflowId: string, input?: unknown) =>
     ReturnType<CreateLoopCapabilityClient['run']>
@@ -91,7 +88,6 @@ export function createCreateLoopRuntimeBridge(
       revision = snapshot.revision
       return { workspaceRoot, workflow: snapshot.settings }
     },
-    buildDataset: (input) => client.buildDataset(workspaceRoot, input),
     getWorkflowStatus: () => client.status(workspaceRoot),
     runWorkflow: (workflowId, input) => client.run(workspaceRoot, workflowId, input),
     stopWorkflow: (workflowId) => client.stop(workspaceRoot, workflowId),

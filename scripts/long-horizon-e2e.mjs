@@ -94,7 +94,7 @@ const tasks = [
     id: 'task-09-sci-plotting-regression',
     prompt: '制定 scientific plotting 样式回归测试计划：覆盖 SVG/PNG 导出、字体、图例、坐标轴、暗色主题和论文图尺寸，要求给出自动化验证命令。',
     files: {
-      'packages/workers/scientific-plotting/src/index.ts': `// fixture: plotting worker exports figure generation APIs.\n`,
+      'plugins/scientific-plotting/src/worker/index.ts': `// fixture: plotting worker exports figure generation APIs.\n`,
       'scripts/scientific-plotting-style-regression.mjs': `// fixture: existing smoke regression command.\n`,
       'docs/plot-style.md': `# Plot style\nPublication figures must preserve labels, legends, and export dimensions.\n`
     }

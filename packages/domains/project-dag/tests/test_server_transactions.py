@@ -6,6 +6,8 @@ import os
 import tempfile
 import threading
 import unittest
+from urllib.parse import quote, unquote
+from workspace_fixture import workspace
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -307,8 +309,8 @@ class RuntimeActorTransactionTests(unittest.TestCase):
         }
         self.assertEqual(len(connections), 3)
 
-        receipt = self.actors.api.enqueue_update(_update_payload("path:/workspace/a"))
-        result = self.actors.update.process_updates("path:/workspace/a")
+        receipt = self.actors.api.enqueue_update(_update_payload(("path:" + workspace(self.root, "a"))))
+        result = self.actors.update.process_updates(("path:" + workspace(self.root, "a")))
 
         self.assertIsNotNone(result)
         status = self.actors.api.update_receipt_status(
@@ -319,8 +321,8 @@ class RuntimeActorTransactionTests(unittest.TestCase):
         self.assertEqual(status["state"], "committed")
 
     def test_enqueue_cannot_commit_the_update_workers_open_transaction(self) -> None:
-        first_project = "path:/workspace/first"
-        second_project = "path:/workspace/second"
+        first_project = ("path:" + workspace(self.root, "first"))
+        second_project = ("path:" + workspace(self.root, "second"))
         self.actors.api.enqueue_update(_update_payload(first_project))
         entered_commit = threading.Event()
         release_commit = threading.Event()
@@ -372,7 +374,7 @@ class RuntimeActorTransactionTests(unittest.TestCase):
             self.actors.api.update_status(second_project)["state"], "pending")
 
     def test_enqueue_during_atomic_claim_preserves_both_receipt_generations(self) -> None:
-        project = "path:/workspace/generation-race"
+        project = ("path:" + workspace(self.root, "generation-race"))
         first = self.actors.api.enqueue_update(_update_payload(project))
         selected = threading.Event()
         release_claim = threading.Event()
@@ -456,7 +458,7 @@ class RuntimeActorTransactionTests(unittest.TestCase):
         )
 
     def test_audit_selection_and_claim_share_one_explicit_transaction(self) -> None:
-        project = "path:/workspace/audit-claim"
+        project = ("path:" + workspace(self.root, "audit-claim"))
         self.actors.api.enqueue_update(_update_payload(project))
         self.assertIsNotNone(self.actors.update.process_updates(project))
         original_q1 = self.actors.audit.store.q1
@@ -518,7 +520,7 @@ class HttpActorSerializationTests(unittest.TestCase):
                 if separator in path[start:]:
                     end = min(end, start + path[start:].index(separator))
             root = path[start:end]
-            path = path.replace("?", f"?workspaceRoot=/{root.lstrip('/')}&", 1)
+            path = path.replace("?", f"?workspaceRoot={quote(unquote(root))}&", 1)
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.server.server_port}{path}",
@@ -556,27 +558,27 @@ class HttpActorSerializationTests(unittest.TestCase):
         self.assertEqual(response["error"]["code"], "BAD_REQUEST")
 
         status, response = self._request_raw(
-            "GET", "/updates/status?workspaceRoot=/workspace/a&projectRoot=/workspace/b")
+            "GET", f"/updates/status?workspaceRoot={quote(workspace(self.root, 'a'))}&projectRoot={quote(workspace(self.root, 'b'))}")
         self.assertEqual(status, 400)
         self.assertIn("same workspace", response["error"]["message"])
 
         status, response = self._request_raw(
-            "GET", "/updates/status?workspaceRoot=/workspace/a&projectKey=path:/workspace/b")
+            "GET", f"/updates/status?workspaceRoot={quote(workspace(self.root, 'a'))}&projectKey=path:{quote(workspace(self.root, 'b'))}")
         self.assertEqual(status, 400)
         self.assertIn("does not match", response["error"]["message"])
 
         status, response = self._request_raw(
-            "GET", "/updates/status?workspaceRoot=/workspace/a&projectKey=/workspace/a")
+            "GET", f"/updates/status?workspaceRoot={quote(workspace(self.root, 'a'))}&projectKey={quote(workspace(self.root, 'a'))}")
         self.assertEqual(status, 400)
         self.assertIn("canonical path", response["error"]["message"])
 
         status, response = self._request_raw(
-            "GET", "/updates/status?projectKey=path:/workspace/a")
+            "GET", f"/updates/status?projectKey=path:{quote(workspace(self.root, 'a'))}")
         self.assertEqual(status, 400)
         self.assertIn("canonical workspaceRoot", response["error"]["message"])
 
     def test_http_open_noop_is_success_when_stale_invalidation_is_already_reconciled(self) -> None:
-        project = "path:/workspace/http-open-noop"
+        project = ("path:" + workspace(self.root, "http-open-noop"))
         self.actors.api.create_goal(project, "Open noop")
         self.actors.api.enqueue_update(_update_payload(project))
         self.assertIsNotNone(self.actors.api.process_updates(project))
@@ -586,13 +588,13 @@ class HttpActorSerializationTests(unittest.TestCase):
             "changedFields": ["evidenceVector"],
         })
         status, response = self._request_raw(
-            "POST", "/updates/open", {"workspaceRoot": "/workspace/http-open-noop"})
+            "POST", "/updates/open", {"workspaceRoot": workspace(self.root, "http-open-noop")})
         self.assertEqual(status, 200)
         self.assertTrue(response["ok"])
         self.assertEqual(response["data"], {"derived": False})
 
     def test_threaded_http_enqueue_and_status_are_serialized_on_api_connection(self) -> None:
-        project = "path:/workspace/http"
+        project = ("path:" + workspace(self.root, "http"))
         entered_enqueue = threading.Event()
         release_enqueue = threading.Event()
         entered_status = threading.Event()
@@ -648,7 +650,7 @@ class HttpActorSerializationTests(unittest.TestCase):
         self.assertTrue(all(response["ok"] for response in responses))
 
     def test_http_project_reads_fail_closed_for_globally_restricted_empty_graph(self) -> None:
-        project = "path:/workspace/http-restricted"
+        project = ("path:" + workspace(self.root, "http-restricted"))
         snapshot = _restricted_http_snapshot(project)
         self.actors.api.store.x(
             "INSERT INTO project_snapshot"
@@ -685,7 +687,7 @@ class HttpActorSerializationTests(unittest.TestCase):
 
         suffix = f"?projectKey={project}"
         receipt_suffix = (
-            "?workspaceRoot=/workspace/http-restricted"
+            f"?workspaceRoot={quote(workspace(self.root, 'http-restricted'))}"
             f"&acceptedRequestVersion={receipt['acceptedRequestVersion']}"
             f"&desiredFingerprint={receipt['desiredFingerprint']}"
         )
@@ -709,7 +711,7 @@ class HttpActorSerializationTests(unittest.TestCase):
                 "GET", f"/assessments{suffix}&snapshotDigest={snapshot['digest']}"),
             "audits": self._request("GET", f"/audits{suffix}"),
             "audit": self._request(
-                "GET", f"/audits/{audit_id}?workspaceRoot=/workspace/http-restricted"),
+                "GET", f"/audits/{audit_id}?workspaceRoot={quote(workspace(self.root, 'http-restricted'))}"),
         }
         serialized = json.dumps(responses, ensure_ascii=False)
         self.assertNotIn("TOP-SECRET", serialized)
@@ -741,7 +743,7 @@ class HttpActorSerializationTests(unittest.TestCase):
             self.assertEqual(item["accessLevel"], "restricted")
 
     def test_http_current_restriction_revokes_three_historical_routes(self) -> None:
-        project = "path:/workspace/http-revoked-history"
+        project = ("path:" + workspace(self.root, "http-revoked-history"))
         claim_id = "claim:http-revoked-history"
         old = _public_historical_http_snapshot(project, claim_id)
         latest = _restricted_http_snapshot(project)
@@ -784,7 +786,7 @@ class HttpActorSerializationTests(unittest.TestCase):
         self.assertTrue(responses["provenance"]["data"]["access"]["redacted"])
 
     def test_http_first_restricted_update_projects_precommit_readbacks(self) -> None:
-        project = "path:/workspace/http-pending-restricted"
+        project = ("path:" + workspace(self.root, "http-pending-restricted"))
         thread_id = "TOP-SECRET-HTTP-PENDING-THREAD"
         evidence_digest = _write_restricted_http_evidence(self.sessions, thread_id)
         enqueue = self._request("POST", "/updates", {
@@ -813,7 +815,7 @@ class HttpActorSerializationTests(unittest.TestCase):
                 "GET", f"/updates/{receipt_row['job_id']}/status"
                 f"?acceptedRequestVersion={receipt_row['request_version']}"
                 f"&desiredFingerprint={receipt_row['desired_fingerprint']}"
-                "&workspaceRoot=/workspace/http-pending-restricted"),
+                f"&workspaceRoot={quote(workspace(self.root, 'http-pending-restricted'))}"),
             "mutation": self._request("POST", "/goals/draft", {
                 "projectKey": project,
                 "title": "TOP-SECRET-HTTP-PENDING-GOAL",
@@ -837,7 +839,7 @@ class HttpActorSerializationTests(unittest.TestCase):
             self.assertEqual(item["accessLevel"], "restricted")
 
     def test_http_side_reads_close_over_downstream_restricted_claims(self) -> None:
-        project = "path:/workspace/http-downstream-restricted"
+        project = ("path:" + workspace(self.root, "http-downstream-restricted"))
         snapshot = _downstream_restricted_http_snapshot(project)
         self.actors.api.store.x(
             "INSERT INTO project_snapshot"
@@ -857,7 +859,7 @@ class HttpActorSerializationTests(unittest.TestCase):
             self.actors.api, project, snapshot["digest"])
         suffix = f"?projectKey={project}"
         receipt_suffix = (
-            "?workspaceRoot=/workspace/http-downstream-restricted"
+            f"?workspaceRoot={quote(workspace(self.root, 'http-downstream-restricted'))}"
             f"&acceptedRequestVersion={receipt['acceptedRequestVersion']}"
             f"&desiredFingerprint={receipt['desiredFingerprint']}"
         )
@@ -876,7 +878,7 @@ class HttpActorSerializationTests(unittest.TestCase):
                 "GET", f"/assessments{suffix}&snapshotDigest={snapshot['digest']}"),
             "audits": self._request("GET", f"/audits{suffix}"),
             "audit": self._request(
-                "GET", f"/audits/{audit_id}?workspaceRoot=/workspace/http-downstream-restricted"),
+                "GET", f"/audits/{audit_id}?workspaceRoot={quote(workspace(self.root, 'http-downstream-restricted'))}"),
         }
         serialized = json.dumps(responses, ensure_ascii=False)
         self.assertNotIn("TOP-SECRET", serialized)

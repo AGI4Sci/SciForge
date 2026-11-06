@@ -15,6 +15,17 @@ describe('electron main source package bundling', () => {
       ]))
   })
 
+  it('keeps retired scientific MCP artifacts out of the main build', () => {
+    const input = (config as {
+      main?: { build?: { rollupOptions?: { input?: Record<string, string> } } }
+    }).main?.build?.rollupOptions?.input
+
+    expect(input).not.toHaveProperty('scientific-skills-mcp-node-entry')
+    expect(input).not.toHaveProperty('scientific-plotting-mcp-node-entry')
+    expect(Object.values(input ?? {}).some((path) => /[\\/]scientific-(?:skills|plotting)-mcp-node-entry\.ts$/u.test(path)))
+      .toBe(false)
+  })
+
   it('rejects bare generated source-package imports in a main artifact', () => {
     expect(() => assertNoBareMainSourcePackageImports({
       'index.js': {

@@ -122,6 +122,32 @@ test('rejects runtime or workspace identity drift within one chain', () => {
   )
 })
 
+test('accepts equivalent workspace paths across turns without rewriting immutable delta identities', () => {
+  const nativeWorkspace = join(tmpdir(), 'evidence-workspace')
+  const initialWorkspace = process.platform === 'win32'
+    ? nativeWorkspace.replace(/\\/g, '/')
+    : `${nativeWorkspace}/./`
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput({ scope: { ...scope, workspaceRoot: initialWorkspace } })).delta
+  const nextInput = appendInput({
+    scope: { ...scope, operationId: 'turn-2', workspaceRoot: nativeWorkspace },
+    idempotencyKey: 'turn-2-idempotency', requestedWatermark: '2', committedWatermark: '2'
+  })
+  const second = chain.append(nextInput).delta
+
+  assert.deepEqual(chain.list()[0], first)
+  assert.equal(first.scope.workspaceRoot, initialWorkspace)
+  assert.equal(second.scope.workspaceRoot, nativeWorkspace)
+  assert.equal(second.predecessorDigest, first.deltaDigest)
+  const reloaded = new EvidenceDeltaChain(scope.threadId, chain.list())
+  assert.deepEqual(reloaded.list(), [first, second])
+  assert.deepEqual(reloaded.append(nextInput), { delta: second, idempotent: true })
+  assert.throws(() => reloaded.append(appendInput({
+    scope: { ...scope, operationId: 'turn-3', workspaceRoot: join(nativeWorkspace, 'other') },
+    idempotencyKey: 'turn-3-idempotency', requestedWatermark: '3', committedWatermark: '3'
+  })), /scope identity drifted/u)
+})
+
 test('rejects stale predecessor and stale expected head during seal', () => {
   const chain = new EvidenceDeltaChain(scope.threadId)
   const first = chain.append(appendInput())
@@ -707,7 +733,8 @@ test('records semantic risk gaps for included contradiction and negative-result 
   const first = chain.append(appendInput({
     payload: {
       claims: [{ id: 'claim:1', text: 'A result.' }],
-      interpretation: 'contradiction unresolved; negative result requires review'
+      interpretation: 'contradiction unresolved; negative result requires review',
+      gapCodes: ['contradiction_unresolved', 'negative_result_missing']
     }
   })).delta
   const policy = evidenceDagClosurePolicyV1Schema.parse({
@@ -1098,6 +1125,7 @@ test('allows interpretive contradiction cycles even when acyclic lineage is stri
     predecessorDigest: first.deltaDigest,
     payload: {
       claims: [{ id: 'claim:2' }],
+      gapCodes: ['contradiction_unresolved'],
       edges: [{ source: 'claim:1', target: 'claim:2', family: 'contradiction' }]
     },
     createdAt: '2026-09-01T00:00:01.000Z'
@@ -1418,4 +1446,35 @@ test('preserves legacy snapshot bytes while dropping old read-model fields from 
   assert.equal('humanReview' in root.snapshot, false)
   assert.equal(Buffer.from(root.snapshotBytesBase64, 'base64').toString('utf8'), JSON.stringify(snapshot))
   assert.equal(root.status, 'legacy/incomplete')
+})
+
+
+test('explicit gap policy preserves recorded negatives while legacy keyword closures restart unchanged', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const delta = chain.append(appendInput({ payload: { claims: [{ id: 'claim:1', negativeResults: ['No benefit'], reproduction: { outcome: 'failed' } }] } })).delta
+  const current = chain.seal(completeClosurePolicy(delta.deltaDigest))
+  assert.equal(current.policy.semanticGapPolicy, 'explicit-v2')
+  assert.deepEqual(current.gapCodes, [])
+  const legacy = chain.seal({ ...completeClosurePolicy(delta.deltaDigest), semanticGapPolicy: 'keyword-v1' })
+  assert.ok(legacy.gapCodes.includes('negative_result_missing'))
+  // Pre-versioned on-disk identity, with the exact legacy digest algorithm.
+  delete legacy.policy.semanticGapPolicy
+  legacy.policyDigest = digest(legacy.policy)
+  legacy.closureDigest = digest({ threadId: legacy.threadId, headDigest: legacy.headDigest, policyDigest: legacy.policyDigest, status: legacy.status, includedDeltaDigests: legacy.includedDeltaDigests, includedExternalRefs: legacy.includedExternalRefs, gapCodes: legacy.gapCodes })
+  const saved = JSON.stringify(legacy)
+  const restarted = new EvidenceDeltaChain(scope.threadId, chain.list(), { closures: [legacy, current] })
+  assert.equal(JSON.stringify(restarted.closures().find(item => item.closureDigest === legacy.closureDigest)), saved)
+  assert.deepEqual(restarted.closures().find(item => item.closureDigest === current.closureDigest), current)
+})
+
+
+test('baseline pre-policy-version closures and formal approval survive restart byte-for-byte', async () => {
+  const fixture = JSON.parse(await readFile(new URL('../../../../../tests/fixtures/scientific-audit-old-closure.json', import.meta.url), 'utf8'))
+  assert.equal(fixture.baseline, 'cbaff179ea7e8dd012cccc27aa931b0ae7ba9804')
+  const restored = new EvidenceDeltaChain('codex:historical', fixture.records, fixture)
+  assert.deepEqual(restored.closures(), fixture.closures)
+  assert.deepEqual(restored.sidechainRecords(), fixture.sidechains)
+  assert.equal(restored.committedSnapshotClosure, fixture.committedSnapshotClosureDigest)
+  assert.ok(restored.closures().some(item => item.gapCodes.includes('negative_result_missing')))
+  assert.equal(restored.sidechainRecords().find(item => item.recordType === 'approval')?.reviewerIdentity, 'human:original-reviewer')
 })

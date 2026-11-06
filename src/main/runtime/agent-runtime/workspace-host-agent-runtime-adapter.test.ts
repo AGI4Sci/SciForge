@@ -240,6 +240,7 @@ describe('createWorkspaceHostAgentRuntimeAdapter', () => {
     }))
     const local = {
       id: 'codex' as const,
+      contextProfiles: ['minimal'] as const,
       transport: 'jsonrpc_stdio' as const,
       probe: vi.fn(async (): Promise<AgentRuntimeDiscoveryResult> => ({
         runtimeId: 'codex' as const,
@@ -328,6 +329,18 @@ describe('createWorkspaceHostAgentRuntimeAdapter', () => {
       }),
       expect.any(Object)
     )
+    expect(placed.contextProfiles).toEqual(['minimal'])
+    remote.request.mockClear()
+    const minimal = { runtimeId: 'codex' as const, contextProfile: 'minimal' as const,
+      mode: 'agent' as const, sidebarVisibility: 'hidden' as const, allowedTools: [] }
+    await expect(placed.startThread({ settings: {} as never }, minimal)).resolves.toMatchObject({ id: 'local-thread' })
+    await expect(placed.startThread({ settings: {} as never,
+      workspaceHost: { locator: session().locator, session: session() } }, minimal))
+      .rejects.toThrow('does not support context profile minimal for this placement')
+    await expect(placed.startTurn({ settings: {} as never,
+      workspaceHost: { locator: session().locator, session: session() } }, { ...input, ...minimal }))
+      .rejects.toThrow('does not support context profile minimal for this placement')
+    expect(remote.request).not.toHaveBeenCalled()
   })
 
   it('reports remote Codex unavailable when the host has no runtime capability', async () => {

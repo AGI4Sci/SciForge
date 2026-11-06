@@ -1,10 +1,12 @@
 import { lazy, type ReactElement } from 'react'
+import type { DomainRendererContribution } from '@sciforge/domain-sdk/host'
 import { LibraryBig } from 'lucide-react'
 
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
   RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
+  RENDERER_EXTENSION_CONTRIBUTION_KIND,
   type DomainRendererCommandHandler,
   type DomainRendererResourceNavigationValue,
   type DomainRendererWorkbenchRightPanelValue,
@@ -30,9 +32,9 @@ import {
   type ResearchDossierI18nResourceContribution
 } from './research-dossier-messages.js'
 
-const ResearchDossierPanel = lazy(() =>
-  import('./ResearchDossierPanel.js').then((module) => ({
-    default: module.ResearchDossierPanel
+const ResearchWorkspacePanel = lazy(() =>
+  import('./ResearchWorkspacePanel.js').then((module) => ({
+    default: module.ResearchWorkspacePanel
   }))
 )
 
@@ -79,15 +81,16 @@ export function createResearchDossierRightPanelContribution(
   host: DomainRendererHost
 ): ResearchDossierRightPanelContribution {
   const client = createResearchDossierCapabilityClient(host.capabilityInvoker)
-  // Installed composition is immutable for the lifetime of this entry. Keep
-  // one contribution snapshot so panel state changes do not re-invoke every
-  // owner summary provider just because the registry returns a defensive copy.
-  const researchSummaries = host.contributions?.list(
-    RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND
-  ) ?? []
+  // Entries are constructed before the generated composition publishes contributions.
+  // Snapshot only on first render, then preserve identity through panel updates.
+  let researchSummaries: readonly DomainRendererContribution[] | undefined
+  let researchViews: readonly DomainRendererContribution[] | undefined
   return Object.freeze({
-    render: ({ activation, ...context }) => (
-      <ResearchDossierPanel
+    render: ({ activation, ...context }) => {
+      researchSummaries ??= host.contributions?.list(RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND) ?? []
+      researchViews ??= host.contributions?.list(RENDERER_EXTENSION_CONTRIBUTION_KIND) ?? []
+      return (
+        <ResearchWorkspacePanel
         {...context}
         {...(activation
           ? {
@@ -101,8 +104,11 @@ export function createResearchDossierRightPanelContribution(
         workbench={host.workbench}
         workspacePreview={host.workspacePreview}
         researchSummaries={researchSummaries}
+        researchViews={researchViews}
+        focused={context.focused}
       />
-    )
+      )
+    }
   })
 }
 
@@ -174,3 +180,6 @@ export * from './research-dossier-capability-client.js'
 export * from './research-dossier-loader.js'
 export * from './research-dossier-messages.js'
 export * from './research-dossier-model.js'
+
+export { ResearchDossierEvidenceReview } from './ResearchDossierEvidenceReview'
+export { createResearchDossierCapabilityClient } from './research-dossier-capability-client'

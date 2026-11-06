@@ -243,18 +243,12 @@ function createApi(): SciForgeApi {
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),
     pickWorkspaceDirectory: (defaultPath) => invoke('workspace:pick-directory', defaultPath),
     pickFile: (request) => invoke('workspace:pick-file', request),
-    buildScientificSkillsMcpConfig: (workspaceRoot) =>
-      invoke('mcp:scientific-skills-config', { workspaceRoot }),
     buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
       invoke('mcp:bgc-discovery-config', { workspaceRoot }),
     buildImageGenerationMcpConfig: (workspaceRoot) =>
       invoke('mcp:image-generation-config', { workspaceRoot }),
     buildPptMasterMcpConfig: (workspaceRoot) =>
       invoke('mcp:ppt-master-config', { workspaceRoot }),
-    getScientificSkillsStatus: (workspaceRoot) =>
-      invoke('mcp:scientific-skills-status', { workspaceRoot }),
-    installScientificSkills: (request) =>
-      invoke('scientific-skills:install', request),
     listSkills: (workspaceRoot) => invoke('skill:list', { workspaceRoot }),
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),

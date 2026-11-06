@@ -12,6 +12,23 @@ const page: AgentRuntimeThreadPage = {
 }
 
 describe('durable history tool', () => {
+  it('advances item pagination on a partially filled final page with escaped text', async () => {
+    const items = Array.from({ length: 25 }, (_, i) => ({ id: `item-${i}`, kind: 'assistant_message' as const, text: '"\\\n'.repeat(600) }))
+    const tool = createHistoryTool({ assertLease: () => undefined, readPage: async () => ({ ...page, nextCursor: null, turns: [{ ...page.turns[0], items }] }) })
+    let itemOffset = 0
+    const seen: string[] = []
+    for (let index = 0; index < 30; index++) {
+      const result = await tool.call({ name: 'sciforge_read_history', context, arguments: { itemOffset } })
+      expect(Buffer.byteLength(result.modelContent!)).toBeLessThanOrEqual(4096)
+      const value = JSON.parse(result.modelContent!)
+      seen.push(...value.items.map((item: { itemId: string }) => item.itemId))
+      if (value.nextItemOffset === null) break
+      expect(value.nextItemOffset).toBeGreaterThan(itemOffset)
+      itemOffset = value.nextItemOffset
+    }
+    expect(seen).toEqual(items.map(item => item.id))
+  })
+
   it('finds original wording on a canonical older page within the calling session', async () => {
     const readPage = vi.fn(async () => page)
     const assertLease = vi.fn()
@@ -56,6 +73,20 @@ describe('durable history tool', () => {
     expect(JSON.parse(first.modelContent!)).toMatchObject({ content: 'a'.repeat(2800), offset: 0, nextOffset: 2800 })
     const next = await tool.call({ name: 'sciforge_read_history', context, arguments: { artifactRef: 'ref', offset: 2800 } })
     expect(JSON.parse(next.modelContent!)).toMatchObject({ content: 'a'.repeat(2800), offset: 2800, nextOffset: 5600 })
+  })
+
+  it('recovers a focused schema in one larger bounded page and rejects excessive budgets', async () => {
+    const schema = { type: 'string', description: 'detail '.repeat(1100) }
+    const tool = createHistoryTool({ readPage: async () => page, assertLease: () => undefined,
+      readArtifact: async () => ({ content: JSON.stringify([schema]) }) })
+    const result = await tool.call({ name: 'sciforge_read_history', context,
+      arguments: { artifactRef: 'ref', jsonPointer: '/0', maxBytes: 16384 } })
+    const delivered = JSON.parse(result.modelContent!)
+    expect(delivered.nextOffset).toBeNull()
+    expect(JSON.parse(delivered.content)).toEqual(schema)
+    expect(Buffer.byteLength(result.modelContent!)).toBeLessThanOrEqual(16384)
+    await expect(tool.call({ name: 'sciforge_read_history', context,
+      arguments: { artifactRef: 'ref', maxBytes: 16385 } })).rejects.toThrow()
   })
 
   it('loads a complete tool artifact through the canonical artifact reader', async () => {

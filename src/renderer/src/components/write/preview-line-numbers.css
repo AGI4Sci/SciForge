@@ -1,0 +1,28 @@
+.preview-source-lines {
+  padding-left: 3.25rem;
+}
+.preview-source-lines [data-preview-line-number] {
+  position: relative;
+}
+[data-preview-line-number]::before {
+  content: attr(data-preview-line-number);
+  position: absolute;
+  right: calc(100% + 0.75rem);
+  width: 3rem;
+  text-align: right;
+  color: var(--ds-muted, #87909e);
+  font: 10px/20px ui-monospace, monospace;
+  font-weight: normal;
+  user-select: none;
+  pointer-events: none;
+}
+.preview-line-gutter {
+  pointer-events: none;
+  user-select: none;
+  font: 10px/20px ui-monospace, monospace;
+  color: var(--ds-muted, #87909e);
+}
+.preview-line-gutter [data-preview-line-number]::before {
+  right: 0;
+  width: 100%;
+}

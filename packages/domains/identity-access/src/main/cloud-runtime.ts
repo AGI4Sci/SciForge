@@ -23,6 +23,7 @@ import {
   resolveDesktopIdentityRuntimeConfig
 } from './cloud-runtime-config.js'
 import { HttpCloudIdentityClient } from './cloud-identity-client.js'
+import { fetchCloudCommand } from './cloud-command-fetch.js'
 import { DesktopDeviceService } from './device-service.js'
 import {
   DesktopIdentityError,
@@ -131,7 +132,11 @@ export class CloudIdentityRuntime {
       this.#publish()
     })
     this.#disposeDeviceSubscription = this.#device.subscribe((status) => {
-      if (status.state !== 'active') this.#clearActiveDeviceAuthority()
+      // Connectivity is not an identity transition. Keep the last confirmed
+      // binding for local work; Cloud transport and signing still require a
+      // fresh ACTIVE Device and invalidate their own in-flight authority below.
+      const temporarilyUnverified = status.state === 'error' && status.reasonCode === 'temporarily_unverified'
+      if (status.state !== 'active' && !temporarilyUnverified) this.#clearActiveDeviceAuthority()
       if (status.state === 'active') this.#deviceError = undefined
       if (authorityUserKey(this.#identity.getStatus()) === this.#authorityUserKey) {
         this.#invalidateChangedAuthority(status)
@@ -493,7 +498,7 @@ export class CloudIdentityRuntime {
         this.#transportUnavailableReason ?? 'SciForge Cloud is not configured.'
       )
     }
-    const send = (token: string): Promise<Response> => this.#fetch(
+    const send = (token: string): Promise<Response> => fetchCloudCommand(this.#fetch,
       `${baseUrl}/v1/commands`,
       {
         method: 'POST',

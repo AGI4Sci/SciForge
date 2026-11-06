@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { existsSync, appendFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, appendFileSync, realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   WORKSPACE_PREVIEW_PROTOCOL,
@@ -19,8 +19,105 @@ export type RemoteCapabilityDescriptor = Readonly<Record<string, unknown> & { id
 export type DshStorageGrant = Readonly<{ profileRoot: string; packageName: string }>
 /** Effects that may be granted to a DSH tool by the Host. */
 export type DshToolEffect = 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
+/** Approval a Host grant may declare. A declaration can raise the effect-derived level, never lower it. */
+export type DshToolApproval = 'none' | 'confirmation'
+export const DSH_TOOL_APPROVAL_LEVELS = Object.freeze(['none', 'confirmation'] as const)
+export const DSH_TOOL_EFFECTS = Object.freeze(['read', 'compute', 'workspace-write', 'external-write', 'destructive'] as const)
+/** Canonical grant shape shared by contracts, install policies and DSH artifact manifests. */
+export const dshToolGrantSchema = z.object({
+  id: z.string().trim().min(1).max(256),
+  effect: z.enum(DSH_TOOL_EFFECTS),
+  approval: z.enum(DSH_TOOL_APPROVAL_LEVELS).optional(),
+  readResource: z.literal('workspace').optional(),
+  /** Declares that the Host must bind the caller's workspace into this tool. */
+  scope: z.literal('workspace').optional()
+}).strict()
+export type DshToolGrant = Readonly<{ id: string; effect: DshToolEffect; approval?: DshToolApproval; /** Explicit Host-only opt-in for reusable cross-session read resources. */ readResource?: 'workspace'; scope?: 'workspace' }>
 /** Exact host-owned grants, never plugin metadata. */
-export type DshToolGrants = Readonly<Record<string, Readonly<{ id: string; effect: DshToolEffect; /** Explicit Host-only opt-in for reusable cross-session read resources. */ readResource?: 'workspace' }>>>
+export type DshToolGrants = Readonly<Record<string, DshToolGrant>>
+
+/** The argument every workspace-bound DSH tool exposes for Host binding. */
+export const DSH_WORKSPACE_ARGUMENT = 'workspaceRoot'
+
+type DshToolParameterSchema = Readonly<{
+  properties?: Readonly<Record<string, Readonly<{ type?: unknown }>>>
+}>
+
+function workspaceArgumentSchemaOf(descriptor: Readonly<Record<string, unknown>> | undefined): DshToolParameterSchema | undefined {
+  const schema = descriptor?.inputSchema
+  return schema && typeof schema === 'object' ? schema as DshToolParameterSchema : undefined
+}
+
+/** True when the descriptor both claims a workspace binding and declares the bound argument. */
+export function declaresWorkspaceArgument(descriptor: Readonly<Record<string, unknown>> | undefined): boolean {
+  const property = workspaceArgumentSchemaOf(descriptor)?.properties?.[DSH_WORKSPACE_ARGUMENT]
+  return property !== undefined && property.type === 'string'
+}
+
+/** True when the Host must bind the caller's workspace into this descriptor. */
+export function isWorkspaceBoundDescriptor(descriptor: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (descriptor?.scope === 'workspace') return true
+  const tags = Array.isArray(descriptor?.tags) ? descriptor.tags as readonly unknown[] : []
+  return tags.includes('dsh-workspace-read') && declaresWorkspaceArgument(descriptor)
+}
+
+/** Compare roots through existing ancestors, including aliases of not-yet-created roots. */
+function canonicalBindingWorkspace(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const value = raw.trim()
+  if (!value || value.includes('\0') || !isAbsolute(value)) return undefined
+  const path = resolve(value)
+  const missing: string[] = []
+  let current = path
+  let canonical = path
+  for (;;) {
+    try {
+      const existing = realpathSync.native(current)
+      canonical = resolve(existing, ...missing.slice().reverse())
+      break
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) break
+      missing.push(basename(current))
+      current = parent
+    }
+  }
+  // macOS volumes may be case-sensitive. Existing aliases are normalized by
+  // realpath; missing suffixes retain their spelling and fail closed.
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical
+}
+
+/**
+ * Bind only the authenticated Host caller root. An explicit input root must
+ * identify that exact canonical directory; it never grants workspace access.
+ * Broker callers must invoke this before replacing or stripping input fields.
+ * Transport marker strings carry no authority.
+ */
+export function bindWorkspaceArgument(
+  descriptor: Readonly<Record<string, unknown>> | undefined,
+  input: unknown,
+  workspaceRoot: string | undefined
+): unknown {
+  if (!isWorkspaceBoundDescriptor(descriptor)) return input
+  const workspace = typeof workspaceRoot === 'string' ? workspaceRoot.trim() : ''
+  const canonicalWorkspace = canonicalBindingWorkspace(workspace)
+  if (canonicalWorkspace === undefined) {
+    throw new ProcessExtensionHostError('request_failed', `Capability ${String(descriptor?.id)} requires a workspace-scoped caller with an absolute workspace root.`)
+  }
+  const object = input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : undefined
+  if (object === undefined && declaresWorkspaceArgument(descriptor)) {
+    throw new ProcessExtensionHostError('request_failed', `Capability ${String(descriptor?.id)} requires an object argument for workspace binding.`)
+  }
+  if (object && Object.prototype.hasOwnProperty.call(object, DSH_WORKSPACE_ARGUMENT)) {
+    const requested = canonicalBindingWorkspace(object[DSH_WORKSPACE_ARGUMENT])
+    if (requested === undefined || requested !== canonicalWorkspace) {
+      throw new ProcessExtensionHostError('request_failed', `Capability ${String(descriptor?.id)} rejects a workspaceRoot outside the authenticated caller workspace.`)
+    }
+  }
+  return { ...(object ?? {}), [DSH_WORKSPACE_ARGUMENT]: workspace }
+}
 
 /** The only ordinary Session identity that crosses the extension process boundary. */
 export type DshOrdinarySessionIdentity = Readonly<{
@@ -51,8 +148,17 @@ export type DshToolAuthorizationRequest = Readonly<{
   generation: number
   capabilityId: string
   effect: DshToolEffect
+  /**
+   * Which lane reaches the tool. `ordinary-session` carries a DSH Session
+   * envelope; `workspace` is the Host-bound broker lane (no Session is invented
+   * for it); `host` is a service-lane call with neither.
+   */
+  lane: 'ordinary-session' | 'workspace' | 'host'
   caller: DshCallerContext
-  ordinarySession: DshOrdinarySessionIdentity
+  /** Only on the ordinary-session lane. */
+  ordinarySession?: DshOrdinarySessionIdentity
+  /** Only on the workspace lane: the caller's declared workspace. */
+  workspaceId?: string
   context: DshCallerContext
 }>
 
@@ -187,7 +293,24 @@ type Pending = {
   cleanup: () => void
 }
 
+/** Host-observed IPC provenance. Contains no invocation arguments or response payload. */
+export type ProcessExtensionInvocationTrace = Readonly<{
+  phase: 'dispatch' | 'succeeded' | 'failed'
+  transportRequestId: string
+  connectionId: string
+  pluginId: string
+  packageName: string
+  version: string
+  generation: number
+  capabilityId: string
+  toolName?: string
+  brokerInvocationId?: string
+  hostCallId?: string
+  hostRequestId?: string | number
+}>
+
 type RuntimeOptions = Readonly<{
+  onInvocationTrace?: (trace: ProcessExtensionInvocationTrace) => void
   hostServices?: HostServiceProviderRegistry
   isHostServiceCurrent?: () => boolean
   pluginId: string
@@ -285,6 +408,11 @@ export class ProcessExtensionRuntime {
     return this.#capabilities
   }
 
+  /** Service ids this generation's Host-resolved provider registry actually has. */
+  get hostServiceIds(): readonly string[] {
+    return this.#options.hostServices?.serviceIds ?? []
+  }
+
   async activate(): Promise<ProcessExtensionSnapshot> {
     if (this.#state === 'active') return this.snapshot
     const bundledRunnerPath = fileURLToPath(new URL('./process-extension-runner.mjs', import.meta.url))
@@ -378,34 +506,73 @@ export class ProcessExtensionRuntime {
     const expectedRevision = revision ?? current?.runtimeRevision
     if (revision !== undefined && current?.runtimeRevision !== revision) throw new ProcessExtensionHostError('stale_generation', 'Capability descriptor revision is stale.')
     const isDshTool = Array.isArray(current?.tags) && current.tags.includes('dsh-tool')
-    if (isDshTool && (current?.effect !== 'compute' || current.scope !== 'global') && invocation === undefined && !(serviceAdmission?.assertCurrent && this.#options.serviceClients?.length)) {
+    // A workspace-scoped tool is bound and authorized by the Host from the
+    // Broker caller, not from a DSH ordinary Session; requiring an envelope
+    // here would make it unreachable for non-Session callers.
+    const workspaceBound = current?.scope === 'workspace'
+    if (isDshTool && !workspaceBound && (current?.effect !== 'compute' || current.scope !== 'global') && invocation === undefined && !serviceAdmission?.assertCurrent) {
       throw new ProcessExtensionHostError('request_failed', 'DSH ordinary Session invocation envelope is required.')
     }
-    if (snapshot !== undefined) {
-      if (!current || !Array.isArray(current.tags) || !current.tags.includes('dsh-tool')) {
-        throw new ProcessExtensionHostError('request_failed', 'Invocation context is only supported for a DSH tool capability.')
-      }
+    if (snapshot !== undefined && (!current || !Array.isArray(current.tags) || !current.tags.includes('dsh-tool'))) {
+      throw new ProcessExtensionHostError('request_failed', 'Invocation context is only supported for a DSH tool capability.')
+    }
+    // Both lanes reach the Host authorization hook when one is configured: the
+    // workspace lane is exactly the one that skips the envelope, so leaving it
+    // unauthorized would turn the workspace binding into an unauthenticated
+    // write channel. A workspace call never fabricates a Session identity; it
+    // presents the caller and its declared workspace. Without a configured hook
+    // only the ordinary-Session lane fails closed (it always did).
+    const callerWorkspace = (typeof (hostServices?.authority?.caller as { workspaceId?: unknown } | undefined)?.workspaceId === 'string'
+      ? String((hostServices?.authority?.caller as { workspaceId?: unknown }).workspaceId)
+      : undefined) ?? (typeof (snapshot?.caller as { workspaceId?: unknown } | undefined)?.workspaceId === 'string'
+        ? String((snapshot?.caller as { workspaceId?: unknown }).workspaceId)
+        : undefined)
+    const boundInput = bindWorkspaceArgument(current, input, callerWorkspace)
+    if (isDshTool) {
       const authorize = this.#options.authorizeDshTool
-      if (authorize === undefined) {
+      if (snapshot !== undefined && authorize === undefined) {
         throw new ProcessExtensionHostError('request_failed', 'Host DSH tool authorization is unavailable.')
       }
-      try {
-        await authorize(Object.freeze({
-          packageName: this.#options.packageName,
-          version: this.#options.version,
-          generation: this.#options.generation,
-          capabilityId: id,
-          effect: current.effect as DshToolEffect,
-          caller: snapshot.caller,
-          ordinarySession: snapshot.ordinarySession,
-          context: snapshot.context,
-        }))
-      } catch (error) {
-        throw new ProcessExtensionHostError('request_failed', error instanceof Error ? error.message : String(error), { cause: error })
+      if (authorize !== undefined) {
+        const lane = snapshot !== undefined ? 'ordinary-session' : current?.scope === 'workspace' ? 'workspace' : 'host'
+        try {
+          await authorize(Object.freeze({
+            packageName: this.#options.packageName,
+            version: this.#options.version,
+            generation: this.#options.generation,
+            capabilityId: id,
+            effect: current?.effect as DshToolEffect,
+            lane,
+            caller: snapshot?.caller ?? (callerWorkspace ? { workspaceId: callerWorkspace } : {}),
+            ...(snapshot !== undefined ? { ordinarySession: snapshot.ordinarySession } : {}),
+            // Any lane that carries a caller workspace presents it, so a Host
+            // authority can decide on the directory even when the call arrived
+            // through an ordinary Session envelope.
+            ...(callerWorkspace ? { workspaceId: callerWorkspace } : {}),
+            context: snapshot?.context ?? {},
+          }))
+        } catch (error) {
+          throw new ProcessExtensionHostError('request_failed', error instanceof Error ? error.message : String(error), { cause: error })
+        }
+        // Authorization may be asynchronous: the descriptor, generation and
+        // grant it authorized may have changed by the time it resolves. Nothing
+        // has been dispatched yet, so re-check before any effect can start.
+        this.#assertCurrent(generation)
+        const latest = this.#capabilities.find((descriptor) => descriptor.id === id)
+        if (latest !== current || latest?.runtimeRevision !== expectedRevision) {
+          throw new ProcessExtensionHostError('stale_generation', 'Capability descriptor changed while its invocation was being authorized.')
+        }
+        // `#assertCurrent` only knows this runtime's own generation; a hot
+        // replace commits a *new* runtime while this one is still active until
+        // it is deactivated. The Host-owned predicate answers "am I still the
+        // committed runtime", which is the fact that matters here.
+        if (this.#options.isHostServiceCurrent?.() === false) {
+          throw new ProcessExtensionHostError('stale_generation', 'Runtime was replaced while its invocation was being authorized.')
+        }
       }
     }
     this.#assertCurrent(generation)
-    return this.#request('invoke', { id, input, revision: expectedRevision, ...(snapshot ? { invocation: snapshot } : {}), ...(serviceAdmission ? { hostServices: true } : {}) }, signal, serviceAdmission)
+    return this.#request('invoke', { id, input: boundInput, revision: expectedRevision, ...(snapshot ? { invocation: snapshot } : {}), ...(serviceAdmission && (isDshTool || serviceAdmission.services.length > 0) ? { hostServices: true } : {}) }, signal, serviceAdmission)
   }
 
   async managedDiscover(generation = this.#options.generation): Promise<unknown> {
@@ -618,6 +785,27 @@ export class ProcessExtensionRuntime {
       services: serviceAdmission.services,
       assertCurrent: serviceAdmission.assertCurrent,
     })
+    const descriptor = command === 'invoke' ? this.#capabilities.find(item => item.id === (payload as { id?: unknown })?.id) : undefined
+    const brokerInvocationId = serviceAdmission?.authority.invocationId
+    const originalContext = serviceAdmission?.authority.originalContext
+    const hostContext = originalContext && typeof originalContext === 'object' && !Array.isArray(originalContext)
+      ? originalContext as Record<string, unknown> : undefined
+    const hostCallId = hostContext?.callId
+    const hostRequestId = hostContext?.requestId
+    const receipt = descriptor ? {
+      transportRequestId: requestId, connectionId: this.#connectionId,
+      pluginId: this.#options.pluginId, packageName: this.#options.packageName,
+      version: this.#options.version, generation: this.#options.generation,
+      capabilityId: descriptor.id,
+      ...(Array.isArray(descriptor.tags) && descriptor.tags.includes('dsh-tool') && typeof descriptor.title === 'string' ? { toolName: descriptor.title.slice(0, 256) } : {}),
+      ...(typeof brokerInvocationId === 'string' && brokerInvocationId.length <= 256 ? { brokerInvocationId } : {}),
+      ...(typeof hostCallId === 'string' && hostCallId.length <= 256 ? { hostCallId } : {}),
+      ...(typeof hostRequestId === 'string' && hostRequestId.length <= 256 || typeof hostRequestId === 'number' && Number.isFinite(hostRequestId) ? { hostRequestId: hostRequestId as string | number } : {})
+    } : undefined
+    const trace = (phase: ProcessExtensionInvocationTrace['phase']) => {
+      if (!receipt) return
+      try { this.#options.onInvocationTrace?.(Object.freeze({ ...receipt, phase })) } catch { /* Observability cannot change execution or settlement. */ }
+    }
     return new Promise((resolve, reject) => {
       const cleanup = () => signal?.removeEventListener('abort', onAbort)
       const cancel = (error: ProcessExtensionHostError) => {
@@ -644,6 +832,7 @@ export class ProcessExtensionRuntime {
       }, timeoutMs ?? this.#timeoutMs(command))
       this.#pending.set(requestId, { resolve, reject, timer, cleanup })
       signal?.addEventListener('abort', onAbort, { once: true })
+      trace('dispatch')
       child.send({ type: 'request', requestId, command, payload }, (error) => {
         if (!error) return
         this.#closeServiceOwner(requestId)
@@ -652,7 +841,7 @@ export class ProcessExtensionRuntime {
         this.#pending.delete(requestId)
         reject(new ProcessExtensionHostError('request_failed', error.message, { cause: error }))
       })
-    })
+    }).then(value => { trace('succeeded'); return value }, error => { trace('failed'); throw error })
   }
 
   #onMessage(message: unknown): void {
@@ -832,6 +1021,15 @@ export class ProcessExtensionRuntime {
           const validEffect = ['read', 'compute', 'workspace-write', 'external-write', 'destructive'].includes(descriptor.effect as string)
           const validScope = ['global', 'workspace', 'resource'].includes(descriptor.scope as string)
           if (!Number.isSafeInteger(descriptor.runtimeRevision) || (descriptor.runtimeRevision as number) <= 0 || !validScope || !validEffect || !Array.isArray(descriptor.tags) || !descriptor.tags.includes('dsh-tool')) throw new Error('invalid dynamic DSH effect descriptor')
+          // A workspace-scoped DSH tool promises the Host binds the caller's
+          // workspace into it. If it does not declare the bound argument the
+          // promise is empty (the caller's own path would survive), so it must
+          // not activate at all. Native capabilities keep the whole-input
+          // contract and are exempt.
+          if (Array.isArray(descriptor.tags) && descriptor.tags.includes('dsh-tool') &&
+            descriptor.scope === 'workspace' && !declaresWorkspaceArgument(descriptor)) {
+            throw new Error('workspace-scoped DSH tool must declare a string workspaceRoot parameter')
+          }
         }
         return true
       } catch (error) {
@@ -898,6 +1096,7 @@ export class ProcessExtensionHost {
   readonly #cleanupOwners = new Map<string, Set<ProcessExtensionRuntime>>()
   readonly #committedPrevious = new Map<string, ProcessExtensionRuntime>()
   readonly #generations = new Map<string, number>()
+  readonly #onInvocationTrace?: RuntimeOptions['onInvocationTrace']
   readonly #onCapabilitiesChanged?: (runtime: ProcessExtensionRuntime) => void
   readonly #resolveDshToolGrants?: (packageName: string, version: string) => DshToolGrants
   readonly #resolveDshStorage?: (packageName: string, version: string) => DshStorageGrant | undefined
@@ -909,13 +1108,14 @@ export class ProcessExtensionHost {
   /** Host-wide ordinary Agent resolver for plugin tool invocations. */
   readonly #dshAgentResolver?: Readonly<{ path: string }>
 
-  constructor(options: Readonly<{ invokeTimeoutMs?: number; resolveServiceClients?: (packageName: string, version: string, generation: number) => readonly import('./host-service-provider.js').HostServiceClientFactory[]; hostServices?: HostServiceProviderRegistry; resolveHostServices?: (packageName: string, version: string, generation: number) => HostServiceProviderRegistry | undefined; onCapabilitiesChanged?: (runtime: ProcessExtensionRuntime) => void; resolveDshStorage?: (packageName: string, version: string) => DshStorageGrant | undefined; resolveDshToolGrants?: (packageName: string, version: string) => DshToolGrants; resolveDshConfig?: (packageName: string, version: string) => Readonly<Record<string, unknown>>; pluginRuntimeDeps?: Readonly<{ packages: readonly string[]; baseUrl: string }>; pluginRuntimeEnv?: Readonly<Record<string, string>>; dshAgentResolver?: Readonly<{ path: string }>; authorizeDshTool?: (request: DshToolAuthorizationRequest) => void | Promise<void> }> = {}) {
+  constructor(options: Readonly<{ onInvocationTrace?: RuntimeOptions['onInvocationTrace']; invokeTimeoutMs?: number; resolveServiceClients?: (packageName: string, version: string, generation: number) => readonly import('./host-service-provider.js').HostServiceClientFactory[]; hostServices?: HostServiceProviderRegistry; resolveHostServices?: (packageName: string, version: string, generation: number) => HostServiceProviderRegistry | undefined; onCapabilitiesChanged?: (runtime: ProcessExtensionRuntime) => void; resolveDshStorage?: (packageName: string, version: string) => DshStorageGrant | undefined; resolveDshToolGrants?: (packageName: string, version: string) => DshToolGrants; resolveDshConfig?: (packageName: string, version: string) => Readonly<Record<string, unknown>>; pluginRuntimeDeps?: Readonly<{ packages: readonly string[]; baseUrl: string }>; pluginRuntimeEnv?: Readonly<Record<string, string>>; dshAgentResolver?: Readonly<{ path: string }>; authorizeDshTool?: (request: DshToolAuthorizationRequest) => void | Promise<void> }> = {}) {
     this.#pluginRuntimeDeps = options.pluginRuntimeDeps
     this.#pluginRuntimeEnv = options.pluginRuntimeEnv
     this.#dshAgentResolver = options.dshAgentResolver
     this.#invokeTimeoutMs = validateTimeoutOption('invokeTimeoutMs', options.invokeTimeoutMs)
     this.#resolveHostServices = options.resolveHostServices ?? (options.hostServices ? () => options.hostServices : undefined)
     this.#resolveServiceClients = options.resolveServiceClients
+    this.#onInvocationTrace = options.onInvocationTrace
     this.#onCapabilitiesChanged = options.onCapabilitiesChanged
     this.#resolveDshToolGrants = options.resolveDshToolGrants
     this.#resolveDshConfig = options.resolveDshConfig
@@ -958,6 +1158,7 @@ export class ProcessExtensionHost {
       hostServices: this.#resolveHostServices?.(options.packageName, options.version, generation),
       isHostServiceCurrent: (): boolean => this.#active.get(options.packageName) === candidate,
       dshStorage,
+      onInvocationTrace: this.#onInvocationTrace ?? options.onInvocationTrace,
       onCapabilitiesChanged: (runtime) => {
         if (this.#active.get(options.packageName) === runtime) this.#onCapabilitiesChanged?.(runtime)
       },

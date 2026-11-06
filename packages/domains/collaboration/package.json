@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-collaboration",
-  "version": "13.0.0",
+  "version": "13.3.2",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -26,8 +26,8 @@
   },
   "dependencies": {
     "@sciforge/collaboration-contracts": "8.0.0",
-    "@sciforge/domain-identity-access": "5.0.2",
-    "@sciforge/domain-sdk": "^0.2.24",
+    "@sciforge/domain-identity-access": "5.1.1",
+    "@sciforge/domain-sdk": "^0.2.32",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",
     "react-i18next": "^15.7.4",

@@ -48,7 +48,7 @@ export interface DshRuntimeOptions {
    * session transport whose dispatch binds a fresh immutable lease each turn;
    * revoke that lease on this signal even when nobody consumes runtime events.
    * A changed live-session MCP configuration fails closed (no invented update API). */
-  getAuthorizedMcpServers?: (identity: DshIdentity & { workspace: string; allowedTools?: readonly string[]; permissionLevel?: string; governanceProfile?: string; signal: AbortSignal }) => Promise<readonly DshMcpServer[]>
+  getAuthorizedMcpServers?: (identity: DshIdentity & { workspace: string; allowedTools?: readonly string[]; permissionLevel?: string; governanceProfile?: string; toolImageInputAllowed: boolean; signal: AbortSignal }) => Promise<readonly DshMcpServer[]>
   resolveWorkspace?: (context: DshContext, input: { workspace?: string | null; workspaceLocator?: unknown }) => Promise<string>
   /** Lifecycle requests and Host callbacks; defaults to 15 seconds. */
   requestTimeoutMs?: number

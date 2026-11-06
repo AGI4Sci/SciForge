@@ -1,0 +1,205 @@
+{
+  "empty-list": {
+    "threads": []
+  },
+  "upsert": {
+    "schemaVersion": 1,
+    "id": "thread-baseline-1",
+    "workspaceKey": "/workspace/example",
+    "purpose": "research",
+    "anchor": {
+      "targetKey": "figure:2",
+      "targetLabel": "Figure 2",
+      "canonical": {
+        "kind": "research",
+        "resourceKind": "figure",
+        "resourceId": "figure-2"
+      },
+      "bounds": {
+        "x": 20,
+        "y": 30,
+        "width": 200,
+        "height": 120
+      }
+    },
+    "capture": {
+      "capturedAt": "2026-07-11T00:00:00.000Z",
+      "appVersion": "1.0.2",
+      "platform": "darwin",
+      "viewport": {
+        "width": 1200,
+        "height": 800,
+        "scaleFactor": 2
+      },
+      "targetLabel": "Figure 2",
+      "targetBounds": {
+        "x": 20,
+        "y": 30,
+        "width": 200,
+        "height": 120
+      },
+      "unavailableReason": "No window was available."
+    },
+    "messages": [
+      {
+        "id": "thread-baseline-1-message",
+        "authorKind": "user",
+        "body": "Please check this plot.",
+        "createdAt": "2026-07-11T00:00:01.000Z",
+        "updatedAt": "2026-07-11T00:00:01.000Z"
+      }
+    ],
+    "status": "open",
+    "anchorResolution": "resolved",
+    "feedback": {
+      "state": "local"
+    },
+    "createdAt": "2026-07-11T00:00:00.000Z",
+    "updatedAt": "2026-07-11T00:00:01.000Z"
+  },
+  "get": {
+    "thread": {
+      "schemaVersion": 1,
+      "id": "thread-baseline-1",
+      "workspaceKey": "/workspace/example",
+      "purpose": "research",
+      "anchor": {
+        "targetKey": "figure:2",
+        "targetLabel": "Figure 2",
+        "canonical": {
+          "kind": "research",
+          "resourceKind": "figure",
+          "resourceId": "figure-2"
+        },
+        "bounds": {
+          "x": 20,
+          "y": 30,
+          "width": 200,
+          "height": 120
+        }
+      },
+      "capture": {
+        "capturedAt": "2026-07-11T00:00:00.000Z",
+        "appVersion": "1.0.2",
+        "platform": "darwin",
+        "viewport": {
+          "width": 1200,
+          "height": 800,
+          "scaleFactor": 2
+        },
+        "targetLabel": "Figure 2",
+        "targetBounds": {
+          "x": 20,
+          "y": 30,
+          "width": 200,
+          "height": 120
+        },
+        "unavailableReason": "No window was available."
+      },
+      "messages": [
+        {
+          "id": "thread-baseline-1-message",
+          "authorKind": "user",
+          "body": "Please check this plot.",
+          "createdAt": "2026-07-11T00:00:01.000Z",
+          "updatedAt": "2026-07-11T00:00:01.000Z"
+        }
+      ],
+      "status": "open",
+      "anchorResolution": "resolved",
+      "feedback": {
+        "state": "local"
+      },
+      "createdAt": "2026-07-11T00:00:00.000Z",
+      "updatedAt": "2026-07-11T00:00:01.000Z"
+    }
+  },
+  "list-by-target": {
+    "threads": [
+      {
+        "schemaVersion": 1,
+        "id": "thread-baseline-1",
+        "workspaceKey": "/workspace/example",
+        "purpose": "research",
+        "anchor": {
+          "targetKey": "figure:2",
+          "targetLabel": "Figure 2",
+          "canonical": {
+            "kind": "research",
+            "resourceKind": "figure",
+            "resourceId": "figure-2"
+          },
+          "bounds": {
+            "x": 20,
+            "y": 30,
+            "width": 200,
+            "height": 120
+          }
+        },
+        "capture": {
+          "capturedAt": "2026-07-11T00:00:00.000Z",
+          "appVersion": "1.0.2",
+          "platform": "darwin",
+          "viewport": {
+            "width": 1200,
+            "height": 800,
+            "scaleFactor": 2
+          },
+          "targetLabel": "Figure 2",
+          "targetBounds": {
+            "x": 20,
+            "y": 30,
+            "width": 200,
+            "height": 120
+          },
+          "unavailableReason": "No window was available."
+        },
+        "messages": [
+          {
+            "id": "thread-baseline-1-message",
+            "authorKind": "user",
+            "body": "Please check this plot.",
+            "createdAt": "2026-07-11T00:00:01.000Z",
+            "updatedAt": "2026-07-11T00:00:01.000Z"
+          }
+        ],
+        "status": "open",
+        "anchorResolution": "resolved",
+        "feedback": {
+          "state": "local"
+        },
+        "createdAt": "2026-07-11T00:00:00.000Z",
+        "updatedAt": "2026-07-11T00:00:01.000Z"
+      }
+    ]
+  },
+  "capture-unavailable": {
+    "ok": false,
+    "message": "Safe registered-target capture is unavailable in this build."
+  },
+  "feedback-submit-unconfigured": {
+    "ok": false,
+    "message": "SciForge feedback gateway is not configured.",
+    "retryable": false
+  },
+  "feedback-status": {
+    "ok": true,
+    "feedback": {
+      "state": "failed",
+      "idempotencyKey": "feedback:thread-1234567890",
+      "disclosure": {
+        "annotatedScreenshots": true,
+        "applicationEnvironment": true,
+        "logs": false,
+        "conversationExcerpt": false,
+        "workspacePaths": false,
+        "fileMetadata": false
+      },
+      "error": "SciForge feedback gateway is not configured.",
+      "updatedAt": "2026-07-11T03:00:00.000Z"
+    }
+  },
+  "delete": {
+    "deleted": true
+  }
+}

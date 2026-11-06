@@ -50,6 +50,14 @@ export type EvidenceProducerReceipt = Readonly<{
 /** Parses and validates one producer's receipt file; throws on any violation. */
 export type EvidenceProducerReceiptAdapter = (value: unknown) => EvidenceProducerReceipt
 
+export type EvidenceProducerPollScope = Readonly<{ runtimeId: string; threadId: string; workspaceRoot: string }>
+export type EvidenceProducerPollReport = Readonly<{
+  delivered: number
+  idempotent: number
+  skipped: number
+  pending: readonly Readonly<{ producer: string; fileName: string; message: string }>[]
+}>
+
 export type EvidenceProducerPreparation = Readonly<{
   runtimeId: string
   threadId: string
@@ -144,7 +152,7 @@ export class EvidenceProducerProvenanceConsumer {
   private enabled = false
   private closed = false
   private timer: ReturnType<typeof setTimeout> | undefined
-  private draining: Promise<void> | undefined
+  private draining: Promise<EvidenceProducerPollReport> | undefined
 
   constructor(private readonly options: Readonly<{
     discoverWorkspaces: () => Promise<readonly string[]>
@@ -158,6 +166,7 @@ export class EvidenceProducerProvenanceConsumer {
       prepared: EvidenceProducerPreparation,
       receipt: EvidenceProducerReceipt
     ) => Promise<void>
+    verifyExistingDelivery?: (delivery: EvidenceProducerDeliveryReceiptV1, receipt: EvidenceProducerReceipt) => Promise<void>
     now?: () => Date
     pollIntervalMs?: number
     log?: (entry: Readonly<{ level: 'debug' | 'warn'; message: string; detail?: unknown }>) => void
@@ -183,14 +192,18 @@ export class EvidenceProducerProvenanceConsumer {
     this.schedule(0, true)
   }
 
-  async pollNow(): Promise<void> {
-    if (!this.enabled || this.closed) return
-    if (this.draining) return this.draining
-    const work = this.drain()
+  async pollNow(force = false, scope?: EvidenceProducerPollScope): Promise<EvidenceProducerPollReport> {
+    const empty = { delivered: 0, idempotent: 0, skipped: 0, pending: [] }
+    if ((!this.enabled && !force) || this.closed) return empty
+    // Scoped calls cannot borrow an unrelated background drain's authority/report.
+    if (this.draining) {
+      if (!scope) return this.draining
+      await this.draining
+      return this.pollNow(force, scope)
+    }
+    const work = this.drain(force, scope)
     this.draining = work
-    try {
-      await work
-    } finally {
+    try { return await work } finally {
       if (this.draining === work) this.draining = undefined
     }
   }
@@ -204,21 +217,24 @@ export class EvidenceProducerProvenanceConsumer {
     await this.draining
   }
 
-  private async drain(): Promise<void> {
+  private async drain(force: boolean, scope?: EvidenceProducerPollScope): Promise<EvidenceProducerPollReport> {
+    const report = { delivered: 0, idempotent: 0, skipped: 0, pending: [] as Array<{ producer: string; fileName: string; message: string }> }
     let workspaces: readonly string[]
     try {
-      workspaces = await this.options.discoverWorkspaces()
+      workspaces = scope ? [scope.workspaceRoot] : await this.options.discoverWorkspaces()
     } catch (error) {
       this.warn('Evidence DAG could not discover workspaces for producer provenance.', error)
-      return
+      report.pending.push({ producer: '', fileName: '', message: error instanceof Error ? error.message : String(error) })
+      return report
     }
     for (const workspaceRoot of uniqueResolved(workspaces)) {
-      if (this.closed || !this.enabled) return
+      if (this.closed || (!this.enabled && !force)) return report
       let producers: readonly string[]
       try {
         producers = await producerDirectories(workspaceRoot)
       } catch (error) {
         this.warn(`Evidence DAG could not inspect producer provenance in ${workspaceRoot}.`, error)
+        report.pending.push({ producer: '', fileName: '', message: String(error) })
         continue
       }
       for (const producer of producers) {
@@ -227,32 +243,37 @@ export class EvidenceProducerProvenanceConsumer {
           sources = await producerReceipts(workspaceRoot, producer)
         } catch (error) {
           this.warn(`Evidence DAG could not inspect ${producer} provenance in ${workspaceRoot}.`, error)
+          report.pending.push({ producer, fileName: '', message: String(error) })
           continue
         }
         for (const source of sources) {
-          if (this.closed || !this.enabled) return
+          if (this.closed || (!this.enabled && !force)) return report
           if ('issue' in source) {
             this.warn(
               `Evidence DAG kept ${producer} provenance ${source.fileName} pending.`,
               new Error(source.issue)
             )
+            report.pending.push({ producer, fileName: source.fileName, message: source.issue })
             continue
           }
           try {
-            await this.deliver(workspaceRoot, producer, source)
+            report[await this.deliver(workspaceRoot, producer, source, scope)]++
           } catch (error) {
             this.warn(`Evidence DAG kept ${producer} provenance ${source.fileName} pending.`, error)
+            report.pending.push({ producer, fileName: source.fileName, message: error instanceof Error ? error.message : String(error) })
           }
         }
       }
     }
+    return report
   }
 
   private async deliver(
     workspaceRoot: string,
     producer: string,
-    source: ValidProducerReceiptFile
-  ): Promise<void> {
+    source: ValidProducerReceiptFile,
+    scope?: EvidenceProducerPollScope
+  ): Promise<'delivered' | 'idempotent' | 'skipped'> {
     const adapter = this.options.adapters?.get(producer)
     const value: unknown = JSON.parse(source.bytes.toString('utf8'))
     const receipt = adapter ? adapter(value) : parseEvidenceProducerReceipt(producer, value)
@@ -266,6 +287,8 @@ export class EvidenceProducerProvenanceConsumer {
       throw new Error('Producer provenance has no target Evidence thread.')
     }
 
+    if (scope && (receipt.runtimeId !== scope.runtimeId || receipt.threadId !== scope.threadId)) return 'skipped'
+
     const sourceDigest = createHash('sha256').update(source.bytes).digest('hex')
     const deliveryPath = evidenceProducerDeliveryReceiptPath(
       workspaceRoot,
@@ -277,7 +300,8 @@ export class EvidenceProducerProvenanceConsumer {
       const delivery = evidenceProducerDeliveryReceiptV1Schema.safeParse(existingDelivery)
       if (delivery.success) {
         assertDeliveryMatches(delivery.data, receipt, sourceDigest)
-        return
+        await this.options.verifyExistingDelivery?.(delivery.data, receipt)
+        return 'idempotent'
       }
       throw new Error('Evidence delivery receipt has an unsupported format.')
     }
@@ -311,6 +335,7 @@ export class EvidenceProducerProvenanceConsumer {
         sourceDigest
       })
     )
+    return 'delivered'
   }
 
   private schedule(delayMs: number, replace = false): void {

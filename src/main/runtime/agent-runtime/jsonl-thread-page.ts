@@ -476,6 +476,8 @@ export function boundAgentRuntimeEventForDelivery(
           header: truncateUtf8(question.header, 256),
           question: truncateUtf8(question.question, 1_024),
           options: question.options.slice(0, 8).map((option) => ({
+            ...(option.id ? { id: option.id } : {}),
+            ...(option.recommended !== undefined ? { recommended: option.recommended } : {}),
             label: truncateUtf8(option.label, 256),
             ...(option.description ? { description: truncateUtf8(option.description, 512) } : {})
           }))

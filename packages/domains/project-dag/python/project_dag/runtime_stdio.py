@@ -8,8 +8,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import select
+from queue import Empty, Queue
 import sys
+from threading import Thread
 import time
 from urllib.parse import parse_qs, urlsplit
 
@@ -82,9 +83,13 @@ def main():
     workspace = os.path.abspath(args.workspace)
     engine = Engine(args.db, args.evidence, judge=NoModel())
     try:
-        # One actor owns both commands and the canonical pump. Raw buffered
-        # reads avoid TextIO prefetch hiding commands from select(), and no
-        # background reader can steal input from a compiler/reasoning exchange.
+        # This restricted sidecar owns stdin; NoModel never reads it. Only the
+        # reader touches the pipe, while this actor owns all Engine/SQLite work.
+        # Windows select() cannot wait on pipes. A bounded raw-byte queue also
+        # preserves partial UTF-8 frames without blocking the idle retry pump.
+        incoming: Queue[bytes | OSError] = Queue(maxsize=16)
+        reader = Thread(target=read_input, args=(sys.stdin.fileno(), incoming), daemon=True)
+        reader.start()
         pending = b''
         eof = False
         while not eof or pending:
@@ -93,12 +98,16 @@ def main():
                 line, separator, pending = pending.partition(b'\n')
                 respond(engine, line, workspace)
                 continue
-            if select.select([sys.stdin], [], [], 0.2)[0]:
-                chunk = os.read(sys.stdin.fileno(), 65536)
-                if chunk:
-                    pending += chunk
-                else:
-                    eof = True
+            try:
+                chunk = incoming.get(timeout=0.2)
+            except Empty:
+                continue
+            if isinstance(chunk, OSError):
+                raise chunk
+            if chunk:
+                pending += chunk
+            else:
+                eof = True
         # Finish all accepted queue work, including already scheduled retries.
         # The owning process adapter bounds this drain and reports forced exit;
         # retry/terminal failures remain in the canonical durable job/receipt.
@@ -108,6 +117,18 @@ def main():
                 time.sleep(0.2)
     finally:
         engine.store.conn.close()
+
+
+def read_input(fd: int, incoming: Queue[bytes | OSError]) -> None:
+    """Deliver bytes, then EOF or an error, in order; never access the Engine."""
+    try:
+        while True:
+            chunk = os.read(fd, 65536)
+            incoming.put(chunk)
+            if not chunk:
+                return
+    except OSError as error:
+        incoming.put(error)
 
 
 def pump_updates(engine: Engine) -> bool:

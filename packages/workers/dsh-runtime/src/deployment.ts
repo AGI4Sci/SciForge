@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { DshRuntimeError, resolveDshLaunchInvocation } from './transport.js'
 import yaml from 'js-yaml'
 import type { DshDeployment, DshRuntimeOptions } from './types.js'
-import { DSH_MODEL_ROUTER_PATCH, modelRouterEnvironment } from './model-router.js'
+import { DSH_MODEL_ROUTER_PATCH, createDshDerivedModelRouterPatch, modelRouterEnvironment } from './model-router.js'
 
 /** Audited against dsh-v0.2.0-rc.2 / 639ed015397290b3745d163aafe02ffee4aa3f84.
  * The invariants below (disabled entry set, approval: ask, ACP, telemetry,
@@ -246,9 +246,9 @@ export async function prepareDeployment(options: DshRuntimeOptions & { commandEx
   const prefix = [...(options.executableArgs ?? [])]
   const args = [...prefix, 'acp', '--patch', patch]
   try {
-    const execution = { cwd: options.stateDirectory, env, timeout: options.requestTimeoutMs ?? 15_000, maxBuffer: 4 * 1024 * 1024 }
+    const execution = { cwd: options.stateDirectory, env, windowsHide: true, timeout: options.requestTimeoutMs ?? 15_000, maxBuffer: 4 * 1024 * 1024 }
     const versionInvocation = resolveDshLaunchInvocation(options.executable, [...prefix, '--version'])
-    const rawVersion = (await exec(versionInvocation.command, [...versionInvocation.args], execution)).stdout.trim()
+    const rawVersion = (await exec(versionInvocation.command, [...versionInvocation.args], { ...execution, windowsVerbatimArguments: versionInvocation.windowsVerbatimArguments })).stdout.trim()
     const version = rawVersion.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0] ?? ''
     // Discovered installs are not version-pinned; an explicit expectedVersion
     // (the packaged pinned artifact) still demands an exact match.
@@ -256,24 +256,31 @@ export async function prepareDeployment(options: DshRuntimeOptions & { commandEx
     // A derived patch is built from the install's own unpatched dump, so it
     // only ever references entries that release actually registers.
     const derived = options.safetyPatch === 'derived'
+    // The release-pinned composition has no reviewed image-input declaration.
+    // A route catalog cannot widen those trusted bytes. Refuse before ACP boot
+    // rather than returning successful MCP image delivery to a text-only model.
+    if (!derived && options.modelRouter?.inputModalities?.includes('image')) {
+      throw new DshRuntimeError('runtime_model_image_unapproved')
+    }
     let safetyPatch: string
     if (derived) {
       const baseInvocation = resolveDshLaunchInvocation(options.executable, [...prefix, 'acp', '--dump-config'])
-      const unpatchedDump = (await exec(baseInvocation.command, [...baseInvocation.args], execution)).stdout
+      const unpatchedDump = (await exec(baseInvocation.command, [...baseInvocation.args], { ...execution, windowsVerbatimArguments: baseInvocation.windowsVerbatimArguments })).stdout
       safetyPatch = createDshDerivedSafetyPatch(unpatchedDump, options.defaultAcpRoute, commandExecution)
     } else {
       safetyPatch = createDshSafetyPatch(options.defaultAcpRoute, commandExecution)
     }
-    await writeFile(patch, options.modelRouter ? yaml.dump(JSON.parse(safetyPatch)) + DSH_MODEL_ROUTER_PATCH : safetyPatch, { mode: 0o600 })
+    const routerPatch = options.modelRouter && derived ? createDshDerivedModelRouterPatch(options.modelRouter) : DSH_MODEL_ROUTER_PATCH
+    await writeFile(patch, options.modelRouter ? yaml.dump(JSON.parse(safetyPatch)) + routerPatch : safetyPatch, { mode: 0o600 })
     const dumpInvocation = resolveDshLaunchInvocation(options.executable, [...args, '--dump-config'])
-    const composedConfig = (await exec(dumpInvocation.command, [...dumpInvocation.args], execution)).stdout
+    const composedConfig = (await exec(dumpInvocation.command, [...dumpInvocation.args], { ...execution, windowsVerbatimArguments: dumpInvocation.windowsVerbatimArguments })).stdout
     if (derived) validateDshDerivedComposedConfig(composedConfig, commandExecution)
     else validateDshComposedConfig(composedConfig, commandExecution)
     const configDigest = createHash('sha256').update(canonicalizeDshComposedConfig(composedConfig)).digest('hex')
     // Boot-free dump precedes ACP startup. The trusted Host must pin the entire composition,
     // reject unknown executable plugins, and confirm all safety rows were actually applied.
     await options.verifyDeployment({ version, composedConfig, configDigest, executable: options.executable })
-    return { args, env, version, cleanup: () => rm(scratch, { recursive: true, force: true }) }
+    return { args, env, version, toolImageInputAllowed: derived && options.modelRouter?.inputModalities?.includes('image') === true, cleanup: () => rm(scratch, { recursive: true, force: true }) }
   } catch (error) {
     await rm(scratch, { recursive: true, force: true })
     if (error instanceof DshRuntimeError) throw error

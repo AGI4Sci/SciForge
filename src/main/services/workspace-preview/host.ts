@@ -1,5 +1,6 @@
-import { readWorkspacePreviewTextRange } from '@sciforge/workspace-host/preview-service'
+import { cachedVisualFrame, exportWorkspacePreviewVisual, readWorkspacePreviewTextRange } from '@sciforge/workspace-host/preview-service'
 import { createHash, randomUUID } from 'node:crypto'
+import { authenticateWorkspaceMutation } from '../workspace-mutation-receipt'
 import { constants, createReadStream, type Stats } from 'node:fs'
 import { copyFile, open, readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative } from 'node:path'
@@ -377,6 +378,7 @@ function inferWorkspacePreviewMimeType(path: string, manifest: WorkspacePreviewP
 
 export class WorkspacePreviewHost {
   private readonly registry: WorkspacePreviewRegistry
+  private readonly visualCacheScope = randomUUID()
   private readonly providers: WorkspacePreviewProviderRegistry
   private readonly createSessionId: () => string
   private readonly workerClient: WorkspacePreviewWorkerClient
@@ -578,27 +580,24 @@ export class WorkspacePreviewHost {
         workspaceId: before.workspaceRoot,
         semanticRevision: sourceRevision
       },
+      ...(input.outputMimeType === undefined ? {} : { outputMimeType: input.outputMimeType }),
       ...(input.frameIndex === undefined ? {} : { frameIndex: input.frameIndex }),
       ...(input.target === undefined ? {} : { target: input.target }),
       ...(input.maxDimension === undefined ? {} : { maxDimension: input.maxDimension })
     })
-    const frame = visualFrameSchema.parse(await provider.renderVisual({
-      session: record.session,
-      manifest: record.manifest,
-      file,
-      request
-    }))
-    if (frame.sourceRevision !== sourceRevision) {
-      throw new Error(
-        `Workspace preview plugin ${record.manifest.id} rendered revision ${frame.sourceRevision}, ` +
-        `but the current session revision is ${sourceRevision}.`
-      )
-    }
+    const cacheKey = JSON.stringify([this.visualCacheScope, record.manifest.id, before, request, record.session.selection])
+    const cached = await cachedVisualFrame(cacheKey, async () => {
+      const rendered = visualFrameSchema.parse(await provider.renderVisual!({ session: record.session, manifest: record.manifest, file, request }))
+      if (rendered.sourceRevision !== sourceRevision) throw new Error(`Workspace preview plugin ${record.manifest.id} rendered revision ${rendered.sourceRevision}, but the current session revision is ${sourceRevision}.`)
+      return rendered
+    })
+    const frame = cached
     const after = await validateVisualSourceFile(record)
     if (
       before.path !== after.path ||
       before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
     ) {
       throw new Error('Workspace preview source changed while its visual frame was rendering.')
     }
@@ -977,7 +976,13 @@ export class WorkspacePreviewHost {
 
     try {
       const parsed = workspacePreviewReadRangeSchema.parse(range)
-      if ('start' in parsed) return await readWorkspacePreviewTextRange(record.file.path, sessionId, parsed)
+      await resolveOpenTargetPath(record.file.path, record.file.workspaceRoot, { allowBasenameFallback: false })
+      if (!('offset' in parsed)) {
+        const readText = this.providers.get(record.manifest.id)?.readText
+        return readText
+          ? await readText({ session: record.session, manifest: record.manifest, file: record.file, range: parsed })
+          : await readWorkspacePreviewTextRange(record.file.path, sessionId, parsed)
+      }
       const fileInfo = await stat(record.file.path)
       if (fileInfo.isDirectory()) return { ok: false, message: 'Cannot read a directory as a preview asset.' }
       const length = Math.min(parsed.length, WORKSPACE_PREVIEW_MAX_RANGE_BYTES)
@@ -1469,6 +1474,8 @@ export class WorkspacePreviewHost {
         return await this.applySelectionEdit(record, parsed, now)
       }
 
+      const before = (await stat(canonicalSessionPath)).size <= 2 * 1024 * 1024
+        ? await readFile(canonicalSessionPath) : undefined
       const result = await this.workerClient.applyEdit({
         session: record.session,
         manifest: record.manifest,
@@ -1476,6 +1483,11 @@ export class WorkspacePreviewHost {
         operation: parsed,
         now
       })
+      if (before && result.ok && result.audit.effect === 'file-write' &&
+          await canonicalPath(record.file.path) === canonicalSessionPath &&
+          (await stat(canonicalSessionPath)).size <= 2 * 1024 * 1024) {
+        authenticateWorkspaceMutation(result, canonicalSessionPath, before, await readFile(canonicalSessionPath))
+      }
       if (result.ok && result.audit.effect === 'session-update') {
         const session = workspacePreviewSessionSchema.parse(result.session)
         if (session.id !== record.session.id || session.pluginId !== record.manifest.id || session.path !== record.session.path) {
@@ -1908,6 +1920,14 @@ export class WorkspacePreviewHost {
     try {
       const parsed = workspacePreviewExportTargetSchema.parse(target)
       const supportedFormats = new Set(record.manifest.capabilities.export ?? [])
+      if (parsed.render) {
+        return await exportWorkspacePreviewVisual({ session: record.session, file: record.file, manifest: record.manifest, target: parsed, now }, () => this.renderVisual(sessionId, {
+          frameIndex: parsed.render!.frameIndex,
+          maxDimension: parsed.render!.maxDimension,
+          outputMimeType: 'image/png',
+          ...(parsed.render!.region ? { target: { kind: 'region', region: parsed.render!.region } } : {})
+        }))
+      }
       if (!supportedFormats.has(parsed.format)) {
         return {
           ok: false,
@@ -3569,6 +3589,7 @@ async function validateVisualSourceFile(
   path: string
   size: number
   mtimeMs: number
+  ctimeMs: number
 }> {
   const workspaceRoot = await canonicalPath(record.file.workspaceRoot)
   const path = await canonicalPath(record.file.path)
@@ -3598,6 +3619,7 @@ async function validateVisualSourceFile(
     workspaceRoot,
     path,
     size: fileInfo.size,
-    mtimeMs: fileInfo.mtimeMs
+    mtimeMs: fileInfo.mtimeMs,
+    ctimeMs: fileInfo.ctimeMs
   }
 }

@@ -100,3 +100,20 @@ Legacy `sourceAnchors` are intentionally not imported because they remain owned 
 
 All operations use the capability broker. The package declares no direct transport prefix or
 alternate IPC/MCP path.
+
+
+## Historical metadata queries
+
+The existing `artifact-versions.list-v2` owner query accepts `metadataQuery` and
+`cursor`. The query searches labels, kind, artifact/version IDs and immutable
+version metadata across all accessible versions when `currentOnly` is false.
+It does not read or search file contents. Access filtering still applies to
+every returned version; selecting a row retains its complete immutable ref.
+
+Follow `nextCursor` using the same caller, workspace and filters. The cursor
+binds that query and fixes its upper sequence watermark, so later commits do
+not shift continuation pages or duplicate rows. Changing scope or filters
+requires a new query. `beforeSequence` remains the numeric paging field for
+existing list consumers and cannot be combined with `cursor`. Availability
+and current-pointer flags remain live owner projections; a cursor is not an
+exported immutable snapshot or an authorization grant.

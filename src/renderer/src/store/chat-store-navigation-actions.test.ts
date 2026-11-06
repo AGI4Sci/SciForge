@@ -3,6 +3,7 @@ import type { AgentRuntimeId, AppSettingsV1 } from '@shared/app-settings'
 import type { NormalizedThread } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import { rememberProviderThreadRuntime } from './chat-store-runtime-helpers'
+import { isCodeThread } from './chat-store-runtime'
 import { stopRuntimeBootRetry, stopRuntimeReconnectProbe, stopRuntimeThreadRefreshPoll } from './chat-store-schedulers'
 
 const inputRecoveryMock = vi.hoisted(() => ({ ensureSessionInputRecovery: vi.fn(async () => undefined) }))
@@ -135,6 +136,19 @@ function buildHarness(options: {
 
 describe('chat-store-navigation-actions refreshThreads', () => {
   let currentSddRegistryJson: string | null = null
+
+  it.each([
+    'C:\\Users\\tester\\AppData\\Local\\Temp\\app\\worker-workspaces\\execution',
+    '/tmp/app/worker-workspaces/execution'
+  ])('preserves a durable Session workspace under a temporary root: %s', async (workspace) => {
+    const active = { ...thread('domain-session', 'codex'), workspace }
+    const { refreshThreads, state } = buildHarness({ activeRuntime: 'codex', activeThread: active, listedThreads: [active] })
+    await refreshThreads()
+    expect(state.threads.find(item => item.id === active.id)?.workspace).toBe(workspace)
+    expect(state.activeThreadId).toBe(active.id)
+    expect(state.codeWorkspaceRoots).not.toContain(workspace)
+    expect(isCodeThread(state.threads.find(item => item.id === active.id)!)).toBe(false)
+  })
 
   it('keeps ordinary conversations when recent archived history exceeds the live-session limit', async () => {
     const active = thread('active', 'codex')
@@ -1186,7 +1200,7 @@ describe('chat-store-navigation-actions probeRuntime', () => {
     expect(state.error).toBeNull()
   })
 
-  it('rehydrates the persisted active thread after the runtime bridge reconnects', async () => {
+  it.each([false, true])('rehydrates the persisted active thread after reconnect (readOnly=%s)', async readOnly => {
     const provider = {
       getConfigurationIdentity: vi.fn(async () => state.activeAgentRuntime),
       probe: vi.fn(async () => availableCodexDiscovery),
@@ -1198,6 +1212,7 @@ describe('chat-store-navigation-actions probeRuntime', () => {
       error: 'bridge disconnected',
       runtimeErrorDetail: 'bridge disconnected',
       activeThreadId: 'persisted-thread',
+      readOnlyThreadIds: readOnly ? { 'persisted-thread': true } : {},
       blocks: [],
       busy: false,
       currentTurnId: null,
@@ -1223,7 +1238,7 @@ describe('chat-store-navigation-actions probeRuntime', () => {
     await actions.probeRuntime('background')
 
     expect(state.refreshThreads).toHaveBeenCalledTimes(1)
-    expect(state.selectThread).toHaveBeenCalledWith('persisted-thread')
+    expect(state.selectThread).toHaveBeenCalledWith('persisted-thread', { readOnly })
     expect(state.activeThreadId).toBe('persisted-thread')
     expect(state.runtimeConnection).toBe('ready')
   })

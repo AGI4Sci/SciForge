@@ -146,7 +146,7 @@ export type AgentRuntimeControlSupport =
   | 'async'
   | 'fail_closed'
 
-export type AgentRuntimeCompactSupport = 'unsupported' | 'native' | 'noop'
+export type AgentRuntimeCompactSupport = 'unsupported' | 'native'
 
 export type AgentRuntimeExecutionGuardSupport = 'native' | 'observe' | 'unsupported'
 
@@ -322,7 +322,7 @@ export type AgentRuntimeContextState = {
   rawHistoryItems: number
   effectiveHistoryItems: number
   summary?: string
-  summarySource?: 'none' | 'heuristic' | 'model' | 'runtime'
+  summarySource?: 'none' | 'runtime'
   estimatedTokens?: number
   triggerReason?: string
   replacedTokens?: number
@@ -610,6 +610,7 @@ export type AgentRuntimeThreadListInput = {
 }
 
 export type AgentRuntimeThreadStartInput = {
+  contextProfile?: 'minimal'
   runtimeId: AgentRuntimeId
   threadId?: string
   workspace?: string
@@ -715,6 +716,7 @@ export type AgentRuntimeExecutionIntent = {
 }
 
 export type AgentRuntimeTurnStartInput = {
+  contextProfile?: 'minimal'
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
@@ -1053,7 +1055,6 @@ export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
   'recordRuntimeContextLedger',
   'createRuntimeHandoffPacket',
   'startRuntimeHandoff',
-  'recordContextCompaction',
   'updateGoalResumeState',
   'listSkills',
   'uploadAttachment',
@@ -1095,7 +1096,6 @@ export const AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS = [
   'recordRuntimeContextLedger',
   'createRuntimeHandoffPacket',
   'startRuntimeHandoff',
-  'recordContextCompaction',
   'updateGoalResumeState',
   'updateThreadWorkspace',
   'archiveThread',
@@ -1225,6 +1225,8 @@ export type AgentRuntimeItem = {
 }
 
 export type AgentRuntimeInputOption = {
+  id?: string
+  recommended?: boolean
   label: string
   description?: string
 }
@@ -1548,7 +1550,10 @@ export type AgentRuntimeEvent =
   | (AgentRuntimeBaseEvent & {
       kind: 'compaction_event'
       status: 'running' | 'success' | 'error'
+      /** Human-readable lifecycle label; never use as continuation context. */
       summary: string
+      /** Actual continuation summary, only when supplied by the owning runtime. */
+      contextSummary?: string
       detail?: string
       auto?: boolean
       messagesBefore?: number

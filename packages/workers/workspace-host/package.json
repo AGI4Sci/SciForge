@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/workspace-host",
-  "version": "0.1.25",
+  "version": "0.1.31",
   "license": "Apache-2.0",
   "type": "module",
   "private": false,
@@ -41,10 +41,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@sciforge/codex-runtime": "0.1.25",
-    "@sciforge/domain-sdk": "0.2.24",
-    "@sciforge/domain-life-science-preview": "1.0.1",
-    "@sciforge/workspace-egress": "0.1.25",
+    "@sciforge/codex-runtime": "0.1.30",
+    "@sciforge/domain-biology-workbench": "1.1.3",
+    "@sciforge/domain-sdk": "0.2.35",
+    "@sciforge/workspace-egress": "0.1.30",
     "zod": "^4.4.3"
   },
   "devDependencies": {

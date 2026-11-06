@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "pins": {
+    "@sciforge/plugin-anchored-comments@0.2.1": {
+      "hostServices": [],
+      "uiResourceKinds": [
+        "resource-text-selection"
+      ]
+    },
+    "@sciforge/plugin-scientific-plotting@0.3.2": {
+      "hostServices": [
+        "artifact-versions.workspace"
+      ],
+      "dshConfig": {
+        "artifacts": "host"
+      },
+      "uiCapabilities": [
+        "artifact-versions.list",
+        "artifact-versions.read",
+        "artifact-versions.materialize",
+        "artifact-versions.describe-v2"
+      ],
+      "uiResourceKinds": [
+        "scientific-plot",
+        "scientific-plot-render-manifest"
+      ]
+    },
+    "@sciforge/plugin-scientific-plotting@0.3.1": {
+      "hostServices": [
+        "artifact-versions.workspace"
+      ],
+      "dshConfig": {
+        "artifacts": "host"
+      },
+      "uiCapabilities": [
+        "artifact-versions.list",
+        "artifact-versions.read",
+        "artifact-versions.materialize",
+        "artifact-versions.describe-v2"
+      ],
+      "uiResourceKinds": [
+        "scientific-plot",
+        "scientific-plot-render-manifest"
+      ]
+    },
+    "@sciforge/plugin-scientific-plotting@0.3.3": {
+      "hostServices": [
+        "artifact-versions.workspace"
+      ],
+      "dshConfig": {
+        "artifacts": "host"
+      },
+      "uiCapabilities": [
+        "artifact-versions.list",
+        "artifact-versions.read",
+        "artifact-versions.materialize",
+        "artifact-versions.describe-v2"
+      ],
+      "uiResourceKinds": [
+        "scientific-plot",
+        "scientific-plot-render-manifest"
+      ]
+    }
+  }
+}

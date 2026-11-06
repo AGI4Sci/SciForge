@@ -382,6 +382,16 @@ CREATE TABLE IF NOT EXISTS review (
   resolved_at   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS review_decision_receipt (
+  project_key TEXT NOT NULL,
+  packet_id TEXT NOT NULL REFERENCES review(id),
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  response_payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(project_key, packet_id, idempotency_key)
+);
+
 CREATE TABLE IF NOT EXISTS decision_event (
   id               TEXT PRIMARY KEY,
   project_key      TEXT NOT NULL,

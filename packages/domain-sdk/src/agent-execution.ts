@@ -55,6 +55,8 @@ export const domainMainAgentExecutionSessionSchema = z.object({
 export const domainMainAgentExecutionRequestSchema = z.object({
   ...domainMainAgentExecutionSessionRequestSchema.shape,
   threadId: z.string().trim().min(1).max(256).optional(),
+  /** Explicit bounded, tool-free context for a new background Agent run. Unsupported runtimes reject it. */
+  contextProfile: z.literal('minimal').optional(),
   clientDirectiveId: z.string()
     .trim()
     .min(1)
@@ -71,6 +73,13 @@ export const domainMainAgentExecutionRequestSchema = z.object({
   metadata: domainPackageJsonValueSchema.optional(),
   signal: z.instanceof(AbortSignal).optional()
 }).strict().superRefine((request, context) => {
+  if (request.contextProfile === 'minimal' && (
+    request.threadId || request.interaction !== 'background' || request.mode !== 'agent' ||
+    request.allowedTools === undefined || request.allowedTools.length !== 0
+  )) {
+    context.addIssue({ code: 'custom', path: ['contextProfile'],
+      message: 'Minimal context requires a new background Agent run with explicit allowedTools: [].' })
+  }
   if (request.threadId && !request.runtimeId) {
     context.addIssue({
       code: 'custom',

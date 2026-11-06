@@ -10,6 +10,7 @@ import {
   hostSidebarPresentation,
   rightPanelPaneMaximumWidth,
   rightPanelPaneWidthFromPointerDelta,
+  workbenchPanelOverlays,
   useWorkbenchLayout
 } from './workbench-layout'
 
@@ -26,7 +27,7 @@ type HostSidebarPreference = 'expanded' | 'collapsed'
 
 let mounted: { root: Root; container: HTMLElement } | null = null
 
-function mountLayoutHook(preferredHostSidebar: HostSidebarPreference) {
+function mountLayoutHook(preferredHostSidebar: HostSidebarPreference, activeSessionId: string | null = null) {
   let layout!: ReturnType<typeof useWorkbenchLayout>
   const props: { preferredHostSidebar: HostSidebarPreference } = { preferredHostSidebar }
   const container = document.createElement('div')
@@ -35,7 +36,7 @@ function mountLayoutHook(preferredHostSidebar: HostSidebarPreference) {
   mounted = { root, container }
   function Harness() {
     layout = useWorkbenchLayout({
-      activeSessionId: null,
+      activeSessionId,
       preferredHostSidebar: props.preferredHostSidebar
     })
     return null
@@ -122,7 +123,7 @@ describe('fitWorkbenchWidths', () => {
     expect(widths).toEqual({
       left: 280,
       rightDockViewport: 833,
-      rightDockContent: 2007
+      rightDockContent: 2011
     })
     expect(1480 - 7 - widths.left - widths.rightDockViewport).toBe(
       WORKBENCH_MAIN_SURFACE_MIN_WIDTH
@@ -135,7 +136,7 @@ describe('fitWorkbenchWidths', () => {
     })
 
     expect(widths.rightDockViewport).toBe(920)
-    expect(widths.rightDockContent).toBe(2007)
+    expect(widths.rightDockContent).toBe(2011)
   })
 
   it('keeps each pane at its hard minimum without inflating the dock viewport', () => {
@@ -143,8 +144,8 @@ describe('fitWorkbenchWidths', () => {
       leftPanelVisible: true
     })
 
-    expect(widths.rightDockContent).toBe(614)
-    expect(widths.rightDockViewport).toBe(614)
+    expect(widths.rightDockContent).toBe(622)
+    expect(widths.rightDockViewport).toBe(622)
   })
 
   it('uses dock-local overflow when preferred pane widths exceed the viewport', () => {
@@ -153,13 +154,13 @@ describe('fitWorkbenchWidths', () => {
       leftPanelVisible: true
     })
 
-    expect(widths.rightDockContent).toBe(1828)
+    expect(widths.rightDockContent).toBe(1844)
     expect(widths.rightDockViewport).toBe(833)
     expect(widths.rightDockContent).toBeGreaterThan(widths.rightDockViewport)
     expect(paneWidths).toEqual([320, 480, 360, 640])
   })
 
-  it('shrinks side viewports responsively before consuming the main minimum', () => {
+  it('overlays navigation before the right dock becomes an unusable slice', () => {
     const wide = fitWorkbenchWidths(1400, 304, [720], {
       leftPanelVisible: true
     })
@@ -167,12 +168,36 @@ describe('fitWorkbenchWidths', () => {
       leftPanelVisible: true
     })
 
-    expect(wide).toMatchObject({ left: 304, rightDockViewport: 727 })
-    expect(narrow).toMatchObject({ left: 273, rightDockViewport: 180 })
-    expect(820 - 7 - narrow.left - narrow.rightDockViewport).toBe(
+    expect(wide).toMatchObject({ left: 304, rightDockViewport: 729 })
+    expect(narrow).toMatchObject({ left: 304, rightDockViewport: 460 })
+    expect(workbenchPanelOverlays(820, true)).toEqual({ left: true, right: false })
+    expect(820 - narrow.rightDockViewport).toBe(
       WORKBENCH_MAIN_SURFACE_MIN_WIDTH
     )
-    expect(narrow.rightDockContent).toBe(727)
+    expect(narrow.rightDockContent).toBe(731)
+  })
+
+
+  it.each([720, 1024, 1440, 576, 819, 1152])('keeps dock controls and the main surface reachable at %ipx', (width) => {
+    const requested = [560, 420]
+    const overlays = workbenchPanelOverlays(width, true)
+    const fit = fitWorkbenchWidths(width, 304, requested, { leftPanelVisible: true })
+    const main = width - (overlays.left ? 0 : fit.left + 7) - (overlays.right ? 0 : fit.rightDockViewport)
+    expect(main).toBeGreaterThanOrEqual(360)
+    expect(fit.rightDockViewport).toBeGreaterThanOrEqual(311)
+    expect(fit.rightDockViewport).toBeLessThanOrEqual(width)
+    expect(requested).toEqual([560, 420])
+  })
+
+  it('uses a right overlay below the two-pane minimum and restores wide preferred widths', () => {
+    expect(workbenchPanelOverlays(576, true)).toEqual({ left: true, right: true })
+    expect(fitWorkbenchWidths(576, 304, [560], { leftPanelVisible: true })).toEqual({
+      left: 304, rightDockViewport: 528, rightDockContent: 571
+    })
+    expect(workbenchPanelOverlays(1440, true)).toEqual({ left: false, right: false })
+    expect(fitWorkbenchWidths(1440, 304, [560], { leftPanelVisible: true })).toEqual({
+      left: 304, rightDockViewport: 571, rightDockContent: 571
+    })
   })
 
   it('does not impose a pane-count limit', () => {
@@ -181,8 +206,38 @@ describe('fitWorkbenchWidths', () => {
       leftPanelVisible: true
     })
 
-    expect(widths.rightDockContent).toBe(39_296)
+    expect(widths.rightDockContent).toBe(39_808)
     expect(widths.rightDockViewport).toBe(833)
+  })
+})
+
+describe('responsive presentation persistence', () => {
+  it('keeps panes, history and user preferences across narrow and wide window transitions', () => {
+    const originalWidth = window.innerWidth
+    const resize = (width: number): void => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+      act(() => { window.dispatchEvent(new Event('resize')) })
+    }
+    try {
+      resize(1440)
+      const hook = mountLayoutHook('expanded', 'session-layout')
+      act(() => hook.layout.addRightPanelPaneForSession('session-layout', { mode: 'file' }, { width: 560 }))
+      act(() => hook.layout.splitRightPanelPaneForSession('session-layout', hook.layout.focusedRightPanelPane!.paneId))
+      const workspace = JSON.stringify(hook.layout.activeRightPanelWorkspace)
+      const stored = window.localStorage.getItem('sciforge.layout.sessionRightPanelWorkspaces.v1')
+      for (const width of [1024, 720, 576, 1440]) {
+        resize(width)
+        expect(JSON.stringify(hook.layout.activeRightPanelWorkspace)).toBe(workspace)
+        expect(window.localStorage.getItem('sciforge.layout.sessionRightPanelWorkspaces.v1')).toBe(stored)
+        expect(window.localStorage.getItem(LEFT_SIDEBAR_COLLAPSED_KEY)).toBe('0')
+        expect(window.localStorage.getItem('sciforge.layout.leftSidebarWidth')).toBe('304')
+        expect(hook.layout.rightPanelOverlay).toBe(width === 576)
+      }
+      expect(hook.layout.leftSidebarCollapsed).toBe(false)
+      expect(hook.layout.leftSidebarWidth).toBe(304)
+    } finally {
+      resize(originalWidth)
+    }
   })
 })
 
@@ -214,6 +269,21 @@ describe('generic main-area sidebar preference', () => {
 })
 
 describe('main-area sidebar collapse', () => {
+  it('keeps narrow-window hover navigation non-modal', () => {
+    const width = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 600 })
+    try {
+      const hook = mountLayoutHook('expanded')
+      expect(hook.layout.leftSidebarModal).toBe(true)
+      act(() => hook.layout.leftSidebarEdge.setBehavior('auto'))
+      act(() => hook.layout.leftSidebarEdge.edgeProps.onClick())
+      expect(hook.layout.leftSidebarCollapsed).toBe(false)
+      expect(hook.layout.leftSidebarOverlay).toBe(true)
+      expect(hook.layout.leftSidebarModal).toBe(false)
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+    }
+  })
   it('keeps the temporary full-page collapse out of the persisted preference', () => {
     window.localStorage.setItem(LEFT_SIDEBAR_COLLAPSED_KEY, '0')
 
@@ -283,11 +353,11 @@ describe('rightPanelPaneWidthFromPointerDelta', () => {
 
   it('caps expansion before it consumes the main work surface', () => {
     const maximum = rightPanelPaneMaximumWidth(1280, 304, { leftPanelVisible: true })
-    expect(maximum).toBe(602)
-    expect(rightPanelPaneWidthFromPointerDelta(420, -500, 'start', maximum)).toBe(602)
+    expect(maximum).toBe(598)
+    expect(rightPanelPaneWidthFromPointerDelta(420, -500, 'start', maximum)).toBe(598)
   })
 
   it('uses the reclaimed sidebar width when the left panel is collapsed', () => {
-    expect(rightPanelPaneMaximumWidth(1280, 304, { leftPanelVisible: false })).toBe(913)
+    expect(rightPanelPaneMaximumWidth(1280, 304, { leftPanelVisible: false })).toBe(909)
   })
 })

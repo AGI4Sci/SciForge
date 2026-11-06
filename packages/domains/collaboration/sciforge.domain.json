@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.collaboration",
     "displayName": "Collaboration",
-    "version": "13.0.0",
+    "version": "13.3.2",
     "hostApi": {
       "minimum": "1.13.0",
       "maximumExclusive": "2.0.0"
@@ -40,7 +40,11 @@
       "location": "workbench.main-area",
       "contractVersion": "1.0.0",
       "label": "collaborationTitle",
-      "preferredHostSidebar": "collapsed"
+      "preferredHostSidebar": "collapsed",
+      "docking": {
+        "defaultPosition": "main",
+        "preferredWidth": 520
+      }
     },
     "collaboration.composer-context": {
       "location": "composer.context",

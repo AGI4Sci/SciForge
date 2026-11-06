@@ -16,6 +16,24 @@ type ExecutionRuntime = Parameters<typeof createDomainAgentExecutionHost>[0]['ru
 type LifecycleListener = Parameters<AgentRuntimeHost['subscribeTurnLifecycle']>[0]
 
 describe('domain Agent execution Host', () => {
+  it('forwards explicit minimal context through a fresh durable background session', async () => {
+    let listener: LifecycleListener | undefined
+    const runtime = fakeRuntime({
+      subscribeTurnLifecycle: (next) => { listener = next; return () => undefined },
+      startTurn: vi.fn(async (request) => {
+        await listener?.(terminalEvent(request.runtimeId, request.threadId, 'turn-minimal', 'completed'))
+        return { threadId: request.threadId, turnId: 'turn-minimal' }
+      })
+    })
+    const execution = createDomainAgentExecutionHost({ runtime, defaultRuntimeId: () => 'codex',
+      runtimeReadiness: () => ({ state: 'ready', runtimeId: 'codex', capabilityTags: [] }) })
+    await execution.run({ prompt: 'Only supplied data.', contextProfile: 'minimal', allowedTools: [],
+      reasoningEffort: 'low', outputSchema: { type: 'object' } })
+    expect(runtime.startThread).toHaveBeenCalledWith(expect.objectContaining({ contextProfile: 'minimal',
+      sidebarVisibility: 'hidden', mode: 'agent', allowedTools: [] }))
+    expect(runtime.startTurn).toHaveBeenCalledWith(expect.objectContaining({ contextProfile: 'minimal',
+      text: 'Only supplied data.', reasoningEffort: 'low', outputSchema: { type: 'object' }, allowedTools: [] }))
+  })
   it('settles the captured interrupted turn after HTTP 200 without task_complete', async () => {
     // final21 evidence 65/66/70: only task_started then turn_aborted;
     // the last received upstream response was 200, not a turn success receipt.

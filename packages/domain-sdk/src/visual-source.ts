@@ -107,6 +107,7 @@ export const visualSourceRenderRequestSchema = z.object({
   frameIndex: z.number().int().positive().max(1_000_000).optional(),
   /** Request one bounded visual frame containing the whole scrollable page. */
   fullPage: z.boolean().optional(),
+  outputMimeType: z.literal('image/png').optional(),
   pixelRatio: z.number().finite().positive().max(8).optional(),
   maxDimension: z.number().int().positive().max(VISUAL_SOURCE_MAX_DIMENSION).optional()
 }).strict()

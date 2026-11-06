@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises'
+import { symlink } from '../../../test-support/symlink'
+import { workspaceMutationReceipt } from '../workspace-mutation-receipt'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { PDFDocument } from 'pdf-lib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createDomainMainEntry } from '@sciforge/domain-life-science-preview/main'
-import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-life-science-preview/contract'
+import { createDomainMainEntry } from '@sciforge/domain-biology-workbench/main'
+import type { MainWorkspacePreviewPluginSlotContribution } from '@sciforge/domain-sdk/workspace-preview'
+import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-biology-workbench/workspace-preview-contract'
 import {
   encodeLifeScienceSelection,
   lifeScienceStructuredSelectionSchema
-} from '@sciforge/domain-life-science-preview/workspace-preview-wire'
+} from '@sciforge/domain-biology-workbench/workspace-preview-wire'
 import { loadPdfAnnotationSidecar } from '../pdf-annotation-sidecar-service'
 import { WorkspaceHtmlPreviewService } from '../workspace-html-preview-service'
 import {
@@ -114,11 +117,18 @@ const lifeScienceEntry = createDomainMainEntry({
   getUserDataDir: () => '',
   defineCapability: () => undefined
 })
-const lifeScienceDomainPlugins = lifeScienceEntry.contributions.map((contribution) => ({
-  ownerId: lifeScienceEntry.definition.module.id,
-  manifest: contribution.value.manifest,
-  provider: contribution.value.provider
-}))
+const lifeScienceDomainPlugins = lifeScienceEntry.contributions
+  .filter((contribution) => contribution.kind === 'main.workspace-preview-plugin')
+  .map((contribution) => {
+    const { value } = contribution as {
+      value: MainWorkspacePreviewPluginSlotContribution<WorkspacePreviewProvider>
+    }
+    return {
+      ownerId: lifeScienceEntry.definition.module.id,
+      manifest: value.manifest,
+      provider: value.provider
+    }
+  })
 
 class WorkspacePreviewHost extends WorkspacePreviewHostImplementation {
   constructor(options: WorkspacePreviewHostOptions = {}) {
@@ -310,6 +320,20 @@ describe('WorkspacePreviewHost', () => {
       audit: { effect: 'file-write' }
     })
     if (!edited.ok) return
+    const receipt = workspaceMutationReceipt(edited)
+    expect(receipt).toBeDefined()
+    const { receiptId, ...evidence } = receipt!
+    expect(receiptId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
+    const diffPath = /[\s"\\]/u.test(opened.session.path)
+      ? JSON.stringify(opened.session.path)
+      : opened.session.path
+    expect(evidence).toEqual({
+      path: opened.session.path,
+      beforeSha256: expectedHex,
+      afterSha256: createHash('sha256').update('beta\n').digest('hex'),
+      patchText: `--- ${diffPath}\n+++ ${diffPath}\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n`
+    })
+    await expect(readFile(join(workspaceRoot, 'verified.md'), 'utf8')).resolves.toBe('beta\n')
     const observed = await host.observe(opened.session.id)
     expect(observed).toMatchObject({
       ok: true,

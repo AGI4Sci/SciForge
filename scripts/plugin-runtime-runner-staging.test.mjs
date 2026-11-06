@@ -21,6 +21,7 @@ test('the installed-plugin runner and its transitive imports are staged next to 
   // packaged plugin child dying with ERR_MODULE_NOT_FOUND for a third file.
   const files = await resolvePluginRuntimeFiles(sourceDirectory)
   assert.ok(files.includes('process-extension-runner.mjs'))
+  assert.ok(files.includes('host-service-client.mjs'), 'absolute Host-selected client factory is staged even without a static runner import')
   assert.ok(files.includes('dsh-storage-root.mjs'))
   assert.ok(files.includes('plugin-package-identity.mjs'), 'the chain runner -> storage-root -> identity must be staged')
 

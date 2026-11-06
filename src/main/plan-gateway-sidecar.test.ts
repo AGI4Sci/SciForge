@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import type { AppSettingsV1 } from '../shared/app-settings'
@@ -74,7 +74,7 @@ describe('Plan Gateway sidecar', () => {
     })
     expect(result.launch.args).toEqual([
       '--env-file-if-exists=.env',
-      join('/app', 'out/main/plan-gateway-sidecar-node-entry.js'),
+      posix.join('/app', 'out/main/plan-gateway-sidecar-node-entry.js'),
       '--host', '127.0.0.1', '--port', '3893', '--mount-path', '/v1',
       '--adapter', 'codex', '--quiet'
     ])

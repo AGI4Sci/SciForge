@@ -14,7 +14,7 @@ export function resolveDshLaunchInvocation(
   args: readonly string[],
   platform: NodeJS.Platform = process.platform,
   comSpec: string = process.env.ComSpec || 'cmd.exe'
-): { command: string; args: readonly string[] } {
+): { command: string; args: readonly string[]; windowsVerbatimArguments?: boolean } {
   if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(command)) return { command, args }
   if (/[&|<>^%!"\r\n]/.test(command)) throw new DshRuntimeError('runtime_path_invalid')
   const safeArgs = args.map((arg) => {
@@ -22,7 +22,7 @@ export function resolveDshLaunchInvocation(
     return `"${arg}"`
   })
   // `/s` changes cmd.exe's quote-stripping rules and breaks quoted shims.
-  return { command: comSpec, args: ['/d', '/c', `""${command}" ${safeArgs.join(' ')}"`] }
+  return { command: comSpec, args: ['/d', '/c', `""${command}" ${safeArgs.join(' ')}"`], windowsVerbatimArguments: true }
 }
 /** ACP is newline-delimited JSON-RPC, not LSP Content-Length framing. */
 export class AcpTransport {
@@ -35,7 +35,7 @@ export class AcpTransport {
   constructor(command: string, args: string[], env: NodeJS.ProcessEnv, cwd: string, private timeout: number,
     private onMessage: (message: Wire) => void, private onFailure: (error: Error) => void) {
     const launch = resolveDshLaunchInvocation(command, args)
-    this.child = spawn(launch.command, [...launch.args], { env, cwd, shell: false, stdio: 'pipe' })
+    this.child = spawn(launch.command, [...launch.args], { env, cwd, shell: false, stdio: 'pipe', windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments })
     this.exited = new Promise(resolve => this.child.once('close', () => { this.fail(new DshRuntimeError('runtime_disconnected')); resolve() }))
     this.child.on('error', () => this.fail(new DshRuntimeError('runtime_start_failed')))
     this.child.stdin.on('error', () => this.fail(new DshRuntimeError('runtime_disconnected')))

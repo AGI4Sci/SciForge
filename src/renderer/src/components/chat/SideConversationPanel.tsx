@@ -1,575 +1,271 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactElement
-} from 'react'
+import { SideConversationHandoffEditor } from './SideConversationHandoffEditor'
+import { useEffect, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import {
-  ArrowDownToLine,
-  ChevronDown,
-  CornerDownLeft,
-  Loader2,
-  MessageCircleMore,
-  Minus,
-  MoreHorizontal,
-  Plus,
-  Trash2,
-  Wrench,
-  X
-} from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { ArrowUpToLine, MessageCircleMore, Plus, X } from 'lucide-react'
 import { useChatStore } from '../../store/chat-store'
-import type { ChatBlock } from '../../agent/types'
-import { CopyTextButton } from '../CopyTextButton'
-import { AssistantMarkdown } from './AssistantMarkdown'
-import { activeThreadTitle, visibleRunningSideCount, visibleSideIds } from './side-conversation-selectors'
+import type { AttachmentReference } from '../../agent/types'
+import type { SideChatMode, SideConversation } from '../../store/chat-store-types'
+import { getProvider } from '../../agent/registry'
+import { prepareImageAttachmentUpload } from '../../lib/image-attachment-upload'
+import { importComposerWorkspaceAttachment } from '../../lib/composer-workspace-attachment'
+import { useEdgePanel, type EdgePanelBehavior } from '../use-edge-panel'
+import { FloatingComposer, type ComposerFileReference, type ComposerImageAttachmentInput } from './FloatingComposer'
+import { MessageTimeline } from './MessageTimeline'
+import { visibleSideIds } from './side-conversation-selectors'
+import type { SideConversationHandoffInput } from './side-conversation-handoff'
+import { sideConversationHandoffDraft } from './side-conversation-handoff-draft'
+import { SIDE_CONVERSATION_WIDTH } from '../side-conversation-layout'
 
-type Props = {
-  className?: string
-  rightOffset?: number
+export type { SideConversationHandoffInput } from './side-conversation-handoff'
+type Props = { className?: string; rightOffset?: number; dockAvailable?: boolean; onHandoff?: (input: SideConversationHandoffInput) => Promise<boolean> }
+
+function modeOf(side: SideConversation): SideChatMode {
+  return side.chatMode ?? (side.source === 'child_agent' || side.source === 'sdd_assistant' ? 'deep' : 'light')
 }
 
-type SideChatComposerProps = {
-  value: string
-  onChange: (value: string) => void
-  onSend: () => void
-  busy?: boolean
-  disabled?: boolean
-  placeholder: string
+function SideModePicker({ mode, disabled, onChange }: {
+  mode: SideChatMode; disabled?: boolean; onChange: (mode: SideChatMode) => void
+}): ReactElement {
+  const { t } = useTranslation('common')
+  return <div className="flex items-center rounded-lg border border-ds-border p-0.5" role="group" aria-label={t('sideChatMode')}>
+    {(['light', 'deep'] as const).map(value => <button key={value} type="button" disabled={disabled} aria-pressed={mode === value}
+      onClick={() => onChange(value)} className={`rounded-md px-2 py-1 text-xs disabled:opacity-50 ${mode === value ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover'}`}>
+      {t(value === 'light' ? 'sideChatLight' : 'sideChatDeep')}</button>)}
+  </div>
 }
 
-function formatInheritedTime(value: string, locale: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat(locale, {
-    hour: '2-digit',
-    minute: '2-digit',
-    month: 'short',
-    day: 'numeric'
-  }).format(date)
-}
+type AttachmentDraft = { attachments: AttachmentReference[]; files: ComposerFileReference[]; busy: boolean; error?: string }
+const emptyAttachments = (): AttachmentDraft => ({ attachments: [], files: [], busy: false })
 
-function compactSideTitle(value: string): string {
-  const trimmed = value.replace(/\s*·\s*side$/i, '').trim()
-  const prefix = Array.from(trimmed || value.trim()).slice(0, 5).join('')
-  return prefix || value
-}
-
-function overlayStyle(rightOffset = 24): CSSProperties {
-  const offset = Math.max(12, Math.round(rightOffset))
-  return {
-    right: `min(${offset}px, calc(12px + max(0px, 100vw - 760px)))`
+function SideConversationView({ sideId, onHandoff }: { sideId: string; onHandoff?: Props['onHandoff'] }): ReactElement | null {
+  const { t } = useTranslation('common')
+  const side = useChatStore(s => s.sideConversations[sideId] ?? null)
+  const parent = useChatStore(useShallow(s => {
+    const source = s.threads.find(thread => thread.id === s.sideConversations[sideId]?.parentThreadId)
+    return source ? { workspace: source.workspace, runtimeId: source.runtimeId } : null
+  }))
+  const shared = useChatStore(useShallow(s => ({
+    runtimeConnection: s.runtimeConnection, workspaceRoot: s.workspaceRoot, activeAgentRuntime: s.activeAgentRuntime,
+    composerPickList: s.composerPickList, composerModelGroups: s.composerModelGroups, setSideInput: s.setSideInput,
+    sendSideMessage: s.sendSideMessage, interruptSide: s.interruptSide, setSideModel: s.setSideModel,
+    setSideReasoningEffort: s.setSideReasoningEffort, setSideChatMode: s.setSideChatMode,
+    removeSideQueuedMessage: s.removeSideQueuedMessage, probeRuntime: s.probeRuntime, setRoute: s.setRoute
+  })))
+  const [drafts, setDrafts] = useState<Record<string, AttachmentDraft>>({})
+  const [handoffs, setHandoffs] = useState<Record<string, { document: string; memory: string; instruction: string }>>({})
+  const [handoffOpen, setHandoffOpen] = useState(false)
+  const [handoffBusy, setHandoffBusy] = useState(false)
+  const [handoffError, setHandoffError] = useState('')
+  const [notice, setNotice] = useState('')
+  useEffect(() => { setHandoffOpen(false); setHandoffError(''); setNotice('') }, [sideId])
+  if (!side) return null
+  const mode = modeOf(side)
+  const workspace = side.workspaceRoot ?? parent?.workspace ?? ''
+  const runtimeId = side.runtimeId ?? parent?.runtimeId
+  const matchingRuntime = Boolean(runtimeId && runtimeId === shared.activeAgentRuntime)
+  const draft = drafts[sideId] ?? emptyAttachments()
+  const handoff = handoffs[sideId]
+  const patchDraft = (update: (value: AttachmentDraft) => AttachmentDraft): void => {
+    setDrafts(current => ({ ...current, [sideId]: update(current[sideId] ?? emptyAttachments()) }))
   }
-}
-
-function SideChatComposer({
-  value,
-  onChange,
-  onSend,
-  busy = false,
-  disabled = false,
-  placeholder
-}: SideChatComposerProps): ReactElement {
-  const sendDisabled = disabled || busy || value.trim().length === 0
-
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey) return
-    event.preventDefault()
-    if (!sendDisabled) onSend()
+  const pickAttachments = async (inputs: ComposerImageAttachmentInput[]): Promise<void> => {
+    patchDraft(current => ({ ...current, busy: true, error: undefined }))
+    try {
+      const provider = getProvider()
+      const runtime = await provider.getRuntimeInfo?.()
+      for (const input of inputs) {
+        if (input.file.type.startsWith('image/')) {
+          const capabilities = runtime?.capabilities.attachments
+          if (!capabilities || !provider.uploadAttachment) throw new Error(t('composerAttachmentUnavailable'))
+          const image = await prepareImageAttachmentUpload(input.file, capabilities)
+          const uploaded = await provider.uploadAttachment({ name: input.file.name, mimeType: image.mimeType,
+            dataBase64: image.dataBase64, textFallback: image.textFallback, threadId: sideId,
+            ...(workspace ? { workspace } : {}), ...(input.path ? { localFilePath: input.path } : {}) })
+          patchDraft(current => ({ ...current, attachments: [...current.attachments, {
+            id: uploaded.id, name: uploaded.name, mimeType: uploaded.mimeType, byteSize: uploaded.byteSize,
+            width: uploaded.width, height: uploaded.height, previewUrl: `data:${image.mimeType};base64,${image.dataBase64}`
+          }] }))
+        } else {
+          if (mode !== 'deep' || !workspace) throw new Error(t('sideChatFileNeedsDeep'))
+          const reference = await importComposerWorkspaceAttachment(input, { workspaceRoot: workspace, threadId: sideId,
+            getPathForFile: window.sciforge.getPathForFile, writeWorkspaceFile: window.sciforge.writeWorkspaceFile })
+          patchDraft(current => ({ ...current, files: [...current.files, reference] }))
+        }
+      }
+    } catch (error) { patchDraft(current => ({ ...current, error: error instanceof Error ? error.message : String(error) })) }
+    finally { patchDraft(current => ({ ...current, busy: false })) }
   }
-
-  return (
-    <div className="rounded-[10px] border border-ds-border-muted bg-ds-card/80 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.42)] dark:bg-white/[0.045]">
-      <div className="flex items-end gap-1.5">
-        <textarea
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={disabled || busy}
-          rows={1}
-          placeholder={placeholder}
-          className="max-h-24 min-h-[30px] flex-1 resize-none bg-transparent px-1 py-1 text-[13px] leading-5 text-ds-ink outline-none placeholder:text-ds-faint disabled:cursor-not-allowed disabled:opacity-65"
-        />
-        <button
-          type="button"
-          onClick={onSend}
-          disabled={sendDisabled}
-          className="mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40"
-          aria-label={placeholder}
-          title={placeholder}
-        >
-          {busy ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
-          ) : (
-            <CornerDownLeft className="h-3.5 w-3.5" strokeWidth={1.9} />
-          )}
-        </button>
+  const send = async (): Promise<void> => {
+    const sent = await shared.sendSideMessage(sideId, side.input, {
+      attachmentIds: draft.attachments.map(a => a.id),
+      ...(mode === 'deep' ? { fileReferences: draft.files.map(file => ({
+        path: file.path ?? file.relativePath, relativePath: file.relativePath, name: file.name,
+        ...(file.workspaceRoot ? { workspaceRoot: file.workspaceRoot } : {})
+      })) } : {})
+    })
+    if (sent) patchDraft(() => emptyAttachments())
+  }
+  const previewHandoff = (): void => {
+    setHandoffs(current => ({ ...current, [sideId]: current[sideId] ?? {
+      document: sideConversationHandoffDraft(side), memory: '', instruction: t('sideChatHandoffDefaultInstruction')
+    } }))
+    setHandoffOpen(true); setHandoffError(''); setNotice('')
+  }
+  const sendHandoff = async (): Promise<void> => {
+    if (!handoff || !onHandoff) return
+    setHandoffBusy(true); setHandoffError('')
+    try {
+      const ok = await onHandoff({ sideId, parentThreadId: side.parentThreadId, runtimeId,
+        title: side.title, document: handoff.document, instruction: handoff.instruction,
+        memoryRefs: handoff.memory.split('\n').map(line => line.trim()).filter(Boolean) })
+      if (!ok) throw new Error(t('sideChatHandoffFailed'))
+      setHandoffOpen(false); setNotice(t('sideChatHandoffSent'))
+    } catch (error) { setHandoffError(error instanceof Error ? error.message : String(error)) }
+    finally { setHandoffBusy(false) }
+  }
+  const patchHandoff = (patch: Partial<NonNullable<typeof handoff>>): void => {
+    setHandoffs(current => ({ ...current, [sideId]: { ...current[sideId], ...patch } }))
+  }
+  return <>
+    <div className="shrink-0 space-y-2 border-b border-ds-border px-3 py-2">
+      <div className="flex items-center gap-2"><SideModePicker mode={mode}
+        disabled={side.busy || Boolean(side.queuedMessages?.length) || draft.busy}
+        onChange={value => shared.setSideChatMode(sideId, value)} />
+        {onHandoff ? <button className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ds-muted hover:bg-ds-hover"
+          disabled={side.busy || !side.blocks.some(block => block.kind === 'assistant')}
+          onClick={previewHandoff}><ArrowUpToLine size={13} />{t('sideChatHandoff')}</button> : null}
       </div>
+      <div className="text-[11px] text-ds-muted">{t(mode === 'light' ? 'sideChatLightDescription' : 'sideChatDeepDescription')}</div>
+      {side.context ? <details className="rounded-md border border-ds-border px-2 py-1 text-xs">
+        <summary className="cursor-pointer truncate text-ds-muted">{side.context.title}</summary>
+        <p className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-xs text-ds-muted">{side.context.text}</p>
+      </details> : null}
     </div>
-  )
+    {handoffOpen && handoff ? <SideConversationHandoffEditor value={handoff} error={handoffError} busy={handoffBusy} onChange={patchHandoff} onCancel={() => setHandoffOpen(false)} onSend={() => void sendHandoff()} /> : <>
+      <MessageTimeline blocks={side.blocks} liveReasoning={side.liveReasoning} live={side.liveAssistant}
+        emptyPresentation="conversation"
+        activeThreadId={sideId} runtimeConnection={shared.runtimeConnection} runtimeError={side.error}
+        runtimeIdOverride={runtimeId} workspaceRootOverride={workspace}
+        onRetryConnection={() => void shared.probeRuntime('user')} onOpenSettings={() => shared.setRoute('settings')}
+        busyOverride={side.busy} currentTurnUserIdOverride={side.userItemId}
+        turnStartedAtByUserIdOverride={{}} turnDurationByUserIdOverride={{}}
+        turnReasoningFirstAtByUserIdOverride={{}} turnReasoningLastAtByUserIdOverride={{}} />
+      {side.error || notice ? <p role="status" className="mx-3 mb-2 text-xs text-ds-muted">{side.error || notice}</p> : null}
+      <div className="shrink-0 border-t border-ds-border p-2">
+        <FloatingComposer variant="compact" threadIdOverride={sideId} disableThreadManagementCommands hideBtwCommand
+          input={side.input} setInput={value => shared.setSideInput(sideId, value)} mode="agent" setMode={() => undefined}
+          busy={side.busy} runtimeReady={shared.runtimeConnection === 'ready' && Boolean(runtimeId)} hasActiveThread
+          composerModel={side.model} composerPickList={matchingRuntime ? shared.composerPickList : [side.model].filter(Boolean)}
+          composerModelGroups={matchingRuntime ? shared.composerModelGroups : []}
+          activeAgentRuntime={runtimeId} runtimeLocked runtimeSessionLocked
+          composerReasoningEffort={side.reasoningEffort} onComposerModelChange={model => shared.setSideModel(sideId, model)}
+          onComposerReasoningEffortChange={effort => shared.setSideReasoningEffort(sideId, effort)}
+          queuedMessages={side.queuedMessages ?? []} onRemoveQueuedMessage={id => void shared.removeSideQueuedMessage(sideId, id)}
+          attachments={draft.attachments} attachmentUploadEnabled={matchingRuntime} attachmentUploadBusy={draft.busy} attachmentUploadError={draft.error}
+          onPickAttachments={inputs => void pickAttachments(inputs)} onRemoveAttachment={id => patchDraft(current => ({ ...current, attachments: current.attachments.filter(a => a.id !== id) }))}
+          fileReferenceEnabled={mode === 'deep' && Boolean(workspace)} fileReferences={mode === 'deep' ? draft.files : []}
+          onAddFileReference={file => patchDraft(current => ({ ...current, files: [...current.files.filter(f => f.relativePath !== file.relativePath || f.workspaceRoot !== file.workspaceRoot), file] }))}
+          onRemoveFileReference={(path, root) => patchDraft(current => ({ ...current, files: current.files.filter(f => f.relativePath !== path || (root !== undefined && f.workspaceRoot !== root)) }))}
+          workspaceRootOverride={workspace} preferWorkspaceRootOverride onSend={() => void send()} onInterrupt={() => void shared.interruptSide(sideId)} />
+      </div>
+    </>}
+  </>
 }
 
-function SideMessageBubble({ block }: { block: ChatBlock }): ReactElement | null {
-  if (block.kind === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="group/side-message relative max-w-[86%] rounded-[14px] bg-ds-card px-3 py-2 pr-9 text-[13px] leading-5 text-ds-ink shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
-          <div className="ds-markdown ds-selectable-text whitespace-pre-wrap break-words">{block.text}</div>
-          <CopyTextButton
-            text={block.text}
-            iconOnly
-            className="absolute right-1.5 top-1.5 opacity-65 group-hover/side-message:opacity-100"
-          />
-        </div>
-      </div>
-    )
-  }
-  if (block.kind === 'assistant') {
-    const streaming = block.id === 'live-assistant'
-    return (
-      <div className="group/side-message relative min-w-0 max-w-full pr-8">
-        <div className="ds-markdown ds-chat-answer ds-selectable-text min-w-0 max-w-full text-[13px] leading-5 text-ds-ink">
-          <AssistantMarkdown
-            text={block.text}
-            streaming={streaming}
-            className="text-[13px] leading-5 [overflow-wrap:anywhere]"
-          />
-        </div>
-        <CopyTextButton
-          text={block.text}
-          iconOnly
-          className="absolute right-0 top-0 opacity-65 group-hover/side-message:opacity-100"
-        />
-      </div>
-    )
-  }
-  if (block.kind === 'reasoning') {
-    return (
-      <div className="rounded-[12px] border border-ds-border-muted bg-ds-card/55 px-2.5 py-2 text-[12px] leading-5 text-ds-muted">
-        <div className="ds-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
-        </div>
-      </div>
-    )
-  }
-  if (block.kind === 'tool') {
-    return (
-      <div className="flex items-center gap-2 rounded-full border border-ds-border-muted bg-ds-card/70 px-3 py-1.5 text-[12px] text-ds-muted">
-        <Wrench className="h-3 w-3 shrink-0" strokeWidth={1.9} />
-        <span className="min-w-0 flex-1 truncate">
-          {block.summary || block.toolKind || 'tool'}
-        </span>
-        {block.status === 'running' ? (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin" strokeWidth={1.9} />
-        ) : null}
-      </div>
-    )
-  }
-  if (block.kind === 'approval') {
-    if (block.status !== 'pending') return null
-    return (
-      <div className="rounded-full border border-ds-border-muted bg-ds-card/60 px-3 py-1.5 text-[12px] text-ds-muted">
-        {block.summary}
-      </div>
-    )
-  }
-  if (block.kind === 'compaction') {
-    return (
-      <div className="rounded-full border border-ds-border-muted bg-ds-card/60 px-3 py-1.5 text-[12px] text-ds-muted">
-        {block.summary}
-      </div>
-    )
-  }
-  if (block.kind === 'user_input') {
-    return (
-      <div className="rounded-full border border-ds-border-muted bg-ds-card/60 px-3 py-1.5 text-[12px] text-ds-muted">
-        {block.questions.map((q) => q.question).join(' · ') || 'user input'}
-      </div>
-    )
-  }
-  if (block.kind === 'system') {
-    return (
-      <div className="rounded-[12px] border border-ds-border-muted bg-ds-card/55 px-3 py-2 text-[12px] text-ds-muted">
-        {block.text}
-      </div>
-    )
-  }
-  return null
-}
-
-function SideSwitchMenuItem({
-  sideId,
-  selected,
-  onSelect
-}: {
-  sideId: string
-  selected: boolean
-  onSelect: () => void
-}): ReactElement | null {
-  // Per-side subscription: other side streams never re-render this row.
-  const side = useChatStore((s) => s.sideConversations[sideId] ?? null)
-  if (!side) return null
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`flex min-h-[34px] w-full items-center gap-2 rounded-lg px-2 text-left text-[12.5px] transition ${
-        selected ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
-      }`}
-    >
-      <span className="min-w-0 flex-1 truncate" title={side.title}>
-        {compactSideTitle(side.title)}
-      </span>
-      {side.busy ? (
-        <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500" />
-      ) : null}
-    </button>
-  )
-}
-
-function SideConversationView({ sideId }: { sideId: string }): ReactElement | null {
-  const { t, i18n } = useTranslation('common')
-  // Per-side subscription: deltas on other side conversations do not
-  // re-render the visible conversation.
-  const side = useChatStore((s) => s.sideConversations[sideId] ?? null)
-  const runtimeConnection = useChatStore((s) => s.runtimeConnection)
-  const setSideInput = useChatStore((s) => s.setSideInput)
-  const sendSideMessage = useChatStore((s) => s.sendSideMessage)
-  if (!side) return null
-  return (
-    <>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-        <div className="text-[11.5px] leading-4 text-ds-faint">
-          {t('sidePanelInheritedAt', {
-            time: formatInheritedTime(side.inheritedAt, i18n.language)
-          })}
-        </div>
-        {side.blocks.length === 0 && !side.liveAssistant && !side.liveReasoning ? (
-          <div className="flex min-h-[132px] flex-col items-center justify-center gap-2 text-center text-[12.5px] text-ds-faint">
-            <MessageCircleMore className="h-5 w-5 opacity-60" strokeWidth={1.7} />
-            <p>{t('sidePanelEmpty')}</p>
-          </div>
-        ) : null}
-        {side.blocks.map((block) => (
-          <SideMessageBubble key={block.id} block={block} />
-        ))}
-        {side.liveReasoning ? (
-          <SideMessageBubble
-            block={{
-              kind: 'reasoning',
-              id: `live-reasoning-${side.lastSeq || Date.now()}`,
-              text: side.liveReasoning
-            }}
-          />
-        ) : null}
-        {side.liveAssistant ? (
-          <SideMessageBubble
-            block={{
-              kind: 'assistant',
-              id: 'live-assistant',
-              text: side.liveAssistant
-            }}
-          />
-        ) : null}
-        {side.busy ? (
-          <div className="flex items-center gap-2 text-[12px] text-ds-faint">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
-            <span>{t('sidePanelThinking')}</span>
-          </div>
-        ) : null}
-        {side.error ? (
-          <div className="rounded-[12px] border border-red-300/70 bg-red-500/10 px-3 py-2 text-[12px] text-red-700 dark:border-red-800/60 dark:bg-red-950/35 dark:text-red-200">
-            {side.error}
-          </div>
-        ) : null}
-      </div>
-
-      <footer className="shrink-0 border-t border-ds-border-muted px-2.5 pb-2.5 pt-2">
-        <SideChatComposer
-          value={side.input}
-          onChange={(value) => setSideInput(side.threadId, value)}
-          onSend={() => void sendSideMessage(side.threadId, side.input)}
-          busy={side.busy}
-          disabled={runtimeConnection !== 'ready'}
-          placeholder={t('sidePanelComposerPlaceholder')}
-        />
-      </footer>
-    </>
-  )
-}
-
-export function SideConversationPanel({
-  className,
-  rightOffset = 24
-}: Props): ReactElement | null {
+export function SideConversationPanel({ className, rightOffset = 12, dockAvailable = false, onHandoff }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const [draftInput, setDraftInput] = useState('')
-  const [minimized, setMinimized] = useState(false)
-  const [switchMenuOpen, setSwitchMenuOpen] = useState(false)
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
-  const switchMenuRef = useRef<HTMLDivElement | null>(null)
-  const moreMenuRef = useRef<HTMLDivElement | null>(null)
-  const prevOpenRef = useRef(false)
-
-  const panel = useChatStore((s) => s.sidePanel)
-  const hasParentThread = useChatStore((s) => Boolean(s.activeThreadId))
-  const parentTitle = useChatStore(activeThreadTitle)
-  const sideIds = useChatStore(useShallow(visibleSideIds))
-  const runningCount = useChatStore(visibleRunningSideCount)
-  const runtimeConnection = useChatStore((s) => s.runtimeConnection)
-  const actions = useChatStore(
-    useShallow((s) => ({
-      spawnSideConversation: s.spawnSideConversation,
-      selectSideConversation: s.selectSideConversation,
-      setSidePanelOpen: s.setSidePanelOpen,
-      openSideConversationDraft: s.openSideConversationDraft,
-      discardSideConversation: s.discardSideConversation,
-      promoteSideConversation: s.promoteSideConversation
-    }))
-  )
-
-  const activeId =
-    panel.activeSideId && sideIds.includes(panel.activeSideId)
-      ? panel.activeSideId
-      : null
-  const shouldRender = Boolean(hasParentThread && panel.open)
-  const rightStyle = overlayStyle(rightOffset)
-
+  const [draftMode, setDraftMode] = useState<SideChatMode>('light')
+  const [draftBusy, setDraftBusy] = useState(false)
+  const [draftError, setDraftError] = useState('')
+  const [draftModel, setDraftModel] = useState('')
+  const panel = useChatStore(s => s.sidePanel)
+  const activeSide = useChatStore(s => panel.activeSideId ? s.sideConversations[panel.activeSideId] ?? null : null)
+  const ids = useChatStore(useShallow(visibleSideIds))
+  const state = useChatStore(useShallow(s => ({ activeThreadId: s.activeThreadId, workspaceRoot: s.workspaceRoot,
+    runtimeConnection: s.runtimeConnection, activeAgentRuntime: s.activeAgentRuntime,
+    composerModel: s.composerModel, composerPickList: s.composerPickList, composerModelGroups: s.composerModelGroups,
+    spawnSideConversation: s.spawnSideConversation, setSidePanelOpen: s.setSidePanelOpen,
+    openSideConversationDraft: s.openSideConversationDraft, selectSideConversation: s.selectSideConversation,
+    setSideModel: s.setSideModel, promoteSideConversation: s.promoteSideConversation,
+    discardSideConversation: s.discardSideConversation
+  })))
+  const title = useChatStore(s => s.threads.find(thread => thread.id === (activeSide?.parentThreadId ?? s.activeThreadId))?.title)
+  const sideOptions = useChatStore(useShallow(s => [...new Set([...ids, ...(activeSide ? [activeSide.threadId] : [])])]
+    .map(id => `${id}\u0000${s.sideConversations[id]?.title ?? id}`)))
+  const edge = useEdgePanel({ storageKey: 'sciforge.layout.sideChatBehavior', open: panel.open, onOpenChange: state.setSidePanelOpen })
+  const docked = dockAvailable && edge.behavior === 'pinned' && panel.open
+  const setPanelOpen = state.setSidePanelOpen
   useEffect(() => {
-    if (panel.open && !prevOpenRef.current) {
-      setMinimized(false)
+    if (!panel.open) return
+    const close = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !event.defaultPrevented) setPanelOpen(false)
     }
-    prevOpenRef.current = panel.open
-  }, [panel.open])
-
-  useEffect(() => {
-    if (!shouldRender) return
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        setSwitchMenuOpen(false)
-        setMoreMenuOpen(false)
-        setMinimized(false)
-        actions.setSidePanelOpen(false)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [shouldRender, actions])
-
-  useEffect(() => {
-    if (!switchMenuOpen && !moreMenuOpen) return
-    const onPointerDown = (event: PointerEvent): void => {
-      const target = event.target
-      if (
-        target instanceof Node &&
-        (switchMenuRef.current?.contains(target) || moreMenuRef.current?.contains(target))
-      ) {
-        return
-      }
-      setSwitchMenuOpen(false)
-      setMoreMenuOpen(false)
-    }
-    window.addEventListener('pointerdown', onPointerDown)
-    return () => window.removeEventListener('pointerdown', onPointerDown)
-  }, [switchMenuOpen, moreMenuOpen])
-
-  if (!shouldRender) return null
-
-  const titleCount = sideIds.length > 0 ? ` · ${sideIds.length}` : ''
-  const title = `${t('sidePanelTitle')}${titleCount}`
-  const subtitle = parentTitle !== null
-    ? t('sidePanelParentLabel', { title: parentTitle })
-    : t('sidePanelParentMissing')
-
-  const closeWindow = (): void => {
-    setMinimized(false)
-    setSwitchMenuOpen(false)
-    setMoreMenuOpen(false)
-    actions.setSidePanelOpen(false)
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [panel.open, setPanelOpen])
+  if (!state.activeThreadId && !activeSide) return null
+  const sendDraft = async (): Promise<void> => {
+    if (!draftInput.trim()) return
+    setDraftBusy(true); setDraftError('')
+    try {
+      const id = await state.spawnSideConversation(undefined, { chatMode: draftMode })
+      if (!id) throw new Error(t('sideChatCreateFailed'))
+      if (draftModel) state.setSideModel(id, draftModel)
+      const sent = await useChatStore.getState().sendSideMessage(id, draftInput)
+      if (sent) setDraftInput('')
+      else useChatStore.getState().setSideInput(id, draftInput)
+    } catch (error) { setDraftError(error instanceof Error ? error.message : String(error)) }
+    finally { setDraftBusy(false) }
   }
-
-  const openDraft = (): void => {
-    setSwitchMenuOpen(false)
-    setMoreMenuOpen(false)
-    actions.openSideConversationDraft()
-  }
-
-  const sendDraft = (): void => {
-    const text = draftInput.trim()
-    if (!text) return
-    setDraftInput('')
-    void actions.spawnSideConversation(text)
-  }
-
-  const discardActiveSide = (): void => {
-    if (!activeId) return
-    setMoreMenuOpen(false)
-    void actions.discardSideConversation(activeId)
-  }
-
-  const promoteActiveSide = (): void => {
-    if (!activeId) return
-    setMoreMenuOpen(false)
-    void actions.promoteSideConversation(activeId)
-  }
-
-  if (minimized) {
-    return (
-      <button
-        type="button"
-        onClick={() => setMinimized(false)}
-        className={`ds-side-chat-mini ds-no-drag fixed bottom-[112px] z-40 flex h-11 items-center gap-2 rounded-full border border-ds-border-muted bg-ds-card/94 px-3 text-ds-muted shadow-[0_16px_42px_rgba(15,23,42,0.18)] backdrop-blur-xl transition hover:bg-ds-card hover:text-ds-ink ${className ?? ''}`}
-        style={rightStyle}
-        aria-label={t('sidePanelExpand')}
-        title={t('sidePanelExpand')}
-      >
-        <MessageCircleMore className="h-4 w-4" strokeWidth={1.85} />
-        <span className="text-[12px] font-semibold">{Math.max(sideIds.length, 1)}</span>
-        {runningCount > 0 ? (
-          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.18)]" />
-        ) : null}
-      </button>
-    )
-  }
-
-  return (
-    <aside
-      className={`ds-side-chat ds-no-drag fixed bottom-[112px] z-40 flex max-h-[min(520px,calc(100vh-180px))] w-[min(360px,calc(100vw-24px))] flex-col overflow-hidden rounded-[14px] border border-ds-border bg-ds-card/96 text-ds-ink shadow-[0_22px_64px_rgba(15,23,42,0.2)] backdrop-blur-xl dark:bg-ds-card/96 dark:shadow-[0_24px_72px_rgba(0,0,0,0.46)] ${className ?? ''}`}
-      style={rightStyle}
-      aria-label={t('sidePanelTitle')}
-    >
-      <header className="flex shrink-0 items-start gap-2 border-b border-ds-border-muted px-3 py-2.5">
-        <MessageCircleMore className="mt-0.5 h-4 w-4 shrink-0 text-accent" strokeWidth={1.85} />
-        <div ref={switchMenuRef} className="relative min-w-0 flex-1">
-          <button
-            type="button"
-            onClick={() => sideIds.length > 0 && setSwitchMenuOpen((open) => !open)}
-            className="flex max-w-full items-center gap-1 rounded-md text-left text-[13px] font-semibold text-ds-ink transition hover:text-accent disabled:hover:text-ds-ink"
-            disabled={sideIds.length === 0}
-            aria-expanded={switchMenuOpen}
-            title={title}
-          >
-            <span className="min-w-0 truncate">{title}</span>
-            {sideIds.length > 0 ? (
-              <ChevronDown className="h-3 w-3 shrink-0 text-ds-faint" strokeWidth={1.9} />
-            ) : null}
-          </button>
-          <div className="truncate text-[11.5px] leading-4 text-ds-faint" title={subtitle}>
-            {subtitle}
+  return <>
+    {edge.edgeVisible ? <button {...edge.edgeProps} className="ds-no-drag absolute inset-y-16 right-0 z-[85] w-3 hover:bg-ds-hover focus-visible:bg-ds-hover"
+      aria-label={t('sidePanelExpand')}><span className="absolute right-1 top-1/2 h-8 w-1 rounded-full bg-ds-border" /></button> : null}
+    <div ref={edge.panelRef} {...edge.panelProps} role="complementary" aria-label={t('sidePanelTitle')}
+      inert={!panel.open} aria-hidden={!panel.open}
+      data-side-chat-presentation={docked ? 'docked' : 'overlay'}
+      className={`ds-side-chat ds-no-drag z-[80] flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-ds-border bg-ds-card text-ds-ink shadow-xl [&_.ds-message-timeline-content]:px-3 [&_.ds-message-timeline-content]:pt-4 [&_.ds-message-timeline-content]:pb-4 ${docked ? 'relative mx-3 my-3 shrink-0' : 'absolute bottom-4 top-[64px]'} ${!panel.open ? 'invisible pointer-events-none' : ''} ${className ?? ''}`}
+      style={docked ? { width: SIDE_CONVERSATION_WIDTH } : { width: SIDE_CONVERSATION_WIDTH, maxWidth: 'calc(100% - 24px)', right: `min(${Math.max(12, rightOffset)}px, max(12px, calc(100% - 464px)))` }}>
+      <header className="flex shrink-0 items-center gap-2 border-b border-ds-border px-3 py-2">
+        <MessageCircleMore className="h-4 w-4 text-accent" />
+        <div className="min-w-0 flex-1"><div className="flex items-center gap-1 text-sm font-medium">
+          {sideOptions.length ? <select className="max-w-full truncate bg-transparent text-sm" value={activeSide?.threadId ?? ''}
+            aria-label={t('sidePanelTitle')} onChange={e => e.target.value ? state.selectSideConversation(e.target.value) : state.openSideConversationDraft()}>
+            <option value="">{t('sidePanelNew')}</option>{sideOptions.map(option => { const [id, label] = option.split('\u0000'); return <option key={id} value={id}>{label}</option> })}
+          </select> : t('sidePanelTitle')}
+        </div><div className="truncate text-[11px] text-ds-muted">{title ?? t('sidePanelParentMissing')}</div></div>
+        <select aria-label={t('sideChatLayout')} value={edge.behavior} onChange={e => edge.setBehavior(e.target.value as EdgePanelBehavior)}
+          className="max-w-24 rounded-md border border-ds-border bg-ds-card p-1 text-[10px] text-ds-muted">
+          <option value="pinned">{t('sideChatPinned')}</option><option value="auto">{t('sideChatAuto')}</option><option value="hidden">{t('sideChatHidden')}</option>
+        </select>
+        {activeSide ? <details className="relative">
+          <summary className="cursor-pointer list-none rounded px-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelMore')}>···</summary>
+          <div className="absolute right-0 top-full z-10 mt-2 w-40 rounded-lg border border-ds-border bg-ds-card p-1 shadow-lg">
+            <button className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-ds-hover"
+              onClick={() => void state.promoteSideConversation(activeSide.threadId)}>{t('sidePanelPromote')}</button>
+            <button className="w-full rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-ds-hover"
+              onClick={() => void state.discardSideConversation(activeSide.threadId)}>{t('sidePanelDiscardTitle')}</button>
           </div>
-
-          {switchMenuOpen ? (
-            <div className="absolute left-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-[12px] border border-ds-border bg-ds-card/98 p-1 shadow-[0_18px_46px_rgba(15,23,42,0.18)] backdrop-blur-xl">
-              {sideIds.map((sideId) => (
-                <SideSwitchMenuItem
-                  key={sideId}
-                  sideId={sideId}
-                  selected={sideId === activeId}
-                  onSelect={() => {
-                    actions.selectSideConversation(sideId)
-                    setSwitchMenuOpen(false)
-                  }}
-                />
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-0.5">
-          <button
-            type="button"
-            onClick={openDraft}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-            aria-label={t('sidePanelNew')}
-            title={t('sidePanelNew')}
-          >
-            <Plus className="h-3.5 w-3.5" strokeWidth={1.9} />
-          </button>
-          {activeId ? (
-            <button
-              type="button"
-              onClick={discardActiveSide}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-ds-faint transition hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-300"
-              aria-label={t('sidePanelDiscardTitle')}
-              title={t('sidePanelDiscardTitle')}
-            >
-              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-            </button>
-          ) : null}
-          <div ref={moreMenuRef} className="relative">
-            <button
-              type="button"
-              onClick={() => setMoreMenuOpen((open) => !open)}
-              disabled={!activeId}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label={t('sidePanelMore')}
-              title={t('sidePanelMore')}
-              aria-expanded={moreMenuOpen}
-            >
-              <MoreHorizontal className="h-3.5 w-3.5" strokeWidth={1.9} />
-            </button>
-            {moreMenuOpen && activeId ? (
-              <div className="absolute right-0 top-full z-50 mt-2 w-44 overflow-hidden rounded-[12px] border border-ds-border bg-ds-card/98 p-1 text-[12.5px] shadow-[0_18px_46px_rgba(15,23,42,0.18)] backdrop-blur-xl">
-                <button
-                  type="button"
-                  onClick={promoteActiveSide}
-                  className="flex min-h-[32px] w-full items-center gap-2 rounded-lg px-2 text-left text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                >
-                  <ArrowDownToLine className="h-3.5 w-3.5" strokeWidth={1.8} />
-                  <span className="min-w-0 flex-1 truncate">{t('sidePanelPromote')}</span>
-                </button>
-              </div>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            onClick={() => setMinimized(true)}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-            aria-label={t('sidePanelMinimize')}
-            title={t('sidePanelMinimize')}
-          >
-            <Minus className="h-3.5 w-3.5" strokeWidth={1.9} />
-          </button>
-          <button
-            type="button"
-            onClick={closeWindow}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-            aria-label={t('sidePanelHide')}
-            title={t('sidePanelHide')}
-          >
-            <X className="h-3.5 w-3.5" strokeWidth={1.9} />
-          </button>
-        </div>
+        </details> : null}
+        <button onClick={state.openSideConversationDraft} className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelNew')}><Plus size={15} /></button>
+        <button onClick={() => state.setSidePanelOpen(false)} className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelHide')}><X size={15} /></button>
       </header>
-
-      <div className="flex min-h-[190px] flex-1 flex-col overflow-hidden">
-        {activeId ? (
-          <SideConversationView sideId={activeId} />
-        ) : (
-          <>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-              <div className="flex min-h-[168px] flex-col items-center justify-center gap-2 text-center text-[12.5px] leading-5 text-ds-faint">
-                <MessageCircleMore className="h-5 w-5 opacity-65" strokeWidth={1.7} />
-                <p>{t('sidePanelDraftEmpty')}</p>
-              </div>
-            </div>
-            <footer className="shrink-0 border-t border-ds-border-muted px-2.5 pb-2.5 pt-2">
-              <SideChatComposer
-                value={draftInput}
-                onChange={setDraftInput}
-                onSend={sendDraft}
-                disabled={runtimeConnection !== 'ready'}
-                placeholder={t('sidePanelComposerPlaceholder')}
-              />
-            </footer>
-          </>
-        )}
-      </div>
-    </aside>
-  )
+      {activeSide ? <SideConversationView sideId={activeSide.threadId} onHandoff={onHandoff} /> : <>
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+          <SideModePicker mode={draftMode} onChange={setDraftMode} disabled={draftBusy} />
+          <p className="text-xs text-ds-muted">{t(draftMode === 'light' ? 'sideChatLightDescription' : 'sideChatDeepDescription')}</p>
+          {draftError ? <p role="alert" className="text-xs text-red-600">{draftError}</p> : null}
+        </div>
+        <div className="shrink-0 border-t border-ds-border p-2"><FloatingComposer variant="compact" threadIdOverride={null}
+          disableThreadManagementCommands hideBtwCommand input={draftInput} setInput={setDraftInput} mode="agent" setMode={() => undefined}
+          busy={draftBusy} runtimeReady={state.runtimeConnection === 'ready'} hasActiveThread={Boolean(state.activeThreadId)}
+          composerModel={draftModel || state.composerModel} composerPickList={state.composerPickList} composerModelGroups={state.composerModelGroups}
+          onComposerModelChange={setDraftModel} activeAgentRuntime={state.activeAgentRuntime} runtimeLocked
+          queuedMessages={[]} onRemoveQueuedMessage={() => undefined} workspaceRootOverride={state.workspaceRoot} preferWorkspaceRootOverride
+          onSend={() => void sendDraft()} onInterrupt={() => undefined} />
+        </div>
+      </>}
+    </div>
+  </>
 }

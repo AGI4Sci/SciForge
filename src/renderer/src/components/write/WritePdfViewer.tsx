@@ -2018,9 +2018,11 @@ function WritePdfPageContent({
   annotationOverlays,
   activeAnnotationId,
   onAnnotationSelect,
-  onPageSize
+  onPageSize,
+  onLineNumbers
 }: {
   pageElementRef: RefObject<HTMLDivElement | null>
+  onLineNumbers: (tops: number[]) => void
   document: PDFDocumentProxy
   pageNumber: number
   scale: number
@@ -2132,6 +2134,15 @@ function WritePdfPageContent({
     )
   }, [activeSearchMatchIndex, pageElementRef, pageNumber, pageSize, pdfSearchSegments, searchQuery, textLayerRevision])
 
+  useEffect(() => {
+    const page = pageElementRef.current
+    const layer = textLayerRef.current
+    if (!page || !layer) return
+    const origin = page.getBoundingClientRect().top
+    const lines = groupTokensIntoVisualLines(collectTextLayerTokens(page, layer))
+    onLineNumbers(lines.map((line) => line.top - origin))
+  }, [onLineNumbers, pageElementRef, textLayerRevision])
+
   return (
     <>
       <canvas ref={canvasRef} className="write-pdf-canvas" />
@@ -2208,9 +2219,11 @@ function WritePdfPage({
   onPageSize: (page: number, width: number, height: number) => void
 }): ReactElement {
   const pageElementRef = useRef<HTMLDivElement | null>(null)
+  const [lineNumbers, setLineNumbers] = useState<number[]>([])
 
   return (
     <WritePdfPageFrame
+      lineNumbers={lineNumbers}
       pageElementRef={pageElementRef}
       pageNumber={contentProps.pageNumber}
       rendered={rendered}
@@ -2219,6 +2232,7 @@ function WritePdfPage({
       {rendered ? (
         <WritePdfPageContent
           {...contentProps}
+          onLineNumbers={setLineNumbers}
           pageElementRef={pageElementRef}
           pageSize={pageSize}
         />

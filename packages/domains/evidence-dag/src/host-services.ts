@@ -42,7 +42,7 @@ export function createDomainHostServiceResolver(
   const options = rawOptions as EvidenceDomainHostServiceOptions
   const services = new Map<string, ReturnType<typeof createEvidenceProductionService>>()
   const resolveService = (packageName: string, version: string, generation: number) => {
-    if (packageName !== 'sciforge-evidence-dag') return undefined
+    if (packageName !== '@sciforge/plugin-evidence-dag') return undefined
     const executable = options.environment.SCIFORGE_EVIDENCE_PYTHON?.trim()
     const wheelPath = options.environment.SCIFORGE_EVIDENCE_WHEEL_PATH?.trim()
     const wheelSha256 = options.environment.SCIFORGE_EVIDENCE_WHEEL_SHA256?.trim()

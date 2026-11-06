@@ -4,3 +4,16 @@
 *.md whitespace=-blank-at-eol
 # Captured command output retains the producer's exact whitespace and hashes.
 *.log -whitespace
+# This historical fixture is authenticated by its exact source SHA256.
+packages/domains/evidence-dag/tests/fixtures/legacy_snapshot_storage.py text eol=lf
+# Reviewed DSH fixtures and their license are authenticated byte-for-byte.
+packages/workers/dsh-runtime/test/fixtures/official-acp/* text eol=lf
+# Executable packaging CLIs need LF shebangs on POSIX and during SSR test imports.
+scripts/dsh-plugin-package.mjs text eol=lf
+scripts/extension-package.mjs text eol=lf
+
+# Runtime and relocation integrity pins cover bytes, including line endings.
+packages/workers/dsh-runtime/docs/release-review/safe-acp.yml text eol=lf
+plugins/scientific-plotting/src/worker/** text eol=lf
+plugins/scientific-plotting/src/ports/** text eol=lf
+plugins/scientific-plotting/src/fixture/** text eol=lf

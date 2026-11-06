@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { delimiter, dirname, join } from 'node:path'
+import { ownedPythonLaunch } from '@sciforge/domain-sdk/host'
 import type {
   DomainMainRuntimeLifecycleContext,
   DomainMainRuntimeLogEntry,
@@ -265,7 +266,7 @@ export function projectDagSidecarConfig(
   ].filter((value): value is string => Boolean(value)).join(delimiter)
   const command = environment[PYTHON_COMMAND_ENV]?.trim() ||
     (process.platform === 'win32' ? 'python.exe' : 'python3')
-  const args = ['-m', 'project_dag.server']
+  const launch = ownedPythonLaunch(['-m', 'project_dag.server'], environment)
   const sessionDir = environment.PDAG_SESSION_DIR?.trim() ||
     evidenceDagStorageRoot(context.userDataDir, environment)
   const dbPath = environment.PDAG_DB_PATH?.trim() ||
@@ -274,7 +275,7 @@ export function projectDagSidecarConfig(
     baseUrl,
     runtimeToken,
     command,
-    args: Object.freeze(args),
+    args: Object.freeze(launch.args),
     cwd: roots.project,
     projectPackageRoot: roots.project,
     evidencePackageRoot: roots.evidence,
@@ -282,7 +283,7 @@ export function projectDagSidecarConfig(
     dbPath,
     autoStart: environment[PROJECT_DAG_AUTO_START_ENV] !== '0',
     env: Object.freeze({
-      ...withoutTextReasonerEnvironment(environment),
+      ...withoutTextReasonerEnvironment(launch.env),
       PDAG_HOST: '127.0.0.1',
       PDAG_PORT: String(port),
       PDAG_SESSION_DIR: sessionDir,

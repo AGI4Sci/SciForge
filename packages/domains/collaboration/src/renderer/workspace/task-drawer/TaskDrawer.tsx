@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react'
+import React, { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { CalendarDays, Check, ChevronDown, Copy, Maximize2, Minimize2, Send, UserRound, X } from 'lucide-react'
 import { deliveryRevisionRequestSchema } from '@sciforge/collaboration-contracts'
 import type { BoardColumnId, TaskAssignmentModel, TaskCardModel } from '../workspace-types.js'
@@ -10,6 +10,8 @@ import { offerAvailabilityPresentation } from '../offer-availability.js'
 import { DeliveryDraft } from './DeliveryDraft.js'
 import type { DeliveryDraftData, DeliveryDraftFile, DeliveryMaterialSelection } from './delivery-draft-types.js'
 import { formatBytes } from '../files/format-bytes.js'
+import { HumanRequestForm } from './HumanRequestForm.js'
+import type { HumanDecision, HumanAnswerFeedback } from '../human-request-decision.js'
 import { workerDeliveryPresentation } from './worker-delivery-presentation.js'
 
 type ActivityItem = Readonly<{ actor: string; text: string; time: string; event?: boolean }>
@@ -19,7 +21,7 @@ const columnLabels: Readonly<Record<BoardColumnId, string>> = {
   intake: '收集箱', ready: '待开始', 'in-progress': '进行中', review: '待确认', completed: '已完成',
 }
 
-export function TaskDrawer({ card, projectName, busy = false, pendingAction, error, currentUserId, members = [], mentionableUsers = [], activity = [], revisionInstruction, delivery, deliveryDetail, materialSelection, onPreviewDraftFile, deliveryError, deliveryFiles = [], onPreviewDeliveryFile, onPreviewSealedFile, onClose, onAdopt, onRequestRevision, onOfferDecision, onHumanAnswer, onReexecute, onContinueSession, onReturnTask, onSubmitDelivery, onSummaryChange, onMaterialsChange, onAiSummaryDecision, onAssign, onWithdraw, onComment }: Readonly<{
+export function TaskDrawer({ card, projectName, busy = false, pendingAction, error, currentUserId, members = [], mentionableUsers = [], activity = [], revisionInstruction, delivery, deliveryDetail, materialSelection, onPreviewDraftFile, deliveryError, deliveryFiles = [], onPreviewDeliveryFile, onPreviewSealedFile, onClose, onAdopt, onRequestRevision, onOfferDecision, onHumanAnswer, humanAnswerFeedback, onReexecute, onContinueSession, onReturnTask, onSubmitDelivery, onSummaryChange, onMaterialsChange, onAiSummaryDecision, onAssign, onWithdraw, onComment }: Readonly<{
   card: TaskCardModel
   busy?: boolean
   pendingAction?: string
@@ -43,7 +45,8 @@ export function TaskDrawer({ card, projectName, busy = false, pendingAction, err
   onAdopt?(): void
   onRequestRevision?(instruction: string): Promise<boolean> | void
   onOfferDecision?(decision: 'accept' | 'reject'): void
-  onHumanAnswer?(answer: string): Promise<boolean> | void
+  humanAnswerFeedback?: HumanAnswerFeedback
+  onHumanAnswer?(answer: string, decision?: HumanDecision): Promise<boolean> | void
   onReexecute?(): void
   onContinueSession?(): void
   onReturnTask?(reason: string): Promise<boolean>
@@ -64,7 +67,6 @@ export function TaskDrawer({ card, projectName, busy = false, pendingAction, err
     setRevisionOpen(false)
     setInstruction('')
   }
-  const [answer, setAnswer] = useState('')
   const [returnOpen, setReturnOpen] = useState(false)
   const [returnReason, setReturnReason] = useState('')
   const validReturnReason = collaborationTaskReturnInputSchema.shape.reason.safeParse(returnReason).success
@@ -74,15 +76,14 @@ export function TaskDrawer({ card, projectName, busy = false, pendingAction, err
     setReturnOpen(false)
     setReturnReason('')
   }
-  const sendAnswer = async (): Promise<void> => {
-    const text = answer.trim()
-    if (busy || !text) return
-    // A rejected answer stays in the field so the Member can retry it.
-    if (await onHumanAnswer?.(text) === false) return
-    setAnswer('')
-  }
   const [comment, setComment] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const drawer = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    drawer.current?.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')?.focus()
+    return () => { if (trigger?.isConnected) trigger.focus() }
+  }, [card.id])
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!onClose) return
@@ -143,10 +144,8 @@ export function TaskDrawer({ card, projectName, busy = false, pendingAction, err
   /> : ownerPreparing ? <section className="collaboration-workspace-delivery-draft" data-testid="delivery-owner-preparing" aria-label="交付进度"><p role="status">成员正在准备交付{deliveryDetail ? `（第 ${deliveryDetail.revision} 版）` : ''}</p></section> : null
   const action = offerBand
     ? <>{offerBand}{assignmentBand}</>
-    : card.stateLabel === '等待回答' && isAssignedWorker && card.humanRequestId
-      ? <ActionBand tone="warning" title="Agent 在等你回答" body={card.question ?? '补充任务需要的边界或决定后，执行会继续。'}><div className="collaboration-workspace-answer-row"><input disabled={busy} value={answer} onChange={(event) => setAnswer(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void sendAnswer() }} placeholder="输入回答" aria-label="回答" /><button type="button" className="collaboration-workspace-button-primary" disabled={busy || !answer.trim()} onClick={() => void sendAnswer()}>{busy && pendingAction === 'answer' ? '处理中…' : '发送'}</button></div></ActionBand>
-      : card.stateLabel === '等待成员回答'
-        ? <ActionBand tone="warning" title={`${card.assignee ?? '成员'} 的 Agent 在等成员回答`} body="只有被派成员可以回答，回答后执行会继续。" />
+    : card.humanRequest
+      ? <HumanRequestForm key={`${card.humanRequest.humanRequestId}:${card.humanRequest.revision}:${card.humanRequest.confirmableAction?.actionDigest ?? ''}:${currentUserId}`} request={card.humanRequest} currentUserId={currentUserId} targetName={members.find(member => member.userId === card.humanRequest?.targetUserId)?.name} busy={busy} onAnswer={onHumanAnswer} />
         : card.stateLabel === '待你采纳' && isOwner
           ? <ActionBand title="交付等待你确认" body="成员已提交交付。采纳后任务完成；不满意可以要求返修。">
             {!showDeliveryDraft ? <FileList files={deliveryFiles} onPreview={onPreviewSealedFile} /> : null}
@@ -175,7 +174,7 @@ export function TaskDrawer({ card, projectName, busy = false, pendingAction, err
     window.setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <aside className={`collaboration-workspace-task-drawer${expanded ? ' is-expanded' : ''}`} aria-label="任务详情" aria-busy={busy}>
+    <aside ref={drawer} className={`collaboration-workspace-task-drawer${expanded ? ' is-expanded' : ''}`} aria-label="任务详情" aria-busy={busy}>
       <header className="collaboration-workspace-task-drawer-header">
         <span className="collaboration-workspace-task-drawer-breadcrumb"><span>{projectName}</span><span aria-hidden="true">/</span><b>{card.reference}</b></span>
         <div>
@@ -197,6 +196,11 @@ export function TaskDrawer({ card, projectName, busy = false, pendingAction, err
         {revisionInstruction && !deliveryDetail?.revisionRequest ? <section className="collaboration-workspace-task-drawer-action tone-warning" aria-label="负责人返修意见"><strong>负责人返修意见</strong><p style={{ whiteSpace: 'pre-wrap' }}>{revisionInstruction}</p></section> : null}
         {draft}
         {action}
+        {humanAnswerFeedback && !card.humanRequest ? <section className="collaboration-workspace-task-drawer-action" aria-label="决定后进度">
+          <strong>{humanAnswerFeedback.decision === 'approve' ? '已批准该动作' : humanAnswerFeedback.decision === 'reject' ? '已拒绝该动作' : '回答已记录'}</strong>
+          <p role="status">决定已记录。{card.executionState === 'running' ? 'Agent 执行中，请查看任务进度；这不代表动作已经完成。' : card.executionState === 'completed' ? '任务执行已结束，请查看交付结果。' : ['failed', 'cancelled', 'manual_recovery_required'].includes(card.executionState ?? '') ? '任务暂未继续或已停止，请查看当前状态和处理原因。' : '正在等待 Agent 接收或更新执行状态，请稍后刷新。'}</p>
+          {isAssignedWorker && onContinueSession ? <button type="button" className="collaboration-workspace-button-secondary" disabled={busy} onClick={onContinueSession}>查看任务会话</button> : null}
+        </section> : null}
         {!showDeliveryDraft ? returnControls : null}
         {error || deliveryError || delivery?.error ? <p role="alert">{error ?? deliveryError ?? delivery?.error}</p> : null}
         <section className="collaboration-workspace-task-drawer-activity" aria-label="动态">

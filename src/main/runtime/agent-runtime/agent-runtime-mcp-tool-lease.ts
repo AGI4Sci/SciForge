@@ -4,7 +4,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { AgentRuntimeToolCallContext, AgentRuntimeToolSurface } from './agent-tool-surface'
-import { agentRuntimeToolModelContent, modelVisibleAgentRuntimeToolFailure } from './agent-tool-surface'
+import { modelVisibleAgentRuntimeToolFailure } from './agent-tool-surface'
+import { modelVisibleToolResultContent } from './model-visible-tool-result'
 
 export type AgentRuntimeMcpToolLeaseOptions = Readonly<{
   surface: AgentRuntimeToolSurface
@@ -12,6 +13,8 @@ export type AgentRuntimeMcpToolLeaseOptions = Readonly<{
   context: AgentRuntimeToolCallContext & { threadId: string; turnId: string }
   signal: AbortSignal
   assertCurrent(): void
+  /** Exact downstream model declaration, captured by the Host for this lease. */
+  imageInputAllowed?: boolean
 }>
 
 export type AgentRuntimeMcpToolLease = Readonly<{
@@ -82,7 +85,7 @@ export async function createAgentRuntimeMcpToolLease(
           context: { ...context, requestId: extra.requestId, callId: `${context.turnId}:${++sequence}` }
         }, { signal: callSignal })
         assertCurrent()
-        return { content: [{ type: 'text' as const, text: agentRuntimeToolModelContent(result) ?? JSON.stringify(result.value) ?? 'null' }] }
+        return { content: modelVisibleToolResultContent(result, options.imageInputAllowed === true) }
       } catch (error) {
         return { isError: true, content: [{ type: 'text' as const, text: signal.aborted
           ? 'Host tool authority has been revoked.'

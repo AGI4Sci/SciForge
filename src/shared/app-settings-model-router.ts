@@ -221,6 +221,8 @@ function normalizeModelRouterMember(
     ...(reasoningEfforts ? { reasoningEfforts } : {}),
     // json_schema is the Router default, so only the downgrade is persisted.
     ...(input?.chatStructuredOutputMode === 'json_object' ? { chatStructuredOutputMode: 'json_object' as const } : {}),
+    // The provider-neutral default stays omitted; an explicit effort value resets the override.
+    ...(input?.chatReasoningControl === 'thinking-type' ? { chatReasoningControl: 'thinking-type' as const } : {}),
     protocol: normalizeModelRouterProtocol(input?.protocol, defaults.protocol)
   }
 }

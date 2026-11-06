@@ -1,111 +1,111 @@
-/**
- * Unit tests for the orchestration layer: resource identity, workspace
- * ownership policy and the openSession operation contract.
- */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { changeInspectorOpenSessionResultSchema } from '../src/contract.js'
 import { openSession } from '../src/core/operations.js'
-import {
-  ChangeInspectorService,
-  changeInspectorResourceId,
-  normalizePath
-} from '../src/core/service.js'
-import type { ChangeInspectorSessionDetail } from '../src/ports/agent-threads.js'
-import { corpusSessions, OTHER_WORKSPACE, WORKSPACE } from './cases.js'
+import { ChangeInspectorService, changeInspectorResourceId } from '../src/core/service.js'
+import { corpusSessions } from './cases.js'
 import { fakeAgentThreads } from './runner.js'
 
-function serviceWith(sessions: Record<string, ChangeInspectorSessionDetail>): ChangeInspectorService {
-  return new ChangeInspectorService({ agentThreads: fakeAgentThreads(sessions) })
-}
+const serviceFor = () => new ChangeInspectorService({ agentThreads: fakeAgentThreads(corpusSessions()) })
 
-test('resource id is the sha256 of the canonical (runtimeId, sessionId) tuple', () => {
+test('resource identity hashes the unambiguous runtime/session tuple', () => {
   const id = changeInspectorResourceId({ runtimeId: 'codex', sessionId: 'thread-1' })
   assert.match(id, /^session-changes:[a-f0-9]{64}$/u)
-  // Delimiter collisions cannot alias: ["a:b", "c"] versus ["a", "b:c"].
-  const left = changeInspectorResourceId({ runtimeId: 'codex:remote', sessionId: 'thread' })
-  const right = changeInspectorResourceId({ runtimeId: 'codex', sessionId: 'remote:thread' })
-  assert.notEqual(left, right)
-  // Deterministic.
   assert.equal(id, changeInspectorResourceId({ runtimeId: 'codex', sessionId: 'thread-1' }))
+  assert.notEqual(changeInspectorResourceId({ runtimeId: 'a:b', sessionId: 'c' }), changeInspectorResourceId({ runtimeId: 'a', sessionId: 'b:c' }))
 })
 
-test('normalizePath folds backslashes and trailing slashes', () => {
-  assert.equal(normalizePath('C:\\repo\\pkg\\'), 'C:/repo/pkg')
-  assert.equal(normalizePath('/repo/'), '/repo')
-  assert.equal(normalizePath('/repo'), '/repo')
+test('openSession accepts omitted selectors and resolves the authenticated port identity', async () => {
+  const service = serviceFor()
+  const output = changeInspectorOpenSessionResultSchema.parse((await openSession(service, {})).output)
+  assert.equal(output.snapshot.sessionId, 'thread-plain-diff')
+  assert.equal(output.snapshot.changes.length, 1)
+  assert.match(output.snapshot.revision, /^changes-[a-f0-9]{64}$/u)
+  assert.equal(output.snapshot.changes[0]!.patchBytes, Buffer.byteLength(output.snapshot.changes[0]!.patch))
+  assert.equal(output.snapshot.changes[0]!.patchTruncated, false)
+  assert.deepEqual(output.snapshot.truncationReasons, [])
 })
 
-test('workspace ownership: equivalent paths pass, foreign paths throw the static message', async () => {
-  const service = serviceWith({
-    'thread-1': { workspaceRoot: `${WORKSPACE}/`, watermark: 'wm', artifacts: [] },
-    'thread-win': { workspaceRoot: 'C:\\repo\\', watermark: 'wm', artifacts: [] },
-    'thread-free': { watermark: 'wm', artifacts: [] }
-  })
-  const pass = await service.snapshot({ runtimeId: 'codex', sessionId: 'thread-1' }, WORKSPACE)
-  assert.equal(pass.sessionId, 'thread-1')
-  const windows = await service.snapshot({ runtimeId: 'codex', sessionId: 'thread-win' }, 'C:/repo')
-  assert.equal(windows.sessionId, 'thread-win')
-  // A session without a recorded workspace is readable from any workspace.
-  const free = await service.snapshot({ runtimeId: 'codex', sessionId: 'thread-free' }, OTHER_WORKSPACE)
-  assert.equal(free.sessionId, 'thread-free')
-  await assert.rejects(
-    service.snapshot({ runtimeId: 'codex', sessionId: 'thread-1' }, OTHER_WORKSPACE),
-    (error: unknown) => {
-      assert.equal((error as Error).message, 'The requested session belongs to another workspace.')
-      return true
-    }
-  )
+test('strict input rejects workspaceRoot, sessionDetail and other authority injection before reads', async () => {
+  let reads = 0
+  const service = new ChangeInspectorService({ agentThreads: { read: async () => { reads++; return corpusSessions()['thread-plain-diff']! } } })
+  for (const input of [{ workspaceRoot: '/forged' }, { sessionDetail: {} }, { sessionId: 42 }, { runtimeId: '' }, { extra: true }]) {
+    await assert.rejects(openSession(service, input))
+  }
+  assert.equal(reads, 0)
 })
 
-test('openSession returns the parsed result contract', async () => {
-  const service = serviceWith(corpusSessions())
-  const result = await openSession(
-    service,
-    { sessionId: 'thread-plain-diff', runtimeId: 'codex' },
-    WORKSPACE
-  )
-  const parsed = changeInspectorOpenSessionResultSchema.parse(result.output)
-  assert.equal(parsed.sessionId, 'thread-plain-diff')
-  assert.match(parsed.resourceId, /^session-changes:[a-f0-9]{64}$/u)
-  assert.equal(parsed.snapshot.changes.length, 1)
-  assert.equal(parsed.snapshot.revision, 'wm-7')
+test('Host DTO requires sessionId, runtimeId and workspaceRoot', async () => {
+  for (const key of ['sessionId', 'runtimeId', 'workspaceRoot']) {
+    const detail: Record<string, unknown> = { ...corpusSessions()['thread-plain-diff']! }
+    delete detail[key]
+    const service = new ChangeInspectorService({ agentThreads: { read: async () => detail as never } })
+    await assert.rejects(openSession(service, {}), /invalid|expected/i)
+  }
 })
 
-test('openSession rejects a missing workspace with the static message', async () => {
-  const service = serviceWith(corpusSessions())
-  await assert.rejects(
-    openSession(service, { sessionId: 'thread-plain-diff', runtimeId: 'codex' }, ''),
-    (error: unknown) => {
-      assert.equal((error as Error).message, 'Change Inspector requires an active workspace.')
-      return true
-    }
-  )
-  await assert.rejects(
-    openSession(service, { sessionId: 'thread-plain-diff', runtimeId: 'codex' }, '   '),
-    (error: unknown) => {
-      assert.equal((error as Error).message, 'Change Inspector requires an active workspace.')
-      return true
-    }
-  )
+test('service refuses a mismatched Host session or runtime identity', async () => {
+  const service = new ChangeInspectorService({ agentThreads: { read: async () => corpusSessions()['thread-plain-diff']! } })
+  await assert.rejects(openSession(service, { sessionId: 'foreign-same-workspace' }), /identity does not match/)
+  await assert.rejects(openSession(service, { runtimeId: 'foreign-runtime' }), /identity does not match/)
 })
 
-test('openSession validates the input with the strict contract schema', async () => {
-  const service = serviceWith(corpusSessions())
-  await assert.rejects(openSession(service, { runtimeId: 'codex' }, WORKSPACE))
-  await assert.rejects(
-    openSession(service, { sessionId: 'thread-plain-diff', runtimeId: 'codex', extra: 1 }, WORKSPACE),
-    /unrecognized|extra/i
-  )
+test('list continues across Host reads that advance watermark, then rejects a new file change', async () => {
+  const changes = [
+    { kind: 'tool', toolKind: 'file_change', id: 'price', filePath: 'price.js', detail: '@@ -1 +1 @@\n-10\n+20' },
+    { kind: 'tool', toolKind: 'file_change', id: 'test', filePath: 'price.test.js', detail: '@@ -1 +1 @@\n-10\n+20' }
+  ]
+  let reads = 0
+  let newChange = false
+  const service = new ChangeInspectorService({ agentThreads: { read: async () => ({
+    sessionId: 'live-session', runtimeId: 'host', workspaceRoot: '/workspace',
+    watermark: `read-${++reads}`,
+    artifacts: [
+      ...changes,
+      ...Array.from({ length: reads }, (_, index) => ({
+        kind: 'tool', toolKind: 'read', id: `list-${index}`, detail: 'change_inspector.list_changes'
+      })),
+      ...(newChange ? [{ ...changes[0], id: 'next-price-edit' }] : [])
+    ]
+  }) } })
+  const first = await service.listChanges({ sessionId: 'live-session', limit: 1 })
+  assert.ok(first.nextCursor)
+  const second = await service.listChanges({ sessionId: 'live-session', limit: 1, cursor: first.nextCursor })
+  assert.equal(second.revision, first.revision)
+  assert.equal(second.changes[0]!.filePath, 'price.test.js')
+  assert.equal(second.nextCursor, null)
+  newChange = true
+  await assert.rejects(service.listChanges({ sessionId: 'live-session', limit: 1, cursor: first.nextCursor }), /cursor does not match/u)
+  const latest = await service.listChanges({ sessionId: 'live-session', limit: 1 })
+  assert.notEqual(latest.revision, first.revision)
 })
 
-test('port read failures propagate unchanged', async () => {
-  const service = serviceWith({})
-  await assert.rejects(
-    openSession(service, { sessionId: 'missing', runtimeId: 'codex' }, WORKSPACE),
-    (error: unknown) => {
-      assert.equal((error as Error).message, 'Unknown session: missing')
-      return true
-    }
-  )
+test('service rejects an existing cursor after whitespace-only plain or JSON diff changes', async () => {
+  for (const json of [false, true]) {
+    let patch = '@@ -1 +1 @@\n-before\n+after \n'
+    const service = new ChangeInspectorService({ agentThreads: { read: async () => ({
+      sessionId: 'byte-session', runtimeId: 'dsh', workspaceRoot: '/workspace', watermark: 'unchanged',
+      artifacts: [
+        { id: 'one', kind: 'tool', toolKind: 'file_change', detail: json ? JSON.stringify({ diff: patch }) : patch },
+        { id: 'two', kind: 'tool', toolKind: 'file_change', detail: '@@ -1 +1 @@\n-x\n+y\n' }
+      ]
+    }) } })
+    const first = await service.listChanges({ limit: 1 })
+    assert.ok(first.nextCursor)
+    assert.equal(first.changes[0]!.patch, patch)
+    const unchanged = await service.listChanges({ limit: 1, cursor: first.nextCursor })
+    assert.equal(unchanged.revision, first.revision)
+    patch = '@@ -1 +1 @@\n-before\n+after  \n'
+    await assert.rejects(service.listChanges({ limit: 1, cursor: first.nextCursor }), /cursor does not match/u)
+    const latest = await service.snapshot({})
+    assert.notEqual(latest.revision, first.revision)
+    assert.equal(latest.changes[0]!.patch, patch)
+    assert.equal(latest.changes[0]!.patchBytes, Buffer.byteLength(patch))
+  }
+})
+
+test('authorized port failures propagate unchanged', async () => {
+  const failure = new Error('Host denied read')
+  const service = new ChangeInspectorService({ agentThreads: { read: async () => { throw failure } } })
+  await assert.rejects(openSession(service, {}), error => error === failure)
 })

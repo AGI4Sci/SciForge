@@ -61,6 +61,7 @@ export class DshRuntimeAdapter {
   private modelRouterIdentity?: string
   private deploymentCleanup?: () => Promise<void>
   private deployedVersion?: string
+  private toolImageInputAllowed = false
   private threads = new Map<string, DshThread>()
   private mounted = new Map<string, string>()
   private active?: Turn
@@ -123,6 +124,7 @@ export class DshRuntimeAdapter {
       if (this.closed || generation !== this.generation) { await deployment.cleanup(); throw new DshRuntimeError('runtime_stale_generation') }
       this.deploymentCleanup = deployment.cleanup
       this.deployedVersion = deployment.version
+      this.toolImageInputAllowed = deployment.toolImageInputAllowed
       const transport = new AcpTransport(target.executable, deployment.args, deployment.env, this.options.stateDirectory,
         this.options.requestTimeoutMs ?? 15_000,
         message => { if (generation === this.generation && !this.closed) this.receive(message, generation) },
@@ -212,7 +214,7 @@ export class DshRuntimeAdapter {
       await this.connect(context)
       turn.generation = this.generation
       turn.transport = this.connection
-      const servers = await this.waitForHost(turn, () => this.options.getAuthorizedMcpServers?.({ ...structuredClone(identity), workspace: thread.workspace!, allowedTools: input.allowedTools ? [...input.allowedTools] : undefined, permissionLevel: input.permissionLevel, governanceProfile: input.governanceProfile, signal: turn.controller.signal }) ?? Promise.resolve([]))
+      const servers = await this.waitForHost(turn, () => this.options.getAuthorizedMcpServers?.({ ...structuredClone(identity), workspace: thread.workspace!, toolImageInputAllowed: this.toolImageInputAllowed, allowedTools: input.allowedTools ? [...input.allowedTools] : undefined, permissionLevel: input.permissionLevel, governanceProfile: input.governanceProfile, signal: turn.controller.signal }) ?? Promise.resolve([]))
       this.checkTurn(turn)
       this.validateServers(servers)
       if (servers.length && this.serverCapabilities.mcpCapabilities?.http !== true) throw new DshRuntimeError('runtime_mcp_unsupported')
@@ -395,6 +397,14 @@ export class DshRuntimeAdapter {
       await this.connection!.request('session/close', { sessionId: input.sessionId })
     } finally { this.threads.delete(input.sessionId); await this.retire() }
     return { ok: true }
+  }
+  /** Release this client's session resources without claiming to delete provider history. */
+  async releaseThread(context: DshContext, input: { runtimeId: string; threadId: string }): Promise<void> {
+    this.assertRuntime(input)
+    await this.interruptTurn(context, input)
+    this.threads.delete(input.threadId)
+    this.mounted.delete(input.threadId)
+    for (const listener of [...this.listeners]) if (listener.threadId === input.threadId) listener.stop()
   }
   async readThreadStatus(_context: DshContext, input: { runtimeId: string; threadId: string }) {
     this.assertRuntime(input)

@@ -161,3 +161,37 @@ than falling back to a system runtime.
 Set `SCIFORGE_WORKSPACE_HOST_ARTIFACT_OFFLINE=1` to require a complete,
 integrity-valid local build cache and fail instead of downloading a missing
 build asset.
+
+### Bounded document reads and visual exports
+
+`workspace-preview.read-range` uses the same contract for UTF-8 source text and
+provider-extracted document text. Start with `{maxCharacters: 4000}`, a one-based
+UTF-16 `start`, or a document `frameIndex` / exact `query`. Continue only with the
+returned `nextCursor`. Cursors bind the canonical source, extracted snapshot and
+selected range; a changed source requires a fresh read. They are opaque and expire
+when the serving process restarts. A reader owns its cursor; snapshots are shared
+in a bounded LRU cache and concurrent extraction of identical content is coalesced.
+PDF anchors identify page numbers and offsets within the returned text. Extraction
+order is not a guarantee of semantic reading order for multi-column documents.
+Image-only documents require OCR rather than fabricated text.
+
+Pages account for JSON escaping and tool-result wrapping. The model router keeps
+bounded structured receipts verbatim, including encoded-looking evidence and
+cursors; oversized results still use the ordinary output budget. Do not substitute
+shell line-by-line reads or reconstruct a document from summarized tool history.
+
+`workspace-preview.export` accepts a workspace-file PNG target with optional
+`render: {frameIndex, region: {x, y, width, height}, maxDimension}`. Regions use
+normalized full-frame coordinates. The provider owns rendering: raster input is
+not upscaled, transparency is preserved, and vector document regions are rendered
+at the requested bounded size. The same export writer handles every provider and
+refuses to overwrite a destination. Results include output dimensions, SHA-256,
+source revision, source anchor and the exact requested parameters. These receipts
+establish provenance and geometry, not proof that every semantic label was retained.
+
+The capability accepts `{targets: [...]}` for up to 16 independent exports from
+one resource. Results retain input order; partial failures are explicit and the
+batch is not atomic. Rendering caches are bounded and do not cache authorization
+or destination writes. Reuse a successful receipt for an unchanged source and
+region; request visual review only when there is a specific unresolved content
+question. No speedup percentage is guaranteed without a matched workload benchmark.

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import JSZip from 'jszip'

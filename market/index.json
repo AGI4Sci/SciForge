@@ -1,24 +1,16 @@
 {
   "format": 1,
-  "generatedAt": "2026-10-25T04:01:14.212Z",
+  "generatedAt": "2026-10-29T09:26:22.097Z",
   "dshRuntimeVersion": "0.2.0-rc.2",
   "plugins": [],
   "blocked": [
     {
-      "name": "@sciforge/plugin-biology-room",
-      "plugin": "biology-room",
-      "version": "0.1.0",
-      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
-      "detail": null,
-      "runtimeGap": "Adapter-provided UI and inputs; activation only here."
-    },
-    {
       "name": "@sciforge/plugin-change-inspector",
       "plugin": "change-inspector",
-      "version": "0.1.0",
-      "reason": "capability ids are already provided by bundled domains, so activating it in this application collides: change-inspector.open-session",
-      "detail": null,
-      "runtimeGap": "Investigation tools need a workspace with real changes; activation only here."
+      "version": "0.1.2",
+      "reason": "Local independent-plugin MVP verified; signed market publication has not been authorized or performed.",
+      "detail": "The static domain and dedicated forwarding layer are removed. Public tools are owned by this plugin and require the authenticated agent-threads.read Host port.",
+      "runtimeGap": "Source-built SciForge with an isolated profile and real DSH Agent verified. Signed packaged-app and public market release acceptance remain separate gates."
     },
     {
       "name": "@sciforge/plugin-evidence-dag",
@@ -35,14 +27,6 @@
       "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
       "detail": "activation failed: Plugin @sciforge/plugin-git-checkpoints activation failed: DSH Cordis entrypoint requires a supported Context runtime: [ { \"expected\": \"string\", \"code\": \"invalid_type\", \"path\": [ \"dataDir\" ], \"message\": \"Invalid input: expected string, received undefined\" } ]",
       "runtimeGap": "Needs host version-control capabilities (G1); activation only here."
-    },
-    {
-      "name": "@sciforge/plugin-life-science-preview",
-      "plugin": "life-science-preview",
-      "version": "0.1.0",
-      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
-      "detail": null,
-      "runtimeGap": "Adapter-provided preview inputs; activation only here."
     },
     {
       "name": "@sciforge/plugin-project-dag",
@@ -63,18 +47,11 @@
     {
       "name": "@sciforge/plugin-scientific-plotting",
       "plugin": "scientific-plotting",
-      "version": "0.1.0",
-      "reason": "capability ids are already provided by bundled domains, so activating it in this application collides: scientific-plotting.compare, scientific-plotting.map-data, scientific-plotting.render, scientific-plotting.rerun, scientific-plotting.status",
+      "version": "0.2.2",
+      "reason": "Unified artifact has not been signed or published by this task.",
       "detail": null,
-      "runtimeGap": "Renders real PNGs; the end-to-end acceptance script invokes it for real."
-    },
-    {
-      "name": "@sciforge/plugin-visual-review",
-      "plugin": "visual-review",
-      "version": "0.1.0",
-      "reason": "artifact declares no tool grants, so installing it would grant nothing and hide what it does.",
-      "detail": null,
-      "runtimeGap": "Adapter-provided review inputs; activation only here."
+      "runtimeGap": "Source app validation and unsigned local packaging do not constitute market release.",
+      "source": "plugins/scientific-plotting"
     }
   ]
 }

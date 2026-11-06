@@ -1,19 +1,7 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import {
-  link,
-  mkdir,
-  mkdtemp,
-  open,
-  readFile,
-  readdir,
-  realpath,
-  rename,
-  rm,
-  symlink,
-  utimes,
-  writeFile
-} from 'node:fs/promises'
+import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, utimes, writeFile } from 'node:fs/promises'
+import { symlink } from '../../test-support/symlink'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'

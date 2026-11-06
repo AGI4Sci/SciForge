@@ -43,7 +43,7 @@ test('resolves workspace-confined files and rejects lexical escapes', async () =
 
 test('rejects writes whose parent traverses a symlink outside the workspace', async () => {
   const { root, workspaceRoot } = await fixture()
-  await symlink(root, join(workspaceRoot, 'escape'))
+  await symlink(root, join(workspaceRoot, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
 
   await assert.rejects(
     resolveSafeWorkspaceWriteTarget('escape/created.txt', workspaceRoot),

@@ -1,18 +1,10 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "types": [
-      "node"
-    ]
+    "target": "ES2023", "module": "ESNext", "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"], "strict": true,
+    "noImplicitOverride": true, "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true, "skipLibCheck": true, "jsx": "react-jsx",
+    "types": ["node"], "resolveJsonModule": true
   },
-  "include": [
-    "src/**/*.ts",
-    "tests/**/*.ts",
-    "build.mjs"
-  ]
+  "include": ["src/sciforge/**/*.ts", "src/sciforge/**/*.tsx", "src/figure-store/**/*.ts", "src/native-dsh/**/*.ts", "src/native-dsh/**/*.tsx", "src/review-ui/**/*.tsx", "src/ui/FiguresPanel.tsx", "src/worker/scientific-plotting-engine.ts", "src/worker/contract.ts", "src/worker/types.ts", "tests/mvp-*.test.ts"]
 }

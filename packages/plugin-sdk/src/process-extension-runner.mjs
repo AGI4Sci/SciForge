@@ -246,7 +246,16 @@ globalThis.__sciforgeHostPorts = hostPorts
 // The trusted runner stamps only correlation. Authority stays in the Host.
 const serviceInvocation = new AsyncLocalStorage()
 const servicePending = new Map()
+// Host-approved service ids for this generation. This is the runner's projection
+// of the trusted `serviceClients` composition, not a grant: every request still
+// needs a live invocation and the Host provider's own authorization. It exists
+// so a plugin can refuse to activate when the Host promised it a service that
+// this generation was never given.
+const approvedServiceIds = new Set()
 globalThis.__sciforgeHostServices = Object.freeze({
+  get invocationId() { return serviceInvocation.getStore()?.invocationId },
+  get invocationToken() { return invocations.get(serviceInvocation.getStore()?.invocationId) },
+  get services() { return Object.freeze([...approvedServiceIds]) },
   request(serviceId, operation, input) {
     const invocationId = serviceInvocation.getStore()?.invocationId
     if (!invocationId || !invocations.has(invocationId)) throw hostPortsError('service_denied', 'No live invocation.')
@@ -517,8 +526,10 @@ process.on('message', async (message) => {
     if (command === 'activate') {
       // Named runner hooks retain their own contract; native entrypoints are
       // loaded through the actual pinned Cordis runtime below.
-      const hasRunnerContract = typeof module.activate === 'function' || typeof module.getCapabilityDefinitions === 'function' ||
-        typeof module.getWorkspacePreviewProviders === 'function'
+      // Preview providers are orthogonal to how capabilities are declared: a native
+      // Cordis entry can register tools AND expose preview slots from the same package.
+      // Only the two capability hooks select the legacy named-runner lane.
+      const hasRunnerContract = typeof module.activate === 'function' || typeof module.getCapabilityDefinitions === 'function'
       if (payload?.dshStorage && hasRunnerContract) throw new Error('Private storage requires a native Cordis entrypoint, not named runner hooks.')
       if (!hasRunnerContract && (typeof module.apply === 'function' || typeof module.default === 'function' || typeof module.default?.apply === 'function')) {
         cordisRoot = new Context()
@@ -526,11 +537,18 @@ process.on('message', async (message) => {
           await cordisRoot.plugin(SystemPrompt)
           await cordisRoot.plugin(ToolRuntime, { mode: 'native' })
           dshTools = cordisRoot.tools
+          approvedServiceIds.clear()
+          const suppliedServices = new Set(['tools', 'systemPrompt', 'sessions', 'sessionProjections', 'storage', 'storageDomain'])
           for (const factory of payload?.serviceClients ?? []) {
             if (!isAbsolute(factory.modulePath) || typeof factory.serviceId !== 'string') throw new Error('Invalid trusted service client factory.')
+            approvedServiceIds.add(factory.serviceId)
             const create = (await import(pathToFileURL(factory.modulePath).href))[factory.exportName]
             if (typeof create !== 'function') throw new Error('Trusted service client factory export is unavailable.')
-            cordisRoot.provide(factory.serviceId, await create(globalThis.__sciforgeHostServices, factory.config))
+            const names = factory.provides ?? [factory.serviceId]
+            if (!Array.isArray(names) || names.length === 0 || names.length > 32 || new Set(names).size !== names.length || names.some(name => typeof name !== 'string' || !name || name !== name.trim() || suppliedServices.has(name))) throw new Error('Invalid or conflicting trusted service names.')
+            const created = await create(globalThis.__sciforgeHostServices, factory.config)
+            if (factory.provides && (!created || typeof created !== 'object' || Object.keys(created).length !== names.length || names.some(name => !Object.hasOwn(created, name)))) throw new Error('Trusted service factory returned different services.')
+            for (const name of names) { cordisRoot.provide(name, factory.provides ? created[name] : created); suppliedServices.add(name) }
           }
           const resolverPath = payload?.dshAgentResolver?.path
           if (typeof resolverPath === 'string') {
@@ -566,18 +584,22 @@ process.on('message', async (message) => {
               throw new Error(`DSH tool ${schema.name} requires an explicit host compute grant or approved effect grant; unsupported effects fail closed.`)
             }
             if (grant.readResource !== undefined && (grant.readResource !== 'workspace' || grant.effect !== 'read')) throw new Error('Invalid Host read resource grant.')
+            if (grant.scope !== undefined && (grant.scope !== 'workspace' || grant.readResource !== undefined)) throw new Error('Invalid Host workspace scope grant.')
+            const workspaceScoped = grant.scope === 'workspace'
             const workspaceRead = grant.readResource === 'workspace'
             const previous = capabilityDefinitions.find((definition) => definition.tool === tool)
-            const fingerprint = JSON.stringify([schema, tool.output.schema, grant])
+            const outputSchema = tool.contractOutputSchema ?? tool.output.schema
+            const fingerprint = JSON.stringify([schema, outputSchema, grant])
             if (previous?.fingerprint === fingerprint) return previous
             return { tool, fingerprint, descriptor: { runtimeRevision: ++toolRevision,
               contractVersion: 3, id: grant.id, version: '1', title: schema.name,
-              description: schema.description.slice(0, 2000), audiences: workspaceRead ? ['agent', 'ui', 'system'] : ['agent', 'ui'],
-              scope: grant.effect === 'read' ? 'resource' : 'global',
-              resourceKinds: grant.effect === 'read' ? [workspaceRead ? 'dsh-workspace' : 'dsh-session'] : [], effect: grant.effect,
-              approval: grant.effect === 'external-write' || grant.effect === 'destructive' ? 'confirmation' : 'none',
+              description: schema.description.slice(0, 2000), audiences: workspaceScoped || workspaceRead ? ['agent', 'ui', 'system'] : ['agent', 'ui'],
+              scope: grant.scope === 'workspace' ? 'workspace' : (grant.effect === 'read' ? 'resource' : 'global'),
+              ...(grant.effect === 'read' && !workspaceScoped ? { resourceKinds: [workspaceRead ? 'dsh-workspace' : 'dsh-session'] } : {}), effect: grant.effect,
+              // A host grant may raise the effect-derived approval floor; it can never lower it.
+              approval: grant.approval === 'confirmation' || grant.effect === 'external-write' || grant.effect === 'destructive' ? 'confirmation' : 'none',
               concurrency: { revision: 'none', idempotency: grant.effect === 'read' ? 'none' : 'required' },
-              inputSchema: schema.parameters, outputSchema: tool.output.schema, tags: workspaceRead ? ['dsh-tool', 'dsh-workspace-read'] : ['dsh-tool']
+              inputSchema: schema.parameters, outputSchema, tags: workspaceScoped ? ['dsh-tool', 'dsh-workspace-scoped'] : workspaceRead ? ['dsh-tool', 'dsh-workspace-read'] : ['dsh-tool']
             }, handler: async (input, execution) => {
               const agent = await localAgentFor(execution.invocation)
               const result = await dshTools.execute({ name: schema.name, arguments: input,
@@ -627,7 +649,7 @@ process.on('message', async (message) => {
       if (definition.tool && (payload.revision !== definition.descriptor.runtimeRevision || dshTools.get(definition.tool.name) !== definition.tool)) {
         throw new Error('DSH tool descriptor revision is stale.')
       }
-      if (definition.tool && (definition.descriptor.effect !== 'compute' || definition.descriptor.scope !== 'global') && payload.invocation === undefined && !payload.hostServices) {
+      if (definition.tool && definition.descriptor.scope !== 'workspace' && (definition.descriptor.effect !== 'compute' || definition.descriptor.scope !== 'global') && payload.invocation === undefined && !payload.hostServices) {
         throw new Error('DSH ordinary Session invocation envelope is required.')
       }
       // Keep the existing legacy ports invocation lane. Host-service invocations
@@ -665,14 +687,18 @@ process.on('message', async (message) => {
       try {
         cordisRoot.sessions.announce(session)
         for (let index = 0; index < (input.events ?? 0); index++) session.append('goal/change', { goal: `synthetic-${index}` })
-        await cordisRoot.sessionProjectionCache.write(session)
+        // The projection cache is only composed with private storage
+        // (storageDomain). A synthetic session used purely as an invocation
+        // provenance envelope must not require plugin-private storage.
+        const projectionCache = cordisRoot.sessionProjectionCache
+        if (projectionCache) await projectionCache.write(session)
         if (input.dispose === true) {
           try { detach() } finally { syntheticSessionDisposers.delete(session.id) }
-          await cordisRoot.sessionProjectionCache.write(session)
+          if (projectionCache) await projectionCache.write(session)
         } else {
           keepLive = true
         }
-        reply(requestId, { id: session.id, eventCount: session.log.length, persisted: true, disposed: input.dispose === true })
+        reply(requestId, { id: session.id, eventCount: session.log.length, persisted: projectionCache !== undefined, disposed: input.dispose === true })
       } finally {
         // Only a successful live-session request transfers ownership to teardown.
         // A failed checkpoint must not reserve its ID or retain its detach handle.

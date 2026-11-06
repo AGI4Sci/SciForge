@@ -196,3 +196,88 @@ history and live UI projections use the shared artifact-reference path, allowing
 Router preserves public reasoning in assistant history and progressively delivers
 it on the direct Chat Completions stream; it never substitutes encrypted reasoning
 state or generated explanations for provider-supplied process output.
+
+### Model-visible result budgets and schema recovery
+
+The common delivery layer uses a 4 KiB default and a 16 KiB hard ceiling.
+A single requested operation descriptor with its complete schema may use the
+larger budget atomically. Other large results are persisted once and projected;
+transport adapters preserve the prepared payload without another truncation.
+Compact operation catalogs prioritize references and titles before inline schemas.
+If an index cannot fit, its continuation explicitly reports the source array
+pointer, total count and next index. Absence from a partial index is not absence
+from the capability catalog.
+
+An omitted schema carries `schemaPointer`, an RFC 6901 path into the **original
+stored result**, including escaped object keys. A preview's `items` wrapper does
+not alter that source path. Combine the pointer with `_delivery.nextRead.arguments`
+to read exactly the schema, without executing discovery again. Artifact reads
+accept `maxBytes` (1024–16384; default 4096), accounting for JSON escaping and
+metadata; continue with `nextOffset` only when the selected value still exceeds
+that budget. No provider-specific or domain-specific budget path exists.
+
+Normal turns retain their provider session: Codex maps the GUI thread to a native
+thread ID, Claude Code resumes its stored SDK session ID, and DSH prompts its ACP
+session ID and resumes it after reconnect when the provider advertises support.
+Codex routing-alias recovery first resumes the same native thread with current
+routing settings. It creates a replacement only when that session cannot be
+restored. Explicit history replacement/fork and unavailable native storage are
+not ordinary continuation. Reusing a session retains native context but does not
+guarantee that a model will avoid redundant exploration; accurate tool delivery
+and the common execution guidance remain necessary.
+
+### Continuation summaries and execution guidance
+
+A `compaction_event.summary` is a lifecycle display label. Only the optional
+`contextSummary` is continuation content and may update a context ledger or
+observational context state. Events without it preserve existing semantic context.
+The Host never summarizes or automatically re-injects conversation history or
+ledger summaries. Runtimes retain their own conversation, compaction and resume
+state; the ledger remains available for observation and explicit cross-runtime
+handoffs. Manual compaction is offered only when the adapter exposes a native
+control. Lack of a control does not imply lack of native automatic compaction.
+There is no Host compactor, fallback summary model request, or fallback threshold
+configuration. Adapters expose only controls actually supported by their provider.
+
+Automatic subagent context uses the shared `subagent-context.ts` projection for
+every runtime with subagent support. Its complete UTF-8 packet is at most 4096
+bytes, including JSON escaping and recovery instructions. It contains child IDs,
+bounded labels, status, update times, and a short progress preview for live work.
+Completed output, summaries, errors and transcripts remain in the canonical
+multi-agent store and are read explicitly through `subagent_status` (with
+`includeTranscript` when needed). Automatic injection never replays those results.
+The index is rebuilt each turn without an "already delivered" cache, so native
+compaction and process restart cannot remove the discovery path. If the index is
+partial, recovery starts at the canonical list operation and follows its cursors;
+the projection never forwards a cursor that would skip omitted records. This
+input budget does not change provider compaction thresholds, summaries, histories,
+or native control dispatch, and does not claim manual compact support for a runtime
+that only compacts automatically.
+
+Task execution guidance is authored once in `task-execution-guidance.ts`.
+Codex installs it as developer instructions, Claude Code appends it to its
+native SDK system preset, and the ACP adapter includes it in the prompt because
+that protocol path has no equivalent system-instruction field. It applies to
+parents and children without domain IDs, MIME-specific task rules or fixed
+reading line counts. It covers batched independent actions, evidence-gap reads,
+source/version reuse, output ownership, acceptance criteria, distinct visual
+and programmatic validation, and completion without redundant verification.
+The guidance does not add an autonomous scheduler, alternate history store, or
+implicit authority to restart children or repeat external writes.
+
+### Completion requirements and operation failures
+
+Only the caller's typed execution intent (including explicit steering) establishes
+completion requirements. Tool arguments and tool failures do not add requirements.
+A visual lookup requesting region grounding does not implicitly require capture
+or final inspection. Required visual receipt chains remain validated at completion;
+ordinary commands and child observation cannot satisfy or erase those requirements.
+Pending completion receipts are not an execution permission policy and cannot ban
+independent work or propagate such a ban to sibling agents. Owned-surface access
+policy and capability allowlists still apply before execution.
+
+A terminal operation failure or exhausted resource retry budget produces scoped
+recovery guidance without interrupting the parent task. The resource circuit stays
+closed: another attempt without qualifying new evidence still triggers enforcement.
+Independent operations and children can continue, and the runtime can report missing
+required evidence. No tool name or visual error code grants a special exception.

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "keys": [
+    {
+      "keyId": "sciforge-release-2026-11",
+      "publisherId": "sciforge",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAjZXwpvbroMEO4NQTAQDuidb3dDRo+kJuXcdDd1wTZ1Q=\n-----END PUBLIC KEY-----\n"
+    }
+  ]
+}

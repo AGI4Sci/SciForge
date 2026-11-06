@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import type { ChildProcess } from 'node:child_process'
+import { execFileSync, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import test from 'node:test'
@@ -35,38 +35,83 @@ test('sidecar configuration is package-owned and derives only generic lifecycle 
   assert.equal(config.baseUrl, 'http://127.0.0.1:3898')
   assert.equal(config.runtimeToken, 'stable-project-token')
   assert.equal(config.command, process.platform === 'win32' ? 'python.exe' : 'python3')
-  assert.deepEqual(config.args, ['-m', 'project_dag.server'])
-  assert.equal(config.cwd, '/Applications/SciForge/packages/domains/project-dag')
+  assert.deepEqual(config.args, ['-B', '-m', 'project_dag.server'])
+  assert.equal(config.cwd, join('/Applications/SciForge', 'packages/domains/project-dag'))
   assert.equal(config.sessionDir, '/data/evidence')
   assert.equal(
     config.dbPath,
-    '/Users/test/Library/Application Support/SciForge/project-dag/project-view.db'
+    join('/Users/test/Library/Application Support/SciForge', 'project-dag/project-view.db')
   )
   assert.equal(config.env.SCIFORGE_PROJECT_DAG_API_KEY, 'stable-project-token')
   assert.equal(config.env.EDAG_MODEL_ROUTER_BASE_URL, 'http://127.0.0.1:3892/v1')
   assert.equal(config.env.EDAG_MODEL_ROUTER_API_KEY, 'contract-router-token')
   assert.equal(config.env.EDAG_MODEL_ROUTER_MODEL, 'contract-extractor')
   assert.deepEqual(config.env.PYTHONPATH?.split(delimiter), [
-    '/Applications/SciForge/packages/domains/project-dag/python',
-    '/Applications/SciForge/packages/domains/evidence-dag/python'
+    join('/Applications/SciForge', 'packages/domains/project-dag/python'),
+    join('/Applications/SciForge', 'packages/domains/evidence-dag/python')
   ])
+})
+
+test('owned sidecar imports real Python modules without bytecode in temporary source resources', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'owned-python-resources-'))
+  try {
+    for (const readOnly of [false, true]) {
+      const packageRoot = join(root, readOnly ? 'read-only' : 'writable')
+      const pythonRoot = join(packageRoot, 'python')
+      const moduleRoot = join(pythonRoot, 'project_dag')
+      await mkdir(moduleRoot, { recursive: true })
+      await writeFile(join(moduleRoot, '__init__.py'), '')
+      await writeFile(join(moduleRoot, 'probe.py'), 'VALUE = 42\n')
+      await writeFile(join(moduleRoot, 'server.py'), [
+        'import json, os, sys',
+        'from .probe import VALUE',
+        'print(json.dumps({"value": VALUE, "no_bytecode": sys.dont_write_bytecode, "inherited": os.environ["LAUNCH_SENTINEL"]}))'
+      ].join('\n'))
+      if (readOnly && process.platform !== 'win32') {
+        for (const name of await readdir(moduleRoot)) await chmod(join(moduleRoot, name), 0o444)
+        await chmod(moduleRoot, 0o555)
+      }
+      const environment = {
+        ...process.env,
+        SCIFORGE_PROJECT_DAG_PACKAGE_ROOT: packageRoot,
+        SCIFORGE_EVIDENCE_DAG_PACKAGE_ROOT: packageRoot,
+        PYTHONDONTWRITEBYTECODE: '',
+        PYTHONPYCACHEPREFIX: '',
+        LAUNCH_SENTINEL: 'preserved'
+      }
+      const config = projectDagSidecarConfig({ appRoot: root, userDataDir: root, environment }, {
+        baseUrl: 'http://127.0.0.1:3892/v1', apiKey: 'test', model: 'test'
+      })
+      const output = JSON.parse(execFileSync(config.command, [...config.args], {
+        cwd: config.cwd, env: { ...config.env }, encoding: 'utf8', timeout: 10_000
+      }))
+      assert.deepEqual((await readdir(pythonRoot, { recursive: true })).filter(name => /__pycache__|\.pyc$/u.test(name)), [])
+      assert.deepEqual(output, { value: 42, no_bytecode: true, inherited: 'preserved' })
+      assert.equal(environment.PYTHONDONTWRITEBYTECODE, '')
+    }
+  } finally {
+    for (const directory of ['writable', 'read-only']) {
+      await chmod(join(root, directory, 'python', 'project_dag'), 0o755).catch(() => undefined)
+    }
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('package roots resolve identically from source and app.asar.unpacked layouts', () => {
   const sourceRoot = '/repo'
   const packagedRoot =
     '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked'
-  const exists = (path: string) => path.includes('/packages/domains/')
+  const exists = (path: string) => path.includes(join('packages', 'domains'))
 
   assert.deepEqual(projectDagPackageRoots(sourceRoot, {}, exists), {
-    project: '/repo/packages/domains/project-dag',
-    evidence: '/repo/packages/domains/evidence-dag'
+    project: join(sourceRoot, 'packages/domains/project-dag'),
+    evidence: join(sourceRoot, 'packages/domains/evidence-dag')
   })
   assert.deepEqual(projectDagPackageRoots(packagedRoot, {}, exists), {
     project:
-      '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked/packages/domains/project-dag',
+      join(packagedRoot, 'packages/domains/project-dag'),
     evidence:
-      '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked/packages/domains/evidence-dag'
+      join(packagedRoot, 'packages/domains/evidence-dag')
   })
 })
 
@@ -84,8 +129,8 @@ test('sidecar appends an existing PYTHONPATH after canonical domain roots', () =
   }, 'stable-project-token')
 
   assert.deepEqual(config.env.PYTHONPATH?.split(delimiter), [
-    '/repo/packages/domains/project-dag/python',
-    '/repo/packages/domains/evidence-dag/python',
+    join('/repo', 'packages/domains/project-dag/python'),
+    join('/repo', 'packages/domains/evidence-dag/python'),
     '/existing/one',
     '/existing/two'
   ])

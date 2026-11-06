@@ -22,12 +22,24 @@ export function apply(ctx) {
   for (const name of ['status', 'read']) ctx.tools.register(defineTool({ name, description: name, parameters: {},
     output: { schema: { type: 'object', additionalProperties: true }, render: () => [] }, execute: () => ctx.inspect.read() }))
 }`)
+  const resolverPath = join(root, 'agent-resolver.mjs')
+  await writeFile(resolverPath, `
+import { createScope } from '@deepseek-ai/dsh-scope'
+export function resolveAgent({ identity, rootContext }) {
+  const agent = { id: identity.sessionId, session: { id: identity.sessionId } }
+  const scope = createScope(rootContext, agent)
+  agent.ctx = scope.ctx
+  return { agent, dispose: scope.dispose }
+}
+`)
   const contract: PluginAdapterContract = { hostApiRange: '^1', permissions: [], approved: true, dshAuthorization: { packageName: name, packageVersion: '1.0.0', dshRuntimeVersion: '0.2.0-rc.2', tools: { status: { id: 'neutral.status', effect }, read: { id: 'neutral.read', effect } } } }
   const contracts = new Map([[`${name}@1.0.0`, contract]])
   let clients: readonly HostServiceClientFactory[] = initial ? [{ serviceId: 'inspect', modulePath: clientPath, exportName: 'create', config: {} }] : []
   const resolutions: string[] = []
   const deliveries: any[] = []
-  const service = new DevelopmentExternalPluginService({ root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts,
+const service = new DevelopmentExternalPluginService({
+    // Fixture Host workspace authority; these suites are not about workspace access.
+    authorizeWorkspace: () => true, root: join(root, 'plugins'), userDataPath: join(root, 'profile'), hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2', adapterContracts: contracts, dshAgentResolver: { path: resolverPath },
     resolveHostServiceClients: (packageName, version) => { resolutions.push(`${packageName}@${version}`); return packageName === name && version === '1.0.0' ? clients : [] },
     hostServiceProviders: { inspect: { authorize: async request => { request.assertCurrent?.(); await authorize?.() }, operations: { read: request => { deliveries.push(request); return request.owner.authority } } } } })
   const registry = new CapabilityRegistry()
@@ -80,34 +92,49 @@ it.each(['read', 'workspace-write'] as const)('registers and invokes resolver-on
     expect(f.registry.get('neutral.read')).toBeDefined()
     const before = f.resolutions.length
     expect((await f.invoke()).output).toEqual({ caller: { ...f.caller, principalContextVersion: 0 }, capabilityId: 'neutral.read', effect, invocationId: 'read-1', ordinarySession: f.session, originalContext: f.original })
-    // The opener checks composition once; the actual child invocation resolves
-    // its current clients once independently (rather than per tool descriptor).
-    expect(f.resolutions.length - before).toBe(effect === 'read' ? 2 : 1)
+    // G7: tool registration is authorized by the grant table, so neither the
+    // workspace/session opener nor the invocation re-resolves service clients.
+    // Clients are composed once, when the generation is activated.
+    expect(f.resolutions.length - before).toBe(0)
     expect(new Set(f.resolutions)).toEqual(new Set(['neutral-read-consumer@1.0.0']))
     expect(f.deliveries).toHaveLength(1)
     expect(typeof f.deliveries[0].assertCurrent).toBe('function')
     expect(Object.isFrozen(f.deliveries[0].owner.authority.originalContext.marker)).toBe(true)
+    // A live generation keeps the clients it was activated with; removing them
+    // from the Host composition takes effect on the next generation.
+    await expect(f.invoke()).resolves.toMatchObject({ output: { effect } })
     f.setClients([])
+    await f.service.setEnabled('neutral-read-consumer', false)
+    await f.service.setEnabled('neutral-read-consumer', true)
     await expect(f.invoke()).rejects.toMatchObject({ code: 'handler_failed' })
-    expect(f.deliveries).toHaveLength(1)
+    expect(f.deliveries).toHaveLength(2)
   } finally { await f.close() }
 })
 
-it.each(['read', 'workspace-write'] as const)('does not treat a resolver function returning no clients as a %s grant', async effect => {
+it.each(['read', 'workspace-write'] as const)('registers a %s tool from its grant even when no service clients are composed (G7)', async effect => {
   const f = await fixture(false, effect)
   try {
     await f.start()
-    expect(f.registry.get('neutral.read')).toBeUndefined()
-    await expect(f.invoke()).rejects.toThrow()
+    // Registration is authorized by the exact-version grant, not by the
+    // presence of Host service clients.
+    expect(f.registry.get('neutral.status')).toBeDefined()
+    expect(f.registry.get('neutral.read')).toBeDefined()
+    // Execution still fails closed: the child has no client to call.
+    await expect(f.invoke()).rejects.toMatchObject({ code: 'handler_failed' })
     expect(f.deliveries).toHaveLength(0)
   } finally { await f.close() }
 })
 
-it.each(['read', 'workspace-write'] as const)('rejects malformed current client descriptors for %s without reaching the provider', async effect => {
+it.each(['read', 'workspace-write'] as const)('rejects malformed current client descriptors for %s on the next generation', async effect => {
   const f = await fixture(true, effect)
   try {
     await f.start()
     f.setClients([{ serviceId: 'inspect', modulePath: 'relative.mjs', exportName: 'create', config: {} }])
+    // Descriptor validation is a composition-time concern: it applies when the
+    // generation is (re)activated, not to an already-running child.
+    await f.service.setEnabled('neutral-read-consumer', false)
+    await f.service.setEnabled('neutral-read-consumer', true)
+    expect(f.registry.get('neutral.read')).toBeDefined()
     await expect(f.invoke()).rejects.toMatchObject({ code: 'handler_failed' })
     expect(f.deliveries).toHaveLength(0)
   } finally { await f.close() }
@@ -144,15 +171,14 @@ it.each(['read', 'workspace-write'] as const)('retains cancellation fencing duri
 })
 
 
-it.each(['approved', 'packageName', 'packageVersion', 'dshRuntimeVersion', 'clients', 'tools'] as const)('rejects opening and observing after %s revocation without provider effects', async field => {
+it.each(['approved', 'packageName', 'packageVersion', 'dshRuntimeVersion', 'tools'] as const)('rejects opening and observing after %s revocation without provider effects', async field => {
   const f = await fixture(true, 'read')
   try {
     await f.start()
     const request = { actionId: 'neutral-read-consumer.dsh-session.open', input: {} }
     const opened = await f.broker.invokeOrdinarySession(f.caller, request, f.session)
     const resource = opened.output as { token: string; semanticRevision: string; expiresAt: string }
-    if (field === 'clients') f.setClients([])
-    else f.contracts.set('neutral-read-consumer@1.0.0', field === 'approved'
+    f.contracts.set('neutral-read-consumer@1.0.0', field === 'approved'
       ? { ...f.contract, approved: false }
       : { ...f.contract, dshAuthorization: { ...f.contract.dshAuthorization!, [field]: field === 'tools' ? {} : 'revoked' } })
     await expect(f.broker.observe(f.caller, { resource })).rejects.toThrow()

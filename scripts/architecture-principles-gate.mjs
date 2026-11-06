@@ -551,7 +551,9 @@ function hasHostPrivateImport(path, source) {
     if (/^@(?:shared|renderer|main)(?:\/|$)/u.test(specifier)) return true
     const resolved = specifier.startsWith('.')
       ? posix.normalize(posix.join(posix.dirname(path), specifier))
-      : specifier
+      : isAbsolute(specifier)
+        ? relative(REPOSITORY_ROOT, specifier).replaceAll('\\', '/')
+        : specifier
     return /^(?:\/)?src\/(?:main|renderer|shared)(?:\/|$)/u.test(resolved)
   })
 }

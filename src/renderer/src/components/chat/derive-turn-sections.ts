@@ -14,9 +14,13 @@ import {
 export type TurnAssistantBlock = Extract<ChatBlock, { kind: 'assistant' }>
 export type TurnConversationBlock = Extract<ChatBlock, { kind: 'assistant' | 'approval' | 'user' | 'user_input' }>
 
+export type TurnTimelineSection =
+  | { kind: 'process'; blocks: ChatBlock[] }
+  | { kind: 'conversation'; block: TurnConversationBlock }
+  | { kind: 'result'; block: ChatBlock }
+
 export type TurnSections = {
-  processBlocks: ChatBlock[]
-  conversationBlocks: TurnConversationBlock[]
+  timeline: TurnTimelineSection[]
   turnFileChanges: ToolBlock[]
 }
 
@@ -68,27 +72,24 @@ function isInternalUserInputToolBlock(block: ChatBlock): boolean {
   return /^(request_user_input|user_input)\s*:/i.test(block.summary.trim())
 }
 
-function latestUserInputBlockIndexes(blocks: ChatBlock[]): Map<string, number> {
-  const latestIndexes = new Map<string, number>()
-  for (const [index, block] of blocks.entries()) {
-    if (block.kind !== 'user_input') continue
-    latestIndexes.set(block.requestId.trim() || block.id, index)
+/** Updates replace an item's value at its first position, including history replay. */
+export function stableTimelineItems(blocks: ChatBlock[]): ChatBlock[] {
+  const positions = new Map<string, number>()
+  const items: ChatBlock[] = []
+  for (const block of blocks) {
+    const key = block.kind === 'user_input' ? `input:${block.requestId.trim() || block.id}` : `item:${block.id}`
+    const position = positions.get(key)
+    if (position === undefined) {
+      positions.set(key, items.length)
+      items.push(block)
+    } else {
+      items[position] = block
+    }
   }
-  return latestIndexes
+  return items
 }
 
-/**
- * Pure derivation of a turn's three view slices:
- *  - `processBlocks`: chronological reasoning/tool/compaction
- *    trace, including in-flight assistant output while a turn is processing.
- *  - `conversationBlocks`: assistant content and user-facing interaction cards
- *    that should render directly in the conversation.
- *  - `turnFileChanges`: successful file_change tool blocks whose detail
- *    is a unified diff, with paths normalised for display.
- *
- * Pulled out of `MessageTurn` so the derivation is testable in isolation
- * and the component body stays focused on rendering.
- */
+/** Preserve source-item anchors independently of process disclosure and modality. */
 export function deriveTurnSections({
   turn,
   isProcessing,
@@ -97,63 +98,59 @@ export function deriveTurnSections({
   liveContent,
   workspaceRoot
 }: DeriveTurnSectionsInput): TurnSections {
-  const processBlocks: ChatBlock[] = []
-  const conversationBlocks: TurnConversationBlock[] = []
-  let latestAssistantContentBlock: TurnAssistantBlock | null = null
-  let renderedAssistantContentCount = 0
-  const trailingAssistantStart = isProcessing ? turn.blocks.length : findTrailingAssistantContentStart(turn.blocks)
-  const fallbackFinalAssistantId = !isProcessing && trailingAssistantStart === turn.blocks.length
-    ? [...turn.blocks].reverse().find((block) => block.kind === 'assistant' && splitThink(block.text).content.trim())?.id
+  const timeline: TurnTimelineSection[] = []
+  const pushProcess = (block: ChatBlock): void => {
+    timeline.push({ kind: 'process', blocks: [block] })
+  }
+  const pushConversation = (block: TurnConversationBlock): void => {
+    timeline.push({ kind: 'conversation', block })
+  }
+  const items = stableTimelineItems(turn.blocks)
+  const trailingAssistantStart = isProcessing ? items.length : findTrailingAssistantContentStart(items)
+  const fallbackFinalAssistantId = !isProcessing && trailingAssistantStart === items.length
+    ? [...items].reverse().find((block) => block.kind === 'assistant' && splitThink(block.text).content.trim())?.id
     : undefined
-  const latestInputIndexes = latestUserInputBlockIndexes(turn.blocks)
 
-  for (const [index, block] of turn.blocks.entries()) {
+  for (const [index, block] of items.entries()) {
     if (block.kind === 'user') {
-      conversationBlocks.push(block)
+      pushConversation(block)
       continue
     }
     if (block.kind === 'assistant') {
       const split = splitThink(block.text)
       if (split.think && !(isProcessing && liveProcessText.trim())) {
-        processBlocks.push({ kind: 'reasoning', id: `${block.id}-think`, text: split.think })
+        pushProcess({ kind: 'reasoning', id: `${block.id}-think`, text: split.think })
       }
       if (split.content.trim()) {
         const contentBlock: TurnAssistantBlock = { ...block, text: split.content }
-        latestAssistantContentBlock = contentBlock
         if (isProcessing || (index < trailingAssistantStart && block.id !== fallbackFinalAssistantId)) {
-          processBlocks.push(contentBlock)
+          pushProcess(contentBlock)
         } else {
-          conversationBlocks.push(contentBlock)
-          renderedAssistantContentCount += 1
+          pushConversation(contentBlock)
         }
       }
       continue
     }
     if (block.kind === 'approval') {
-      if (block.status === 'pending') conversationBlocks.push(block)
+      if (block.status === 'pending') pushConversation(block)
       continue
     }
     if (isInternalUserInputToolBlock(block)) {
       continue
     }
-    if (block.kind === 'user_input' && latestInputIndexes.get(block.requestId.trim() || block.id) !== index) {
-      continue
-    }
     if (block.kind === 'user_input') {
-      conversationBlocks.push(block)
+      pushConversation(block)
       continue
     }
     if (isProcessBlock(block)) {
-      processBlocks.push(block)
+      pushProcess(block)
+    } else {
+      timeline.push({ kind: 'result', block })
     }
   }
 
-  if (!isProcessing && renderedAssistantContentCount === 0 && latestAssistantContentBlock) {
-    conversationBlocks.push(latestAssistantContentBlock)
-  }
-
   if (liveProcessText.trim()) {
-    processBlocks.push({
+    pushProcess({
       kind: 'reasoning',
       id: 'live-reasoning',
       text: liveProcessText,
@@ -182,5 +179,5 @@ export function deriveTurnSections({
         return [{ ...block, detail: detailText, filePath: resolvedFilePath }]
       }))
 
-  return { processBlocks, conversationBlocks, turnFileChanges }
+  return { timeline, turnFileChanges }
 }

@@ -3,6 +3,7 @@ import ts from 'typescript'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import * as dsh from './runtime/agent-runtime/dsh-agent-runtime-adapter'
 import * as runtime from '@sciforge/dsh-runtime'
 import type { AgentRuntimeAdapter } from './runtime/agent-runtime/adapter'
@@ -50,7 +51,7 @@ function productionAdapters(userData: string, resourcesPath: string, toolSurface
 
 describe('production DSH composition', () => {
   it('registers the real package-backed factory with the canonical Broker surface and owned userData', async () => {
-    const root = await mkdtemp(join(process.env.TMPDIR!, 'dsh-composition-'))
+    const root = await mkdtemp(join(tmpdir(), 'dsh-composition-'))
     const surface: AgentRuntimeToolSurface = { tools: () => [], call: vi.fn(), abortTurn: vi.fn() }
     const coreFactory = vi.spyOn(runtime, 'createDshRuntimeAdapter')
     try {
