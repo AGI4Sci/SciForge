@@ -11,8 +11,8 @@
 
 <p align="center">
   <a href="./README.md">简体中文</a> ·
-  <a href="https://agi4sci.github.io/sciforge-docs-v2/">User documentation</a> ·
-  <a href="https://agi4sci.github.io/SciForge/submit/">Submit a research need</a>
+  <a href="https://agi4sci.github.io/sciforge-docs-v2/en/">User Manual</a> ·
+  <a href="https://agi4sci.github.io/SciForge/submit/">Submit a Research Request</a>
 </p>
 
 <p align="center">
