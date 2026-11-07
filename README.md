@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="./README.en.md">English</a> ·
-  <a href="https://agi4sci.github.io/sciforge-docs-v2/">使用文档</a> ·
+  <a href="https://agi4sci.github.io/sciforge-docs-v2/">使用手册</a> ·
   <a href="https://agi4sci.github.io/SciForge/submit/">提交科研需求</a>
 </p>
 
