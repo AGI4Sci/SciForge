@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { responsesToChatCompletions } from './response-compat';
+import { anthropicMessageToResponse, responseToAnthropicMessage, responsesToAnthropicMessages, responsesToChatCompletions } from './response-compat';
 
 type ChatTool = {
   type: string;
@@ -114,4 +114,52 @@ test('retains none, required and named tool choices when callable tools are avai
   const body = responsesToChatCompletions({ input: 'hello', tools, tool_choice: { type: 'function', name: 'lookup' } });
   assert.deepEqual(body.tool_choice, { type: 'function', function: { name: 'lookup' } });
   assert.equal((body.tools as ChatTool[]).length, 1);
+});
+
+test('explicit final answers delimit independent assistant reasoning turns', () => {
+  const body = responsesToChatCompletions({ input: [
+    { role: 'user', content: 'question' },
+    { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'first reasoning' }], summary: [] },
+    { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'first answer' }] },
+    { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'second reasoning' }], summary: [] },
+    { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'second answer' }] },
+  ] });
+  assert.deepEqual((body.messages as Array<Record<string, unknown>>).slice(1).map(item => [item.content, item.reasoning_content]),
+    [['first answer', 'first reasoning'], ['second answer', 'second reasoning']]);
+});
+
+test('display summaries never become full provider reasoning on protocol conversion', () => {
+  const body = responsesToChatCompletions({ input: [
+    { type: 'reasoning', summary: [{ type: 'summary_text', text: 'display summary only' }] },
+    { type: 'function_call', name: 'inspect', call_id: 'call_a', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'call_a', output: 'result' },
+  ] });
+  assert.equal((body.messages as Array<Record<string, unknown>>)[0]?.reasoning_content, undefined);
+});
+
+
+test('empty signed thinking retains its exact signature through canonical conversion and replay', () => {
+  for (const signature of ['opaque-signature', '']) {
+    const thinking = { type: 'thinking', thinking: '', signature };
+    const response = anthropicMessageToResponse({ content: [thinking], stop_reason: 'end_turn' });
+    assert.deepEqual(responseToAnthropicMessage(response).content, [thinking]);
+    const replay = responsesToAnthropicMessages({ input: response.output });
+    assert.deepEqual((replay.messages as Array<{ content: unknown }>)[0]?.content, [thinking]);
+    assert.throws(() => responsesToChatCompletions({ input: response.output }), /cannot represent opaque/);
+  }
+});
+
+
+test('message protocols explicitly reject native client tool calls and results', () => {
+  const items = [
+    { type: 'custom_tool_call', call_id: 'custom', name: 'edit', input: 'raw source' },
+    { type: 'custom_tool_call_output', call_id: 'custom', output: 'done' },
+    { type: 'tool_search_call', execution: 'client', call_id: 'search', arguments: { query: 'tools' } },
+    { type: 'tool_search_output', execution: 'client', call_id: 'search', tools: [] },
+  ];
+  for (const item of items) {
+    for (const convert of [responsesToChatCompletions, responsesToAnthropicMessages]) {
+      assert.throws(() => convert({ input: [item] }), /cannot represent native Responses client tool transcripts/);
+    }
+  }
 });

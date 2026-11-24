@@ -13,6 +13,7 @@ import {
 import { canonicalTaskIdForRequirementsModule } from '@sciforge/collaboration-contracts/node'
 import { capabilityRequirementsSatisfied } from '../capability-requirements.js'
 import type {
+  CoordinatorUserCloudCommand,
   CoordinatorCloudCommand,
   CoordinatorCloudCommandService
 } from '../coordinator-cloud-command.js'
@@ -54,7 +55,7 @@ type CommittedReassignment = Readonly<{
 }>
 
 type TaskOfferReassignCommand = Extract<
-  CoordinatorCloudCommand,
+  CoordinatorUserCloudCommand,
   { type: 'task.offer.reassign' }
 >
 type TaskOfferCreateCommand = Extract<
@@ -89,7 +90,7 @@ export function createProjectCoordinatorTaskOfferReassignmentPort(options: Reado
       if (input.previousTaskOfferId === null) {
         return createFirstRequirementsOffer(options.coordinatorCloudCommands, options.workspace, requestId, observed, input, idempotencyKey)
       }
-      const replay = await options.coordinatorCloudCommands.resume(
+      const replay = await options.coordinatorCloudCommands.resumeUser(
         idempotencyKey,
         (command) => { requireExactReplayedCommand(command, idempotencyKey, input) }
       )
@@ -127,7 +128,7 @@ export function createProjectCoordinatorTaskOfferReassignmentPort(options: Reado
           offerExpiresAt: input.offerExpiresAt,
           nextFileIntent: current.nextFileIntent
         })
-        response = await options.coordinatorCloudCommands.execute(command)
+        response = await options.coordinatorCloudCommands.executeUser(command)
       }
       const committed = requireExactReassignmentResponse(
         response,
@@ -236,7 +237,7 @@ function requireWorkerCapabilityCoverage(
 }
 
 function requireExactReplayedCommand(
-  rawCommand: CoordinatorCloudCommand,
+  rawCommand: CoordinatorUserCloudCommand,
   idempotencyKey: string,
   input: NormalizedTaskOfferReassignInput
 ): TaskOfferReassignCommand {

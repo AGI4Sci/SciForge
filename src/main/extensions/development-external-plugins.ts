@@ -1638,6 +1638,7 @@ export class DevelopmentExternalPluginService {
         outputSchema,
         handler: async (input: unknown, context: CapabilityHandlerContext) => {
           await assertToolGrant()
+          let invocationActive = true
           try {
             // Workspace-scoped extension capabilities bind the caller's
             // workspace into the input, mirroring the static adapter path
@@ -1694,7 +1695,23 @@ export class DevelopmentExternalPluginService {
                 ...(context.originalContext ? { originalContext: context.originalContext } : {}),
               },
               services: serviceIds,
-              assertCurrent: context.assertPrincipalCurrent,
+              assertCurrent: () => {
+                context.assertPrincipalCurrent()
+                context.signal?.throwIfAborted()
+                const contract = this.#contract(plugin.manifest.name, runtime.snapshot.version)
+                const authorization = contract?.dshAuthorization
+                const grant = namedTool === undefined ? undefined : authorization?.tools?.[namedTool]
+                if (!invocationActive || this.#extensionHost.runtime(plugin.manifest.name) !== runtime ||
+                  runtime.snapshot.state !== 'active' || runtime.snapshot.generation !== generation ||
+                  contract?.approved !== true || this.#capabilityRegistry?.get(remote.id)?.handler !== definition.handler ||
+                  (isDshTool && (!grant || authorization?.packageName !== plugin.manifest.name ||
+                    authorization.packageVersion !== runtime.snapshot.version || authorization.dshRuntimeVersion !== this.#dshRuntimeVersion ||
+                    grant.id !== remote.id || grant.effect !== remote.effect || !validDshWorkspaceScope(grant, remote) || !validReadResource(grant, remote))) ||
+                  !serviceIds.every(id => {
+                    const allowed = contract.dshAuthorization?.hostServices
+                    return allowed === 'none' ? false : Array.isArray(allowed) ? allowed.includes(id) : this.#hostServiceIds.includes(id)
+                  })) throw new Error('Host service outer invocation authority is no longer current.')
+              },
             } : undefined
             // Existing service contracts retain their Session lane; explicit native clients also receive the authenticated child session.
             return await runtime.invoke(remote.id, effectiveInput, generation, context.signal, runtimeRevision as number | undefined, dshInvocation, hostServices)
@@ -1703,6 +1720,8 @@ export class DevelopmentExternalPluginService {
               throw new CapabilityBrokerError('invocation_cancelled', 'Extension invocation was explicitly cancelled.', { cause: error })
             }
             throw error
+          } finally {
+            invocationActive = false
           }
         }
       } as unknown as CapabilityDefinition

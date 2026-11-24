@@ -3,10 +3,32 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { DecisionQuestionnaire } from './questionnaire.js'
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }))
+// Resolve keys through the package's own resource so the assertions below keep
+// matching the real copy instead of a hand-written stub. The language is
+// switchable so a test can prove the card follows the interface language.
+const i18nState = vi.hoisted(() => ({ language: 'en' as 'en' | 'zh' }))
+vi.mock('react-i18next', async () => {
+  const { userDecisionsI18nResourceContribution } = await import('./messages.js')
+  const resources = userDecisionsI18nResourceContribution.resources as Record<string, Record<string, string>>
+  const translate = (key: string, options?: Record<string, unknown>): string => {
+    const raw = resources[i18nState.language]?.[key] ?? resources.en[key] ?? key
+    return options
+      ? raw.replace(/\{\{(\w+)\}\}/g, (match, name: string) =>
+          options[name] === undefined ? match : String(options[name])
+        )
+      : raw
+  }
+  return {
+    useTranslation: () => ({
+      t: translate,
+      i18n: { get language() { return i18nState.language } }
+    })
+  }
+})
 let root: Root
 let container: HTMLDivElement
 beforeEach(() => {
+  i18nState.language = 'en'
   sessionStorage.clear()
   container = document.createElement('div'); document.body.append(container)
   root = createRoot(container)
@@ -35,9 +57,11 @@ it('requires an explicit choice and preserves a draft when closed without cancel
   await act(async () => root.render(<DecisionQuestionnaire requestId="request" questions={questions} status="pending" autoOpen={false} onSubmit={submit} onCancel={cancel} />))
   await click(button('Answer questions'))
   expect(document.querySelector('[role=dialog]')?.getAttribute('aria-modal')).toBe('false')
+  expect(document.querySelector('[data-native-view-occluder="true"]')).not.toBeNull()
   expect(button('Submit and continue').disabled).toBe(true)
   await click(document.querySelector('input[type=radio]')!)
   await click(button('Later'))
+  expect(document.querySelector('[data-native-view-occluder="true"]')).toBeNull()
   expect(cancel).not.toHaveBeenCalled()
   expect(submit).not.toHaveBeenCalled()
   await click(button('Answer questions'))
@@ -104,4 +128,19 @@ it.each(['pending', 'error'] as const)('submits every answer and additional cont
     { id: 'q2', label: 'Answer', value: 'Compare overlapping contributions' }
   ])
   expect(document.querySelector('[role=dialog]')).toBeNull()
+})
+
+it('follows the interface language while keeping option labels as data', async () => {
+  i18nState.language = 'zh'
+  const submit = vi.fn(async () => {})
+  await act(async () => root.render(<DecisionQuestionnaire requestId="zh" questions={questions} status="pending" autoOpen={false} onSubmit={submit} onCancel={async () => {}} />))
+  expect(container.textContent).toContain('需要你决定')
+  await click(button('回答问题（1）'))
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain('需要你决定')
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain('补充说明（可选）')
+  expect(document.querySelector('[role=dialog]')?.textContent).toContain('（推荐）')
+  // The wire format stays stable: the selected option keeps its original label.
+  await click(document.querySelector('input[type=radio]')!)
+  await click(button('提交并继续'))
+  expect(submit).toHaveBeenCalledWith([{ id: 'q', label: 'All', value: 'All' }])
 })

@@ -1,6 +1,6 @@
 {
   "name": "@sciforge/domain-browser-preview",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -24,7 +24,7 @@
     "test:browser": "electron tests/native-app"
   },
   "dependencies": {
-    "@sciforge/domain-sdk": "^0.2.0",
+    "@sciforge/domain-sdk": "^0.2.43",
     "@napi-rs/canvas": "^0.1.100",
     "lucide-react": "^0.544.0",
     "react": "^19.0.0",

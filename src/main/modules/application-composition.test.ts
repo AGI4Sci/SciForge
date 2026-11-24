@@ -143,7 +143,7 @@ describe('application domain composition', () => {
     try {
       const packageNames = catalog.listPackages().map((definition) => definition.packageName)
       expect(packageNames).not.toContain('@sciforge/domain-biology-workbench')
-      expect(packageNames).toContain('@sciforge/domain-content-space')
+      expect(packageNames).toContain('@sciforge/domain-siyuan-content-space-provider')
       expect(catalog.listModules().map((module) => module.id)).not.toContain(BIOLOGY_ROOM_DOMAIN_MODULE_ID)
     } finally {
       catalog.dispose()
@@ -157,7 +157,7 @@ describe('application domain composition', () => {
     expect(resolveExcludedPackageNames([])).toEqual([])
   })
 
-  it('keeps the development-only content-space mock provider out of every generated composition', () => {
+  it('keeps retired Content Space packages out of generated composition and the live catalog', () => {
     const generated = [
       'src/shared/installed-domain-packages.ts',
       'src/main/modules/installed-domain-main.ts',
@@ -166,7 +166,7 @@ describe('application domain composition', () => {
     ]
     for (const path of generated) {
       const source = readFileSync(join(process.cwd(), path), 'utf8')
-      expect(source, `${path} must not install the mock provider`).not.toContain('content-space-mock-provider')
+      expect(source, `${path} must not install retired Content Space packages`).not.toMatch(/@sciforge\/domain-content-space(?:[/'"]|-mock-provider)/)
     }
 
     const catalog = createApplicationDomainCatalog({
@@ -181,7 +181,8 @@ describe('application domain composition', () => {
     })
     try {
       const packageNames = catalog.listPackages().map((definition) => definition.packageName)
-      expect(packageNames).toContain('@sciforge/domain-content-space')
+      expect(packageNames).toContain('@sciforge/domain-siyuan-content-space-provider')
+      expect(packageNames).not.toContain('@sciforge/domain-content-space')
       expect(packageNames).not.toContain('@sciforge/domain-content-space-mock-provider')
     } finally {
       catalog.dispose()

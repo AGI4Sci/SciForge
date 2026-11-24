@@ -15,6 +15,15 @@ const genericStagerUrl = new URL(
 )
 
 describe('Identity native private-vault boundary', () => {
+  it('forbids authentication dialogs on every identity Keychain operation', async () => {
+    const source = await readFile(nativeSourceUrl, 'utf8')
+    const baseQuery = source.slice(source.indexOf('NSMutableDictionary* BaseQuery('), source.indexOf('NSString* ReadAccount('))
+    expect(baseQuery).toContain('kSecUseAuthenticationUI: (__bridge id)kSecUseAuthenticationUIFail')
+    expect(source).toContain('SecKeychainSetUserInteractionAllowed(false)')
+    expect(source).toContain('SecKeychainSetUserInteractionAllowed(previous_)')
+    expect(source.match(/SilentKeychainAccess access;/gu)).toHaveLength(4)
+  })
+
   it('uses in-process stable Node-API and the device-only Keychain class', async () => {
     const source = await readFile(nativeSourceUrl, 'utf8')
 

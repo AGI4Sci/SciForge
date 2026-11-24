@@ -38,20 +38,21 @@ describe('DSH through the public IPC validation boundary', () => {
   })
   it('accepts the full settings snapshot shape the settings view persists', () => {
     // The settings view saves the whole form; the DSH section always carries
-    // executablePath/selectedModel/reasoningEffort (empty-string defaults).
+    // command/selectedModel/reasoningEffort (empty-string defaults).
     // Rejecting them made every full-form save fail with "Unrecognized keys".
     const payload = {
       activeAgentRuntime: 'dsh',
-      agents: { dsh: { command: 'dsh', executablePath: '', selectedModel: '', reasoningEffort: '' } }
+      agents: { dsh: { command: 'dsh', selectedModel: '', reasoningEffort: '' } }
     }
     expect(settingsPatchSchema.parse(payload)).toEqual(payload)
     expect(
       settingsPatchSchema.safeParse({
-        agents: { dsh: { executablePath: 'C:\\tools\\dsh.exe', selectedModel: 'deepseek-v4', reasoningEffort: 'high' } }
+        agents: { dsh: { command: 'C:\\tools\\dsh.exe', selectedModel: 'deepseek-v4', reasoningEffort: 'high' } }
       }).success
     ).toBe(true)
   })
   it('retains strict settings fields and rejects historical or unknown runtime identities', () => {
+    expect(settingsPatchSchema.safeParse({ agents: { dsh: { executablePath: '/obsolete/dsh' } } }).success).toBe(false)
     expect(settingsPatchSchema.safeParse({ agents: { dsh: { command: 'dsh', extraArgs: ['--unsafe'] } } }).success).toBe(false)
     for (const runtimeId of ['deepseek', 'deepseek-runtime', 'unknown']) {
       expect(agentRuntimeConnectPayloadSchema.safeParse({ runtimeId }).success).toBe(false)

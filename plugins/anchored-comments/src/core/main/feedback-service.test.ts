@@ -17,7 +17,7 @@ const screenshotAsset = {
 
 function thread(): AnchoredCommentThread {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'thread-1',
     workspaceKey: 'workspace-1',
     purpose: 'product_feedback',

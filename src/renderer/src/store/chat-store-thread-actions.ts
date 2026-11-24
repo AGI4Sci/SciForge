@@ -1,6 +1,13 @@
 import { agentRuntimeClient } from '../agent/agent-runtime-client'
 import { acceptSessionInput, abandonSessionInput, canDispatchSessionInput, canReexecuteSessionInput, isSessionInputOutputPending, readSessionInputs, readSessionInputHistory, retrySessionInput, ensureSessionInputRecovery, inputReconciliationMessage, INPUT_RECONCILIATION_REQUIRED } from './chat-session-admission'
-import type { AgentProvider, ChatBlock, NormalizedThread, ReviewTarget, ThreadEventSink } from '../agent/types'
+import type {
+  AgentProvider,
+  ChatBlock,
+  NormalizedThread,
+  ReviewTarget,
+  ThreadEventSink,
+  UserMessageFileReference
+} from '../agent/types'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import i18n from '../i18n'
@@ -82,6 +89,7 @@ import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { rekeySessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
+import { readBrowserStorageItem, writeBrowserStorageItem } from '../lib/browser-storage'
 import { supportedComposerTurnSettings } from '../lib/composer-runtime-options'
 
 type SseAbortRef = ChatStreamRef
@@ -366,6 +374,135 @@ function appendAcceptedSteerUserBlock(
   })
 }
 
+const USER_FILE_REFERENCES_STORAGE_KEY = 'sciforge.userMessageFileReferences.v1'
+export const MAX_USER_FILE_REFERENCE_TURNS = 500
+export const MAX_USER_FILE_REFERENCES = 50
+const MAX_FILE_REFERENCE_PATH_CHARS = 4_096
+const MAX_FILE_REFERENCE_NAME_CHARS = 512
+const MAX_FILE_REFERENCE_KIND_CHARS = 32
+const MAX_FILE_REFERENCE_KEY_CHARS = 1_024
+
+type StoredUserFileReferences = Record<string, UserMessageFileReference[]>
+
+function fileReferenceSize(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const size = (value as Record<string, unknown>).size
+  return typeof size === 'number' && Number.isFinite(size) && size >= 0 ? size : undefined
+}
+
+/**
+ * Project what the composer actually sent into the serializable record carried
+ * by the user block. Runtime references stay canonical; only the display facts
+ * the transcript needs (byte size) are added here.
+ */
+export function userMessageFileReferences(value: unknown): UserMessageFileReference[] {
+  if (!Array.isArray(value)) return []
+  const references: UserMessageFileReference[] = []
+  for (const item of value) {
+    if (references.length >= MAX_USER_FILE_REFERENCES) break
+    const reference = normalizeRuntimeFileReferences([item])[0]
+    if (!reference) continue
+    const size = fileReferenceSize(item)
+    references.push({
+      path: reference.path,
+      ...(reference.relativePath ? { relativePath: reference.relativePath } : {}),
+      ...(reference.name ? { name: reference.name } : {}),
+      ...(reference.kind ? { kind: reference.kind } : {}),
+      ...(size !== undefined ? { size } : {})
+    })
+  }
+  return references
+}
+
+function normalizeUserFileReferenceKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const key = value.trim()
+  if (!key || key.length > MAX_FILE_REFERENCE_KEY_CHARS) return null
+  const separator = key.indexOf('|')
+  if (separator <= 0 || separator === key.length - 1) return null
+  const threadId = key.slice(0, separator).trim()
+  const itemId = key.slice(separator + 1).trim()
+  return threadId && itemId ? `${threadId}|${itemId}` : null
+}
+
+function normalizeUserFileReferenceMap(raw: unknown): StoredUserFileReferences {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const entries: Array<[string, UserMessageFileReference[]]> = []
+  for (const [rawKey, rawValue] of Object.entries(raw as Record<string, unknown>)) {
+    const key = normalizeUserFileReferenceKey(rawKey)
+    if (!key) continue
+    const references = userMessageFileReferences(rawValue)
+    if (!references.length) continue
+    entries.push([key, references])
+  }
+  return Object.fromEntries(entries.slice(-MAX_USER_FILE_REFERENCE_TURNS))
+}
+
+function loadUserFileReferences(): StoredUserFileReferences {
+  try {
+    const raw = readBrowserStorageItem(USER_FILE_REFERENCES_STORAGE_KEY)
+    if (!raw) return {}
+    return normalizeUserFileReferenceMap(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
+
+function readRememberedUserFileReferences(
+  threadId: string | null | undefined,
+  itemId: string
+): UserMessageFileReference[] {
+  const thread = threadId?.trim()
+  if (!thread || !itemId.trim()) return []
+  return loadUserFileReferences()[`${thread}|${itemId.trim()}`] ?? []
+}
+
+/**
+ * Remember the file references carried by one sent user message. The runtime
+ * does not persist this renderer-only display metadata, so it is mirrored into
+ * the same thread+item browser-storage registry that keeps the optimistic model
+ * label across thread reloads (`rememberTurnModel` / `hydrateBlockModelLabels`).
+ */
+export function rememberUserFileReferences(
+  threadId: string,
+  itemId: string,
+  references: unknown
+): void {
+  const thread = threadId.trim()
+  const item = itemId.trim()
+  if (!thread || !item) return
+  const normalized = userMessageFileReferences(references)
+  if (!normalized.length) return
+  const key = `${thread}|${item}`
+  const map = loadUserFileReferences()
+  delete map[key]
+  map[key] = normalized
+  writeBrowserStorageItem(USER_FILE_REFERENCES_STORAGE_KEY, JSON.stringify(normalizeUserFileReferenceMap(map)))
+}
+
+/** Restore remembered file references onto reloaded user blocks. */
+export function hydrateUserBlockFileReferences(threadId: string, blocks: ChatBlock[]): ChatBlock[] {
+  const thread = threadId.trim()
+  if (!thread) return blocks
+  const map = loadUserFileReferences()
+  const keys = Object.keys(map)
+  if (!keys.length) return blocks
+  let changed = false
+  const next = blocks.map((block) => {
+    if (block.kind !== 'user') return block
+    if (block.meta?.fileReferences?.length) return block
+    const references = map[`${thread}|${block.id}`]
+    if (!references?.length) return block
+    changed = true
+    return { ...block, meta: { ...(block.meta ?? {}), fileReferences: references } }
+  })
+  return changed ? next : blocks
+}
+
+function hydrateThreadUserBlocks(threadId: string, blocks: ChatBlock[]): ChatBlock[] {
+  return hydrateUserBlockFileReferences(threadId, hydrateBlockModelLabels(threadId, blocks))
+}
+
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
 ): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'loadEarlierThreadHistory' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'clearQueuedMessages' | 'updateQueuedMessage' | 'retryQueuedMessage' | 'reexecuteFailedInput' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
@@ -390,7 +527,7 @@ export function createThreadActions(
       rememberProviderThreadRuntime(provider, threadId, state.threads)
       const page = await provider.getThreadPage(threadId, cursor)
       if (get().activeThreadId !== threadId || selectionEpoch !== selectThreadRequestSeq) return
-      const olderBlocks = hydrateBlockModelLabels(threadId, page.blocks)
+      const olderBlocks = hydrateThreadUserBlocks(threadId, page.blocks)
       set((snapshot) => {
         const currentById = new Map(snapshot.blocks.map((block) => [block.id, block]))
         const olderIds = new Set(olderBlocks.map((block) => block.id))
@@ -559,7 +696,7 @@ export function createThreadActions(
         }
         return false
       }
-      const hydratedBlocks = hydrateBlockModelLabels(activeThreadId, rawBlocks)
+      const hydratedBlocks = hydrateThreadUserBlocks(activeThreadId, rawBlocks)
       if (snapshotLooksStaleForCurrentTurn(state, hydratedBlocks, latestTurnId, latestUserMessageId)) {
         const ac = new AbortController()
         sseAbortRef.current = ac
@@ -715,7 +852,7 @@ export function createThreadActions(
       if (!isCurrentSelection()) return
       const contextState = await readProviderContextState(p, id)
       if (!isCurrentSelection()) return
-      const hydratedBlocks = hydrateBlockModelLabels(id, rawBlocks)
+      const hydratedBlocks = hydrateThreadUserBlocks(id, rawBlocks)
       const busy = threadSnapshotHasTurnEvidence(hydratedBlocks, latestTurnId, latestUserMessageId) &&
         threadSnapshotLooksRunning(hydratedBlocks, threadStatus)
       const blocks = settleStalePendingBlocksWhenIdle(hydratedBlocks, busy)
@@ -857,11 +994,11 @@ export function createThreadActions(
       }))
       const runtimeText = buildCodeRuntimePrompt(settings, latestQueued.text)
       const fileReferences = normalizeRuntimeFileReferences(latestQueued.fileReferences)
-      const supportedTurnSettings = supportedComposerTurnSettings({
-        model: latestQueued.model ?? '',
-        reasoningEffort: latestQueued.reasoningEffort ?? '',
-        serviceTier: latestQueued.serviceTier ?? ''
-      }, latestState.composerModelCatalog, { providerManaged: latestState.modelAccessMode === 'api' })
+      const supportedTurnSettings = {
+        model: latestQueued.model,
+        reasoningEffort: latestQueued.reasoningEffort,
+        serviceTier: latestQueued.serviceTier
+      }
       const turnHandle = await provider.sendUserMessage(targetThreadId, runtimeText, {
         runtimeId: targetRuntimeId,
         clientDirectiveId: queued.id,
@@ -885,6 +1022,17 @@ export function createThreadActions(
       }))
       if (turnHandle.userMessageItemId && latestQueued.modelLabel) {
         rememberTurnModel(deliveredThreadId, turnHandle.userMessageItemId, latestQueued.modelLabel)
+      }
+      if (turnHandle.userMessageItemId && fileReferences.length) {
+        const remembered = readRememberedUserFileReferences(
+          latestQueued.threadId ?? targetThreadId,
+          queued.id
+        )
+        rememberUserFileReferences(
+          deliveredThreadId,
+          turnHandle.userMessageItemId,
+          remembered.length ? remembered : latestQueued.fileReferences
+        )
       }
       watchBackgroundThreadCompletion(set, get, deliveredThreadId)
       return true
@@ -1179,6 +1327,10 @@ export function createThreadActions(
       const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
       const attachments = overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
       const fileReferences = normalizeRuntimeFileReferences(overrides?.fileReferences)
+      // The queue keeps only the canonical runtime projection; remember the
+      // richer composer facts (byte size) under the queue id so the eventual
+      // transcript block can still show them.
+      const queuedUserFileReferences = userMessageFileReferences(overrides?.fileReferences)
       const currentTurnId = initialState.currentTurnId
       const canSteerActiveTurn =
         explicitSteerText !== null &&
@@ -1237,6 +1389,9 @@ export function createThreadActions(
             ...(attachments?.length ? { attachments } : {}),
             ...(fileReferences?.length ? { fileReferences } : {})
           }
+        if (queuedUserFileReferences.length && ownerThreadId) {
+          rememberUserFileReferences(ownerThreadId, message.id, queuedUserFileReferences)
+        }
         const accepted = await acceptSessionInput({ runtimeId: threadSnap?.runtimeId ?? initialActiveRuntimeId,
           threadId: ownerThreadId }, message)
         set((state) => ({ queuedMessages: [...state.queuedMessages, accepted], error: null }))
@@ -1261,6 +1416,12 @@ export function createThreadActions(
     const fileReferences = normalizeRuntimeFileReferences(
       queued?.fileReferences ?? overrides?.fileReferences
     )
+    const rememberedUserFileReferences = queued
+      ? readRememberedUserFileReferences(queued.threadId ?? ownerThreadId, queued.id)
+      : []
+    const userFileReferences = rememberedUserFileReferences.length
+      ? rememberedUserFileReferences
+      : userMessageFileReferences(queued?.fileReferences ?? overrides?.fileReferences)
     let activeThreadId = ownerThreadId || null
     const displayText = queued?.displayText ?? overrides?.displayText?.trim() ?? messageText
     const userDisplayText = displayText !== messageText ? displayText : undefined
@@ -1277,11 +1438,13 @@ export function createThreadActions(
     const overrideModel = overrides?.model?.trim()
     let supportedTurnSettings: ReturnType<typeof supportedComposerTurnSettings>
     try {
-      supportedTurnSettings = supportedComposerTurnSettings({
-        model: queued?.model ?? overrideModel ?? frozenConversationSettings.model,
-        reasoningEffort: queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim() ??
+      supportedTurnSettings = queued ? {
+        model: queued.model, reasoningEffort: queued.reasoningEffort, serviceTier: queued.serviceTier
+      } : supportedComposerTurnSettings({
+        model: overrideModel ?? frozenConversationSettings.model,
+        reasoningEffort: overrides?.reasoningEffort?.trim() ??
           frozenConversationSettings.reasoningEffort,
-        serviceTier: queued?.serviceTier ?? overrides?.serviceTier?.trim() ??
+        serviceTier: overrides?.serviceTier?.trim() ??
           frozenConversationSettings.serviceTier
       }, initialState.composerModelCatalog, { providerManaged: initialState.modelAccessMode === 'api' })
     } catch (error) {
@@ -1349,13 +1512,14 @@ export function createThreadActions(
                 createdAt: new Date(now).toISOString(),
                 text: displayText,
                 ...(userModelChip ? { modelLabel: userModelChip } : {}),
-                ...(userDisplayText || attachmentIds.length || attachments.length
+                ...(userDisplayText || attachmentIds.length || attachments.length || userFileReferences.length
                   ? {
                       meta: {
                         source: 'desktop',
                         ...(userDisplayText ? { displayText: userDisplayText } : {}),
                         ...(attachmentIds.length ? { attachmentIds } : {}),
-                        ...(attachments.length ? { attachments } : {})
+                        ...(attachments.length ? { attachments } : {}),
+                        ...(userFileReferences.length ? { fileReferences: userFileReferences } : {})
                       }
                     }
                   : { meta: { source: 'desktop' } })
@@ -1524,6 +1688,11 @@ export function createThreadActions(
       const seqAtSend = deliveryStartedInForeground ? previousLastSeq : 0
       const sendingThread = get().threads.find((thread) => thread.id === previousThreadId)
       rememberProviderThreadRuntime(p, previousThreadId, get().threads)
+      // Remember against the optimistic block id as well: a background delivery
+      // or a lost handle keeps the user block under this id.
+      if (userFileReferences.length) {
+        rememberUserFileReferences(previousThreadId, userBlockId, userFileReferences)
+      }
       const boundRuntimeId = queued?.runtimeId ?? (requestedTargetThreadId || !deliveryStartedInForeground ? sendingThread?.runtimeId : undefined)
       const desiredRuntimeId = boundRuntimeId ?? (deliveryStartedInForeground
         ? initialActiveRuntimeId
@@ -1639,6 +1808,12 @@ export function createThreadActions(
       // re-selection. The runtime itself doesn't persist per-turn metadata.
       if (userMessageItemId && userModelChip) {
         rememberTurnModel(activeThreadId, userMessageItemId, userModelChip)
+      }
+      // The transcript is rebuilt from the runtime item id, so mirror the sent
+      // file references under that same id; the optimistic block id stays keyed
+      // for deliveries that never surface a handle.
+      if (userMessageItemId && userFileReferences.length) {
+        rememberUserFileReferences(activeThreadId, userMessageItemId, userFileReferences)
       }
       if (
         userMessageItemId && userMessageItemId !== userBlockId &&

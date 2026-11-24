@@ -4,6 +4,7 @@ import {
   type DomainRendererComposerContextProvider,
   type DomainRendererComposerContextProviderContract,
   type DomainRendererComposerContextRequest,
+  type DomainRendererComposerContextSearchRequest,
   type DomainRendererComposerContextResult
 } from '@sciforge/domain-sdk/renderer'
 import {
@@ -48,6 +49,12 @@ export class ComposerContextProviderRegistry {
       contribution: Object.freeze({
         id: input.id,
         ...input.contract,
+        ...(input.value.resolveDraft ? { resolveDraft: async (request: DomainRendererComposerContextRequest) =>
+          domainRendererComposerContextResultSchema.parse(await input.value.resolveDraft!(request)) } : {}),
+        ...(input.value.active ? { active: async (request: DomainRendererComposerContextRequest) =>
+          domainRendererComposerContextResultSchema.parse(await input.value.active!(request)) } : {}),
+        ...(input.value.search ? { search: async (request: DomainRendererComposerContextSearchRequest) =>
+          domainRendererComposerContextResultSchema.parse(await input.value.search!(request)) } : {}),
         provide: async (
           request: DomainRendererComposerContextRequest
         ): Promise<DomainRendererComposerContextResult> =>

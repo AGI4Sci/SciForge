@@ -86,6 +86,30 @@ const RESOURCE_RETIREMENT_RETRY_MS = 1_000
 
 type BrokerErrorCategory = 'rejected' | 'failed'
 
+/** Only public schema-owned fields are safe diagnostic locations; dynamic keys are data. */
+function trustedInputField(schema: z.ZodType, path: readonly PropertyKey[]): string {
+  const fields: string[] = []
+  let current = schema
+  for (const key of path.slice(0, 16)) {
+    for (let layer = 0; layer < 8; layer++) {
+      if (current instanceof z.ZodOptional || current instanceof z.ZodNullable || current instanceof z.ZodDefault) current = current.unwrap() as z.ZodType
+      else break
+    }
+    let field: string
+    if (current instanceof z.ZodObject && typeof key === 'string' &&
+        /^[A-Za-z_][A-Za-z0-9_-]{0,31}$/.test(key) && Object.hasOwn(current.shape, key)) {
+      field = key
+      current = current.shape[key] as z.ZodType
+    } else if (current instanceof z.ZodArray && typeof key === 'number' && Number.isSafeInteger(key) && key >= 0) {
+      field = String(key)
+      current = current.element as z.ZodType
+    } else break
+    if ([...fields, field].join('.').length > 160) break
+    fields.push(field)
+  }
+  return fields.join('.') || '<input>'
+}
+
 export class CapabilityBrokerError extends Error {
   readonly code: string
   readonly category: BrokerErrorCategory
@@ -1479,19 +1503,26 @@ export class CapabilityBroker {
 
       const parsedInput = definition.inputSchema.safeParse(request.input)
       if (!parsedInput.success) {
-        throw new CapabilityBrokerError('invalid_input', `Input for ${request.actionId} failed validation.`, {
-          // Keep validation diagnostics bounded and field-addressable so an
-          // agent can repair a request from the canonical schema instead of
-          // blindly retrying the same payload. Never include the rejected
-          // input itself (it may contain user content or provider data).
-          details: {
-            issues: parsedInput.error.issues.slice(0, 8).map((issue) => ({
-              path: issue.path.map(String).slice(0, 16),
-              code: issue.code,
-              message: issue.message.slice(0, 256)
-            }))
+        // The renderer's contextBridge flattens a thrown error into a plain
+        // Error, dropping `code` and `details`; the first failing field must
+        // therefore also be legible in the message itself. Details keep a
+        // dotted `field` rather than `path`: `path` is stripped by the
+        // transport redaction allowlist and would never reach the renderer.
+        const inputSchema = definition.inputSchema
+        const issues = parsedInput.error.issues.slice(0, 8).map((issue) => ({
+          field: trustedInputField(inputSchema, issue.path),
+          code: issue.code
+        }))
+        const firstField = issues[0]?.field
+        throw new CapabilityBrokerError(
+          'invalid_input',
+          `Input for ${request.actionId} failed validation${firstField ? ` at ${firstField}` : ''}.`,
+          {
+            // Never include the rejected input itself (it may contain user
+            // content or provider data).
+            details: { issues }
           }
-        })
+        )
       }
 
       if (definition.descriptor.effect !== 'read' && !request.invocationId) {

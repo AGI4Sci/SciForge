@@ -128,3 +128,10 @@ temp/
 
 ### Generated DSH plugin test-fixture catalogue (signed with a local test key; rebuild with npm run market:fixtures)
 tests/fixtures/dsh-plugins/market/
+
+### Local client verification caches and private credentials
+/.secrets/
+/deps/
+/wheels/
+/pytmp/
+/.devdata/

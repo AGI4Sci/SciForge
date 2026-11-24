@@ -294,15 +294,16 @@ export class ProjectDagRuntime {
     }
     const context = this.#context
     if (!context) return
-    try {
-      await this.#sidecar.ensure(context)
-    } catch (error) {
+    // Starting the sidecar is a cold child-process boot (~1s). Activation must
+    // not wait for it: `#ready()` awaits the same single-flight ensure() on the
+    // first capability call, so the window appears without paying the cost.
+    void this.#sidecar.ensure(context).catch((error) => {
       context.log({
         level: 'error',
         message: 'Project DAG sidecar is not ready.',
         detail: error
       })
-    }
+    })
   }
 
   #markStale(
@@ -430,7 +431,9 @@ export class ProjectDagRuntime {
         scope !== undefined && committed === null
       )
     }
-    if (parsed.data.threadId !== engineThreadId) {
+    // The workspace-authorized Evidence owner resolves Session successor chains.
+    // Its authoritative head, when present, binds the returned Snapshot identity.
+    if (parsed.data.threadId !== (status.authoritativeHead?.threadId ?? engineThreadId)) {
       throw projectError(
         'evidence_snapshot_unavailable',
         `Evidence Snapshot identity does not match ${engineThreadId}.`,

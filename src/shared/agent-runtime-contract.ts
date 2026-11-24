@@ -445,9 +445,32 @@ export type AgentRuntimeMemoryScope = 'user' | 'project' | 'workspace'
 export type AgentRuntimeMemoryThreadMode = 'agent' | 'plan'
 export type AgentRuntimeMemoryTaskType = 'agent' | 'plan' | 'plan_draft' | 'plan_refine'
 
+/** Source identity is a locator, never proof that the source is current or accessible. */
+export type AgentRuntimeResearchSource = {
+  owner: string
+  locator: string
+  version: string
+  digest?: string
+  access: 'unknown' | 'partial' | 'inaccessible'
+}
+
+export type AgentRuntimeResearchSnapshot = {
+  text: string
+  sources: AgentRuntimeResearchSource[]
+  conditions: string[]
+  counterexamples: string[]
+}
+
+export type AgentRuntimeResearchMemory = Omit<AgentRuntimeResearchSnapshot, 'text'> & {
+  status: 'unverified' | 'stale' | 'withdrawn'
+  corrections: string[]
+  history: AgentRuntimeResearchSnapshot[]
+}
+
 export type AgentRuntimeMemoryRecord = {
   id: string
   text: string
+  research?: AgentRuntimeResearchMemory
   scope: AgentRuntimeMemoryScope
   workspace?: string
   project?: string
@@ -547,8 +570,10 @@ export type AgentRuntimeThread = {
   hasUserMessage?: boolean
 }
 
-/** Small, bounded polling payload. Thread summary metadata belongs to listThreads. */
+/** Small, bounded polling payload with authoritative workspace identity. */
 export type AgentRuntimeThreadStatus = {
+  workspace?: string
+  archived?: boolean
   id: string
   runtimeId: AgentRuntimeId
   status?: string

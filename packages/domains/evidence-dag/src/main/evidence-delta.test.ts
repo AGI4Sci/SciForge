@@ -13,6 +13,7 @@ import {
   EvidenceDagDeltaStore,
   EvidenceDeltaChain,
   digest,
+  digestBytes,
   evidenceDagDeltaInputFromTrace,
   evaluateEvidenceDagIndependence
 } from './evidence-delta.js'
@@ -921,6 +922,36 @@ test('fails closed when an earlier delta watermark cannot be compared to the bar
   assert.ok(closure.gapCodes.includes('missing_delta'))
 })
 
+test('closure classifies lifecycle records by their captured thread boundary without conflating receipt coverage', () => {
+  const chain = new EvidenceDeltaChain(scope.threadId)
+  const first = chain.append(appendInput())
+  const lifecycle = chain.append(appendInput({
+    scope: { ...scope, kind: 'artifact_lifecycle', operationId: 'artifact-lifecycle:42' },
+    idempotencyKey: 'lifecycle-receipt-42',
+    predecessorDigest: first.delta.deltaDigest,
+    requestedWatermark: '1:artifact-lifecycle:42',
+    committedWatermark: '1:artifact-lifecycle:42',
+    payload: { claims: [{ id: 'claim:lifecycle', text: 'Captured lifecycle obligation.' }] }
+  }))
+  const head = chain.append(appendInput({
+    predecessorDigest: lifecycle.delta.deltaDigest,
+    idempotencyKey: 'manual-after-lifecycle',
+    requestedWatermark: '2', committedWatermark: '2'
+  }))
+  const historical = chain.seal(completeClosurePolicy(head.delta.deltaDigest, '2'))
+  assert.ok(historical.gapCodes.includes('missing_delta'))
+  const closure = chain.seal({
+    ...completeClosurePolicy(head.delta.deltaDigest, '2'),
+    watermarkPolicy: 'captured-thread-v2',
+    targetClaimIds: ['claim:1', 'claim:lifecycle'],
+    requiredRecords: ['claim:lifecycle']
+  })
+  assert.equal(closure.status, 'complete')
+  assert.ok(closure.includedDeltaDigests.includes(lifecycle.delta.deltaDigest))
+  const restored = new EvidenceDeltaChain(scope.threadId, chain.list(), { closures: [historical, closure] })
+  assert.equal(restored.head.headDigest, head.delta.deltaDigest)
+})
+
 test('requires explicit independence metadata for semantic assessments', () => {
   const valid = evidenceDagIndependenceMetadataV1Schema.parse({
     producerIdentity: 'agent:producer',
@@ -1190,6 +1221,262 @@ test('persists committed deltas and restores the authoritative head after restar
   assert.equal(restored.head.sequence, 1)
   assert.deepEqual(restored.list(), [first.delta])
   assert.match(await readFile(storagePath, 'utf8'), /"version":1/u)
+})
+
+test('roundtrips JSON payload snapshots before hashing and replays equivalent JSON idempotently', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-json-payload-')))
+  const storagePath = join(directory, 'deltas.json')
+  const store = new EvidenceDagDeltaStore(storagePath)
+  const payload = {
+    trace: [{ kind: 'message', optional: undefined, nested: { absent: undefined, explicit: null } }],
+    values: [undefined, null, { absent: undefined, value: 'original' }]
+  }
+  const expected = {
+    trace: [{ kind: 'message', nested: { explicit: null } }],
+    values: [null, null, { value: 'original' }]
+  }
+  const original = structuredClone(payload)
+  const appended = await store.append(appendInput({ payload }))
+  // Load first: this reproduced the writer's payload-digest mismatch before the fix.
+  const restarted = new EvidenceDagDeltaStore(storagePath)
+  assert.deepEqual((await restarted.chain(scope.threadId)).list(), [appended.delta])
+  assert.deepEqual(appended.delta.payload, expected)
+  assert.equal(appended.delta.payloadDigest, digest(expected))
+  payload.trace[0]!.kind = 'changed'
+  ;(payload.values[2] as { value: string }).value = 'changed'
+  assert.deepEqual((await store.chain(scope.threadId)).list()[0]!.payload, expected)
+  for (const current of [store, restarted]) {
+    assert.equal((await current.append(appendInput({ payload: original }))).idempotent, true)
+    assert.equal((await current.append(appendInput({ payload: expected }))).idempotent, true)
+    assert.equal((await current.append(appendInput({ payload: JSON.parse(JSON.stringify(expected)) }))).idempotent, true)
+    await assert.rejects(() => current.append(appendInput({ payload: { ...expected, extra: null } })), /different content/u)
+  }
+  const pristine = await readFile(storagePath, 'utf8')
+  for (const field of ['payload', 'payloadDigest', 'deltaDigest'] as const) {
+    const corrupted = JSON.parse(pristine)
+    corrupted.chains[0].records[0][field] = field === 'payload' ? { changed: true } : `sha256:${'0'.repeat(64)}`
+    await writeFile(storagePath, JSON.stringify(corrupted))
+    const isolated = new EvidenceDagDeltaStore(storagePath)
+    await isolated.load()
+    const recovery = isolated.recoveryStatus()[0]!
+    assert.equal(await readFile(join(directory, recovery.archiveName), 'utf8'), JSON.stringify(corrupted))
+    const recovered = (await isolated.chain(scope.threadId)).list()
+    assert.equal(recovered.length, 1)
+    assert.equal(recovered[0]!.payload.recordType, 'integrity_isolation')
+    assert.notEqual(recovered[0]!.deltaDigest, corrupted.chains[0].records[0].deltaDigest)
+  }
+})
+
+test('archives invalid UTF8 bytes exactly and verifies their digest after restart', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-raw-bytes-')))
+  const path = join(directory, 'deltas.json')
+  await new EvidenceDagDeltaStore(path).append(appendInput({ payload: { text: 'BYTE_TARGET' } }))
+  const damaged = await readFile(path)
+  const offset = damaged.indexOf('BYTE_TARGET')
+  assert.ok(offset >= 0)
+  damaged[offset] = 0xff
+  await writeFile(path, damaged)
+  const store = new EvidenceDagDeltaStore(path)
+  await store.load()
+  const recovery = store.recoveryStatus()[0]!
+  assert.equal(recovery.archiveDigest, digestBytes(damaged))
+  assert.deepEqual(await readFile(join(directory, recovery.archiveName)), damaged)
+  const restarted = new EvidenceDagDeltaStore(path)
+  await restarted.load()
+  assert.deepEqual(restarted.recoveryStatus(), [recovery])
+  assert.equal((await restarted.chain(scope.threadId)).list()[0]!.payload.recordType, 'integrity_isolation')
+  assert.deepEqual(await readFile(join(directory, recovery.archiveName)), damaged)
+})
+
+test('retains verifiable recovery lineage after repeated same-chain damage and restart', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-repeat-recovery-')))
+  const path = join(directory, 'deltas.json')
+  const original = new EvidenceDagDeltaStore(path)
+  await original.append(appendInput())
+  await original.append(appendInput({ idempotencyKey: 'repeat-2', requestedWatermark: '2', committedWatermark: '2' }))
+  const healthy = (await original.append(appendInput({ scope: { ...scope, threadId: 'healthy' } }))).delta
+  const archives: Buffer[] = []
+  let recoveries: ReturnType<EvidenceDagDeltaStore['recoveryStatus']> = []
+  for (const recordIndex of [1, 0, 0]) {
+    const document = JSON.parse(await readFile(path, 'utf8'))
+    document.chains.find((entry: { threadId: string }) => entry.threadId === scope.threadId).records[recordIndex].payload = { damaged: archives.length }
+    const damaged = Buffer.from(JSON.stringify(document))
+    archives.push(damaged)
+    await writeFile(path, damaged)
+    const recovered = new EvidenceDagDeltaStore(path)
+    await recovered.load()
+    const history = recovered.recoveryStatus()
+    assert.deepEqual(history.slice(0, -1), recoveries)
+    recoveries = history
+    assert.equal(history.length, archives.length)
+    assert.deepEqual((await recovered.chain('healthy')).list(), [healthy])
+    const restarted = new EvidenceDagDeltaStore(path)
+    await restarted.load()
+    assert.deepEqual(restarted.recoveryStatus(), history)
+    assert.deepEqual((await restarted.chain('healthy')).list(), [healthy])
+    for (let index = 0; index < history.length; index++) {
+      assert.deepEqual(await readFile(join(directory, history[index]!.archiveName)), archives[index])
+      assert.equal(history[index]!.archiveDigest, digestBytes(archives[index]!))
+    }
+  }
+  const active = await readFile(path)
+  // Missing and modified historical archives must fail without replacing active bytes.
+  const archivePath = join(directory, recoveries[0]!.archiveName)
+  const movedPath = `${archivePath}.held`
+  await rename(archivePath, movedPath)
+  await assert.rejects(new EvidenceDagDeltaStore(path).load(), /ENOENT/u)
+  assert.deepEqual(await readFile(path), active)
+  await rename(movedPath, archivePath)
+  await writeFile(archivePath, 'tampered')
+  await assert.rejects(new EvidenceDagDeltaStore(path).load(), /quarantine archive digest mismatch/u)
+  assert.deepEqual(await readFile(path), active)
+  await writeFile(archivePath, archives[0]!)
+  const drifted = JSON.parse(active.toString('utf8'))
+  drifted.chains.find((entry: { threadId: string }) => entry.threadId === scope.threadId).records[0].scope.operationId = 'forged-operation'
+  await writeFile(path, JSON.stringify(drifted))
+  const driftedBytes = await readFile(path)
+  await assert.rejects(new EvidenceDagDeltaStore(path).load(), /recovery metadata/u)
+  assert.deepEqual(await readFile(path), driftedBytes)
+  const forged = JSON.parse(active.toString('utf8'))
+  forged.recoveries[0].detectedAt = '2026-01-01T00:00:00.000Z'
+  await writeFile(path, JSON.stringify(forged))
+  const forgedBytes = await readFile(path)
+  await assert.rejects(new EvidenceDagDeltaStore(path).load(), /recovery metadata/u)
+  assert.deepEqual(await readFile(path), forgedBytes)
+})
+
+test('does not acknowledge isolation when archive persistence fails and retries from untouched original bytes', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-isolation-failure-')))
+  const path = join(directory, 'deltas.json')
+  await new EvidenceDagDeltaStore(path).append(appendInput())
+  const document = JSON.parse(await readFile(path, 'utf8'))
+  document.chains[0].records[0].payload = { damaged: true }
+  const raw = JSON.stringify(document)
+  await writeFile(path, raw)
+  const archivePath = join(directory, `deltas-quarantine-${digestBytes(Buffer.from(raw)).slice(7)}.json`)
+  await mkdir(archivePath)
+  const store = new EvidenceDagDeltaStore(path)
+  await assert.rejects(store.load(), /nonregular|directory/u)
+  assert.equal(await readFile(path, 'utf8'), raw)
+  await rename(archivePath, `${archivePath}.blocked`)
+  await store.load()
+  assert.equal(store.recoveryStatus().length, 1)
+  assert.equal(await readFile(archivePath, 'utf8'), raw)
+})
+
+test('isolates the damaged suffix, preserves other histories, and resumes append across restart without certifying the gap', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-isolation-')))
+  const path = join(directory, 'deltas.json')
+  const original = new EvidenceDagDeltaStore(path)
+  const first = (await original.append(appendInput())).delta
+  await original.append(appendInput({ idempotencyKey: 'turn-2-isolation', requestedWatermark: '2', committedWatermark: '2' }))
+  await original.append(appendInput({ idempotencyKey: 'turn-3-isolation', requestedWatermark: '3', committedWatermark: '3' }))
+  const independent = (await original.append(appendInput({ scope: { ...scope, threadId: 'independent' } }))).delta
+  const corrupted = JSON.parse(await readFile(path, 'utf8'))
+  const damaged = corrupted.chains.find((chain: { threadId: string }) => chain.threadId === scope.threadId)
+  damaged.records[1].payload = { damaged: true }
+  const raw = JSON.stringify(corrupted) + '\n'
+  await writeFile(path, raw)
+  const recovered = new EvidenceDagDeltaStore(path)
+  await recovered.load()
+  const recovery = recovered.recoveryStatus()[0]!
+  assert.equal(recovery.verifiedPrefixLength, 1)
+  assert.equal(recovery.quarantinedRecordCount, 2)
+  assert.equal(await readFile(join(directory, recovery.archiveName), 'utf8'), raw)
+  assert.deepEqual((await recovered.chain('independent')).list(), [independent])
+  assert.deepEqual((await recovered.chain(scope.threadId)).list()[0], first)
+  const continuation = appendInput({ idempotencyKey: 'turn-4-isolation', requestedWatermark: '4', committedWatermark: '4' })
+  const next = (await recovered.append(continuation)).delta
+  const reopened = new EvidenceDagDeltaStore(path)
+  await reopened.load()
+  assert.deepEqual(reopened.recoveryStatus(), [recovery])
+  assert.equal((await reopened.append(continuation)).idempotent, true)
+  assert.equal((await reopened.chain(scope.threadId)).list().length, 3)
+  const view = await reopened.compileProvisional(scope.threadId, { compilerVersion: 'test', policyVersion: 'test' })
+  assert.equal(view.summary.coverage.complete, false)
+  const closure = await reopened.seal(scope.threadId, completeClosurePolicy(next.deltaDigest, '4'))
+  assert.equal(closure.status, 'incomplete')
+  assert.ok(closure.gapCodes.includes('lineage_incomplete'))
+  const pristineRecovered = await readFile(path, 'utf8')
+  for (const mutate of [
+    (document: any) => { document.recoveries = [] },
+    (document: any) => { document.recoveries[0].verifiedPrefixLength = -1 },
+    (document: any) => { document.recoveries[0].quarantinedRecordCount++ },
+    (document: any) => { document.recoveries[0].code = 'delta_digest_mismatch' },
+    (document: any) => { document.recoveries[0].archiveDigest = `sha256:${'0'.repeat(64)}` }
+  ]) {
+    const modified = JSON.parse(pristineRecovered)
+    mutate(modified)
+    await writeFile(path, JSON.stringify(modified))
+    await assert.rejects(new EvidenceDagDeltaStore(path).load(), /recovery metadata/u)
+  }
+  await writeFile(path, pristineRecovered)
+  await writeFile(join(directory, recovery.archiveName), 'changed')
+  await assert.rejects(new EvidenceDagDeltaStore(path).load(), /quarantine archive digest mismatch/u)
+})
+
+test('trace, assessment, correction and sidechain writers share JSON-stable payload identities', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-json-writers-')))
+  const storagePath = join(directory, 'deltas.json')
+  const store = new EvidenceDagDeltaStore(storagePath)
+  const trace = evidenceDagDeltaInputFromTrace({
+    ...scope, requestedWatermark: '1', idempotencyKey: 'trace-json', createdAt,
+    trace: [{ kind: 'system', detail: undefined, values: [undefined, null] }]
+  })
+  await store.append(trace)
+  const assessment = {
+    scope, requestedWatermark: '2', idempotencyKey: 'assessment-json', createdAt,
+    assessment: {
+      outcome: 'hold', detail: undefined, nested: { explicit: null, absent: undefined },
+      independenceMetadata: {
+        producerIdentity: 'producer:1', reviewerIdentity: null,
+        producerInvocationId: 'invocation:1', reviewerInvocationId: null,
+        producerPromptDigest: null, reviewerPromptDigest: null,
+        producerContextDigest: null, reviewerContextDigest: null, effectiveContextDigest: null,
+        modelOrToolVersion: 'test', predicate: 'distinct_invocation',
+        result: 'not_independently_assessed', assessedAt: createdAt
+      }
+    }
+  }
+  await store.appendAssessment(assessment)
+  const correction = {
+    scope: { ...scope, kind: 'correction' as const }, requestedWatermark: '3',
+    idempotencyKey: 'correction-json', createdAt,
+    correction: {
+      recordId: 'corrected', targetRecordId: 'original', relation: 'corrects' as const,
+      reason: 'Correct the result.', producerIdentity: 'researcher:1', reviewerIdentity: null, createdAt
+    }
+  }
+  const corrected = await store.appendCorrection(correction)
+  const closure = await store.seal(scope.threadId, completeClosurePolicy(corrected.delta.deltaDigest, '3'))
+  const sidechain = {
+    threadId: scope.threadId, recordId: 'review-json', recordType: 'review' as const,
+    closureDigest: closure.closureDigest, idempotencyKey: 'sidechain-json',
+    payload: { verdict: 'hold', detail: undefined, nested: [{ absent: undefined, explicit: null }, undefined] },
+    producerIdentity: 'reviewer:1', createdAt
+  }
+  const appended = await store.appendSidechain(sidechain)
+  const expected = { verdict: 'hold', nested: [{ explicit: null }, null] }
+  assert.deepEqual(appended.record.payload, expected)
+  sidechain.payload.verdict = 'changed'
+  assert.deepEqual((await store.sidechains(scope.threadId))[0]!.payload, expected)
+  const restarted = new EvidenceDagDeltaStore(storagePath)
+  assert.deepEqual((await restarted.chain(scope.threadId)).list(), (await store.chain(scope.threadId)).list())
+  assert.deepEqual(await restarted.sidechains(scope.threadId), [appended.record])
+  for (const current of [store, restarted]) {
+    assert.equal((await current.append(JSON.parse(JSON.stringify(trace)))).idempotent, true)
+    assert.equal((await current.appendAssessment(JSON.parse(JSON.stringify(assessment)))).idempotent, true)
+    assert.equal((await current.appendCorrection(correction)).idempotent, true)
+    assert.equal((await current.appendSidechain({ ...sidechain, payload: expected })).idempotent, true)
+    assert.equal((await current.appendSidechain({ ...sidechain, payload: { ...expected, detail: undefined } })).idempotent, true)
+  }
+  const pristine = await readFile(storagePath, 'utf8')
+  for (const field of ['payload', 'recordDigest'] as const) {
+    const corrupted = JSON.parse(pristine)
+    corrupted.chains[0].sidechains[0][field] = field === 'payload' ? { changed: true } : `sha256:${'0'.repeat(64)}`
+    await writeFile(storagePath, JSON.stringify(corrupted))
+    await assert.rejects(() => new EvidenceDagDeltaStore(storagePath).load(), /sidechain digest does not match/u)
+  }
 })
 
 test('rolls back the in-memory head when the atomic delta replacement fails', async () => {
@@ -1477,4 +1764,17 @@ test('baseline pre-policy-version closures and formal approval survive restart b
   assert.equal(restored.committedSnapshotClosure, fixture.committedSnapshotClosureDigest)
   assert.ok(restored.closures().some(item => item.gapCodes.includes('negative_result_missing')))
   assert.equal(restored.sidechainRecords().find(item => item.recordType === 'approval')?.reviewerIdentity, 'human:original-reviewer')
+})
+
+
+test('superseded queued derivation leaves accepted raw delta and prior view intact', async () => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'evidence-cancelled-derivation-')))
+  const store = new EvidenceDagDeltaStore(join(directory, 'deltas.json'))
+  const appended = await store.append(appendInput())
+  const before = await store.provisional(scope.threadId)
+  await assert.rejects(store.compileProvisional(scope.threadId, {
+    compilerVersion: 'compiler', policyVersion: 'policy', desiredHeadDigest: appended.delta.deltaDigest
+  }, () => false), /superseded/)
+  assert.equal((await store.head(scope.threadId)).headDigest, appended.delta.deltaDigest)
+  assert.deepEqual(await store.provisional(scope.threadId), before)
 })

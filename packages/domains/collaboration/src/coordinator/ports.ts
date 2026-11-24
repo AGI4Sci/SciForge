@@ -1,3 +1,7 @@
+import type { LeaderProposal } from './leader-planning-contract.js'
+import type { HumanDirectedCommands } from './human-directed-commands.js'
+import type { createResultAssessment } from './result-assessment.js'
+import type { ResultAssessment } from './result-assessment-contract.js'
 import {
   CURRENT_PROTOCOL_VERSION,
   PROJECT_COORDINATION_COLLECTIONS,
@@ -5,6 +9,7 @@ import {
   PROJECT_INVITATION_READ_COLLECTIONS,
   agentInboxMessageSchema,
   humanAnswerSchema,
+  humanAnswerDecisionText,
   humanNeededSchema,
   planItemIdSchema,
   projectMembershipSchema,
@@ -18,6 +23,7 @@ import {
   requirementsAcceptanceCriterionSchema,
   requirementsWorkModuleSchema,
   requirementsWorkModulesSchema,
+  taskFileOutputIntentSchema,
   taskExecutionHistorySchema,
   taskExecutionSchema,
   taskHistorySchema,
@@ -58,6 +64,7 @@ import type { ProjectCoordinatorRequirementsDispatchPort } from './requirements-
 import {
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
+  projectCoordinatorHumanNeededDeferInputSchema,
   projectCoordinatorProjectCreateInputSchema,
   projectCoordinatorProjectCreateReceiptSchema,
   projectCoordinatorProjectDeleteInputSchema,
@@ -71,6 +78,7 @@ import {
   projectCoordinatorWorkspaceSchema,
   type ProjectCoordinatorHumanAnswerInput,
   type ProjectCoordinatorHumanNeededCreateInput,
+  type ProjectCoordinatorHumanNeededDeferInput,
   type ProjectCoordinatorProject,
   type ProjectCoordinatorProjectCreateInput,
   type ProjectCoordinatorProjectCreateReceipt,
@@ -160,6 +168,7 @@ export type ProjectCoordinatorActionPort = Readonly<{
     input: ProjectCoordinatorHumanAnswerInput,
     idempotencyKey: string
   ): Promise<ProjectCoordinatorWorkspace>
+  deferHumanNeeded(input: ProjectCoordinatorHumanNeededDeferInput, idempotencyKey: string): Promise<ProjectCoordinatorWorkspace>
   handleInbox(message: AgentInboxMessage): Promise<void>
 }>
 
@@ -169,6 +178,7 @@ export type ProjectCoordinatorMainPorts = Readonly<{
   membership: ProjectCoordinatorMembershipPort
   delivery: ProjectCoordinatorDeliveryPort
   coordinatorCloudCommands: CoordinatorCloudCommandService
+  humanCommands?: HumanDirectedCommands
   actions: ProjectCoordinatorActionPort
 }>
 
@@ -198,6 +208,9 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
     coordinatorAuthorityEpoch: number
     contentDigest: string
   }>) => Promise<ProjectCoordinatorRequirementsCompletion | null>
+  readLeaderStatus?: (project: ProjectCoordinatorProject) => Promise<Pick<ProjectCoordinatorProject, 'leaderPlanningStatus' | 'leaderSession'>>
+  readLeaderProposal?: (project: ProjectCoordinatorProject) => Promise<LeaderProposal | null>
+  readResultAssessments?: (project: ProjectCoordinatorProject) => Promise<readonly ResultAssessment[]>
   createIntentState?: Pick<ProjectCoordinatorStateStore, 'resolveProjectCreateIntent'>
   requestId?: () => `req_${string}`
   now?: () => Date
@@ -278,6 +291,22 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
       ) {
         view = { ...view, coordinatorTransferFeedback: transferFeedback }
       }
+      if (focused && project.ownerUserId === status.userId && options.readResultAssessments) {
+        view = { ...view, resultAssessments: [...await options.readResultAssessments(view)] }
+      }
+      if (focused && project.ownerUserId === status.userId && project.executionMode === 'ai_leader' && options.readLeaderProposal) {
+        const proposal = await options.readLeaderProposal(view)
+        const requirements = view.confirmedRequirements
+        const current = proposal && proposal.projectId === project.projectId && proposal.projectRevision === project.revision &&
+          proposal.coordinatorAuthorityEpoch === project.coordinatorAuthorityEpoch &&
+          proposal.requirementsDocumentId === (requirements?.requirementsDocumentId ?? null) &&
+          proposal.requirementsRevision === (requirements?.revision ?? null) &&
+          proposal.requirementsContentDigest === (requirements?.contentDigest ?? null)
+        view = { ...view, leaderProposal: current ? proposal : null }
+      }
+      if (focused && project.ownerUserId === status.userId && project.executionMode === 'ai_leader' && options.readLeaderStatus) {
+        view = { ...view, ...await options.readLeaderStatus(view) }
+      }
       const draft = view.requirementsDraft
       if (draft && project.ownerUserId === status.userId) {
         const completion = await options.readRequirementsCompletion?.({
@@ -334,6 +363,9 @@ export function createProjectCoordinatorCloudWorkspacePort(options: Readonly<{
         idempotencyKey: projectCreateIdempotencyKey(identity.userId, createIntentId),
         ...canonicalInput
       })
+      if (response.type === 'rest.error') {
+        throw new Error(`Project create failed: ${response.error.code}: ${response.error.message}`)
+      }
       if (response.type !== 'rest.project_created') {
         throw new Error(`Project create returned ${response.type}.`)
       }
@@ -357,7 +389,8 @@ const generatedRequirementsModelWorkModuleSchema = z.object({
   title: requirementsWorkModuleSchema.shape.title,
   objective: requirementsWorkModuleSchema.shape.objective,
   dependencyPlanItemIds: requirementsWorkModuleSchema.shape.dependencyPlanItemIds,
-  requiredCapabilityTags: requirementsWorkModuleSchema.shape.requiredCapabilityTags.unwrap()
+  requiredCapabilityTags: requirementsWorkModuleSchema.shape.requiredCapabilityTags.unwrap(),
+  output: taskFileOutputIntentSchema
 }).strict()
 
 const generatedRequirementsModelCriterionSchema = z.object({
@@ -414,6 +447,7 @@ function assertRequirementsCompletion(
 /** Every known requirements-completion failure is one of these bounded reasons. */
 export class ProjectCoordinatorRequirementsCompletionError extends Error {
   readonly reason: ProjectCoordinatorRequirementsCompletionFailureReason
+  readonly invalidFields?: readonly string[]
 
   constructor(
     reason: ProjectCoordinatorRequirementsCompletionFailureReason,
@@ -423,6 +457,9 @@ export class ProjectCoordinatorRequirementsCompletionError extends Error {
     super(message, options)
     this.name = 'ProjectCoordinatorRequirementsCompletionError'
     this.reason = reason
+    if (reason === 'invalid_structured_output' && options?.cause instanceof z.ZodError) {
+      this.invalidFields = options.cause.issues.slice(0, 5).map(issue => issue.path.join('.').slice(0, 500) || '$')
+    }
   }
 }
 
@@ -641,6 +678,7 @@ export function createProjectCoordinatorRequirementsPort(options: Readonly<{
           () => agentExecution.prepareSession!({
             title: sessionTitle,
             interaction: 'reviewable',
+            allowedTools: [],
             mode: 'plan'
           }),
           generationTimeoutMs
@@ -687,10 +725,14 @@ export function createProjectCoordinatorRequirementsPort(options: Readonly<{
           'Use a unique stable item_* planItemId for every work module. dependencyPlanItemIds must reference another work module in this same response and must not form a cycle. Use [] when there is no dependency.',
           `Worker capability catalog: ${JSON.stringify(capabilityCatalog)}`,
           'Every work module requires title, objective and requiredCapabilityTags. Capability tags are executable requirements, not topical labels. Copy every requiredCapabilityTags value character-for-character from the Worker capability catalog; never invent tags such as public-data-selection, single-cell-rna-seq, quality-control, or documentation. If a work module needs no additional capability beyond the catalogued runtime profiles, use an empty requiredCapabilityTags array.',
+          'Every work module must declare output with kind delivery.output, fileName, mediaType and maxBytes. Preserve the exact deliverable filename and format requested by the Owner, and use a justified size limit. output.fileName must be a single portable printable-ASCII basename (1–128 characters), never a directory or path: use results.zip, not outputs/results.zip or outputs\\results.zip. If the Owner names a path, retain only its final filename in output.fileName and describe the requested directory in objective. Do not use reserved device names, reserved characters, or a trailing dot or space. Do not substitute generic documentation for a named artifact. If the requirement does not name an output, propose a concrete suitable artifact for human review in the requirements draft; never guess filenames by parsing the objective at dispatch time.',
           'Every work module requires at least one acceptance criterion whose target is its exact planItemId. Include at least one project-level criterion whose target is the literal "$project". Criteria and evidenceMethod must be concrete and verifiable.',
           'Acceptance criteria targets may only be one of this response\'s planItemIds or "$project". Do not emit id, status, assignee, task, execution or digest fields.'
         ].join('\n'),
         outputSchema,
+        // Completion derives only from the supplied Owner facts and capability catalog.
+        // Explicitly disable tools (including native web search) on fresh and reused sessions.
+        allowedTools: [],
         interaction: 'reviewable',
         mode: 'plan'
       }), generationTimeoutMs)
@@ -736,7 +778,7 @@ export function createProjectCoordinatorRequirementsPort(options: Readonly<{
     if (!parsedModelContent.success) {
       throw await fail(
         'invalid_structured_output',
-        'Local Coordinator Runtime returned output that violates the structured generation contract.',
+        `Local Coordinator Runtime returned output that violates the structured generation contract: ${parsedModelContent.error.issues.slice(0, 5).map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`,
         { cause: parsedModelContent.error }
       )
     }
@@ -934,6 +976,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
   transport: AuthenticatedCloudTransport
   state: ProjectCoordinatorStateStore
   requirementsDispatch: Pick<ProjectCoordinatorRequirementsDispatchPort, 'reconcileProject'>
+  resultAssessment?: Pick<ReturnType<typeof createResultAssessment>, 'enqueue'>
   log?(entry: Readonly<{ level: 'info' | 'warn'; message: string }>): void
   requestId?: () => `req_${string}`
 }>): ProjectCoordinatorActionPort {
@@ -1113,7 +1156,27 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
     },
     createHumanNeeded: async (rawInput, idempotencyKey) => {
       const input = projectCoordinatorHumanNeededCreateInputSchema.parse(rawInput)
-      const response = await options.coordinatorCloudCommands.execute({
+      const confirmableAction = input.interaction.kind === 'approval' ? {
+        actionType: 'collaboration.project.decision',
+        safeSummary: 'Record approval or rejection of this project proposal only; do not dispatch or start tasks.',
+        effect: 'external-write' as const,
+        actionDigest: stableDigest({ actionType: 'collaboration.project.decision', projectId: input.projectId,
+          projectRevision: input.expectedProjectRevision, coordinatorAuthorityEpoch: input.expectedCoordinatorAuthorityEpoch,
+          targetUserId: input.targetUserId, prompt: input.prompt, interaction: input.interaction, requiredAssurance: input.requiredAssurance })
+      } : null
+      // Resume the exact durable request before rebuilding its timestamp/CAS
+      // envelope. Replanning must not turn a retried question into another one.
+      const replay = await options.coordinatorCloudCommands.resume(idempotencyKey, command => {
+        if (command.type !== 'human.needed.create' || command.projectId !== input.projectId ||
+          command.targetUserId !== input.targetUserId || command.prompt !== input.prompt ||
+          command.context.scope !== 'coordinator_project' ||
+          command.context.expectedCoordinatorAuthorityEpoch !== input.expectedCoordinatorAuthorityEpoch ||
+          command.requiredAssurance !== input.requiredAssurance || stableJson(command.confirmableAction ?? null) !== stableJson(confirmableAction) ||
+          stableJson(command.interaction) !== stableJson(input.interaction)) {
+          throw new Error('HumanNeeded replay does not match the exact Project decision request.')
+        }
+      })
+      const response = replay?.response ?? await options.coordinatorCloudCommands.execute({
         protocolVersion: CURRENT_PROTOCOL_VERSION,
         requestId: requestId(),
         type: 'human.needed.create',
@@ -1127,7 +1190,8 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         },
         requiredAssurance: input.requiredAssurance,
         prompt: input.prompt,
-        confirmableAction: null,
+        interaction: input.interaction,
+        confirmableAction,
         expiresAt: input.expiresAt
       })
       if (response.type === 'rest.error') {
@@ -1140,6 +1204,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       if (
         needed.projectId !== input.projectId ||
         needed.targetUserId !== input.targetUserId ||
+        needed.prompt !== input.prompt || stableJson(needed.interaction) !== stableJson(input.interaction) || stableJson(needed.confirmableAction) !== stableJson(confirmableAction) ||
         needed.context.scope !== 'coordinator_project' ||
         needed.context.coordinatorAuthorityEpoch !== input.expectedCoordinatorAuthorityEpoch
       ) {
@@ -1159,6 +1224,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         humanRequestId: input.humanRequestId,
         requestRevision: input.requestRevision,
         answer: input.answer,
+        ...(input.selectedOptionId ? { selectedOptionId: input.selectedOptionId } : {}),
         ...(input.decision ? { decision: input.decision } : {})
       })
       if (response.type !== 'rest.entity') {
@@ -1167,8 +1233,25 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       const answer = humanAnswerSchema.parse(response.entity)
       if (answer.projectId !== input.projectId || answer.humanRequestId !== input.humanRequestId ||
           answer.requestRevision !== input.requestRevision || answer.answer !== input.answer ||
-          answer.decision !== (input.decision ?? null) || !answeringUserId || answer.answeredByUserId !== answeringUserId) {
+          answer.decision !== (input.decision ?? null) || answer.selectedOptionId !== (input.selectedOptionId ?? null) || !answeringUserId || answer.answeredByUserId !== answeringUserId) {
         throw new Error('HumanAnswer did not return the exact Project request answer.')
+      }
+      return options.workspace.readWorkspace({ projectId: input.projectId })
+    },
+    deferHumanNeeded: async (rawInput, idempotencyKey) => {
+      const input = projectCoordinatorHumanNeededDeferInputSchema.parse(rawInput)
+      const identity = options.transport.status()
+      if (identity.state !== 'ready') throw new Error('Deferring a request requires the current User.')
+      const response = await executeUserCloud(options.transport, {
+        protocolVersion: CURRENT_PROTOCOL_VERSION, requestId: requestId(), type: 'human.needed.defer', idempotencyKey,
+        humanRequestId: input.humanRequestId, requestRevision: input.requestRevision, reason: input.reason
+      })
+      if (response.type !== 'rest.entity') throw new Error(`HumanNeeded defer returned ${response.type}.`)
+      const request = humanNeededSchema.parse(response.entity)
+      if (request.projectId !== input.projectId || request.humanRequestId !== input.humanRequestId ||
+          request.revision !== input.requestRevision + 1 || request.status !== 'pending' ||
+          request.deferred?.deferredByUserId !== identity.userId || request.deferred.reason !== input.reason) {
+        throw new Error('HumanNeeded defer did not return the exact User deferral.')
       }
       return options.workspace.readWorkspace({ projectId: input.projectId })
     },
@@ -1176,6 +1259,18 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       const message = agentInboxMessageSchema.parse(rawMessage)
       if (message.payload.type === 'project.deleted') {
         await options.state.clearProjectLocalState(message.payload.projectId)
+        return
+      }
+      if (message.payload.type === 'project.updated') {
+        // Project label, mode and authorization changes are delivered to every
+        // participant Agent. Reading the current projection consumes the event;
+        // it never grants coordinator authority or dispatches work.
+        const updated = message.payload
+        const workspace = await options.workspace.readWorkspace({ projectId: updated.projectId })
+        const project = requireVisibleProject(workspace, updated.projectId)
+        if (project.project.revision < updated.revision) {
+          throw new Error('Project update notification is newer than current Cloud facts.')
+        }
         return
       }
       if (message.payload.type === 'project.started') {
@@ -1401,9 +1496,11 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         const project = requireReadyProject(workspace, published.projectId)
         if (message.recipientAgentId !== project.project.coordinatorAgentId) return
         if (!project.deliveryDrive?.projectResults.some((result) => (
-          result.projectResultId === published.projectResultId &&
+          result.projectResultId === published.projectResultId && result.projectVersion === published.projectVersion &&
           result.deliveryManifestId === published.deliveryManifestId
         ))) throw new Error('Published Project Result is absent from fresh Cloud facts.')
+        // Inbox receipt is not held hostage by model latency. Durable reservation and startup sweep recover it.
+        await options.resultAssessment?.enqueue(published.projectId, published.projectResultId)
 
         return
       }
@@ -1462,6 +1559,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         throw new Error('Project Coordinator received an unsupported Agent Inbox message.')
       }
       const answer = message.payload.answer
+      const decisionText = humanAnswerDecisionText(answer, message.payload.request)
       if (answer.context.scope !== 'coordinator_project') {
         throw new Error('Project Coordinator received an unsupported Agent Inbox message.')
       }
@@ -1485,8 +1583,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
       if (existing) {
         if (
           existing.authorAgentId !== project.project.coordinatorAgentId ||
-          existing.authorUserId !== project.project.ownerUserId ||
-          existing.body !== answer.answer
+          existing.authorUserId !== project.project.ownerUserId
         ) {
           throw new Error('The existing Project decision does not match this HumanAnswer.')
         }
@@ -1511,9 +1608,9 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         humanAnswerId: answer.humanAnswerId,
         expectedProjectRevision: project.project.revision,
         expectedCoordinatorAuthorityEpoch: project.project.coordinatorAuthorityEpoch,
-        expectedHumanRequestRevision: answer.requestRevision + 1,
+        expectedHumanRequestRevision: message.payload.request.revision,
         expectedHumanAnswerRevision: answer.revision,
-        decision: answer.answer
+        decision: decisionText
       })
       if (response.type === 'rest.error') {
         throw new Error(`Project decision failed: ${response.error.code}: ${response.error.message}`)
@@ -1530,7 +1627,7 @@ export function createProjectCoordinatorActionPort(options: Readonly<{
         decision.sourceHumanAnswerId !== answer.humanAnswerId ||
         decision.authorAgentId !== project.project.coordinatorAgentId ||
         decision.authorUserId !== project.project.ownerUserId ||
-        decision.body !== answer.answer
+        decision.body !== decisionText
       ) {
         throw new Error('Project decision did not return the exact Coordinator-authored HumanAnswer record.')
       }
@@ -1698,7 +1795,7 @@ async function readOwnMembershipFacts(
   const snapshot = await readProjectFactCollections(
     transport,
     project,
-    PROJECT_INVITATION_READ_COLLECTIONS,
+    ['memberships', 'user_label_facts'],
     requestId,
     options
   )
@@ -1757,7 +1854,7 @@ async function readProjectFactCollections(
   }
   // Invitations disclose only the bounded invitation facts; sealed Drive reads
   // require current membership on the Cloud gateway on every request.
-  const deliveryDrive = collections === PROJECT_INVITATION_READ_COLLECTIONS ? undefined
+  const deliveryDrive = !collections.includes('tasks') ? undefined
     : await executeUserCloud(transport, {
       protocolVersion: CURRENT_PROTOCOL_VERSION, requestId: requestId(),
       type: 'delivery.drive.list', projectId: project.projectId
@@ -1766,17 +1863,25 @@ async function readProjectFactCollections(
     throw new Error('Project Drive read did not return its canonical view.')
   }
   const taskDeliveries = new Map<string, TaskDeliveryFacts>()
-  for (const rawTask of pages.get('tasks') ?? []) {
-    const task = rawTask as { taskId: string }
-    const response = await executeUserCloud(transport, {
-      protocolVersion: CURRENT_PROTOCOL_VERSION, requestId: requestId(),
-      type: 'delivery.task.get', taskId: task.taskId
-    }, options)
-    if (response.type !== 'rest.task.delivery' || response.facts.taskId !== task.taskId) {
-      throw new Error('Task Delivery facts do not match the requested Task.')
+  const tasks = pages.get('tasks') ?? []
+  let nextTask = 0
+  // Each task uses the same authenticated gateway and exact ID validation.
+  // Bound concurrency so project latency does not grow by one round trip per
+  // task, without flooding the server for large projects.
+  await Promise.all(Array.from({ length: Math.min(4, tasks.length) }, async () => {
+    while (nextTask < tasks.length) {
+      options?.signal?.throwIfAborted()
+      const task = tasks[nextTask++] as { taskId: string }
+      const response = await executeUserCloud(transport, {
+        protocolVersion: CURRENT_PROTOCOL_VERSION, requestId: requestId(),
+        type: 'delivery.task.get', taskId: task.taskId
+      }, options)
+      if (response.type !== 'rest.task.delivery' || response.facts.taskId !== task.taskId) {
+        throw new Error('Task Delivery facts do not match the requested Task.')
+      }
+      taskDeliveries.set(task.taskId, response.facts)
     }
-    taskDeliveries.set(task.taskId, response.facts)
-  }
+  }))
   return Object.freeze({ observedAt, pages, finalSummary, taskDeliveries,
     ...(deliveryDrive?.type === 'rest.delivery.drive' ? { deliveryDrive: deliveryDrive.drive } : {}) })
 }

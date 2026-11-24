@@ -40,6 +40,7 @@ export const EVIDENCE_DAG_CAPABILITY_IDS = Object.freeze({
   view: 'evidence-dag.view',
   snapshotStatus: 'evidence-dag.snapshot-status',
   update: 'evidence-dag.update',
+  submitClaims: 'evidence-dag.submit-claims',
   sealClosure: 'evidence-dag.seal-closure',
   appendSidechain: 'evidence-dag.append-sidechain',
   priority: 'evidence-dag.priority',
@@ -227,6 +228,7 @@ export const evidenceDagClosurePolicyV1Schema = z.object({
   version: z.literal('EvidenceClosurePolicyV1'),
   // Absent on historical policies: reproduce immutable keyword semantics.
   semanticGapPolicy: z.enum(['keyword-v1', 'explicit-v2']).optional(),
+  watermarkPolicy: z.literal('captured-thread-v2').optional(),
   targetClaimIds: z.array(boundedIdSchema).min(1).max(10_000),
   expectedHeadDigest: sha256DigestSchema,
   barrierWatermark: watermarkSchema,
@@ -328,10 +330,13 @@ export const evidenceDagCanonicalStatusSchema = z.object({
 }).strict()
 
 export const evidenceDagViewInputSchema = z.object({
+  snapshotDigest: sha256DigestSchema.optional(),
+  artifactVersionRef: artifactVersionRefV1Schema.optional(),
   runtimeId: runtimeIdSchema.optional(),
   threadId: boundedIdSchema.optional(),
   workspaceRoot: z.string().trim().min(1).max(4_096).optional()
 }).strict().superRefine((value, context) => {
+  if ((value.snapshotDigest || value.artifactVersionRef) && (!value.runtimeId || !value.threadId)) context.addIssue({ code: 'custom', message: 'Explicit graph selectors require runtimeId and threadId.' })
   if (Boolean(value.runtimeId) === Boolean(value.threadId)) return
   context.addIssue({
     code: 'custom',
@@ -339,8 +344,16 @@ export const evidenceDagViewInputSchema = z.object({
   })
 })
 
+export const evidenceDagReadBindingSchema = z.object({
+  status: z.enum(['resolved', 'missing']), snapshotDigest: sha256DigestSchema.optional(),
+  reason: z.string().min(1).max(256).optional()
+}).strict().superRefine((value, context) => {
+  if (value.status === 'resolved' && !value.snapshotDigest) context.addIssue({ code: 'custom', message: 'Resolved binding requires a snapshot digest.' })
+})
+
 export const evidenceDagViewOutputSchema = z.object({
-  url: z.string().url().max(4_096),
+  url: z.string().url().max(4_096).nullable(),
+  binding: evidenceDagReadBindingSchema.optional(),
   threadId: boundedIdSchema.optional(),
   status: evidenceDagCanonicalStatusSchema
 }).strict()
@@ -372,6 +385,36 @@ export const evidenceDagUpdateOutputSchema = z.object({
   idempotent: z.boolean(),
   status: evidenceDagCanonicalStatusSchema
 }).strict()
+
+export const evidenceDagClaimSourceSchema = z.object({
+  ref: artifactVersionRefV1Schema,
+  startByte: z.number().int().nonnegative(),
+  endByte: z.number().int().positive(),
+  quote: z.string().min(1).max(128_000)
+}).strict().refine(value => value.endByte > value.startByte, 'Source byte range must be nonempty.')
+
+export const evidenceDagSubmittedClaimSchema = z.object({
+  id: boundedIdSchema,
+  text: z.string().trim().min(1).max(16_000),
+  reviewStatus: z.literal('pending'),
+  sources: z.array(evidenceDagClaimSourceSchema).min(1).max(32)
+}).strict()
+
+export const evidenceDagSubmitClaimsInputSchema = z.object({
+  runtimeId: runtimeIdSchema,
+  threadId: boundedIdSchema,
+  workspaceRoot: z.string().trim().min(1).max(4_096).optional(),
+  idempotencyKey: z.string().trim().min(8).max(512),
+  claims: z.array(evidenceDagSubmittedClaimSchema.omit({ id: true, reviewStatus: true })).min(1).max(100)
+}).strict()
+export const evidenceDagSubmitClaimsOutputSchema = z.object({
+  threadId: boundedIdSchema,
+  deltaDigest: sha256DigestSchema,
+  idempotent: z.boolean(),
+  claims: z.array(evidenceDagSubmittedClaimSchema).min(1).max(100)
+}).strict()
+export type EvidenceDagSubmitClaimsInput = z.infer<typeof evidenceDagSubmitClaimsInputSchema>
+export type EvidenceDagSubmitClaimsOutput = z.infer<typeof evidenceDagSubmitClaimsOutputSchema>
 
 export const evidenceDagSealClosureInputSchema = z.object({
   runtimeId: runtimeIdSchema,
@@ -646,7 +689,8 @@ export const evidenceDagExportSnapshotProductsOutputSchema = z.object({
  * instead of being aggregated here.
  */
 export const evidenceDagAuditQueryInputSchema = z.object({
-  subject: evidenceDagAuditQuerySubjectSchema
+  subject: evidenceDagAuditQuerySubjectSchema,
+  asOf: timestampSchema.optional()
 }).strict()
 
 /**
@@ -661,6 +705,7 @@ export const evidenceDagActivationPayloadSchema = z.object({
   runtimeId: runtimeIdSchema.optional(),
   threadId: boundedIdSchema.optional(),
   snapshotDigest: sha256DigestSchema.optional(),
+  artifactVersionRef: artifactVersionRefV1Schema.optional(),
   nodeId: boundedIdSchema.optional()
 }).strict().superRefine((value, context) => {
   if (value.view === 'closure' && !value.closureDigest) context.addIssue({ code: 'custom', message: 'An exact closure view requires its closure digest.' })

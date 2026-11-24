@@ -26,6 +26,8 @@ const VALIDATION_KEYWORDS = new Set([
   'minLength',
   'maxLength',
   'pattern',
+  'minimum',
+  'maximum',
   'enum',
   'const',
   'anyOf',
@@ -42,6 +44,7 @@ const ANNOTATION_KEYWORDS = new Set([
   'writeOnly',
   'deprecated',
 ]);
+const JSON_SCHEMA_TYPES = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
 const MAX_REPORTED_ISSUES = 5;
 
 /** Throws a RangeError when the schema uses a keyword the local validator cannot enforce. */
@@ -55,11 +58,27 @@ export function assertLocallyEnforceableJsonSchema(schema: JsonValue, path = '$'
         `Structured-output schema keyword "${keyword}" at ${path} cannot be enforced locally for a json_object upstream.`,
       );
     }
+    if (keyword === 'type' && !(
+      typeof value === 'string' && JSON_SCHEMA_TYPES.has(value)
+      || Array.isArray(value) && value.length > 0 && value.every((type) => typeof type === 'string' && JSON_SCHEMA_TYPES.has(type))
+    )) throw new RangeError(`Structured-output schema type at ${path} is invalid.`);
+    if (keyword === 'required' && !(Array.isArray(value) && value.every((name) => typeof name === 'string'))) {
+      throw new RangeError(`Structured-output schema required at ${path} must be an array of property names.`);
+    }
+    if (['minItems', 'maxItems', 'minLength', 'maxLength'].includes(keyword) && !(typeof value === 'number' && Number.isInteger(value) && value >= 0)) {
+      throw new RangeError(`Structured-output schema ${keyword} at ${path} must be a nonnegative integer.`);
+    }
+    if ((keyword === 'minimum' || keyword === 'maximum') && !(typeof value === 'number' && Number.isFinite(value))) {
+      throw new RangeError(`Structured-output schema ${keyword} at ${path} must be a finite number.`);
+    }
+    if ((keyword === 'enum' || keyword === 'anyOf') && !(Array.isArray(value) && value.length > 0)) {
+      throw new RangeError(`Structured-output schema ${keyword} at ${path} must be a nonempty array.`);
+    }
     if (keyword === 'properties' && isObject(value)) {
       for (const [name, child] of Object.entries(value)) {
         assertLocallyEnforceableJsonSchema(child, `${path}.properties.${name}`);
       }
-    } else if ((keyword === 'items' || keyword === 'additionalProperties') && !Array.isArray(value)) {
+    } else if (keyword === 'items' || keyword === 'additionalProperties') {
       assertLocallyEnforceableJsonSchema(value, `${path}.${keyword}`);
     } else if (keyword === 'anyOf' && Array.isArray(value)) {
       value.forEach((child, index) => assertLocallyEnforceableJsonSchema(child, `${path}.anyOf[${index}]`));
@@ -151,6 +170,10 @@ function validate(value: JsonValue, schema: JsonValue, path: string, issues: str
   }
   if (Array.isArray(schema.anyOf) && !schema.anyOf.some((branch) => branchMatches(value, branch, path))) {
     issues.push(`${path}: value matches no anyOf branch`);
+  }
+  if (typeof value === 'number') {
+    if (typeof schema.minimum === 'number' && value < schema.minimum) issues.push(`${path}: number is below minimum`);
+    if (typeof schema.maximum === 'number' && value > schema.maximum) issues.push(`${path}: number exceeds maximum`);
   }
   if (typeof value === 'string') validateString(value, schema, path, issues);
   if (Array.isArray(value)) validateArray(value, schema, path, issues);

@@ -19,7 +19,7 @@ describe('discussion outcome draft', () => {
     expect(draft).toContain('讨论范围：对照实验')
     expect(draft).toContain('失败记录')
     for (const id of ['side-7', 'main-4', 'turn-2', 'exec-7']) expect(draft).not.toContain(id)
-    expect(draft).toContain('待验证与下一步')
+    expect(draft).not.toContain('请补充尚未验证')
     expect(draft).not.toContain('旧回答')
     expect(draft).not.toContain('内部分析')
     expect(draft).not.toContain('raw tool output')

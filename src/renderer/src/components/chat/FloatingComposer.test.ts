@@ -5,12 +5,12 @@ import { WORKSPACE_PREVIEW_DRAG_SOURCE_MIME } from '@shared/workspace-preview'
 import {
   FloatingComposer,
   attachmentInputsFromPickedFiles,
+  attachmentInputsFromTransfer,
   composerWorkspaceReferenceDropFromTransfer,
   composeInsertedTextAtSelection,
   formatGoalElapsedSeconds,
   formatThreadContextStateLabel,
-  handleComposerImagePaste,
-  imageAttachmentInputsFromTransfer,
+  handleComposerAttachmentPaste,
   imageFilesFromTransfer,
   imageTransferHasImages,
   isImageGenerationConfigured,
@@ -18,7 +18,8 @@ import {
   parseCompactCommand,
   parseGoalCommand,
   parseReviewCommand,
-  parseSteerCommand
+  parseSteerCommand,
+  transferCarriesFiles
 } from './FloatingComposer'
 import {
   COMPOSER_RUNTIME_IDS,
@@ -484,7 +485,7 @@ describe('FloatingComposer image transfer helpers', () => {
       }
     }
 
-    expect(imageAttachmentInputsFromTransfer(source)).toEqual([
+    expect(attachmentInputsFromTransfer(source)).toEqual([
       { file: screenshot, path: '/tmp/project/shot.png' }
     ])
     expect(getPathForFile).toHaveBeenCalledWith(screenshot)
@@ -541,8 +542,8 @@ describe('FloatingComposer image transfer helpers', () => {
     const preventDefault = vi.fn()
     const onPickAttachments = vi.fn()
     const onPasteClipboardImage = vi.fn()
-    const handled = handleComposerImagePaste({
-      canPickAttachment: true,
+    const handled = handleComposerAttachmentPaste({
+      canAttachFiles: true,
       clipboardData: {
         getData: () => '',
         items: {
@@ -561,11 +562,44 @@ describe('FloatingComposer image transfer helpers', () => {
     expect(onPasteClipboardImage).not.toHaveBeenCalled()
   })
 
+  it('attaches a pasted PDF instead of leaving it to the clipboard bridge', () => {
+    const pdf = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'paper.pdf', {
+      type: 'application/pdf'
+    })
+    const preventDefault = vi.fn()
+    const onPickAttachments = vi.fn()
+    const onPasteClipboardImage = vi.fn()
+    const handled = handleComposerAttachmentPaste({
+      canAttachFiles: true,
+      clipboardData: {
+        getData: () => '',
+        files: {
+          length: 1,
+          0: pdf
+        }
+      },
+      preventDefault,
+      onPickAttachments,
+      onPasteClipboardImage
+    })
+
+    expect(handled).toBe(true)
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(onPickAttachments).toHaveBeenCalledWith([{ file: pdf }])
+    expect(onPasteClipboardImage).not.toHaveBeenCalled()
+  })
+
+  it('detects a file drag before drop data is populated', () => {
+    expect(transferCarriesFiles({ types: { length: 1, 0: 'Files' } })).toBe(true)
+    expect(transferCarriesFiles({ types: { length: 1, 0: 'text/plain' } })).toBe(false)
+    expect(attachmentInputsFromTransfer({ types: { length: 1, 0: 'Files' } })).toEqual([])
+  })
+
   it('does not intercept ordinary text paste', () => {
     const preventDefault = vi.fn()
     const onPasteClipboardImage = vi.fn()
-    const handled = handleComposerImagePaste({
-      canPickAttachment: true,
+    const handled = handleComposerAttachmentPaste({
+      canAttachFiles: true,
       clipboardData: {
         getData: (format) => format === 'text/plain' ? 'hello' : ''
       },
@@ -581,8 +615,8 @@ describe('FloatingComposer image transfer helpers', () => {
   it('falls back to the Electron clipboard image bridge when files are unavailable', () => {
     const preventDefault = vi.fn()
     const onPasteClipboardImage = vi.fn()
-    const handled = handleComposerImagePaste({
-      canPickAttachment: true,
+    const handled = handleComposerAttachmentPaste({
+      canAttachFiles: true,
       clipboardData: {
         getData: () => ''
       },
@@ -1408,7 +1442,9 @@ describe('FloatingComposer capability controls', () => {
     )
 
     expect(html).toContain('papers/spec.pdf')
-    expect(html).toContain('Open papers/spec.pdf')
+    // The chip labels its open affordance with the base name; the full path stays
+    // visible on the secondary line and in the title attribute.
+    expect(html).toContain('Open spec.pdf')
     expect(html).toContain('PDF')
     expect(html).toContain('Remove file reference')
     expect(html).toContain('aria-label="Send"')

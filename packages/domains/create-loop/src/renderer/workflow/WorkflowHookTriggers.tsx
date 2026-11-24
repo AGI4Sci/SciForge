@@ -11,7 +11,7 @@ import {
 } from '../../contract.js'
 
 const FIELD =
-  'w-full rounded-lg border border-ds-border bg-ds-card px-2.5 py-1.5 text-[13px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'
+  'w-full rounded-lg border border-ds-border bg-ds-card px-2.5 py-1.5 text-ds-md text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'
 
 function isToolPhase(phase: WorkflowHookPhase): boolean {
   return phase === 'PreToolUse' || phase === 'PostToolUse'
@@ -52,8 +52,8 @@ export function WorkflowHookTriggers({
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <div className="flex flex-col">
-              <span className="text-[14px] font-semibold text-ds-ink">{t('workflowHooks')}</span>
-              <span className="text-[11.5px] text-ds-faint">{t('workflowHooksHint')}</span>
+              <span className="text-ds-lg font-semibold text-ds-ink">{t('workflowHooks')}</span>
+              <span className="text-ds-xs text-ds-faint">{t('workflowHooksHint')}</span>
             </div>
           </div>
           <button
@@ -67,12 +67,12 @@ export function WorkflowHookTriggers({
 
         <div className="flex flex-col gap-3 overflow-y-auto px-5 py-4">
           {triggers.length === 0 ? (
-            <p className="py-6 text-center text-[12.5px] leading-5 text-ds-faint">{t('workflowHooksEmpty')}</p>
+            <p className="py-6 text-center text-ds-sm leading-5 text-ds-faint">{t('workflowHooksEmpty')}</p>
           ) : (
             triggers.map((trigger, index) => (
               <div key={trigger.id} className="flex flex-col gap-2.5 rounded-xl border border-ds-border p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <label className="flex items-center gap-2 text-[12.5px] font-medium text-ds-muted">
+                  <label className="flex items-center gap-2 text-ds-sm font-medium text-ds-muted">
                     <input
                       type="checkbox"
                       checked={trigger.enabled}
@@ -92,7 +92,7 @@ export function WorkflowHookTriggers({
 
                 <div className="grid grid-cols-2 gap-2">
                   <label className="flex flex-col gap-1">
-                    <span className="text-[11px] font-medium text-ds-faint">{t('workflowHookPhase')}</span>
+                    <span className="text-ds-xs font-medium text-ds-faint">{t('workflowHookPhase')}</span>
                     <select
                       className={FIELD}
                       value={trigger.phase}
@@ -106,7 +106,7 @@ export function WorkflowHookTriggers({
                     </select>
                   </label>
                   <label className="flex flex-col gap-1">
-                    <span className="text-[11px] font-medium text-ds-faint">{t('workflowHookWorkflow')}</span>
+                    <span className="text-ds-xs font-medium text-ds-faint">{t('workflowHookWorkflow')}</span>
                     <select
                       className={FIELD}
                       value={trigger.workflowId}
@@ -123,7 +123,7 @@ export function WorkflowHookTriggers({
                 </div>
 
                 <label className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-ds-faint">{t('workflowHookMode')}</span>
+                  <span className="text-ds-xs font-medium text-ds-faint">{t('workflowHookMode')}</span>
                   <select
                     className={FIELD}
                     value={trigger.mode}
@@ -135,12 +135,12 @@ export function WorkflowHookTriggers({
                       </option>
                     ))}
                   </select>
-                  <span className="text-[11px] leading-4 text-ds-faint">{t(`workflowHookModeHint_${trigger.mode}`)}</span>
+                  <span className="text-ds-xs leading-4 text-ds-faint">{t(`workflowHookModeHint_${trigger.mode}`)}</span>
                 </label>
 
                 {isToolPhase(trigger.phase) ? (
                   <label className="flex flex-col gap-1">
-                    <span className="text-[11px] font-medium text-ds-faint">{t('workflowHookToolNames')}</span>
+                    <span className="text-ds-xs font-medium text-ds-faint">{t('workflowHookToolNames')}</span>
                     <input
                       className={FIELD}
                       value={trigger.toolNames.join(', ')}
@@ -154,7 +154,7 @@ export function WorkflowHookTriggers({
                         })
                       }
                     />
-                    <span className="text-[11px] leading-4 text-ds-faint">{t('workflowHookToolNamesHint')}</span>
+                    <span className="text-ds-xs leading-4 text-ds-faint">{t('workflowHookToolNamesHint')}</span>
                   </label>
                 ) : null}
               </div>
@@ -177,13 +177,13 @@ export function WorkflowHookTriggers({
                 }
               ])
             }
-            className="inline-flex items-center gap-1.5 self-start rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium text-accent transition hover:bg-accent/10"
+            className="inline-flex items-center gap-1.5 self-start rounded-lg px-2.5 py-1.5 text-ds-sm font-medium text-accent transition hover:bg-accent/10"
           >
             <Plus className="h-3.5 w-3.5" strokeWidth={2} />
             {t('workflowHookAdd')}
           </button>
 
-          <p className="rounded-lg bg-ds-subtle px-3 py-2 text-[11px] leading-5 text-ds-faint">
+          <p className="rounded-lg bg-ds-subtle px-3 py-2 text-ds-xs leading-5 text-ds-faint">
             {t('workflowHookRecursionNote')}
           </p>
         </div>

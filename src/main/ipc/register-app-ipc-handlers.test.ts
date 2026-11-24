@@ -215,10 +215,10 @@ describe('registerAppIpcHandlers', () => {
     const sender = createSender(7)
     const turn = { runtimeId: 'codex', threadId: 'side-1', text: 'Light question', allowedTools: [] }
     await expect(handlers.get('agentRuntime:startTurn')?.({ sender }, turn)).resolves.toEqual({ threadId: 'side-1', turnId: 'turn-1' })
-    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining(turn))
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining(turn), 'native-composer')
     const queued = { runtimeId: 'codex', threadId: 'side-1', clientDirectiveId: 'light-queue-1', text: 'Follow up', payload: { chatMode: 'light', allowedTools: [] } }
     await expect(handlers.get('agentRuntime:acceptQueuedInput')?.({ sender }, queued)).resolves.toEqual({ accepted: true })
-    expect(acceptQueuedInput).toHaveBeenCalledWith(queued)
+    expect(acceptQueuedInput).toHaveBeenCalledWith(queued, 'native-composer')
   })
 
   beforeEach(() => {
@@ -779,7 +779,7 @@ describe('registerAppIpcHandlers', () => {
         expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
           visibleContextSurfaceId: initiatingWindowId,
           visibleContextBindingId: expect.stringMatching(/^bound_surface_/u)
-        }))
+        }), 'native-composer')
         expect(boundWindowId).toBe(initiatingWindowId)
         expect(boundRoute).toBe(`/${initiatingWindowId}/initial`)
         expect(visibleContext.peek()).toMatchObject({
@@ -844,7 +844,7 @@ describe('registerAppIpcHandlers', () => {
         visibleContextSurfaceId: 'browser:7',
         visibleContextBindingAttempted: true,
         visibleContextBindingId: expect.stringMatching(/^bound_surface_/u)
-      }))
+      }), 'native-composer')
       expect(boundWindowId).toBe('browser:7')
       expect(reportedFailure).toBeUndefined()
     } finally {
@@ -882,10 +882,10 @@ describe('registerAppIpcHandlers', () => {
       visibleContextSurfaceId: 'browser:7',
       visibleContextBindingAttempted: true,
       visibleContextBindingFailure: 'binding_error'
-    }))
+    }), 'native-composer')
     expect(startTurn).toHaveBeenCalledWith(
       expect.not.objectContaining({ visibleContextBindingId: expect.anything() })
-    )
+    , 'native-composer')
   })
 
   it('forwards the surface-binding failure reason reported at the IPC boundary', async () => {
@@ -930,7 +930,7 @@ describe('registerAppIpcHandlers', () => {
     expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
       visibleContextBindingAttempted: true,
       visibleContextBindingFailure: 'thread_mismatch'
-    }))
+    }), 'native-composer')
   })
 
   it('issues registered target references through the native sender identity', async () => {
@@ -1802,7 +1802,7 @@ describe('registerAppIpcHandlers', () => {
           requiresRegionRef: true
         }]
       }
-    })
+    }, 'native-composer')
     expect(agentRuntime.interruptTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-1',
@@ -1819,7 +1819,7 @@ describe('registerAppIpcHandlers', () => {
         mode: 'inspect',
         requirements: [{ receiptKind: 'visual.look' }]
       }
-    })
+    }, 'native-composer')
     expect(agentRuntime.resolveApproval).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-1',

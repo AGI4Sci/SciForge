@@ -7,6 +7,8 @@ import {
   WORKSPACE_TABULAR_MAX_PREVIEW_ROWS,
   WorkspaceTabularService,
   applyWorkspaceTabularDelimitedEdit,
+  countDelimitedDataRows,
+  countDelimitedRecords,
   createWorkspaceTabularPreview,
   deleteWorkspaceTabularColumns,
   deleteWorkspaceTabularRows,
@@ -41,6 +43,25 @@ test('parses CSV text into a bounded preview and column summary', () => {
   assert.deepEqual(result.previewRows[1]?.values, ['B "quoted"', '12', 'beta'])
   assert.equal(result.columns[1]?.inferredType, 'number')
   assert.deepEqual(result.columns[1]?.examples, ['10', '12', '13'])
+})
+
+test('previews Unicode JSONL without Node Buffer, a local path or a synthetic observation', () => {
+  const text = '{"sample":"细胞α","count":2}\n'
+  const originalBuffer = globalThis.Buffer
+  let result: ReturnType<typeof createWorkspaceTabularPreview>
+  try {
+    Object.defineProperty(globalThis, 'Buffer', { configurable: true, writable: true, value: undefined })
+    result = createWorkspaceTabularPreview(workspaceTabularPreviewInputSchema.parse({
+      text, mimeType: 'application/x-ndjson', size: new TextEncoder().encode(text).byteLength * 2,
+      includeObservation: false
+    }))
+  } finally {
+    Object.defineProperty(globalThis, 'Buffer', { configurable: true, writable: true, value: originalBuffer })
+  }
+  assert.equal(result.rowCount, 2)
+  assert.equal(result.rowCountIsEstimate, true)
+  assert.deepEqual(result.previewRows[0]?.values, ['细胞α', '2'])
+  assert.equal(result.observation, undefined)
 })
 
 test('parses TSV without a header and bounds columns', () => {
@@ -180,6 +201,7 @@ test('estimates JSONL row count from provided file size metadata', () => {
   assert.equal(result.rowCount, 8)
   assert.equal(result.truncatedRows, true)
   assert.equal(result.observation?.tables?.[0]?.rowCount, 8)
+  assert.equal(result.observation?.tables?.[0]?.rowCountIsEstimate, true)
   assert.match(result.observation?.visibleText ?? '', /approximately 8 data rows/)
   assert.ok(result.observation?.actions.includes('tabular.filterRows'))
   assert.ok(result.observation?.actions.includes('tabular.selectCells'))
@@ -188,6 +210,53 @@ test('estimates JSONL row count from provided file size metadata', () => {
   assert.ok(!result.observation?.actions.includes('tabular.insertColumns'))
   assert.ok(!result.observation?.actions.includes('tabular.deleteRows'))
   assert.ok(!result.observation?.actions.includes('tabular.deleteColumns'))
+})
+
+test('uses an exact full-file CSV row count when the host counted beyond the preview prefix', () => {
+  const text = 'cell_id,gene,yhat\nc1,AFF2,1.0\nc2,AMBRA1,2.0\n'
+  const result = createWorkspaceTabularPreview(workspaceTabularPreviewInputSchema.parse({
+    text,
+    format: 'csv',
+    size: 2_200_000,
+    exactDataRowCount: 25_800,
+    maxPreviewRows: 50,
+    path: '02_intervals.csv'
+  }))
+
+  assert.equal(result.format, 'csv')
+  assert.equal(result.rowCountIsEstimate, false)
+  assert.equal(result.rowCount, 25_800)
+  assert.equal(result.truncatedRows, true)
+  assert.equal(result.observation?.tables?.[0]?.rowCount, 25_800)
+  assert.equal(result.observation?.tables?.[0]?.rowCountIsEstimate, false)
+  assert.match(result.observation?.visibleText ?? '', /Tabular preview: 25800 data rows/)
+  assert.match(result.observation?.visibleText ?? '', /export or open the full file/)
+  assert.ok(result.warnings.some((warning) => warning.includes('Preview includes 2 of 25800 data rows')))
+  assert.ok(!result.warnings.some((warning) => warning.includes('estimated')))
+})
+
+test('falls back to an estimated CSV row count when only a size-bounded prefix is available', () => {
+  const text = 'cell_id,gene,yhat\nc1,AFF2,1.0\nc2,AMBRA1,2.0\n'
+  const textBytes = new TextEncoder().encode(text).byteLength
+  const result = createWorkspaceTabularPreview(workspaceTabularPreviewInputSchema.parse({
+    text,
+    format: 'csv',
+    size: textBytes * 2,
+    maxPreviewRows: 50,
+    path: '02_intervals.csv'
+  }))
+
+  assert.equal(result.rowCountIsEstimate, true)
+  assert.equal(result.rowCount, 4)
+  assert.equal(result.observation?.tables?.[0]?.rowCountIsEstimate, true)
+  assert.match(result.observation?.visibleText ?? '', /approximately 4 data rows/)
+})
+
+test('counts delimited data rows with quoting without materializing the full table', () => {
+  const text = 'a,b\n"1,2","line\nbreak"\nc,d\n'
+  assert.equal(countDelimitedRecords(text, ','), 3)
+  assert.equal(countDelimitedDataRows(text, ',', true), 2)
+  assert.equal(countDelimitedDataRows(text, ',', false), 3)
 })
 
 test('emits a WorkspaceObservation-compatible tabular summary shape', () => {

@@ -160,7 +160,7 @@ export function DocxWorkspaceViewer({
         data-workspace-preview-docx-viewer
         data-status={model.status}
       >
-        <div className="p-4 text-sm text-ds-text" role={model.status === 'unsupported' ? 'alert' : 'status'}>
+        <div className="p-4 text-ds-lg text-ds-text" role={model.status === 'unsupported' ? 'alert' : 'status'}>
           <strong>{model.title}</strong>
           <p className="mt-1 text-ds-muted">{model.message}</p>
         </div>

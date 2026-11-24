@@ -246,7 +246,7 @@ test('probes protocols before the first automatic request and caches the support
 });
 
 test('times out an upstream request at the protocol boundary', async () => {
-  const negotiator = new UpstreamProtocolNegotiator();
+  const negotiator = new UpstreamProtocolNegotiator({ sleep: async () => undefined });
   const fetchImpl: typeof fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
     init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
   });
@@ -280,7 +280,7 @@ test('applies the configured upstream timeout when the profile sets none', async
     else process.env.SCIFORGE_UPSTREAM_TIMEOUT_MS = previous;
   });
 
-  const negotiator = new UpstreamProtocolNegotiator();
+  const negotiator = new UpstreamProtocolNegotiator({ sleep: async () => undefined });
   const fetchImpl: typeof fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
     init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
   });
@@ -428,32 +428,37 @@ test('invalidates a cached protocol only on definitive incompatibility', async (
   ]);
 });
 
-test('never resubmits a prompt after auth, quota, rate-limit, timeout, 5xx, or ambiguous 400 failures', async (context) => {
+test('retries only transient upstream failures, never a contract or auth rejection', async (context) => {
   const cases: Array<{
     name: string;
-    response?: Response;
+    response?: () => Response;
     error?: Error;
     expectedCode: string;
+    expectedCalls: number;
   }> = [
-    { name: 'auth', response: Response.json({ error: { message: 'invalid API key' } }, { status: 401 }), expectedCode: 'upstream_http_401' },
-    { name: 'quota', response: Response.json({ error: { message: 'quota exhausted' } }, { status: 402 }), expectedCode: 'upstream_http_402' },
-    { name: 'rate limit', response: Response.json({ error: { message: 'too many requests' } }, { status: 429 }), expectedCode: 'upstream_http_429' },
-    { name: 'server failure', response: Response.json({ error: { message: 'temporary failure' } }, { status: 503 }), expectedCode: 'upstream_http_503' },
-    { name: 'ordinary bad parameter', response: Response.json({ error: { message: 'invalid parameter temperature' } }, { status: 400 }), expectedCode: 'upstream_http_400' },
-    { name: 'structured schema validation', response: Response.json({ error: { message: 'invalid request schema: additionalProperties must be false' } }, { status: 400 }), expectedCode: 'upstream_http_400' },
-    { name: 'structured schema field path', response: Response.json({ error: { message: 'invalid value at path response_format.json_schema.schema.additionalProperties' } }, { status: 400 }), expectedCode: 'upstream_http_400' },
-    { name: 'structured content media type', response: Response.json({ error: { message: 'unsupported media type in JSON Schema contentMediaType' } }, { status: 422 }), expectedCode: 'upstream_http_422' },
-    { name: 'timeout', error: new Error('request timed out'), expectedCode: 'upstream_timeout' },
+    { name: 'auth', response: () => Response.json({ error: { message: 'invalid API key' } }, { status: 401 }), expectedCode: 'upstream_http_401', expectedCalls: 1 },
+    { name: 'quota', response: () => Response.json({ error: { message: 'quota exhausted' } }, { status: 402 }), expectedCode: 'upstream_http_402', expectedCalls: 1 },
+    { name: 'rate limit', response: () => Response.json({ error: { message: 'too many requests' } }, { status: 429 }), expectedCode: 'upstream_http_429', expectedCalls: 3 },
+    { name: 'server failure', response: () => Response.json({ error: { message: 'temporary failure' } }, { status: 503 }), expectedCode: 'upstream_http_503', expectedCalls: 3 },
+    { name: 'ordinary bad parameter', response: () => Response.json({ error: { message: 'invalid parameter temperature' } }, { status: 400 }), expectedCode: 'upstream_http_400', expectedCalls: 1 },
+    { name: 'structured schema validation', response: () => Response.json({ error: { message: 'invalid request schema: additionalProperties must be false' } }, { status: 400 }), expectedCode: 'upstream_http_400', expectedCalls: 1 },
+    { name: 'structured schema field path', response: () => Response.json({ error: { message: 'invalid value at path response_format.json_schema.schema.additionalProperties' } }, { status: 400 }), expectedCode: 'upstream_http_400', expectedCalls: 1 },
+    { name: 'structured content media type', response: () => Response.json({ error: { message: 'unsupported media type in JSON Schema contentMediaType' } }, { status: 422 }), expectedCode: 'upstream_http_422', expectedCalls: 1 },
+    { name: 'timeout', error: new Error('request timed out'), expectedCode: 'upstream_timeout', expectedCalls: 3 },
   ];
 
   for (const entry of cases) {
     await context.test(entry.name, async () => {
       let callCount = 0;
-      const negotiator = new UpstreamProtocolNegotiator();
+      const negotiator = new UpstreamProtocolNegotiator({
+        random: () => 0,
+        sleep: async () => undefined,
+      });
       const fetchImpl: typeof fetch = async () => {
         callCount += 1;
         if (entry.error) throw entry.error;
-        return entry.response as Response;
+        // A fresh Response per attempt: the retry re-reads the body.
+        return (entry.response as () => Response)();
       };
       await assert.rejects(
         negotiator.request({
@@ -466,7 +471,7 @@ test('never resubmits a prompt after auth, quota, rate-limit, timeout, 5xx, or a
         }),
         (error: unknown) => error instanceof UpstreamRequestError && error.code === entry.expectedCode,
       );
-      assert.equal(callCount, 1);
+      assert.equal(callCount, entry.expectedCalls);
     });
   }
 });
@@ -798,7 +803,7 @@ test('json_object Chat upstreams fail closed before sending a schema the Router 
   const calls: CapturedCall[] = [];
   await assert.rejects(
     new UpstreamProtocolNegotiator().request({
-      request: { ...request, outputSchema: { type: 'object', properties: { n: { type: 'number', minimum: 1 } } } },
+      request: { ...request, outputSchema: { type: 'object', properties: { n: { type: 'number', multipleOf: 2 } } } },
       baseUrl: 'https://json-mode.example/v1',
       apiKey: 'secret',
       model: 'neutral-model',
@@ -809,17 +814,17 @@ test('json_object Chat upstreams fail closed before sending a schema the Router 
     (error: unknown) => (
       error instanceof UpstreamRequestError
       && error.code === 'upstream_protocol_capability_unsupported'
-      && /"minimum"/u.test(error.message)
+      && /"multipleOf"/u.test(error.message)
     ),
   );
   assert.equal(calls.length, 0);
 });
 
-test('json_object declaration leaves Responses and Anthropic structured output native', async () => {
+test('json_object declaration enforces Responses locally and keeps Anthropic native', async () => {
   const calls: CapturedCall[] = [];
   const negotiator = new UpstreamProtocolNegotiator();
   for (const [protocol, result] of [
-    ['responses', responsesResult('not validated locally')],
+    ['responses', responsesResult(JSON.stringify({ workModules: [{ planItemId: 'item_a1', title: 'Collect' }], target: '$project' }))],
     ['anthropic-messages', anthropicResult('not validated locally')],
   ] as const) {
     await negotiator.request({
@@ -832,8 +837,67 @@ test('json_object declaration leaves Responses and Anthropic structured output n
       preferredProtocol: protocol,
     });
   }
-  assert.equal((calls[0]?.body.text as { format: { type: string } }).format.type, 'json_schema');
+  assert.equal((calls[0]?.body.text as { format: { type: string } }).format.type, 'json_object');
+  assert.ok(String(calls[0]?.body.instructions).includes(JSON.stringify(requirementsLikeSchema)));
+  assert.equal(calls[0]?.body.model, 'neutral-model');
   assert.equal((calls[1]?.body.output_config as { format: { type: string } }).format.type, 'json_schema');
+});
+
+test('automatic Responses json_object rejects original lookaround schema violations without retrying another provider or wire', async () => {
+  const schema = { type: 'object', properties: { question: { type: 'string', pattern: '^(?=.*[a-z]).+$' } }, required: ['question'], additionalProperties: false };
+  for (const text of ['', '{"question":"   "}', '{"question":"ok","extra":true}', 'not-json']) {
+    const calls: CapturedCall[] = [];
+    await assert.rejects(new UpstreamProtocolNegotiator().request({
+      request: { ...request, text: { format: { type: 'json_schema', name: 'question', schema, strict: true } } },
+      baseUrl: 'https://json-mode.example/v1', apiKey: 'secret', model: 'neutral-model',
+      compatibility: { chatStructuredOutputMode: 'json_object' },
+      fetchImpl: captureFetch(calls, [responsesResult(text)]), preferredProtocol: 'responses',
+    }), (error: unknown) => error instanceof UpstreamRequestError && error.code === 'structured_output_invalid');
+    assert.equal(calls.length, 1);
+    assert.match(calls[0]!.url, /\/responses$/u);
+    assert.deepEqual(calls[0]!.body.text, { format: { type: 'json_object' } });
+    assert.ok(String(calls[0]!.body.instructions).includes(JSON.stringify(schema)));
+  }
+});
+
+test('Responses json_object preserves tools and rejects unsupported local constraints before sending', async () => {
+  const calls: CapturedCall[] = [];
+  const toolRequest = { ...request, tools: [{ type: 'function', name: 'inspect', parameters: { type: 'object', properties: {}, additionalProperties: false } }], outputSchema: requirementsLikeSchema };
+  const toolResponse = Response.json({ id: 'resp_tool', object: 'response', status: 'completed', output: [{ type: 'function_call', call_id: 'call_1', name: 'inspect', arguments: '{}' }] });
+  const result = await new UpstreamProtocolNegotiator().request({
+    request: toolRequest, baseUrl: 'https://json-mode.example/v1', apiKey: 'secret', model: 'neutral-model',
+    compatibility: { preferredProtocol: 'responses', allowedProtocols: ['responses'], chatStructuredOutputMode: 'json_object' },
+    fetchImpl: captureFetch(calls, [toolResponse]), preferredProtocol: 'responses',
+  });
+  assert.deepEqual(calls[0]!.body.tools, toolRequest.tools);
+  assert.equal((result.response.output as Array<{ type: string }>)[0]!.type, 'function_call');
+  await assert.rejects(new UpstreamProtocolNegotiator().request({
+    request: { ...request, outputSchema: { type: 'object', properties: { n: { type: 'number', multipleOf: 2 } } } },
+    baseUrl: 'https://json-mode.example/v1', apiKey: 'secret', model: 'neutral-model',
+    compatibility: { preferredProtocol: 'responses', allowedProtocols: ['responses'], chatStructuredOutputMode: 'json_object' },
+    fetchImpl: captureFetch(calls, []), preferredProtocol: 'responses',
+  }), (error: unknown) => error instanceof UpstreamRequestError && error.code === 'upstream_protocol_capability_unsupported');
+  assert.equal(calls.length, 1);
+});
+
+test('Responses JSON compatibility validates standard message content without SDK output_text in JSON and SSE', async () => {
+  for (const stream of [false, true]) {
+    for (const valid of [true, false]) {
+      const text = JSON.stringify({ question: valid ? 'Which input?' : '   ' });
+      const terminal = { id: 'resp_standard', object: 'response', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] };
+      const response = stream
+        ? new Response(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: terminal })}\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+        : Response.json(terminal);
+      const pending = new UpstreamProtocolNegotiator().request({
+        request: { ...request, stream, outputSchema: { type: 'object', properties: { question: { type: 'string', pattern: '\\S' } }, required: ['question'], additionalProperties: false } },
+        baseUrl: 'https://json-mode.example/v1', apiKey: 'secret', model: 'neutral-model',
+        compatibility: { preferredProtocol: 'responses', allowedProtocols: ['responses'], chatStructuredOutputMode: 'json_object' },
+        fetchImpl: captureFetch([], [response]), preferredProtocol: 'responses',
+      });
+      if (valid) assert.deepEqual((await pending).response.output, terminal.output);
+      else await assert.rejects(pending, (error: unknown) => error instanceof UpstreamRequestError && error.code === 'structured_output_invalid');
+    }
+  }
 });
 
 test('invalid provider-neutral outputSchema never degrades to an unconstrained request', async () => {
@@ -2035,7 +2099,11 @@ test('an explicit upstream rejection is remembered and blocks the repeat pre-sen
 
 test('rate limits never create negatives, and a success clears an existing one', async () => {
   const corrections = new CapabilityCorrections({ now: () => 5_000, ttlMs: 3_600_000 });
-  const negotiator = new UpstreamProtocolNegotiator({ corrections });
+  const negotiator = new UpstreamProtocolNegotiator({
+    corrections,
+    random: () => 0,
+    sleep: async () => undefined,
+  });
   const compatibility = {
     preferredProtocol: 'responses' as const,
     allowedProtocols: ['responses' as const],
@@ -2048,17 +2116,23 @@ test('rate limits never create negatives, and a success clears an existing one',
     level: 'max',
   };
 
+  let rateLimitedCalls = 0;
   await assert.rejects(
     negotiator.request({
       request: { ...request, reasoning_effort: 'max' },
       baseUrl: 'https://models.example/v1',
       apiKey: 'secret',
       model: 'configured-model',
-      fetchImpl: captureFetch([], [Response.json({ error: 'rate limited' }, { status: 429 })]),
+      // Every retry re-reads a fresh 429 body; the budget still runs out.
+      fetchImpl: async () => {
+        rateLimitedCalls += 1;
+        return Response.json({ error: 'rate limited' }, { status: 429 });
+      },
       compatibility,
     }),
     (error: UpstreamRequestError) => error.code === 'upstream_http_429',
   );
+  assert.equal(rateLimitedCalls, 3);
   assert.equal(corrections.negative(negativeQuery), null);
 
   // Race: a concurrent request records the negative while this one is in flight;
@@ -2149,3 +2223,222 @@ test('adaptive default invents no effort and unsupported budgets still fail befo
   await assert.rejects(run({ type: 'adaptive' }, { effort: 'turbo' }), /effort/);
   assert.equal(calls.length, 1);
 });
+
+test('retries a rate-limited request after Retry-After and re-sends a byte-identical body', async () => {
+  const calls: CapturedCall[] = [];
+  const delays: number[] = [];
+  const attempts: UpstreamTraceAttemptStart[] = [];
+  const responses = [
+    Response.json(
+      { error: { message: 'too many requests' } },
+      { status: 429, headers: { 'retry-after': '1' } },
+    ),
+    responsesResult('recovered'),
+  ];
+  const negotiator = new UpstreamProtocolNegotiator({
+    sleep: async (delayMs) => { delays.push(delayMs); },
+    random: () => 0,
+  });
+
+  const result = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    preferredProtocol: 'responses',
+    compatibility: { allowedProtocols: ['responses'] },
+    fetchImpl: captureFetch(calls, responses),
+    traceAttempt: (attempt) => { attempts.push(attempt); return {}; },
+  });
+
+  assert.equal(result.protocol, 'responses');
+  assert.equal(calls.length, 2);
+  // Safety: the retry is only allowed because the prepared body never changed.
+  assert.deepEqual(calls[1]?.body, calls[0]?.body);
+  // Retry-After: 1 is honoured in milliseconds instead of the exponential delay.
+  assert.deepEqual(delays, [1_000]);
+  assert.deepEqual(attempts.map((attempt) => attempt.retry), [0, 1]);
+});
+
+test('a persistent 429 exhausts the attempt budget and names the final reason', async () => {
+  const calls: CapturedCall[] = [];
+  const delays: number[] = [];
+  const attempts: UpstreamTraceAttemptStart[] = [];
+  const negotiator = new UpstreamProtocolNegotiator({
+    sleep: async (delayMs) => { delays.push(delayMs); },
+    random: () => 1,
+    policy: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 400 },
+  });
+
+  const failure = await captureRejection(negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    preferredProtocol: 'responses',
+    compatibility: { allowedProtocols: ['responses'] },
+    fetchImpl: recordingFetch(calls, () => Response.json(
+      { error: { message: 'too many requests' } },
+      { status: 429 },
+    )),
+    traceAttempt: (attempt) => { attempts.push(attempt); return {}; },
+  }));
+
+  assert.ok(failure instanceof UpstreamRequestError);
+  // The established code contract is preserved for existing consumers...
+  assert.equal(failure.code, 'upstream_http_429');
+  // ...while the exhausted retry budget is named distinctly.
+  assert.deepEqual(failure.retryState, {
+    attempts: 3,
+    exhausted: true,
+    reasonCode: 'upstream_http_429_exhausted',
+  });
+  assert.equal(failure.retryable, true);
+  assert.match(failure.message, /Upstream returned HTTP 429/u);
+  assert.match(failure.message, /Gave up after 3 attempt/u);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(attempts.map((attempt) => attempt.retry), [0, 1, 2]);
+  // Exponential backoff with jitter pinned to its upper bound by random = 1.
+  assert.deepEqual(delays, [100, 200]);
+});
+
+test('retries an upstream timeout and returns the later successful attempt', async () => {
+  const calls: CapturedCall[] = [];
+  const delays: number[] = [];
+  const negotiator = new UpstreamProtocolNegotiator({
+    sleep: async (delayMs) => { delays.push(delayMs); },
+    random: () => 0,
+  });
+
+  const result = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    preferredProtocol: 'responses',
+    compatibility: { allowedProtocols: ['responses'] },
+    fetchImpl: recordingFetch(calls, (call) => {
+      if (call === 1) throw new Error('upstream request timed out');
+      return responsesResult('slow but complete');
+    }),
+  });
+
+  assert.equal(result.protocol, 'responses');
+  assert.equal(calls.length, 2);
+  // Bare exponential delay halved by jitter pinned to its lower bound.
+  assert.deepEqual(delays, [250]);
+});
+
+test('never replays a request after the first delta reached the caller', async () => {
+  let calls = 0;
+  const deltas: string[] = [];
+  const sleeps: number[] = [];
+  const encoder = new TextEncoder();
+  const negotiator = new UpstreamProtocolNegotiator({
+    sleep: async (delayMs) => { sleeps.push(delayMs); },
+  });
+  const streamingFetch: typeof fetch = async (_url, init) => {
+    calls += 1;
+    const signal = init?.signal;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'data: {"id":"chat","choices":[{"delta":{"content":"Partial "},"finish_reason":null}]}\n\n',
+        ));
+      },
+      // Stall after the delta until the attempt times out, so the failure is a
+      // retryable timeout that arrives *after* public output.
+      pull() {
+        return new Promise<void>((_resolve, reject) => {
+          const abort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+          if (signal?.aborted) abort();
+          else signal?.addEventListener('abort', abort, { once: true });
+        });
+      },
+    });
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+  };
+
+  // AbortSignal.timeout() uses an unref'd timer; hold one ref'd handle so the
+  // stalled stream cannot let the runner exit before the timeout fires.
+  const keepAlive = setTimeout(() => undefined, 5_000);
+  try {
+    await assert.rejects(
+      negotiator.request({
+        request: { ...request, stream: true },
+        baseUrl: 'https://models.example/v1',
+        apiKey: 'secret',
+        model: 'configured-model',
+        preferredProtocol: 'chat-completions',
+        compatibility: { allowedProtocols: ['chat-completions'] },
+        timeoutMs: 30,
+        fetchImpl: streamingFetch,
+        onTextDelta: (text) => deltas.push(text),
+      }),
+      (error: unknown) => error instanceof UpstreamRequestError && error.code === 'upstream_timeout',
+    );
+
+    assert.equal(calls, 1);
+    assert.deepEqual(deltas, ['Partial ']);
+    assert.deepEqual(sleeps, []);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+test('a cancelled turn ends the retry loop with the failure it already had', async () => {
+  const calls: CapturedCall[] = [];
+  const sleeps: number[] = [];
+  const controller = new AbortController();
+  const negotiator = new UpstreamProtocolNegotiator({
+    random: () => 1,
+    sleep: async (delayMs) => {
+      sleeps.push(delayMs);
+      controller.abort();
+    },
+  });
+
+  const failure = await captureRejection(negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    preferredProtocol: 'responses',
+    compatibility: { allowedProtocols: ['responses'] },
+    signal: controller.signal,
+    fetchImpl: recordingFetch(calls, () => Response.json(
+      { error: { message: 'too many requests' } },
+      { status: 429 },
+    )),
+  }));
+
+  assert.ok(failure instanceof UpstreamRequestError);
+  assert.equal(failure.code, 'upstream_http_429');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sleeps, [500]);
+});
+
+async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  assert.fail('Expected the upstream request to reject.');
+}
+
+function recordingFetch(
+  calls: CapturedCall[],
+  respond: (call: number) => Response,
+): typeof fetch {
+  let call = 0;
+  return async (url, init) => {
+    calls.push({
+      url: String(url),
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+    });
+    call += 1;
+    return respond(call);
+  };
+}

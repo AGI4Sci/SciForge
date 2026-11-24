@@ -22,3 +22,16 @@ test('activation receiver validates exact resource and all Host identity facts, 
   for (const forged of [{ ...host, sessionId: 'another' }, { ...host, runtimeId: 'other' }, { ...host, runtimeId: '' }, { ...host, workspaceRoot: '/other' }]) assert.throws(() => selectionFromResource(resource, forged))
   for (const forged of [{ ...resource, resourceId: 'other' }, { ...resource, resourceKind: 'other' }, { ...resource, context: { ...selection, capabilityIds: ['anchored-comments.upsert'] } }, { ...resource, context: null }]) assert.throws(() => selectionFromResource(forged, host))
 })
+
+test('code selection freezes portable code location alongside the exact selected text', () => {
+  const codeAnchor = { filePath: 'src/example.ts', side: 'new', line: 4, endLine: 5,
+    hunkHeader: '@@ -4,2 +4,2 @@', code: selection.quote, baseRevision: 'abc', contentDigest: 'a'.repeat(64) }
+  const input = selectionCommentInput({ ...selection, codeAnchor }, 'Explain', host, 'code', selection.capturedAt)
+  assert.deepEqual(input.thread.anchor.codeAnchor, codeAnchor)
+  assert.equal(input.thread.anchor.canonical.selection?.quote, selection.quote)
+  for (const forged of [{ ...codeAnchor, filePath: '../secret' }, { ...codeAnchor, filePath: 'src\\secret.ts' },
+    { ...codeAnchor, filePath: 'src/file:secret.ts' }, { ...codeAnchor, endLine: 3 },
+    { ...codeAnchor, code: 'Different source' }, { ...codeAnchor, workspaceRoot: '/other' }]) {
+    assert.throws(() => selectionCommentInput({ ...selection, codeAnchor: forged }, 'Explain', host, 'code', selection.capturedAt))
+  }
+})

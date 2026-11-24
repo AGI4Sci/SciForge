@@ -848,11 +848,16 @@ export function buildThreadEventSink(
         latestTurnStatus: ev.state,
         updatedAt: runtimeEventUpdatedAt(ev.createdAt)
       })
+      // The raw runtime message is what the user used to see ("unexpected
+      // status 429"); format it so a recognized upstream rate limit/timeout maps
+      // to the localized, actionable summary while the raw text stays in the
+      // technical detail.
+      const failed = !completed && ev.state !== 'cancelled' && ev.state !== 'aborted'
+      const failureText = ev.message?.trim() || 'Turn failed'
       const base = flushLiveBlocks(s, {
         ...finalizeTurnTiming(s),
-        error: completed || ev.state === 'cancelled' || ev.state === 'aborted'
-          ? null
-          : ev.message?.trim() || 'Turn failed',
+        error: failed ? formatRuntimeError(failureText) : null,
+        ...(failed ? { runtimeErrorDetail: runtimeErrorDetail(failureText) || null } : {}),
         currentTurnId: null,
         currentTurnUserId: null
       })

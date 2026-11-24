@@ -184,6 +184,20 @@ test('chat/file UI requests fresh acceptance and code/run UI preserves source dr
     assert.deepEqual(refreshed.inputPaths, ['new-data.csv'])
     assert.equal(button('执行已冻结 Python').disabled, false)
     assert.equal(container.querySelectorAll('[role="alert"]').length, 0)
+    // A formal rejection/cancellation does not change the document revision.
+    // Explicit refresh must permit a fresh request, with a fresh operation identity.
+    const acceptanceRequests: Array<Record<string, unknown>> = []
+    await act(async () => { root.render(React.createElement(FiguresPanel, { client, initialDocumentId: 'doc-a', onSendRequest: async () => {}, onRequestAcceptance: async (input: Record<string, unknown>) => { acceptanceRequests.push(input) } })) })
+    await click('申请接受')
+    assert.equal(button('申请接受').disabled, true, 'prevent duplicate requests while approval is pending')
+    await click('刷新')
+    assert.equal(button('申请接受').disabled, false, 'explicit refresh permits retry after rejected, cancelled or expired approval')
+    await click('申请接受')
+    assert.equal(acceptanceRequests.length, 2)
+    assert.notEqual(acceptanceRequests[0].operationId, acceptanceRequests[1].operationId)
+    assert.equal(acceptanceRequests[0].expectedDocumentRevision, acceptanceRequests[1].expectedDocumentRevision)
+    await act(async () => { root.render(React.createElement(FiguresPanel, { client, codeRunsCall: call, onSendRequest: async () => {} })) })
+    await click('代码与运行')
     failHistory = true
     await click('刷新列表')
     assert.match(container.textContent!, /History unavailable/)

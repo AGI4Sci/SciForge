@@ -1,3 +1,10 @@
+import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { AuthenticatedCloudTransportError, type AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import {
   createCollaborationError,
   restRequestSchema,
@@ -28,6 +35,174 @@ import {
   type CollaborationStateBackend
 } from './store.js'
 import { createTestAgentCloudRuntime } from './test-agent-cloud-runtime.js'
+
+function objectTimeoutRequest(bytes: Buffer) {
+  return { protocolVersion: '1.0' as const, type: 'object.stage' as const,
+    requestId: 'req_ObjectTimeout001', idempotencyKey: 'idem_object-timeout-original',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    sha256: createHash('sha256').update(bytes).digest('hex'), byteCount: bytes.length, mediaType: 'text/plain' }
+}
+function objectTimeoutReceipt(request: ReturnType<typeof objectTimeoutRequest>) {
+  return { protocolVersion: '1.0' as const, type: 'rest.object.staged' as const, requestId: request.requestId,
+    object: { objectId: 'obj_ObjectTimeout001', objectKey: 'immutable/timeout', revision: 1,
+      projectId: request.projectId, sha256: request.sha256, byteCount: request.byteCount,
+      mediaType: request.mediaType, visibility: 'staged' as const, ownerUserId: TEST_IDS.userId, retentionUntil: null } }
+}
+
+test('object stage keeps its independent 240s budget and aborts before reconciling the same identity', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-stage-timeout-')), path = join(root, 'result.txt')
+  const bytes = Buffer.from('same immutable bytes'), request = objectTimeoutRequest(bytes)
+  await writeFile(path, bytes)
+  const store = await localStore()
+  let signal: AbortSignal | undefined, sends = 0
+  const transport = { status: () => userStatus(), stageObject: async (input, options) => {
+    assert.deepEqual(input.request, request); assert.deepEqual(Buffer.from(input.body), bytes)
+    if (++sends === 1) {
+      signal = options?.signal
+      assert.ok(signal)
+      return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(new Error('aborted upload')), { once: true }))
+    }
+    return objectTimeoutReceipt(request)
+  } } as AuthenticatedCloudTransport
+  const outbox = new DurableCloudOutbox({ store, agentCloudRuntime: createTestAgentCloudRuntime({}),
+    authenticatedCloudTransport: transport, localAgentId: () => TEST_IDS.agentId })
+  try {
+    const pending = assert.rejects(outbox.stageAndWait(request, path), /outcome is unknown/u)
+    await settle()
+    context.mock.timers.tick(45_000); await settle()
+    assert.equal(signal?.aborted, false); assert.equal(store.snapshot().outbox[0]?.state, 'sending')
+    context.mock.timers.tick(194_999); await settle(); assert.equal(signal?.aborted, false)
+    context.mock.timers.tick(1); await pending
+    assert.equal(signal?.aborted, true); assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+    assert.equal(store.snapshot().outbox[0]?.failureReason, 'transport_unavailable')
+    await outbox.stageAndWait(request, path)
+    assert.equal(sends, 2); assert.equal(store.snapshot().outbox.length, 1)
+    assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  } finally { outbox.stop(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('an aborted but unsettled provider cannot overlap retries even across outbox recreation', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-stage-unsettled-')), path = join(root, 'result.txt')
+  const bytes = Buffer.from('retained original'), request = objectTimeoutRequest(bytes)
+  await writeFile(path, bytes)
+  const store = await localStore()
+  let sends = 0, finish: ((value: ReturnType<typeof objectTimeoutReceipt>) => void) | undefined
+  const transport = { status: () => userStatus(), stageObject: async (_input, options) => {
+    if (++sends === 1) return new Promise(resolve => { finish = resolve; options!.signal!.addEventListener('abort', () => undefined) })
+    return objectTimeoutReceipt(request)
+  } } as AuthenticatedCloudTransport
+  const authority = new IdempotentAgentAuthority()
+  const make = () => new DurableCloudOutbox({ store, agentCloudRuntime: authority.runtime,
+    authenticatedCloudTransport: transport, localAgentId: () => TEST_IDS.agentId })
+  let outbox = make()
+  try {
+    const pending = assert.rejects(outbox.stageAndWait(request, path), /outcome is unknown/u)
+    await settle(); context.mock.timers.tick(240_000); await pending
+    await assert.rejects(outbox.stageAndWait(request, path), /still settling/u)
+    await assert.rejects(outbox.stageAndWait({ ...request, idempotencyKey: 'idem_object-second-stage' }, path), /still settling/u)
+    await outbox.enqueueProjectionDelivery(COMMAND, IDEMPOTENCY_KEY)
+    await outbox.waitForIdle()
+    assert.equal(store.snapshot().outbox.find(entry => entry.idempotencyKey === IDEMPOTENCY_KEY)?.state, 'delivered')
+    await outbox.retry(); await outbox.waitForIdle(); assert.equal(sends, 1)
+    outbox.stop(); outbox = make()
+    await assert.rejects(outbox.stageAndWait(request, path), /still settling/u)
+    finish!(objectTimeoutReceipt(request)); await settle()
+    await outbox.stageAndWait(request, path)
+    assert.equal(sends, 2); assert.equal(store.snapshot().outbox.filter(entry => entry.kind === 'delivery.stage').length, 1)
+  } finally { outbox.stop(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('object timeout cancels a real slow loopback HTTP request before same-key reconciliation', async context => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-stage-http-cancel-')), path = join(root, 'result.txt')
+  const bytes = Buffer.from('loopback upload cancellation'), request = objectTimeoutRequest(bytes)
+  await writeFile(path, bytes)
+  let calls = 0, firstClosed = false
+  const receivedKeys: string[] = []
+  const server = createServer((incoming, response) => {
+    receivedKeys.push(String(incoming.headers['idempotency-key']))
+    incoming.resume()
+    if (++calls === 1) { response.on('close', () => { firstClosed = true }); return }
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(objectTimeoutReceipt(request)))
+  })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const address = server.address(); assert.ok(address && typeof address !== 'string')
+  const base = `http://127.0.0.1:${address.port}`
+  const store = await localStore()
+  let signal: AbortSignal | undefined
+  const transport = { status: () => userStatus(), stageObject: async (input, options) => {
+    signal = options?.signal
+    const response = await fetch(`${base}/v1/objects/stage`, { method: 'POST', body: input.body,
+      headers: { 'idempotency-key': input.request.idempotencyKey }, signal })
+    return response.json()
+  } } as AuthenticatedCloudTransport
+  const originalTimeout = globalThis.setTimeout
+  // Only compress the production object deadline; fetch/socket timers remain real.
+  context.mock.method(globalThis, 'setTimeout', ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+    originalTimeout(callback, delay === 240_000 ? 100 : delay, ...args)) as typeof setTimeout)
+  const outbox = new DurableCloudOutbox({ store, agentCloudRuntime: createTestAgentCloudRuntime({}),
+    authenticatedCloudTransport: transport, localAgentId: () => TEST_IDS.agentId })
+  try {
+    await assert.rejects(outbox.stageAndWait(request, path), /outcome is unknown/u)
+    assert.equal(signal?.aborted, true)
+    await settle()
+    assert.equal(firstClosed, true, 'fetch cancellation closes the unresolved HTTP response')
+    await outbox.stageAndWait(request, path)
+    assert.deepEqual(receivedKeys, [request.idempotencyKey, request.idempotencyKey])
+    assert.equal(store.snapshot().outbox.length, 1); assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+  } finally { outbox.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) }
+})
+
+test('stopping the outbox aborts the active object and retains its unknown result', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-stage-stop-')), path = join(root, 'result.txt')
+  const bytes = Buffer.from('stop cancels object'), request = objectTimeoutRequest(bytes)
+  await writeFile(path, bytes)
+  const store = await localStore()
+  let signal: AbortSignal | undefined
+  const transport = { status: () => userStatus(), stageObject: async (_input, options) => {
+    signal = options!.signal
+    return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }))
+  } } as AuthenticatedCloudTransport
+  const outbox = new DurableCloudOutbox({ store, agentCloudRuntime: createTestAgentCloudRuntime({}),
+    authenticatedCloudTransport: transport, localAgentId: () => TEST_IDS.agentId })
+  try {
+    const pending = assert.rejects(outbox.stageAndWait(request, path), /outcome is unknown/u)
+    await settle(); outbox.stop(); await pending
+    assert.equal(signal?.aborted, true); assert.equal(store.snapshot().outbox[0]?.failureReason, 'transport_unavailable')
+    assert.equal(store.snapshot().outbox[0]?.idempotencyKey, request.idempotencyKey)
+  } finally { outbox.stop(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('real 50 second loopback object upload survives the former 45 second outbox deadline',
+  { skip: process.env.SCIFORGE_TEST_REAL_SLOW_UPLOAD !== '1' }, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-stage-real-slow-')), path = join(root, 'result.txt')
+    const bytes = Buffer.from('real 50 second object verification'), request = objectTimeoutRequest(bytes)
+    await writeFile(path, bytes)
+    let responseTimer: ReturnType<typeof setTimeout> | undefined, signal: AbortSignal | undefined
+    const server = createServer((incoming, response) => {
+      incoming.resume()
+      responseTimer = setTimeout(() => response.end(JSON.stringify(objectTimeoutReceipt(request))), 50_000)
+    })
+    server.listen(0, '127.0.0.1'); await once(server, 'listening')
+    const address = server.address(); assert.ok(address && typeof address !== 'string')
+    const store = await localStore()
+    const transport = { status: () => userStatus(), stageObject: async (input, options) => {
+      signal = options?.signal
+      const response = await fetch(`http://127.0.0.1:${address.port}/v1/objects/stage`, {
+        method: 'POST', body: input.body, signal, headers: { 'idempotency-key': input.request.idempotencyKey } })
+      return response.json()
+    } } as AuthenticatedCloudTransport
+    const outbox = new DurableCloudOutbox({ store, agentCloudRuntime: createTestAgentCloudRuntime({}),
+      authenticatedCloudTransport: transport, localAgentId: () => TEST_IDS.agentId })
+    try {
+      const completed = outbox.stageAndWait(request, path)
+      await new Promise(resolve => setTimeout(resolve, 46_000))
+      assert.equal(signal?.aborted, false); assert.equal(store.snapshot().outbox[0]?.state, 'sending')
+      await completed
+      assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+    } finally { outbox.stop(); clearTimeout(responseTimer); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }) }
+  })
 
 const IDEMPOTENCY_KEY = 'idem_projection.outbox-recovery-01'
 const COMMAND = {
@@ -124,12 +299,40 @@ test('authenticated manual acceptance retains an exact Cloud rejection as its du
       status: () => ({ state: 'ready', baseUrl: 'https://cloud.example.test', userId: TEST_IDS.userId,
         deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
       execute: async () => ({ contractVersion: 1, status: 409, body: response }),
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('No object upload expected') },
       readObject: async () => { throw new Error('No object read expected') }
     }
   })
   assert.deepEqual(await outbox.enqueueAndWait('task.offer-decision', request), response)
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
+})
+
+test('Agent offer acceptance keeps its original authority route when no User transport is installed', async () => {
+  const store = await localStore()
+  const request = restRequestSchema.parse({ protocolVersion: '1.0', type: 'task.offer.accept',
+    requestId: 'req_AgentAcceptRoute01', idempotencyKey: 'idem_agent-accept-route-one',
+    taskOfferId: 'ofr_AgentRoute00001', taskId: TEST_IDS.taskId, agentId: TEST_IDS.agentId,
+    interaction: 'explicit_click', expectedTaskRevision: 1, expectedOfferRevision: 1 })
+  const response = restResponseSchema.parse({ protocolVersion: '1.0', type: 'rest.error', requestId: request.requestId,
+    error: createCollaborationError('expired', 'The Offer expired.') })
+  let sends = 0
+  const outbox = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({
+      authorityStatus: async agentId => ({ state: 'ready', agentId, userId: TEST_IDS.userId,
+        deviceId: TEST_IDS.deviceId, generation: 1, runtimeId: null, capabilityTags: [] }),
+      execute: async () => { sends++; return response }
+    }) })
+  assert.deepEqual(await outbox.enqueueAndWait('task.offer-decision', request), response)
+  assert.equal(sends, 1)
+  assert.equal(store.snapshot().outbox[0]?.userAuthority, undefined)
 })
 
 test('enqueueAndWait joins the exact pending command until authority wakes it to one terminal receipt', async () => {
@@ -508,7 +711,7 @@ test('delivers an exact task.offer.reassign response without conjecturing execut
   const store = await localStore()
   const command = coordinatorReassignCommand()
   const response = coordinatorReassignCollection(command)
-  const outbox = coordinatorOutbox(store, async () => response)
+  const outbox = coordinatorOutbox(store, async () => response, true)
 
   assert.deepEqual(await outbox.enqueueAndWait('coordinator.command', command), response)
   assert.equal(store.snapshot().outbox[0]?.state, 'delivered')
@@ -536,11 +739,11 @@ test('rejects task.offer.reassign success whose Task file intent drifts from the
     ...response,
     items: [{ ...task, fileIntent: null }, successorOffer]
   })
-  const outbox = coordinatorOutbox(store, async () => drifted)
+  const outbox = coordinatorOutbox(store, async () => drifted, true)
 
   await assert.rejects(
     outbox.enqueueAndWait('coordinator.command', command),
-    /unexpected rest\.collection/u
+    /Unexpected reassignment response/u
   )
   assert.equal(store.snapshot().outbox[0]?.state, 'failed')
   assert.equal(store.snapshot().outbox[0]?.deliveredAt, undefined)
@@ -559,11 +762,11 @@ test('rejects task.offer.reassign success that reuses the previous Task offer id
     ...response,
     items: [task, { ...successorOffer, taskOfferId: command.previousTaskOfferId }]
   })
-  const outbox = coordinatorOutbox(store, async () => drifted)
+  const outbox = coordinatorOutbox(store, async () => drifted, true)
 
   await assert.rejects(
     outbox.enqueueAndWait('coordinator.command', command),
-    /unexpected rest\.collection/u
+    /Unexpected reassignment response/u
   )
   assert.equal(store.snapshot().outbox[0]?.state, 'failed')
   assert.equal(store.snapshot().outbox[0]?.deliveredAt, undefined)
@@ -953,6 +1156,7 @@ function coordinatorHumanNeededCommand(): RestRequest {
     },
     requiredAssurance: 'verified',
     prompt: 'Choose the direction the Coordinator should record.',
+    interaction: { kind: 'clarification' },
     confirmableAction: null,
     expiresAt: TEST_LATER_TIMESTAMP
   }
@@ -998,6 +1202,7 @@ function coordinatorHumanNeededResponse(request: RestRequest): RestResponse {
       requestedByAgentId: TEST_IDS.agentId,
       requiredAssurance: request.requiredAssurance,
       prompt: request.prompt,
+      interaction: request.interaction,
       confirmableAction: request.confirmableAction,
       expiresAt: request.expiresAt
     }
@@ -1235,9 +1440,48 @@ function coordinatorReassignCollection(request: RestRequest): RestResponse {
   })
 }
 
+test('candidate validation rejection preserves its request-bound receipt and never retries frozen content', async () => {
+  const store = await localStore()
+  let sends = 0
+  const outbox = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({}),
+    authenticatedCloudTransport: {
+      status: () => ({ state: 'ready', baseUrl: 'https://cloud.invalid', userId: TEST_IDS.userId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+      execute: async ({ payload }: { payload: unknown }) => {
+        const request = restRequestSchema.parse(payload)
+        sends++
+        return { contractVersion: 1, status: 400, body: { protocolVersion: '1.0', type: 'rest.error', requestId: request.requestId,
+          error: { protocolVersion: '1.0', type: 'error', code: 'validation_error', category: 'validation', httpStatus: 400, retryable: false, message: 'Additional file violates policy.' } } }
+      }
+    } as never
+  })
+  const request = restRequestSchema.parse({ protocolVersion: '1.0', requestId: 'req_CandidateValidation01', type: 'delivery.candidate.create',
+    idempotencyKey: 'idem_candidate_validation_01', candidateId: 'cnd_CandidateTest0001', projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId, workerUserId: TEST_IDS.userId,
+    contractRevision: 1, resultRevision: 1, bundleDigest: 'a'.repeat(64), bundleObjectId: 'obj_BundleTest00001', outputObjectIds: [] })
+  await assert.rejects(outbox.enqueueAndWait('delivery.command', request), /violates policy/u)
+  const failed = store.snapshot().outbox[0]!
+  assert.equal(failed.state, 'failed')
+  assert.equal(failed.response?.type, 'rest.error')
+  assert.equal(failed.response?.requestId, request.requestId)
+  await outbox.retry()
+  await outbox.waitForIdle()
+  await assert.rejects(outbox.enqueueAndWait('delivery.command', request), /violates policy/u)
+  assert.equal(sends, 1)
+  assert.equal(store.snapshot().outbox[0]!.state, 'failed')
+  // A pre-fix row has no verified rejection receipt and must still be able to
+  // obtain one through the original command, never through a fabricated result.
+  await store.transact(draft => { draft.outbox[0]!.response = undefined })
+  await assert.rejects(outbox.enqueueAndWait('delivery.command', request), /violates policy/u)
+  assert.equal(sends, 2)
+  assert.equal(store.snapshot().outbox[0]!.response?.type, 'rest.error')
+  outbox.stop()
+})
+
 function coordinatorOutbox(
   store: CollaborationLocalStore,
-  execute: (agentId: string, request: RestRequest) => Promise<RestResponse>
+  execute: (agentId: string, request: RestRequest) => Promise<RestResponse>,
+  authenticated = false
 ): DurableCloudOutbox {
   return new DurableCloudOutbox({
     store,
@@ -1253,7 +1497,26 @@ function coordinatorOutbox(
       }),
       execute
     }),
-    localAgentId: () => TEST_IDS.agentId
+    localAgentId: () => TEST_IDS.agentId,
+    authenticatedCloudTransport: authenticated ? {
+      status: () => ({ state: 'ready', baseUrl: 'https://cloud.example.test', userId: TEST_IDS.userId,
+        deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+      execute: async ({ payload }) => {
+        const request = restRequestSchema.parse(payload)
+        assert.equal(request.type, 'task.offer.reassign')
+        return { contractVersion: 1, status: 200, body: await execute(TEST_IDS.agentId, request) }
+      },
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      stageObject: async () => { throw new Error('No object upload expected') },
+      readObject: async () => { throw new Error('No object read expected') }
+    } : undefined
   })
 }
 
@@ -1372,3 +1635,333 @@ test('a hung Cloud send fails as transport-unavailable after its bound and relea
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 20; turn += 1) await new Promise<void>((resolve) => setImmediate(resolve))
 }
+
+
+for (const legacy of [false, true]) test(`object 413 survives wakes and restart, then explicit retry reuses bytes and identity (legacy=${legacy})`, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-upload-'))
+  const bytes = Buffer.from('a,b\n1,2\n')
+  const path = join(root, 'result.csv')
+  await writeFile(path, bytes)
+  const backend = new MemoryBackend(structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+  let store = new CollaborationLocalStore(backend)
+  await store.open()
+  let rejected = true
+  let sends = 0
+  const requests: unknown[] = []
+  const transport = { status: () => userStatus(), stageObject: async (input) => {
+    sends++
+    requests.push(input.request)
+    assert.deepEqual(Buffer.from(input.body), bytes)
+    if (rejected) throw new AuthenticatedCloudTransportError('object_upload_limit', 'Cloud object request returned HTTP 413.')
+    return { protocolVersion: '1.0', type: 'rest.object.staged', requestId: input.request.requestId,
+      object: { objectId: 'obj_UploadResult001', objectKey: 'immutable/result', revision: 1,
+        projectId: TEST_IDS.projectId, sha256: input.request.sha256, byteCount: bytes.length,
+        mediaType: 'text/csv', visibility: 'staged', ownerUserId: TEST_IDS.userId, retentionUntil: null } }
+  } } as AuthenticatedCloudTransport
+  const makeOutbox = () => new DurableCloudOutbox({ store, agentCloudRuntime: createTestAgentCloudRuntime({}),
+    authenticatedCloudTransport: transport, localAgentId: () => TEST_IDS.agentId })
+  let outbox = makeOutbox()
+  const request = { protocolVersion: '1.0' as const, type: 'object.stage' as const,
+    requestId: 'req_UploadLimit001', idempotencyKey: 'idem_upload-limit-result',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    sha256: createHash('sha256').update(bytes).digest('hex'), byteCount: bytes.length, mediaType: 'text/csv' }
+  try {
+    await assert.rejects(outbox.stageAndWait(request, path), /HTTP 413/u)
+    assert.equal(store.snapshot().outbox[0]?.failureReason, 'object_upload_limit')
+    await outbox.retry()
+    await outbox.retry(store.snapshot().outbox[0]!.outboxId)
+    await outbox.retry(request.idempotencyKey)
+    await outbox.waitForIdle()
+    assert.equal(sends, 1, 'generic retry cannot clear a parked upload limit')
+    assert.equal(store.snapshot().outbox[0]?.error, 'Cloud object request returned HTTP 413.')
+    if (legacy) await store.transact(draft => {
+      draft.outbox[0]!.failureReason = 'command_failed'
+      // The old stageAndWait may have revived the row immediately before shutdown.
+      draft.outbox[0]!.state = 'reconciling'
+    })
+    outbox.wake()
+    await outbox.waitForIdle()
+    await assert.rejects(outbox.stageAndWait(request, path), /HTTP 413/u)
+    outbox.stop()
+    store = new CollaborationLocalStore(backend)
+    await store.open()
+    outbox = makeOutbox()
+    outbox.start()
+    await outbox.waitForIdle()
+    await assert.rejects(outbox.stageAndWait(request, path), /HTTP 413/u)
+    assert.equal(sends, 1)
+    assert.equal(store.snapshot().outbox[0]?.attempts, 1)
+    rejected = false
+    await outbox.stageAndWait(request, path, { explicitRetry: true })
+    assert.equal(sends, 2)
+    assert.deepEqual(requests, [request, request])
+    assert.equal(store.snapshot().outbox.length, 1)
+    await outbox.stageAndWait(request, path, { explicitRetry: true })
+    assert.equal(sends, 2)
+  } finally { outbox.stop(); await rm(root, { recursive: true, force: true }) }
+})
+
+
+for (const code of ['cloud_unavailable', 'cloud_rejected', 'network'] as const) test(`transient object ${code} remains automatically resumable`, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-transient-upload-'))
+  const path = join(root, 'result.txt')
+  const bytes = Buffer.from('transient retry')
+  await writeFile(path, bytes)
+  const store = await localStore()
+  let sends = 0
+  const request = { protocolVersion: '1.0' as const, type: 'object.stage' as const,
+    requestId: 'req_TransientUpload1', idempotencyKey: 'idem_transient-upload-one',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    sha256: createHash('sha256').update(bytes).digest('hex'), byteCount: bytes.length, mediaType: 'text/plain' }
+  const outbox = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({}), authenticatedCloudTransport: {
+      status: () => userStatus(),
+      stageObject: async () => {
+        if (++sends === 1) throw code === 'network' ? new TypeError('fetch failed') :
+          new AuthenticatedCloudTransportError(code, `Cloud object request returned HTTP ${code === 'cloud_rejected' ? 429 : 503}.`)
+        return { protocolVersion: '1.0', type: 'rest.object.staged', requestId: request.requestId,
+          object: { objectId: 'obj_Transient0001', objectKey: 'immutable/transient', revision: 1,
+            projectId: TEST_IDS.projectId, sha256: request.sha256, byteCount: bytes.length,
+            mediaType: request.mediaType, visibility: 'staged', ownerUserId: TEST_IDS.userId, retentionUntil: null } }
+      }
+    } as unknown as AuthenticatedCloudTransport })
+  try {
+    await assert.rejects(outbox.stageAndWait(request, path))
+    await outbox.stageAndWait(request, path)
+    assert.equal(sends, 2)
+    assert.equal(store.snapshot().outbox.length, 1)
+  } finally { outbox.stop(); await rm(root, { recursive: true, force: true }) }
+})
+
+function userStatus(): { state: 'ready'; baseUrl: string; userId: string; deviceId: string; deviceRevision: number } {
+  return { state: 'ready' as const, baseUrl: 'https://cloud.example.test', userId: TEST_IDS.userId,
+    deviceId: TEST_IDS.deviceId, deviceRevision: 1 }
+}
+
+function boundUserRequest(): RestRequest {
+  return restRequestSchema.parse({ protocolVersion: '1.0', requestId: 'req_BoundUser0001',
+    type: 'delivery.adoption.record', idempotencyKey: 'idem_bound-user-command-01',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId,
+    deliveryManifestId: 'mft_BoundManifest001', integrationRevision: 1,
+    validationEvidence: ['Reviewed immutable delivery'], operationId: 'adoption-bound-command', disposition: 'adopted' })
+}
+
+function boundUserOutbox(store: CollaborationLocalStore, status: () => ReturnType<typeof userStatus>,
+  execute: (request: RestRequest) => Promise<RestResponse>): DurableCloudOutbox {
+  return new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({ execute: async () => { throw new Error('User command reached Agent transport') } }),
+    authenticatedCloudTransport: { status, execute: async ({ payload }) =>
+      ({ contractVersion: 1, status: 200, body: await execute(restRequestSchema.parse(payload)) }) } as AuthenticatedCloudTransport })
+}
+
+function boundUserReceipt(request: RestRequest): RestResponse {
+  return restResponseSchema.parse({ protocolVersion: '1.0', type: 'rest.entity', requestId: request.requestId,
+    entity: projectFixture })
+}
+
+for (const restart of [false, true]) for (const dimension of ['userId', 'deviceId', 'baseUrl'] as const) {
+  test(`User creation binding blocks changed ${dimension}, restart=${restart}`, async () => {
+    const backend = new MemoryBackend(structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+    let store = new CollaborationLocalStore(backend)
+    await store.open()
+    let status = userStatus()
+    let sends = 0
+    const execute = async (request: RestRequest) => { sends++; return boundUserReceipt(request) }
+    let outbox = boundUserOutbox(store, () => status, execute)
+    outbox.stop()
+    const request = boundUserRequest()
+    await outbox.enqueue('delivery.command', request)
+    const original = store.snapshot().outbox[0]!
+    status = { ...status, [dimension]: dimension === 'userId' ? TEST_IDS.secondUserId :
+      dimension === 'deviceId' ? 'dev_OtherDevice0001' : 'https://other-cloud.example.test' }
+    if (restart) {
+      store = new CollaborationLocalStore(backend)
+      await store.open()
+      outbox = boundUserOutbox(store, () => status, execute)
+    }
+    outbox.start()
+    await outbox.waitForIdle()
+    assert.equal(sends, 0)
+    assert.equal(store.snapshot().outbox[0]?.failureReason, 'authority_lost')
+    await outbox.retry()
+    await outbox.waitForIdle()
+    assert.equal(sends, 0)
+    await assert.rejects(outbox.enqueue('delivery.command', request), /creation authority/u)
+    await assert.rejects(outbox.resumeAndWait('delivery.command', original.idempotencyKey, () => {}), /creation authority/u)
+    assert.deepEqual(store.snapshot().outbox[0]?.body, original.body)
+    assert.deepEqual(store.snapshot().outbox[0]?.userAuthority, original.userAuthority)
+    outbox.stop()
+  })
+}
+
+test('User receipt survives restart and revision renewal; another identity cannot resume it', async () => {
+  const backend = new MemoryBackend(structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+  let store = new CollaborationLocalStore(backend)
+  await store.open()
+  let status = userStatus()
+  let sends = 0
+  const execute = async (request: RestRequest) => { sends++; return boundUserReceipt(request) }
+  let outbox = boundUserOutbox(store, () => status, execute)
+  const request = boundUserRequest()
+  const response = await outbox.enqueueAndWait('delivery.command', request)
+  outbox.stop()
+  store = new CollaborationLocalStore(backend)
+  await store.open()
+  status = { ...status, deviceRevision: 2 }
+  outbox = boundUserOutbox(store, () => status, execute)
+  assert.deepEqual((await outbox.resumeAndWait('delivery.command', 'idem_bound-user-command-01', () => {}))?.response, response)
+  assert.equal(sends, 1)
+  status = { ...status, userId: TEST_IDS.secondUserId }
+  await assert.rejects(outbox.resumeAndWait('delivery.command', 'idem_bound-user-command-01', () => {}), /creation authority/u)
+  assert.deepEqual(store.snapshot().outbox[0]?.response, response)
+  await store.transact(draft => { draft.outbox[0]!.userAuthority = undefined })
+  await assert.rejects(outbox.resumeAndWait('delivery.command', 'idem_bound-user-command-01', () => {}), /no creation authority/u)
+  assert.deepEqual(store.snapshot().outbox[0]?.response, response)
+  outbox.stop()
+})
+
+test('lost User response cannot be retried by another identity; original identity reconciles original body', async () => {
+  const store = await localStore()
+  let status = userStatus()
+  let sends = 0
+  const request = boundUserRequest()
+  const outbox = boundUserOutbox(store, () => status, async original => {
+    sends++
+    if (sends === 1) throw new Error('response lost after commit')
+    assert.deepEqual(original, request)
+    return boundUserReceipt(original)
+  })
+  await assert.rejects(outbox.enqueueAndWait('delivery.command', request), /response lost/u)
+  const original = store.snapshot().outbox[0]!
+  status = { ...status, userId: TEST_IDS.secondUserId }
+  await outbox.retry()
+  await outbox.waitForIdle()
+  assert.equal(sends, 1)
+  assert.deepEqual(store.snapshot().outbox[0], original, 'another identity must not overwrite the retained lost-response failure')
+  assert.deepEqual(store.snapshot().outbox[0]?.userAuthority, original.userAuthority)
+  status = userStatus()
+  assert.deepEqual((await outbox.resumeAndWait('delivery.command', original.idempotencyKey, () => {}))?.response, boundUserReceipt(request))
+  assert.equal(sends, 2)
+  outbox.stop()
+})
+
+test('legacy User command without binding is failed closed without dispatch', async () => {
+  const store = await localStore()
+  let sends = 0
+  const outbox = boundUserOutbox(store, userStatus, async request => { sends++; return boundUserReceipt(request) })
+  outbox.stop()
+  await outbox.enqueue('delivery.command', boundUserRequest())
+  await store.transact(draft => { draft.outbox[0]!.userAuthority = undefined })
+  outbox.start()
+  await outbox.waitForIdle()
+  assert.equal(sends, 0)
+  assert.equal(store.snapshot().outbox[0]?.failureReason, 'authority_lost')
+  outbox.stop()
+})
+
+test('stage identity is checked after sending checkpoint and before reading private bytes', async () => {
+  const store = await localStore()
+  let status = userStatus()
+  let sends = 0
+  const outbox = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({}), authenticatedCloudTransport: {
+      status: () => status, stageObject: async () => { sends++; throw new Error('unexpected stage') }
+    } as unknown as AuthenticatedCloudTransport })
+  const transact = store.transact.bind(store)
+  store.transact = async operation => {
+    const result = await transact(operation)
+    if (store.snapshot().outbox.some(entry => entry.state === 'sending')) status = { ...status, userId: TEST_IDS.secondUserId }
+    return result
+  }
+  const request = { protocolVersion: '1.0' as const, type: 'object.stage' as const,
+    requestId: 'req_BoundStage0001', idempotencyKey: 'idem_bound-stage-command-01',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    sha256: TEST_HASH, byteCount: 12, mediaType: 'text/plain' }
+  await assert.rejects(outbox.stageAndWait(request, 'nonexistent-private-file'), /creation authority/u)
+  assert.equal(sends, 0)
+  assert.match(store.snapshot().outbox[0]?.error ?? '', /creation authority/u)
+  assert.equal(store.snapshot().outbox[0]?.failureReason, 'authority_lost')
+  outbox.stop()
+})
+
+test('User command checks creation identity again after the asynchronous sending checkpoint', async () => {
+  const store = await localStore()
+  let status = userStatus()
+  let sends = 0
+  const outbox = boundUserOutbox(store, () => status, async request => { sends++; return boundUserReceipt(request) })
+  const transact = store.transact.bind(store)
+  store.transact = async operation => {
+    const result = await transact(operation)
+    if (store.snapshot().outbox.some(entry => entry.state === 'sending')) status = { ...status, baseUrl: 'https://changed.example.test' }
+    return result
+  }
+  await assert.rejects(outbox.enqueueAndWait('delivery.command', boundUserRequest()), /creation authority/u)
+  assert.equal(sends, 0)
+  assert.equal(store.snapshot().outbox[0]?.failureReason, 'authority_lost')
+  outbox.stop()
+})
+
+test('held stage persists original authority across restart and never reads or uploads for another User', async () => {
+  const backend = new MemoryBackend(structuredClone(EMPTY_COLLABORATION_LOCAL_STATE))
+  let store = new CollaborationLocalStore(backend)
+  await store.open()
+  let status = userStatus()
+  let sends = 0
+  const transport = { status: () => status, stageObject: async () => { sends++; throw new Error('unexpected upload') } } as unknown as AuthenticatedCloudTransport
+  const makeOutbox = () => new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({}), authenticatedCloudTransport: transport })
+  let outbox = makeOutbox()
+  outbox.stop()
+  const request = { protocolVersion: '1.0' as const, type: 'object.stage' as const,
+    requestId: 'req_HeldStage0001', idempotencyKey: 'idem_held-stage-command-01',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    sha256: TEST_HASH, byteCount: 12, mediaType: 'text/plain' }
+  await assert.rejects(outbox.stageAndWait(request, 'nonexistent-private-file'), /pending reconciliation/u)
+  const original = store.snapshot().outbox[0]!
+  status = { ...status, userId: TEST_IDS.secondUserId }
+  store = new CollaborationLocalStore(backend)
+  await store.open()
+  outbox = makeOutbox()
+  outbox.start()
+  await outbox.waitForIdle()
+  assert.equal(sends, 0)
+  assert.match(store.snapshot().outbox[0]?.error ?? '', /creation authority/u)
+  await assert.rejects(outbox.stageAndWait(request, 'nonexistent-private-file', { explicitRetry: true }), /creation authority/u)
+  assert.deepEqual(store.snapshot().outbox[0]?.stageFile, original.stageFile)
+  assert.deepEqual(store.snapshot().outbox[0]?.userAuthority, original.userAuthority)
+  outbox.stop()
+})
+
+
+test('stage response cannot complete for a different identity after upload', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'outbox-stage-authority-'))
+  const path = join(root, 'frozen.txt')
+  const bytes = Buffer.from('exact sealed bytes')
+  await writeFile(path, bytes)
+  const store = await localStore()
+  let status = userStatus()
+  let uploads = 0
+  const outbox = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+    agentCloudRuntime: createTestAgentCloudRuntime({}), authenticatedCloudTransport: {
+      status: () => status,
+      stageObject: async ({ request }: { request: { requestId: string; sha256: string; mediaType: string } }) => {
+        uploads++
+        status = { ...status, userId: TEST_IDS.secondUserId }
+        return { protocolVersion: '1.0', type: 'rest.object.staged', requestId: request.requestId,
+          object: { objectId: 'obj_StageAuthority001', objectKey: 'immutable/frozen', revision: 1,
+            projectId: TEST_IDS.projectId, sha256: request.sha256, byteCount: bytes.length,
+            mediaType: request.mediaType, visibility: 'staged', ownerUserId: TEST_IDS.userId, retentionUntil: null } }
+      }
+    } as unknown as AuthenticatedCloudTransport })
+  const request = { protocolVersion: '1.0' as const, type: 'object.stage' as const,
+    requestId: 'req_StageAuthority001', idempotencyKey: 'idem_stage-authority-response-1',
+    projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    sha256: createHash('sha256').update(bytes).digest('hex'), byteCount: bytes.length, mediaType: 'text/plain' }
+  try {
+    await assert.rejects(outbox.stageAndWait(request, path), /creation authority/u)
+    assert.equal(uploads, 1)
+    assert.equal(store.snapshot().outbox[0]?.state, 'failed')
+    assert.equal(store.snapshot().outbox[0]?.userAuthority?.userId, TEST_IDS.userId)
+    assert.equal(store.snapshot().outbox[0]?.failureReason, 'authority_lost')
+  } finally { outbox.stop(); await rm(root, { recursive: true, force: true }) }
+})

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { codeConversationCommandSchemas, codeConversationMutationResponseSchema, codeConversationPageResponseSchema } from './code-conversations.js'
 import {
   cloudStateCommandSchemas,
   cloudStateEntitySchema,
@@ -55,6 +56,9 @@ import {
   humanAnswerSchema,
   humanEndpointBindingSchema,
   humanNeededSchema,
+  humanDecisionInteractionSchema,
+  humanDecisionOptionSchema,
+  refineHumanDecisionRequest,
   localSessionProjectionBindingSchema,
   managedProviderContainerSchema,
   orderedProjectionItemSchema,
@@ -70,6 +74,7 @@ import {
   userPrincipalSchema
 } from './entities.js'
 import { objectReferenceSchema } from './object-reference.js'
+import { OBJECT_STAGE_MAX_BYTES } from './object-transfer-limits.js'
 import {
   projectMembershipSchema,
   projectWorkerAvailabilityViewSchema,
@@ -499,11 +504,20 @@ export const agentInboxPayloadSchema = z.discriminatedUnion('type', [
   z.object({
     ...agentInboxEnvelopeShape,
     type: z.literal('human.answer.received'),
+    request: humanNeededSchema,
     answer: humanAnswerSchema
-  }).strict(),
+  }).strict().superRefine(({request,answer},ctx)=>{
+    if(request.humanRequestId!==answer.humanRequestId||request.projectId!==answer.projectId||request.targetUserId!==answer.answeredByUserId||request.status!=='answered'||request.revision!==answer.requestRevision+1)ctx.addIssue({code:'custom',path:['request'],message:'The answer notification must contain its exact answered request snapshot.'})
+  }),
   z.object({
     ...agentInboxEnvelopeShape,
     type: z.literal('project.started'),
+    projectId: projectIdSchema,
+    revision: revisionSchema
+  }).strict(),
+  z.object({
+    ...agentInboxEnvelopeShape,
+    type: z.literal('project.updated'),
     projectId: projectIdSchema,
     revision: revisionSchema
   }).strict(),
@@ -753,9 +767,15 @@ export const humanAnswerCommandSchema = z.object({
   humanRequestId: humanRequestIdSchema,
   requestRevision: revisionSchema,
   answer: nonEmptyTextSchema,
+  selectedOptionId: humanDecisionOptionSchema.shape.id.optional(),
   decision: z.enum(['approve', 'reject']).optional()
 }).strict()
 export type HumanAnswerCommand = z.infer<typeof humanAnswerCommandSchema>
+
+export const humanNeededDeferCommandSchema = z.object({
+  ...writeCommandShape, type:z.literal('human.needed.defer'),humanRequestId:humanRequestIdSchema,requestRevision:revisionSchema,reason:z.string().trim().min(1).max(2000)
+}).strict()
+export type HumanNeededDeferCommand=z.infer<typeof humanNeededDeferCommandSchema>
 
 export const humanNeededCreateCommandSchema = z.object({
   ...writeCommandShape,
@@ -765,9 +785,10 @@ export const humanNeededCreateCommandSchema = z.object({
   context: humanNeededCreateContextSchema,
   requiredAssurance: assuranceLevelSchema,
   prompt: nonEmptyTextSchema,
+  interaction: humanDecisionInteractionSchema,
   confirmableAction: confirmableHumanActionSchema.nullable().optional(),
   expiresAt: timestampSchema
-}).strict()
+}).strict().superRefine(refineHumanDecisionRequest)
 export type HumanNeededCreateCommand = z.infer<typeof humanNeededCreateCommandSchema>
 
 /** Delivery commands are intentionally REST-only until their Cloud facts are
@@ -876,7 +897,7 @@ export const deliveryDriveListQuerySchema = z.object({
  */
 export const OBJECT_STAGE_ROUTE = '/v1/objects/stage'
 export const OBJECT_READ_ROUTE = '/v1/objects/read'
-export const OBJECT_STAGE_MAX_BYTES = 256 * 1024 * 1024
+export { OBJECT_STAGE_MAX_BYTES } from './object-transfer-limits.js'
 export const objectStageHeaderNames = Object.freeze({
   requestId: 'x-sciforge-request-id',
   projectId: 'x-sciforge-project-id',
@@ -941,7 +962,22 @@ export const objectStorageReconcileCommandSchema = z.object({
   dryRun: z.boolean()
 }).strict()
 
+export const projectExecutionModeSetCommandSchema = z.object({ ...writeCommandShape, type: z.literal('project.execution_mode.set'), projectId: projectIdSchema, expectedRevision: revisionSchema, mode: z.enum(['manual', 'ai_leader']) }).strict()
+export const projectDispatchAuthorizeCommandSchema = z.object({ ...writeCommandShape, type: z.literal('project.dispatch.authorize'), projectId: projectIdSchema, expectedRevision: revisionSchema,
+    requirementsDocumentId: projectRequirementsDocumentIdSchema, requirementsDocumentRevision: revisionSchema,
+    requirementsContentDigest: sha256Schema, assignments: z.array(z.object({ planItemId: z.string().regex(/^item_[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])$/u), workerUserId: userIdSchema }).strict()).min(1).max(100), expiresAt: timestampSchema }).strict()
+
+export const projectRenameCommandSchema = z.object({ ...writeCommandShape, type: z.literal('project.rename'), projectId: projectIdSchema, expectedRevision: revisionSchema, displayName: z.string().trim().min(1).max(200) }).strict()
+
+export const taskContentUpdateCommandSchema = z.object({ ...writeCommandShape, type: z.literal('task.content.update'), taskId: taskIdSchema,
+    expectedTaskRevision: revisionSchema, title: z.string().trim().min(1).max(200),
+    objective: nonEmptyTextSchema, completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100) }).strict()
+
+export const taskContentDecideCommandSchema = z.object({ ...writeCommandShape, type: z.literal('task.content.decide'), taskId: taskIdSchema,
+    expectedTaskRevision: revisionSchema, decision: z.enum(['approve', 'reject']) }).strict()
+
 export const restRequestSchema = z.discriminatedUnion('type', [
+  ...codeConversationCommandSchemas,
   ...cloudStateCommandSchemas,
   deliveryCandidateCreateCommandSchema,
   deliveryCandidateReviewCommandSchema,
@@ -1005,7 +1041,10 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...protocolEnvelopeShape, type: z.literal('projection.list'), ownerUserId: userIdSchema }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('projection.update'), projectionId: projectionIdSchema, expectedRevision: revisionSchema, displayName: z.string().trim().min(1).max(200).optional(), status: z.enum(['active', 'paused']).optional(), allowedSenderUserIds: z.array(userIdSchema).min(1).max(100).optional() }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('projection.message.publish'), projectionId: projectionIdSchema, projectionRevision: revisionSchema, localItemId: localItemIdSchema, localTurnId: runtimeTurnIdSchema.optional(), kind: z.enum(['user_message', 'assistant_progress', 'assistant_final', 'system_status']), text: nonEmptyTextSchema, occurredAt: timestampSchema }).strict(),
+  projectExecutionModeSetCommandSchema,
+  projectDispatchAuthorizeCommandSchema,
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.get'), projectId: projectIdSchema }).strict(),
+  projectRenameCommandSchema,
   z.object({ ...writeCommandShape, type: z.literal('project.transition'), projectId: projectIdSchema, expectedRevision: revisionSchema, expectedCoordinatorAuthorityEpoch: revisionSchema, expectedExecutionAuthorityEpoch: revisionSchema, status: z.enum(['active', 'paused', 'cancelled']) }).strict(),
   projectDeleteCommandSchema,
   projectTransferCoordinatorCommandSchema,
@@ -1014,11 +1053,14 @@ export const restRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...writeCommandShape, type: z.literal('project.endpoint.update'), projectEndpointBindingId: projectEndpointBindingIdSchema, expectedRevision: revisionSchema, locator: providerLocatorSchema.optional(), locatorRevision: revisionSchema.optional(), status: z.enum(['active', 'closed']).optional() }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('project.endpoint.get'), projectId: projectIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('task.get'), taskId: taskIdSchema }).strict(),
+  taskContentUpdateCommandSchema,
+  taskContentDecideCommandSchema,
   z.object({ ...protocolEnvelopeShape, type: z.literal('resource.get'), resourceRefId: resourceRefIdSchema }).strict(),
   z.object({ ...protocolEnvelopeShape, type: z.literal('inbox.pull'), recipientType: z.enum(['user', 'agent']), afterSequence: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), limit: z.number().int().min(1).max(1_000) }).strict(),
   z.object({ ...writeCommandShape, type: z.literal('inbox.ack'), inboxMessageId: inboxMessageIdSchema, sequence: sequenceSchema }).strict(),
   humanAnswerCommandSchema,
   humanNeededCreateCommandSchema,
+  humanNeededDeferCommandSchema,
   z.object({ ...protocolEnvelopeShape, type: z.literal('receipt.get'), receiptId: receiptIdSchema }).strict()
 ])
 
@@ -1118,6 +1160,8 @@ const restWorkerAvailabilityPageSchema = z.object({
 }).readonly()
 
 export const restResponseSchema = z.discriminatedUnion('type', [
+  codeConversationMutationResponseSchema,
+  codeConversationPageResponseSchema,
   restProjectPageResponseSchema,
   restProjectCoordinationResponseSchema,
   z.object({

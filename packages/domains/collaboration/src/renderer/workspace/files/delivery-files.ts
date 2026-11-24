@@ -1,3 +1,4 @@
+import { translateWorkspace as cw } from '../workspace-i18n.js'
 import type {
   DashboardTaskCard,
   DeliveryOutputDescriptor,
@@ -29,6 +30,8 @@ export type DeliveryFileEntry = Readonly<{
   revision: number
   submitter: string | null
   submittedAt: string | null
+  projectVersion?: number
+  adoptedAt?: string
   relativePath?: string
   role?: DeliveryOutputDescriptor['role']
   source?: DeliveryOutputDescriptor['source']
@@ -73,7 +76,7 @@ export function deliveryManifestEntries(
   const submitter = memberName(context.members, executionUserId) ?? context.fallbackSubmitter ?? null
   return objects.map((object, index) => {
     const output = manifest.outputs?.find((entry) => entry.objectId === object.objectId)
-    const name = output?.fileName ?? (objects.length > 1 ? `历史交付文件 ${index + 1}` : '历史交付文件')
+    const name = output?.fileName ?? (objects.length > 1 ? cw('历史交付文件 {{index}}', { index: index + 1 }) : cw('历史交付文件'))
     return {
       key: `${manifest.deliveryManifestId}:${object.objectId}`,
       name,
@@ -105,7 +108,7 @@ function sharedMaterialEntry(
 ): DeliveryFileEntry {
   return {
     key: `material:${object.objectId}`,
-    name: '共享资料',
+    name: cw('共享资料'),
     mediaType: object.mediaType,
     byteCount: object.byteCount,
     revision: object.revision,
@@ -123,11 +126,41 @@ export function deliveryFileGroups(input: Readonly<{
   const members = input.project?.memberUsers ?? []
   const tasks = input.project?.tasks ?? []
   const dashboardTasks = input.dashboards.flatMap((dashboard) => dashboard.tasks)
+  const resultFiles = new Map<string, DeliveryFileEntry>()
+  for (const manifest of input.drive?.taskDeliveries ?? []) {
+    const view = tasks.find(({ task }) => task.projectId === manifest.projectId && task.taskId === manifest.taskId)
+    const receipt = view?.delivery?.receipt
+    const currentManifest = view?.delivery?.manifest
+    const execution = view?.executions.find((entry) => entry.executionId === manifest.executionId)
+    // Adoption is already a formal result; publishing a Project version is a separate action.
+    // Only the current completed Task's exact adopted manifest may contribute files.
+    if (manifest.projectId !== input.drive?.projectId || manifest.projectId !== input.project?.project.projectId ||
+        view?.task.status !== 'completed' || view.task.currentExecutionId !== manifest.executionId ||
+        view.task.currentExecutionState !== 'completed' || execution?.state !== 'completed' ||
+        execution.projectId !== manifest.projectId || execution.taskId !== manifest.taskId ||
+        view.delivery?.taskId !== manifest.taskId || receipt?.disposition !== 'adopted' ||
+        receipt.projectId !== manifest.projectId || receipt.taskId !== manifest.taskId ||
+        receipt.deliveryManifestId !== manifest.deliveryManifestId ||
+        currentManifest?.deliveryManifestId !== manifest.deliveryManifestId ||
+        currentManifest.projectId !== manifest.projectId || currentManifest.taskId !== manifest.taskId ||
+        currentManifest.executionId !== manifest.executionId || currentManifest.manifestDigest !== manifest.manifestDigest) continue
+    const published = [view.delivery.result, ...(input.drive?.projectResults ?? [])].find((result) => (
+      result?.disposition === 'adopted' && result.projectId === manifest.projectId &&
+      result.deliveryManifestId === manifest.deliveryManifestId && result.integrationReceiptId === receipt.integrationReceiptId
+    ))
+    for (const file of deliveryManifestEntries(manifest, {
+      members,
+      executions: view.executions,
+      fallbackSubmitter: dashboardTasks.find((task) => task.projectId === manifest.projectId && task.taskId === manifest.taskId)?.assigneeDisplayName ?? null
+    })) {
+      resultFiles.set(file.key, { ...file, ...(published ? { projectVersion: published.projectVersion } : {}), adoptedAt: receipt.createdAt })
+    }
+  }
   return [
     {
       id: 'shared',
       title: '共享资料',
-      empty: '负责人上传的共享资料会出现在这里。',
+      empty: '还没有共享资料。',
       files: (input.drive?.sharedMaterials ?? []).map((object) => sharedMaterialEntry(object, members))
     },
     {
@@ -148,7 +181,7 @@ export function deliveryFileGroups(input: Readonly<{
       id: 'result',
       title: '项目成果',
       empty: '采纳后的成果会汇总在这里。',
-      files: []
+      files: [...resultFiles.values()]
     }
   ]
 }

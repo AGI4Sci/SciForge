@@ -168,6 +168,10 @@ export type DomainMainAgentRuntimeReadiness = z.infer<
  * Host must fail closed when the adapter cannot honor structured output.
  */
 export type DomainMainAgentExecutionHost = Readonly<{
+  /** Native owner observation; transport errors and unrecognized states remain unknown. */
+  inspectSession?: (session: SessionAdmissionRef) => Promise<Readonly<{
+    state: 'missing' | 'quiescent' | 'active' | 'unknown'
+  }>>
   readAdmission?: (session: SessionAdmissionRef) => Promise<SessionAdmissionSnapshot>
   acquireSubmission?: (input: SessionSubmissionAcquire) => Promise<SessionAdmissionSnapshot>
   releaseSubmission?: (input: SessionSubmissionRelease) => Promise<void>

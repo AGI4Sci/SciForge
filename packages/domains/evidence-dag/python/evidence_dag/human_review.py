@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Optional
 
@@ -29,6 +30,7 @@ from .model import (
     NodeStatus,
     NodeType,
     ReviewPacket,
+    ReviewSelection,
 )
 
 
@@ -38,6 +40,14 @@ class HumanReviewPolicy:
     optional_threshold: float = 0.25
     recommended_threshold: float = 0.50
     required_threshold: float = 0.75
+    # Share of eligible nodes drawn uniformly into a non-blocking random-audit packet per scientific state.
+    # 0 disables it. The audit is the only unbiased source for calibrating review scores and estimating
+    # propagation from correction logs, so it is drawn from the full eligible set before any ranking.
+    random_audit_fraction: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.random_audit_fraction < 1.0:
+            raise ValueError("random_audit_fraction must be in [0, 1)")
 
     def level_for(self, score: float) -> HumanReviewLevel:
         if score >= self.required_threshold:
@@ -50,6 +60,12 @@ class HumanReviewPolicy:
 
 
 DEFAULT_POLICY = HumanReviewPolicy()
+RANDOM_AUDIT_POLICY_SUFFIX = "+random-audit"
+
+
+def policy_with_random_audit(fraction: float, base: HumanReviewPolicy = DEFAULT_POLICY) -> HumanReviewPolicy:
+    """Policy with a random audit share. Its version differs so packet identities never collide with the base policy."""
+    return replace(base, version=base.version + RANDOM_AUDIT_POLICY_SUFFIX, random_audit_fraction=fraction)
 CHECKER_ACTOR = "evidence-human-review-checker"
 CHECKER_METHOD = "risk-score-policy-v1"
 
@@ -305,6 +321,80 @@ def _unique_reasons(reasons: Iterable[HumanReviewReason]) -> tuple[HumanReviewRe
     ))
 
 
+AUDIT_ELIGIBLE_TYPES = frozenset({
+    NodeType.CLAIM, NodeType.CONCLUSION, NodeType.FINDING, NodeType.ASSUMPTION,
+})
+RANDOM_AUDIT_CHECKER = HumanReviewChecker(
+    actor_type=HumanReviewActorType.RULE,
+    actor="evidence-random-audit-sampler",
+    method="hash-ranked-uniform-sample-v1",
+    authority=HumanReviewAuthority.ADVISORY,
+)
+
+
+def random_audit_sample(
+    node_ids: Iterable[str], *, material_digest: str, policy: HumanReviewPolicy,
+) -> tuple[tuple[str, ...], Optional[float]]:
+    """Uniform sample without replacement from the FULL eligible set, drawn before any ranking.
+
+    Each node is ranked by a hash of (policy version, scientific-state digest, node id); the smallest ranks are taken.
+    The result depends only on the scientific state, so recompiling an unchanged state redraws the same sample, and it
+    does not depend on the Python version's random implementation. Returns (targets, inclusion probability).
+    """
+    ids = sorted(set(node_ids))
+    if policy.random_audit_fraction <= 0 or not ids:
+        return (), None
+    count = min(len(ids), max(1, math.ceil(policy.random_audit_fraction * len(ids))))
+    key = lambda node_id: hashlib.sha256(
+        f"random-audit-v1|{policy.version}|{material_digest}|{node_id}".encode("utf-8")
+    ).hexdigest()
+    return tuple(sorted(sorted(ids, key=key)[:count])), count / len(ids)
+
+
+def _random_audit_packet(
+    graph: ThreadGraph, support: DirectedGraph, material_digest: str, policy: HumanReviewPolicy, computed_at: str,
+) -> Optional[ReviewPacket]:
+    eligible = [node.id for node in graph.nodes.values() if node.type in AUDIT_ELIGIBLE_TYPES]
+    targets, inclusion = random_audit_sample(eligible, material_digest=material_digest, policy=policy)
+    if not targets or inclusion is None:
+        return None
+    reason = HumanReviewReason(
+        code="random_audit",
+        message=f"Randomly drawn audit sample: {len(targets)} of {len(eligible)} eligible nodes.",
+    )
+    return ReviewPacket(
+        review_packet_id=_packet_id(policy.version, HumanReviewLevel.OPTIONAL, targets, ("random_audit",),
+                                    material_digest),
+        level=HumanReviewLevel.OPTIONAL,
+        score=0.0,
+        status=HumanReviewStatus.PENDING,
+        reasons=(reason,),
+        blocking=False,
+        policy_version=policy.version,
+        computed_at=computed_at,
+        target_ids=targets,
+        assessment_ids=(),
+        checker=RANDOM_AUDIT_CHECKER,
+        question=("Inspect each sampled target and record, per target, whether an error is found and whether "
+                  "it originates in the target itself or is inherited from a parent."),
+        blast_radius={
+            "targetCount": len(targets),
+            "maxDownstreamNodes": max((_downstream_count(support, target) for target in targets), default=0),
+        },
+        recommended_action="Inspect the sampled targets and record per-target outcomes.",
+        options=(
+            {"action": "approve", "label": "Approve"},
+            {"action": "reject", "label": "Reject"},
+            {"action": "defer", "label": "Defer"},
+            {"action": "request_evidence", "label": "Request evidence"},
+        ),
+        selection=ReviewSelection(
+            mechanism="random_audit", inclusion_probability=inclusion, frame="all_eligible",
+            audit_round=material_digest[:16],
+        ),
+    )
+
+
 def _preserve_decision(candidate: ReviewPacket, previous: ReviewPacket) -> ReviewPacket:
     if previous.status not in {
         HumanReviewStatus.APPROVED,
@@ -318,6 +408,8 @@ def _preserve_decision(candidate: ReviewPacket, previous: ReviewPacket) -> Revie
         blocking=False if previous.status == HumanReviewStatus.APPROVED else candidate.blocking,
         reviewed_by=previous.reviewed_by,
         reviewed_at=previous.reviewed_at,
+        review_rationale=previous.review_rationale,
+        reviewed_snapshot_digest=previous.reviewed_snapshot_digest,
     )
 
 
@@ -415,6 +507,13 @@ def attach_human_reviews(
         for item in members:
             packet_by_assessment[item.assessment_id] = packet_id
 
+    if policy.random_audit_fraction > 0:
+        audit_packet = _random_audit_packet(graph, support, material_digest, policy, computed_at)
+        if audit_packet is not None:
+            previous_audit = previous_by_id.get(audit_packet.review_packet_id)
+            packets.append(_preserve_decision(audit_packet, previous_audit)
+                           if previous_audit is not None else audit_packet)
+
     reviewed = [replace(
         item,
         human_review=replace(
@@ -432,6 +531,14 @@ def attach_human_reviews(
             ),
             reviewed_at=(
                 next((packet.reviewed_at for packet in packets
+                      if packet.review_packet_id == packet_by_assessment.get(item.assessment_id)), None)
+            ),
+            reviewed_snapshot_digest=(
+                next((packet.reviewed_snapshot_digest for packet in packets
+                      if packet.review_packet_id == packet_by_assessment.get(item.assessment_id)), None)
+            ),
+            review_rationale=(
+                next((packet.review_rationale for packet in packets
                       if packet.review_packet_id == packet_by_assessment.get(item.assessment_id)), None)
             ),
             blocking=(
@@ -462,7 +569,9 @@ def attach_human_reviews(
             and set(old.target_ids).issubset(packet.target_ids)
             for packet in packets
         )
-        superseded = covered_by_current or bool(affected_targets.intersection(old.target_ids))
+        # A random audit sample belongs to one scientific state; a newer draw replaces an unanswered older one.
+        superseded = (covered_by_current or bool(affected_targets.intersection(old.target_ids))
+                      or (old.selection is not None and old.selection.mechanism == "random_audit"))
         if superseded and old.status in {HumanReviewStatus.PENDING, HumanReviewStatus.DEFERRED,
                                          HumanReviewStatus.REJECTED}:
             packets.append(replace(old, status=HumanReviewStatus.EXPIRED, blocking=False))

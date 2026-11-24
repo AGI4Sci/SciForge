@@ -1418,3 +1418,36 @@ test('restored current becomes the exact base for the next queued checkpoint', a
     await rm(userDataDir, { recursive: true, force: true })
   }
 })
+
+
+for (const terminalState of ['failed', 'cancelled'] as const) test(`durable ${terminalState} intent freezes its terminal fact across restart without releasing the lease`, async () => {
+  const userDataDir = await mkdtemp(join(tmpdir(), 'checkpoint-intent-state-'))
+  const workspace = join(userDataDir, 'workspace')
+  try {
+    const store = new ResearchCheckpointStore({ userDataDir })
+    const boundary = { issuerEpoch: TEST_ISSUER_EPOCH, deliveryAttemptOrdinal: 1, leaseId: 'lease-terminated', deliveryAttemptId: 'attempt-terminated',
+      clientDirectiveId: 'directive-terminated', runtimeId: 'codex', threadId: 'thread-1' }
+    await store.ensureAutomaticLease(workspace, { ...boundary, title: 'Partial result', boundary: { watermark: '0', knownTurnIds: [] } })
+    const owner = { ...boundary, boundaryLeaseId: boundary.leaseId, workspaceRoot: workspace, phase: 'terminated-intent' as const, turnId: 'terminal-turn', terminalState }
+    const snapshot = { issuerEpoch: TEST_ISSUER_EPOCH, nextDeliveryAttemptOrdinal: 2, retiredThroughOrdinal: 0, retiredOrdinalRanges: [], owners: [owner] }
+    await store.reconcileTurnBoundaryOwners(snapshot)
+    const restarted = new ResearchCheckpointStore({ userDataDir })
+    await restarted.reconcileTurnBoundaryOwners(snapshot)
+    assert.equal(await restarted.turnBoundaryLeaseState(workspace, boundary.leaseId), 'open')
+    await assert.rejects(restarted.reconcileTurnBoundaryOwners({ ...snapshot, owners: [{ ...owner, terminalState: terminalState === 'failed' ? 'cancelled' : 'failed' }] }), /identity/)
+    await assert.rejects(restarted.reconcileTurnBoundaryOwners({ ...snapshot, owners: [{ ...owner, turnId: 'another-turn' }] }), /identity/)
+    const recording = await restarted.recordingContextForLease(workspace, boundary)
+    assert.ok(recording)
+    const incoming: DomainTurnArtifactEvent = { ...event(owner.turnId, 1), kind: 'turn-terminated', terminalState,
+      workspaceRoot: workspace, clientDirectiveId: boundary.clientDirectiveId }
+    const extracted = extractCheckpointFromTurn(incoming, recording.recording, workspace, new Map())
+    const operation = await restarted.enqueue(workspace, recording.recording.recordingId, extracted, 'terminal-idempotent-commit', boundary)
+    assert.equal(operation.manifest.turn.terminalState, terminalState)
+    assert.equal((await restarted.enqueue(workspace, recording.recording.recordingId, extracted, 'terminal-idempotent-commit', boundary)).operationId, operation.operationId)
+    await assert.rejects(restarted.enqueue(workspace, recording.recording.recordingId, { ...extracted, manifest: { ...extracted.manifest,
+      turn: { ...extracted.manifest.turn, terminalState: terminalState === 'failed' ? 'cancelled' : 'failed' } } }, 'terminal-idempotent-commit', boundary), /immutable content/)
+    await restarted.settleTurnBoundaryLease(workspace, { ...boundary, turnId: owner.turnId, state: 'released', terminalState })
+    assert.equal(await restarted.turnBoundaryLeaseState(workspace, boundary.leaseId), 'consumed')
+    assert.equal((await restarted.operation(workspace, operation.operationId))?.state, 'pending')
+  } finally { await rm(userDataDir, { recursive: true, force: true }) }
+})

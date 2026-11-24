@@ -3,40 +3,125 @@ import {
   type CloudIdentityClient
 } from './cloud-identity-client.js'
 
+export type IdentityConfigurationField = 'oidcIssuer' | 'cloudBaseUrl'
+export type IdentityConfigurationSource = 'settings' | 'environment'
+
+/**
+ * Deployment input for Desktop Cloud sign-in.
+ *
+ * `settings` is the package-owned, non-secret document a user edits from the
+ * Account surface. `oidcIssuer`/`cloudBaseUrl` are the deployment-provided
+ * environment values. An explicit saved setting wins over the environment so a
+ * user can correct a deployment default without editing the launch script.
+ *
+ * The repository's shared-development defaults live in
+ * `deployments/development/sciforge.env` and `.env.local.example`, which the
+ * development launcher applies. Packaged builds deliberately carry no endpoint
+ * default: incomplete configuration fails closed instead of contacting an
+ * invented production service.
+ */
+export type DesktopIdentityConfigurationInput = Readonly<{
+  oidcIssuer?: string
+  cloudBaseUrl?: string
+  settings?: Readonly<{
+    oidcIssuer?: string | null
+    cloudBaseUrl?: string | null
+  }> | null
+}>
+
+export type DesktopIdentityConfigurationStatus = Readonly<{
+  oidcIssuer: string | null
+  cloudBaseUrl: string | null
+  source: Readonly<Record<IdentityConfigurationField, IdentityConfigurationSource | null>>
+  missing: readonly IdentityConfigurationField[]
+  invalid: readonly IdentityConfigurationField[]
+  error: string | null
+}>
+
 export type DesktopIdentityRuntimeConfig =
   | Readonly<{ mode: 'http'; issuer: string; cloudBaseUrl: string }>
   | Readonly<{ mode: 'disabled'; issuer: string | null; error: string }>
 
-export function resolveDesktopIdentityRuntimeConfig(input: Readonly<{
-  oidcIssuer?: string
-  cloudBaseUrl?: string
-}>): DesktopIdentityRuntimeConfig {
-  const configuredIssuer = trimmed(input.oidcIssuer)
-  const configuredCloudBaseUrl = trimmed(input.cloudBaseUrl)
-  if (!configuredIssuer || !configuredCloudBaseUrl) {
-    const missing = [
-      ...(configuredIssuer ? [] : ['SCIFORGE_OIDC_ISSUER']),
-      ...(configuredCloudBaseUrl ? [] : ['SCIFORGE_CLOUD_BASE_URL'])
-    ]
-    return {
-      mode: 'disabled',
-      issuer: configuredIssuer ?? null,
-      error: `Cloud identity is disabled because ${missing.join(' and ')} is not configured.`
+const FIELD_DESCRIPTIONS: Readonly<Record<IdentityConfigurationField, Readonly<{
+  label: string
+  env: string
+}>>> = Object.freeze({
+  oidcIssuer: Object.freeze({ label: 'the OIDC issuer', env: 'SCIFORGE_OIDC_ISSUER' }),
+  cloudBaseUrl: Object.freeze({
+    label: 'the SciForge Cloud service address',
+    env: 'SCIFORGE_CLOUD_BASE_URL'
+  })
+})
+
+/**
+ * Pure configuration inspection shared by runtime activation and the Account
+ * settings capability. It never performs I/O and never falls back to an
+ * invented endpoint: incomplete or invalid input fails closed.
+ */
+export function inspectDesktopIdentityConfiguration(
+  input: DesktopIdentityConfigurationInput
+): DesktopIdentityConfigurationStatus {
+  const oidcIssuer = resolveField(
+    trimmed(input.settings?.oidcIssuer),
+    trimmed(input.oidcIssuer)
+  )
+  const cloudBaseUrl = resolveField(
+    trimmed(input.settings?.cloudBaseUrl),
+    trimmed(input.cloudBaseUrl)
+  )
+  const missing: IdentityConfigurationField[] = []
+  const invalid: IdentityConfigurationField[] = []
+  const validationErrors: string[] = []
+  const validate = (field: IdentityConfigurationField, value: string | null): void => {
+    if (!value) {
+      missing.push(field)
+      return
+    }
+    try {
+      validateIdentityUrl(value, FIELD_DESCRIPTIONS[field].label)
+    } catch (error) {
+      invalid.push(field)
+      validationErrors.push(error instanceof Error ? error.message : 'The value is not a valid URL.')
     }
   }
+  validate('oidcIssuer', oidcIssuer.value)
+  validate('cloudBaseUrl', cloudBaseUrl.value)
 
-  try {
-    validateIdentityUrl(configuredIssuer, 'OIDC issuer')
-    validateIdentityUrl(configuredCloudBaseUrl, 'SciForge Cloud base URL')
-  } catch (error) {
-    return {
-      mode: 'disabled',
-      issuer: null,
-      error: error instanceof Error ? error.message : 'Cloud identity configuration is invalid.'
-    }
+  const missingMessage = missing.length > 0
+    ? `SciForge Cloud is not configured. Set ${missing.map((field) =>
+      FIELD_DESCRIPTIONS[field].label).join(' and ')} in Account settings, or provide ${missing.map(
+      (field) => FIELD_DESCRIPTIONS[field].env).join(' and ')}.`
+    : null
+  const invalidMessage = validationErrors.length > 0
+    ? `${validationErrors.join(' ')} Correct the value in Account settings.`
+    : null
+
+  return {
+    oidcIssuer: oidcIssuer.value,
+    cloudBaseUrl: cloudBaseUrl.value,
+    source: {
+      oidcIssuer: oidcIssuer.source,
+      cloudBaseUrl: cloudBaseUrl.source
+    },
+    missing,
+    invalid,
+    error: missingMessage ?? invalidMessage
   }
+}
 
-  return { mode: 'http', issuer: configuredIssuer, cloudBaseUrl: configuredCloudBaseUrl }
+export function resolveDesktopIdentityRuntimeConfig(
+  input: DesktopIdentityConfigurationInput
+): DesktopIdentityRuntimeConfig {
+  const status = inspectDesktopIdentityConfiguration(input)
+  if (status.error) {
+    const issuer = status.invalid.length > 0 ? null : status.oidcIssuer
+    return { mode: 'disabled', issuer, error: status.error }
+  }
+  return {
+    mode: 'http',
+    issuer: status.oidcIssuer!,
+    cloudBaseUrl: status.cloudBaseUrl!
+  }
 }
 
 export function createUnavailableCloudIdentityClient(
@@ -54,12 +139,21 @@ export function createUnavailableCloudIdentityClient(
   }
 }
 
-function trimmed(value: string | undefined): string | undefined {
+function resolveField(
+  setting: string | undefined,
+  environment: string | undefined
+): Readonly<{ value: string | null; source: IdentityConfigurationSource | null }> {
+  if (setting) return { value: setting, source: 'settings' }
+  if (environment) return { value: environment, source: 'environment' }
+  return { value: null, source: null }
+}
+
+function trimmed(value: string | null | undefined): string | undefined {
   const result = value?.trim()
   return result ? result : undefined
 }
 
-function validateIdentityUrl(value: string, label: string): void {
+export function validateIdentityUrl(value: string, label: string): void {
   let url: URL
   try {
     url = new URL(value)

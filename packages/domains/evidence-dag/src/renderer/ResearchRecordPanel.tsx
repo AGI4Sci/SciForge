@@ -1,3 +1,4 @@
+import { AuditOverviewPanel } from './AuditOverviewPanel'
 import { ResearchSourceRetention } from './ResearchSourceRetention'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement, type CSSProperties } from 'react'
 import { ArrowUpRight, ChevronDown, ChevronRight, MessageSquare, RefreshCw, Settings2, X } from 'lucide-react'
@@ -11,7 +12,6 @@ import { RESEARCH_READING_SIZES, RESEARCH_READING_DEFAULT, researchRecordReading
 import { recordVisualState, recordOperation, RecordOperationIcon, RecordStatus } from './research-record-visual'
 import { RecordLongText } from './RecordLongText'
 import { RecordWindow, useRecordSelectionLock } from './RecordWindow'
-import { ResearchRecordCompact } from './ResearchRecordCompact'
 import { ResearchRecordScientificReview } from './ResearchRecordScientificReview'
 import { ResearchRecordMedia } from './ResearchRecordMedia'
 import { ResearchRecordSearch } from './ResearchRecordSearch'
@@ -40,6 +40,7 @@ function containsSelection(element: HTMLElement): boolean {
 }
 
 type ResearchRecordPanelProps = {
+  auditOverview?: boolean
   returnContributionId?: string
   scope: ResearchRecordScope; invoker: DomainRendererCapabilityInvoker; workbench?: DomainRendererWorkbenchHost;
   presentation?: ResearchRecordPresentation
@@ -54,7 +55,7 @@ export function ResearchRecordPanel(props: ResearchRecordPanelProps): ReactEleme
   return <ScopedResearchRecordPanel key={JSON.stringify([runtimeId, threadId, workspaceRoot])} {...props} />
 }
 
-function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: providedPresentation, visibleContext, active = true, sourcePresentation = 'right-panel', returnContributionId }: ResearchRecordPanelProps): ReactElement {
+function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: providedPresentation, visibleContext, active = true, sourcePresentation = 'right-panel', returnContributionId, auditOverview = false }: ResearchRecordPanelProps): ReactElement {
   const [localPresentation] = useState(createResearchRecordPresentation)
   const presentation = providedPresentation ?? localPresentation
   const state = useSyncExternalStore(presentation.subscribe, presentation.getSnapshot)
@@ -63,7 +64,8 @@ function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: pr
   const [detailError, setDetailError] = useState('')
   const [detailRetry, setDetailRetry] = useState(0)
   const [detailTab, setDetailTab] = useState<'summary' | 'source' | 'media'>('summary')
-  useEffect(() => setDetailTab('summary'), [state.selectedId])
+  const [materialsOpen, setMaterialsOpen] = useState(false)
+  useEffect(() => { setDetailTab('summary'); setMaterialsOpen(false) }, [state.selectedId])
   const [revision, setRevision] = useState(0)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -179,7 +181,7 @@ function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: pr
     presentation.focusSource(id)
   }
   const edit = async (change: import('../research-record-contract').ResearchRecordEdit['change']) => {
-    if (!view) return false
+    if (!view || busy) return false
     setBusy(true); setError('')
     try {
       await invoker.invoke(researchRecordContracts.edit, { ...scope, requestId: crypto.randomUUID(), expectedRevision: view.revision, change }, { workspaceId: scope.workspaceRoot })
@@ -225,31 +227,54 @@ function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: pr
     <style>{researchRecordReadingStyles}</style>
     <div className="record-panel-header shrink-0 space-y-3 border-b border-ds-border px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
-        <strong className="record-title font-medium">科研审计</strong><span className="ml-auto record-caption text-ds-muted">{view?.paused ? '整理已暂停' : ''}</span>
-        <div className="record-reading-controls flex items-center gap-1 rounded border border-ds-border" role="group" aria-label="研究阅读字号">
-          <button className="rounded hover:bg-ds-hover disabled:opacity-40" aria-label="缩小研究文字" disabled={state.readingSize <= RESEARCH_READING_SIZES[0]} onClick={() => presentation.setReadingSize(RESEARCH_READING_SIZES[Math.max(0, RESEARCH_READING_SIZES.findIndex(size => size === state.readingSize) - 1)])}>A−</button>
-          <button className="rounded px-1 hover:bg-ds-hover" title="恢复默认阅读字号，不改变界面或图片缩放" aria-label="恢复默认研究字号" onClick={() => presentation.setReadingSize(RESEARCH_READING_DEFAULT)}>{state.readingSize}</button>
-          <button className="rounded hover:bg-ds-hover disabled:opacity-40" aria-label="放大研究文字" disabled={state.readingSize >= RESEARCH_READING_SIZES.at(-1)!} onClick={() => presentation.setReadingSize(RESEARCH_READING_SIZES[Math.min(RESEARCH_READING_SIZES.length - 1, RESEARCH_READING_SIZES.findIndex(size => size === state.readingSize) + 1)])}>A+</button>
-        </div>
-        <button className="rounded px-2 py-1 record-caption text-ds-muted hover:bg-ds-hover" disabled={busy || !view?.latestRecordPath.length} onClick={() => void currentRound()}>定位当前轮次</button>
+        {!auditOverview && <strong className="record-title font-medium">研究进展</strong>}<span className="ml-auto record-caption text-ds-muted">{view?.paused ? '整理已暂停' : ''}</span>
+        <button className="rounded px-2 py-1 record-caption text-ds-muted hover:bg-ds-hover" disabled={busy || !view?.latestRecordPath.length} onClick={() => void currentRound()}>回到最新</button>
         <button className="rounded p-1 text-ds-muted hover:bg-ds-hover" disabled={selected} onClick={() => { presentation.resetPage(pageKey); refresh() }} aria-label="刷新研究记录"><RefreshCw size={13} /></button>
-        <details className="relative"><summary aria-label="管理研究记录" className="cursor-pointer list-none rounded p-1 text-ds-muted hover:bg-ds-hover"><Settings2 size={14} /></summary>
-          <div className="absolute right-0 top-8 z-20 max-h-[65vh] w-72 max-w-[80vw] space-y-2 overflow-auto rounded-xl border border-ds-border bg-ds-main p-3 shadow-lg">
+      </div>
+      <details className="record-settings min-w-0"><summary aria-label="管理研究记录" className="flex cursor-pointer items-center gap-1 rounded py-1 record-caption text-ds-muted hover:bg-ds-hover"><Settings2 size={14} />阅读与整理设置</summary>
+          <div role="region" aria-label="研究记录设置" className="mt-2 max-h-[40vh] space-y-3 overflow-auto rounded-xl border border-ds-border bg-ds-main p-3 [overflow-wrap:anywhere]">
+            <details><summary className="cursor-pointer record-text">阅读显示</summary>
+            <div className="record-reading-controls flex items-center gap-1 rounded border border-ds-border" role="group" aria-label="研究阅读字号">
+              <button className="rounded hover:bg-ds-hover disabled:opacity-40" aria-label="缩小研究文字" disabled={state.readingSize <= RESEARCH_READING_SIZES[0]} onClick={() => presentation.setReadingSize(RESEARCH_READING_SIZES[Math.max(0, RESEARCH_READING_SIZES.findIndex(size => size === state.readingSize) - 1)])}>A−</button>
+              <button className="rounded px-1 hover:bg-ds-hover" title="恢复默认阅读字号，不改变界面或图片缩放" aria-label="恢复默认研究字号" onClick={() => presentation.setReadingSize(RESEARCH_READING_DEFAULT)}>{state.readingSize}</button>
+              <button className="rounded hover:bg-ds-hover disabled:opacity-40" aria-label="放大研究文字" disabled={state.readingSize >= RESEARCH_READING_SIZES.at(-1)!} onClick={() => presentation.setReadingSize(RESEARCH_READING_SIZES[Math.min(RESEARCH_READING_SIZES.length - 1, RESEARCH_READING_SIZES.findIndex(size => size === state.readingSize) + 1)])}>A+</button>
+            </div>
+            </details>
+            <details><summary className="cursor-pointer record-text">人工复核（可选）</summary>
+            <button className={button} disabled={busy || !view} onClick={() => void edit({ kind: 'human-review-settings', enabled: !view?.humanReview?.enabled })}>{view?.humanReview?.enabled ? '关闭项目人工复核' : '开启项目人工复核'}</button>
+            <p className="record-caption text-ds-muted">当前工作区项目生效。复核按需，允许跳过；关闭保留历史，自动材料核查继续。</p>
+            </details>
+            <details><summary className="cursor-pointer record-text">阶段与归属（可选）</summary>
+            <p className="record-caption text-ds-muted">可直接阅读研究记录；需要时再划分阶段。</p>
             <input className={field} aria-label="阶段名称" placeholder="长期阶段或子阶段名称" value={phaseTitle} onChange={event => setPhaseTitle(event.target.value)} />
             <select className={field} aria-label="父阶段" value={parentId} onChange={event => setParentId(event.target.value)}><option value="root">整个课题</option>{phaseOptions.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select>
             <div className="flex flex-wrap gap-2"><button className={button} disabled={busy || !phaseTitle.trim()} onClick={() => void edit({ kind: 'phase', parentId, title: phaseTitle, summary: '' })}>新增阶段</button><button className={button} disabled={busy || !editableNode} onClick={() => void edit({ kind: 'move', nodeId: editableNode!.id, parentId })}>归入该阶段</button></div>
             {editableNode && <RecordFields node={editableNode} busy={busy} presentation={presentation} onEdit={edit} />}
+            </details>
+            <details><summary className="cursor-pointer record-text">自动整理</summary>
+            <p className="record-caption text-ds-muted">默认沿用 Agent 配置，无需另选模型。</p>
             <input className={field} aria-label="整理模型" placeholder="旁路模型，留空沿用 Agent 配置" value={model} onChange={event => setModel(event.target.value)} />
             <div className="flex flex-wrap gap-2"><button className={button} disabled={busy || !view} onClick={() => void edit({ kind: 'settings', paused: !view?.paused, model })}>{view?.paused ? '继续整理' : '暂停整理'}</button><button className={button} disabled={busy || !view} onClick={() => void edit({ kind: 'settings', paused: view?.paused ?? false, model })}>保存模型</button><button className={button} disabled={busy} onClick={() => void edit({ kind: 'retry' })}>重试整理</button></div>
             <p className="record-caption text-ds-muted">复用来源 Agent 接入。摘要来自可见会话快照，原始行为按需读取。</p>
-            {!!view?.failures.length && <details><summary className="cursor-pointer record-text text-ds-muted">整理失败记录（{view.failures.length}）</summary>{view.failures.map((failure, index) => <p key={index} className="mt-1 record-text">{failure.message}</p>)}</details>}
+            </details>
+            {view && !view.node?.source && <details><summary className="cursor-pointer record-text">来源与导出</summary><ResearchSourceRetention view={view} scope={scope} invoker={invoker} active={active} /></details>}
           </div>
+      </details>
+      {(!!view?.failures.length || !!view?.organizationCoverage?.blocked) && <div role="status" className="record-caption record-check-text">
+        <p>{view?.failures.length ? `整理失败 ${view.failures.length} 项。` : ''}{view?.organizationCoverage?.blocked ? ` ${view.organizationCoverage.blocked} 轮整理受阻，已有内容保留。` : ''}</p>
+        <details><summary className="cursor-pointer">查看整理问题与恢复方法</summary>
+          {view?.failures.map((failure, index) => <p key={index} className="mt-1 whitespace-pre-wrap break-words">{failure.message}</p>)}
+          {auditOverview ? <button className={button} disabled={busy} onClick={() => void edit({ kind: 'retry' })}>重试整理</button> : <p>可在阅读与整理设置 → 自动整理中重试。</p>}
         </details>
-      </div>
-      <nav aria-label="研究阶段路径" className="flex flex-wrap items-center gap-1 record-caption text-ds-muted"><button className="hover:text-ds-ink aria-[current=page]:font-medium aria-[current=page]:text-ds-ink" aria-current={focusId === 'root' ? 'page' : undefined} onClick={() => navigate('root')}>整个课题</button>{[...(view?.ancestors ?? []), ...(view?.node ? [view.node] : [])].map(node => <span key={node.id} className="flex min-w-0 items-center gap-1"><ChevronRight size={11} /><button className="max-w-48 truncate hover:text-ds-ink aria-[current=page]:font-medium aria-[current=page]:text-ds-ink" title={node.title} aria-current={node.id === focusId ? 'page' : undefined} onClick={() => navigate(node.id)}>{node.title}</button></span>)}</nav>
-      <nav aria-label="研究视图" className="record-view-tabs flex flex-wrap gap-1">{([['overview', '精简列表'], ['changes', '审查变化'], ['process', '局部过程']] as const).map(([value, label]) => <button key={value} className={`${button} ${state.recordView === value ? 'bg-ds-hover font-medium' : ''}`} aria-pressed={state.recordView === value} onClick={() => changeView(value)}>{label}</button>)}{state.navigation.length > 0 && <button className={button} onClick={() => { rememberPosition(); setView(undefined); presentation.back() }}>返回上一范围</button>}</nav>
+      </div>}
+      {(!auditOverview || focusId !== 'root' || state.recordView !== 'overview') && <nav aria-label="研究阶段路径" className="flex flex-wrap items-center gap-1 record-caption text-ds-muted"><button className="hover:text-ds-ink aria-[current=page]:font-medium aria-[current=page]:text-ds-ink" aria-current={focusId === 'root' ? 'page' : undefined} onClick={() => navigate('root')}>{auditOverview ? '全部已记录内容' : '整个课题'}</button>{[...(view?.ancestors ?? []), ...(view?.node ? [view.node] : [])].map(node => <span key={node.id} className="flex min-w-0 items-center gap-1"><ChevronRight size={11} /><button className="max-w-48 truncate hover:text-ds-ink aria-[current=page]:font-medium aria-[current=page]:text-ds-ink" title={node.title} aria-current={node.id === focusId ? 'page' : undefined} onClick={() => navigate(node.id)}>{node.title}</button></span>)}</nav>}
+      {auditOverview ? <div className="flex flex-wrap gap-2 record-caption">
+        {state.recordView !== 'overview' && <button className={button} onClick={() => changeView('overview')}>返回研究摘要</button>}
+        <details><summary className="cursor-pointer text-ds-muted">查看过程与来源</summary><div className="mt-1 flex flex-wrap gap-2"><button className={button} onClick={() => changeView('process')}>查看研究过程</button><button className={button} onClick={() => changeView('changes')}>查看记录变化</button></div></details>
+        {state.navigation.length > 0 && <button className={button} onClick={() => { rememberPosition(); setView(undefined); presentation.back() }}>返回上一范围</button>}
+      </div> : <nav aria-label="研究视图" className="record-view-tabs flex flex-wrap gap-1">{([['overview', '概览'], ['changes', '最近变化'], ['process', '过程']] as const).map(([value, label]) => <button key={value} className={`${button} ${state.recordView === value ? 'bg-ds-hover font-medium' : ''}`} aria-pressed={state.recordView === value} onClick={() => changeView(value)}>{label}</button>)}{state.navigation.length > 0 && <button className={button} onClick={() => { rememberPosition(); setView(undefined); presentation.back() }}>返回上一范围</button>}</nav>}
       {error && <p role="alert" className="record-text text-ds-ink">{error}</p>}
-      {updateAvailable && <p role="status" className="record-caption text-ds-muted">自动读取暂缓；保留当前选区与其版本，取消选区后核对来源和新修订。</p>}
+      {updateAvailable && <p role="status" className="record-caption text-ds-muted">有新内容，结束选取后更新。</p>}
     </div>
     <ResearchRecordSelection key={`${focusId}:${state.recordView}`} root={surfaceRef} scope={scope} workbench={workbench} revision={view?.revision ?? 0} active={active} onDiscuss={selection => discuss(selection.resourceId, selection)} />
     <div className="record-body">
@@ -257,19 +282,18 @@ function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: pr
       {!view?.node?.source && <ResearchRecordSearch key={`${scopeKey}:${focusId}`} query={query} disabled={selected} onQuery={value => { presentation.query(focusId, value); presentation.resetPage(recordPageKey(focusId, value, synthesisOffset, messageOffset)); setView(undefined) }} />}
       {view && !view.node?.source && state.recordView === 'changes' && <RecordReview scope={scope} nodeId={focusId} revision={view.revision} invoker={invoker} presentation={presentation} active={active}
         onInspect={presentation.inspect} onDiscuss={discuss} full={state.recordView === 'changes'} />}
-      {state.recordView !== 'overview' && <div className="mb-2 flex flex-wrap items-center gap-2 record-caption text-ds-muted"><span>{view?.node?.source ? '原始依据' : state.recordView === 'changes' ? '版本变化与来源核对' : '仅显示当前范围的直接成员'}</span><span className="ml-auto flex shrink-0 gap-1">{!view?.node?.source && <button className="rounded px-1 py-1 hover:bg-ds-hover" onClick={() => presentation.collapseLevel(view?.children ?? [])}>收起本层</button>}{!!state.collapsedGroups[focusId]?.length && <button className="rounded px-1 py-1 hover:bg-ds-hover" onClick={presentation.restoreLevel}>恢复本层展开</button>}<button className="rounded px-1 py-1 hover:bg-ds-hover" disabled={busy} onClick={() => void discuss(focusId)}>讨论此范围</button></span></div>}
-      {view?.node?.source && <section className="mb-3 space-y-3" aria-label="原始依据" {...selectionAttributes(view.node)}><div className="flex flex-wrap items-center gap-2"><h2 className="min-w-0 flex-1 select-text break-words record-title font-medium">{view.node.title}</h2>{state.sourceReturnId !== null && <button className={button} onClick={() => navigate(state.sourceReturnId!)}>返回之前范围</button>}</div><ResearchRecordSource view={view} onOpen={value => void openSource(value)} busy={busy} presentation={presentation} /></section>}
+      {state.recordView !== 'overview' && <div className="mb-2 flex flex-wrap items-center gap-2 record-caption text-ds-muted"><span>{view?.node?.source ? '原始依据' : state.recordView === 'changes' ? '最近更新' : '当前阶段'}</span><span className="ml-auto flex shrink-0 gap-1">{!view?.node?.source && <button className="rounded px-1 py-1 hover:bg-ds-hover" onClick={() => presentation.collapseLevel(view?.children ?? [])}>收起本层</button>}{!!state.collapsedGroups[focusId]?.length && <button className="rounded px-1 py-1 hover:bg-ds-hover" onClick={presentation.restoreLevel}>恢复本层展开</button>}<button className="rounded px-1 py-1 hover:bg-ds-hover" disabled={busy} onClick={() => void discuss(focusId)}>讨论此范围</button></span></div>}
+      {view?.node?.source && <section className="mb-3 space-y-3" aria-label="原始依据" {...selectionAttributes(view.node)}><div className="flex flex-wrap items-center gap-2"><h2 className="min-w-0 flex-1 select-text break-words record-title font-medium">{view.node.title}</h2>{state.sourceReturnId !== null && <button className={button} onClick={() => navigate(state.sourceReturnId!)}>返回之前范围</button>}</div><ResearchRecordSource view={view} onOpen={value => void openSource(value)} busy={busy} presentation={presentation} /><ResearchSourceRetention view={view} scope={scope} invoker={invoker} active={active} /></section>}
       {state.recordView !== 'overview' && view?.node && ['phase', 'round'].includes(view.node.kind) && <ResearchRecordCheckpoint node={view.node} scope={scope} invoker={invoker} workbench={workbench} />}
-      {view && <ResearchSourceRetention view={view} scope={scope} invoker={invoker} active={active} />}
       {view?.organizationCoverage && !view.node?.source && <RecordCoverage coverage={view.organizationCoverage} scopeId={focusId} presentation={presentation} />}
 
       {view?.node && ['phase', 'round'].includes(view.node.kind) && state.recordView === 'process' && <div className="mb-3"><RecordSynthesis node={view.node} presentation={presentation} onInspect={presentation.inspect} disabled={selected} onOffset={value => presentation.offset(`server-synthesis:${focusId}`, value)} /></div>}
-      {state.recordView !== 'overview' && !view?.children.length && !view?.node?.source && <p className="py-6 record-text text-ds-muted">{view?.node ? Object.keys(query).length ? '本范围无匹配；未加载不表示没有记录。' : '该阶段暂无记录' : '等待研究记录…'}</p>}
+      {state.recordView !== 'overview' && !view?.children.length && !view?.node?.source && <p className="py-6 record-text text-ds-muted">{view?.node ? Object.keys(query).length ? '当前范围没有匹配记录。' : '该阶段暂无记录' : '等待研究记录…'}</p>}
       {view && state.recordView !== 'overview' && <RecordMessages view={view} nodeId={focusId} offset={messageOffset} presentation={presentation} selected={selected} />}
-      {view && state.recordView === 'process' && !view.node?.source && <p className="mb-2 record-caption text-ds-muted">本范围 {view.totalChildren} 个{Object.keys(query).length ? '匹配结果（含后代）' : '直接成员'}；当前读取 {view.children.length} 个{view.totalChildren > view.children.length ? '，其余未加载' : ''}。成组展示保留原始 ID，不合并实验。</p>}
+      {view && state.recordView === 'process' && !view.node?.source && <p className="mb-2 record-caption text-ds-muted">本范围 {view.totalChildren} 个{Object.keys(query).length ? '匹配结果（含后代）' : '直接成员'}；当前读取 {view.children.length} 个{view.totalChildren > view.children.length ? '，其余未加载' : ''}。</p>}
       {state.recordView === 'process' && !!view?.children.some(node => node.kind === 'event') && <button className={`${button} mb-2`} aria-expanded={state.expanded.has(`raw:${focusId}`)} onClick={() => presentation.toggle(`raw:${focusId}`)}>原始行为 · 本页 {view.children.filter(node => node.kind === 'event').length} 项 · 含失败的原始结果保留</button>}
-      {state.recordView === 'overview' && view && !view.node?.source && <ResearchRecordCompact view={view} presentation={presentation} onNavigate={navigate} scope={scope} componentId={componentId} active={active} visibleContext={visibleContext} />}
-      {state.recordView === 'process' && <RecordWindow items={(view?.children ?? []).filter(node => Object.keys(query).length > 0 || node.kind !== 'event' || state.expanded.has(`raw:${focusId}`))} id={`${focusId}:${offset}:${state.recordView}`} label="当前范围成员" presentation={presentation} render={(node, index) => <RecordChapter key={node.id} node={node} ancestorIds={Object.keys(query).length ? view?.locations?.find(location => location.nodeId === node.id)?.ancestorIds : undefined} index={index + offset} currentPath={currentPath} scope={scope} presentation={presentation} onInspect={presentation.inspect} onDiscuss={discuss} onNavigate={navigate} visibleContext={visibleContext} componentId={componentId} active={active} overview={state.recordView === 'overview'} /> } />}
+      {state.recordView === 'overview' && view && !view.node?.source && <AuditOverviewPanel view={view} onInspect={presentation.inspect} onProcess={() => changeView('process')} scope={scope} componentId={componentId} active={active} visibleContext={visibleContext} />}
+      {state.recordView === 'process' && <RecordWindow items={(view?.children ?? []).filter(node => Object.keys(query).length > 0 || node.kind !== 'event' || state.expanded.has(`raw:${focusId}`))} id={`${focusId}:${offset}:${state.recordView}`} label="当前范围成员" presentation={presentation} render={node => <RecordChapter key={node.id} node={node} ancestorIds={Object.keys(query).length ? view?.locations?.find(location => location.nodeId === node.id)?.ancestorIds : undefined} currentPath={currentPath} scope={scope} presentation={presentation} onInspect={presentation.inspect} onDiscuss={discuss} onNavigate={navigate} visibleContext={visibleContext} componentId={componentId} active={active} overview={state.recordView === 'overview'} /> } />}
       {!!view?.page && state.recordView !== 'changes' && <ResearchRecordPaging label="范围成员" offset={offset} count={view.children.length} total={view.page.total} hasPrevious={!!page?.previous.length} hasNext={view.page.nextCursor !== null} disabled={selected || !!error} onPrevious={() => presentation.previousPage(pageKey)} onNext={() => { if (view.page?.nextCursor && view.page.nextOffset !== null) presentation.nextPage(pageKey, view.page.nextCursor, view.page.nextOffset) }} />}
 
     </div></div>
@@ -283,8 +307,11 @@ function ScopedResearchRecordPanel({ scope, invoker, workbench, presentation: pr
       {detail?.node && ['phase', 'round'].includes(detail.node.kind) ? <RecordSynthesis node={detail.node} presentation={presentation} onInspect={presentation.inspect} disabled={selected} onOffset={value => presentation.offset(`server-synthesis:${state.selectedId}`, value)} /> : detail?.node?.summary && <p className="whitespace-pre-wrap record-text text-ds-muted">{detail.node.summary}</p>}
       {detail?.node && ['phase', 'round'].includes(detail.node.kind) && <ResearchRecordCheckpoint node={detail.node} scope={scope} invoker={invoker} workbench={workbench} />}
       </div>}
-      {detail && <ResearchSourceRetention view={detail} scope={scope} invoker={invoker} active={active} />}
-      {detailTab === 'summary' && detail && <ResearchRecordScientificReview view={detail} scope={scope} active={active} invoker={invoker} workbench={workbench} />}
+      {detailTab === 'source' && detail && <ResearchSourceRetention view={detail} scope={scope} invoker={invoker} active={active} />}
+      {detailTab === 'summary' && detail && <details open={materialsOpen} onToggle={event => setMaterialsOpen(event.currentTarget.open)} className="mt-3">
+        <summary className="cursor-pointer record-caption text-ds-muted">相关材料{detail.synthesisImpact?.some(item => item.status === 'requires-review') ? ' · 有内容需查看' : ''}</summary>
+        {materialsOpen && <div className="mt-2"><ResearchRecordScientificReview view={detail} scope={scope} active={active} invoker={invoker} workbench={workbench} onSaved={() => { setDetailRetry(value => value + 1); refresh() }} /></div>}
+      </details>}
       {detailTab === 'source' && detail && <ResearchRecordSource view={detail} onOpen={value => void openSource(value)} busy={busy} presentation={presentation} />}
       {detailTab === 'media' && detail && <ResearchRecordMedia key={state.selectedId} sourceStatus={detail.sourceStatus} raw={detail.raw} rawOrigin={detail.rawOrigin} retainedSource={detail.retainedSource} scope={scope} invoker={invoker} workbench={workbench} {...(detail.node?.source ? { onSource: () => void openSource(detail) } : {})} />}
       {detailTab === 'summary' && detail && state.selectedId && <RecordMessages view={detail} nodeId={state.selectedId} offset={detailMessageOffset} presentation={presentation} selected={selected} />}
@@ -309,8 +336,8 @@ function RecordMessages({ view, nodeId, offset, presentation, selected }: { view
   </details>
 }
 
-function RecordChapter({ node, ancestorIds, index, currentPath, scope, presentation, onInspect, onDiscuss, onNavigate, visibleContext, componentId, active, overview }: {
-  node: ResearchRecordNode; ancestorIds?: string[]; index: number; currentPath: ReadonlySet<string>; scope: ResearchRecordScope;
+function RecordChapter({ node, ancestorIds, currentPath, scope, presentation, onInspect, onDiscuss, onNavigate, visibleContext, componentId, active, overview }: {
+  node: ResearchRecordNode; ancestorIds?: string[]; currentPath: ReadonlySet<string>; scope: ResearchRecordScope;
   presentation: ResearchRecordPresentation; onInspect: (id: string, ids?: readonly string[], title?: string) => void;
   onDiscuss: (id: string) => Promise<void>; onNavigate: (id: string) => void
   visibleContext?: DomainRendererVisibleContextHost; componentId: string; active: boolean; overview: boolean
@@ -328,7 +355,6 @@ function RecordChapter({ node, ancestorIds, index, currentPath, scope, presentat
     {!phase && !capability && !event && <span className={`absolute -left-[4px] top-2 h-[7px] w-[7px] rounded-full border ${current ? 'border-accent bg-accent' : 'border-ds-border-strong bg-ds-main'}`} />}
     <div ref={headerRef} {...selectionAttributes(node)} className="record-node-head min-w-0" data-record-tone={visualState.tone}><div className="record-step-header flex min-w-0 items-start gap-1.5">
       {!event && <button className="mt-0.5 shrink-0 rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={`${open ? '收起' : '展开'} ${node.title}`} aria-expanded={open} onClick={() => presentation.toggle(node.id)}>{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>}
-      {phase && <span className={`record-index mt-1 shrink-0 record-caption ${current ? 'text-accent' : 'text-ds-muted'}`}>{String(index + 1).padStart(2, '0')}</span>}
       <div className="record-step-title min-w-0 flex-1">
       <button className={`w-full min-w-0 py-0.5 text-left ${capability ? 'record-text text-ds-ink' : event ? 'record-caption' : 'record-text'}`} aria-label={`${event ? '查看' : '展开内容'} ${node.title}`} onClick={click => {
         // Completing a text selection for an annotation must retain the selected DOM.
@@ -349,7 +375,7 @@ function RecordChapter({ node, ancestorIds, index, currentPath, scope, presentat
       <button className="shrink-0 rounded p-1 text-ds-muted hover:bg-ds-hover" onClick={() => void onDiscuss(node.id)} aria-label={`讨论 ${node.title}`}><MessageSquare size={13} /></button>
     </div>{overview && (phase || node.kind === 'round') && <RecordUnderstanding node={node} onInspect={onInspect} />}</div>
     {open && <div className="my-2 space-y-2 border-l border-ds-border pl-3" data-record-preview={node.id}>
-      <p className="record-caption text-ds-muted">范围 ID：{node.id} · 原始成员按层级保留，进入后查看；展开不会挂载后代。</p>
+      <details className="record-caption text-ds-muted"><summary className="cursor-pointer">技术详情</summary><p>范围 ID：{node.id} · 原始成员按层级保留，进入后查看；展开不会挂载后代。</p></details>
       {(phase || node.kind === 'round') && <RecordSynthesis node={node} presentation={presentation} onInspect={onInspect} />}
       {!event && <button className={button} onClick={() => onNavigate(node.id)}>进入此范围</button>}
       <button className={button} onClick={() => onInspect(node.id)}>查看详情与来源</button>

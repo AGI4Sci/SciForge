@@ -48,7 +48,8 @@ import {
 } from './main/runtime.js'
 import { EVIDENCE_DAG_WRITE_EXPORT_ACTION } from './main/gate.js'
 import { EVIDENCE_DAG_CAPABILITY_EVAL_CONTRIBUTION as EVIDENCE_DAG_CAPABILITY_EVAL_VALUE } from './capability-eval.js'
-import { researchRecordContracts } from './research-record-contract.js'
+import { researchRecordContracts, researchHumanReviewContract } from './research-record-contract.js'
+import { evidenceDagSubmitClaimsInputSchema, evidenceDagSubmitClaimsOutputSchema } from './contract.js'
 
 export { EvidenceDagRuntime } from './main/runtime.js'
 export { ResearchRecordRuntime } from './main/research-record.js'
@@ -217,7 +218,8 @@ export function createDomainMainEntry<CapabilityDefinition = unknown>(
     defineCapability: host.defineCapability as (
       options: EvidenceDagCapabilityOptions
     ) => CapabilityDefinition,
-    getRuntime: requireRuntime
+    getRuntime: requireRuntime,
+    humanActions: host.humanActions
   })
 
   return {
@@ -255,6 +257,7 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
   options: Readonly<{
     defineCapability: (options: EvidenceDagCapabilityOptions) => CapabilityDefinition
     getRuntime: () => EvidenceDagRuntimePort
+    humanActions?: import('@sciforge/domain-sdk/host').DomainMainHumanActionsHost
   }>
 ): EvidenceDagCapabilityFactory<CapabilityDefinition> {
   const define = (
@@ -282,6 +285,16 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
       allowedDirectTransports: Object.freeze([]) as readonly []
     }),
     createDefinitions: () => [
+      define({ id: researchHumanReviewContract.actionId, title: 'Submit human result review',
+        description: 'Records an optional human decision on exact result and report versions with confirmed identity and opinion.',
+        audiences: ['ui'], scope: 'workspace', effect: 'compute', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: researchHumanReviewContract.inputSchema, outputSchema: researchHumanReviewContract.outputSchema,
+        handler: async (input, context) => {
+          if (input.target.workspaceRoot !== evidenceWorkspaceFromCaller(context)) throw new Error('复核工作区不匹配。')
+          return { output: await options.getRuntime().records.submitHumanReview(input, options.humanActions) }
+        }
+      }),
       ...Object.entries(researchRecordContracts).map(([name, contract]) => define({
         id: contract.actionId,
         title: `Research record ${name}`,
@@ -350,6 +363,20 @@ export function createEvidenceDagCapabilityFactory<CapabilityDefinition>(
             ...input,
             workspaceRoot: evidenceWorkspaceFromCaller(context)
           })
+        })
+      }),
+      define({
+        id: EVIDENCE_DAG_CAPABILITY_IDS.submitClaims,
+        title: 'Submit Evidence claims',
+        description: 'Submits explicit pending claims pinned to exact immutable source versions and byte ranges.',
+        scope: 'workspace',
+        effect: 'workspace-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: evidenceDagSubmitClaimsInputSchema,
+        outputSchema: evidenceDagSubmitClaimsOutputSchema,
+        handler: async (input, context) => ({
+          output: await options.getRuntime().submitClaims({ ...input, workspaceRoot: evidenceWorkspaceFromCaller(context) })
         })
       }),
       define({

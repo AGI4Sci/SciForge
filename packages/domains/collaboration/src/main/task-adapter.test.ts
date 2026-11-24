@@ -1,9 +1,10 @@
+import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk/contract'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import {
   agentInboxMessageSchema,
   cloudResourceRefSchema,
@@ -34,14 +35,15 @@ import {
   agentNodeFixture,
   humanAnswerFixture,
   humanNeededFixture,
-  projectFixture
+  projectFixture,
+  userPrincipalFixture
 } from '@sciforge/collaboration-contracts/testing'
 import {
   domainMainAgentExecutionSessionRequestSchema,
   type DomainMainAgentExecutionHost,
   type DomainMainHumanActionsHost
 } from '@sciforge/domain-sdk/host'
-import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
+import { AuthenticatedCloudTransportError, type AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import { AgentCloudRuntimeError } from '@sciforge/domain-identity-access/agent-cloud-runtime'
 import type { DeviceFactAttestationSigningService } from '@sciforge/domain-identity-access/device-fact-attestation-signing'
 import { collaborationTaskViewSchema } from '../contract.js'
@@ -64,6 +66,178 @@ import {
   WORKER_RESULT_SUMMARY_MAX_CODE_POINTS,
   workerRuntimeResultOutputSchema
 } from '../worker-runtime-result.js'
+
+const testRunWorkspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-worker-suite-'))
+
+// A scheduled revisit must survive restart without polling the model, changing
+// sessions, repeating a completed turn, or bypassing current Cloud authority.
+async function followupFixture(fileMode = false) {
+  const cloud = new FakeWorkerCloud('offered', fileMode)
+  let now = new Date(TEST_TIMESTAMP)
+  const dueAt = new Date(now.getTime() + 120_000).toISOString()
+  const calls: Parameters<DomainMainAgentExecutionHost['run']>[0][] = []
+  let failNext = false
+  let deferAgain = false
+  const wakeups: Array<{ at: string; wake: () => void; cancelled: boolean }> = []
+  const options = {
+    now: () => now,
+    wakeups: { schedule(at: string, wake: () => void) {
+      const entry = { at, wake, cancelled: false }
+      wakeups.push(entry)
+      return () => { entry.cancelled = true }
+    } }
+  }
+  const agent: DomainMainAgentExecutionHost = {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async (input) => {
+      calls.push(input)
+      if (cloud.fileMode) {
+        await mkdir(input.workspaceRoot!, { recursive: true })
+        await writeFile(join(input.workspaceRoot!, 'analysis.md'), 'Existing analysis, not an acceptance certificate.')
+      }
+      if (failNext) return { runtimeId: input.runtimeId!, threadId: input.threadId!, turnId: 'followup-failed', state: 'failed', text: '', failure: { code: 'transport_unknown', message: 'Cannot establish the previous job outcome.', retryable: false } }
+      return { runtimeId: input.runtimeId!, threadId: input.threadId!, turnId: `followup-turn-${calls.length}`,
+        state: 'completed', text: calls.length === 1 || deferAgain
+          ? JSON.stringify({ result: { schemaVersion: 1, outcome: 'deferred', followup: {
+            key: 'existing-job', at: new Date(now.getTime() + 120_000).toISOString(), about: 'Read the existing job output. Preserve the negative result; do not restart training.'
+          } } }) : completedWorkerResultText('Existing job finished with a negative result; scientific acceptance remains unverified.') }
+    }
+  }
+  let fixture = await createRunner(cloud, agent, emptyState(), options)
+  await fixture.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await fixture.adapter.waitForIdle()
+  await fixture.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await chooseAi(fixture.adapter)
+  await fixture.adapter.waitForIdle()
+  return {
+    cloud, calls, wakeups, dueAt,
+    get fixture() { return fixture },
+    advance(extra = 0) { now = new Date(Date.parse(dueAt) + extra) },
+    failNext() { failNext = true },
+    deferAgain() { deferAgain = true },
+    async restart(snapshot = fixture.store.snapshot()) {
+      fixture.adapter.stop()
+      fixture = await createRunner(cloud, agent, JSON.parse(JSON.stringify(snapshot)), options)
+      await fixture.adapter.recover()
+      await fixture.adapter.waitForIdle()
+    }
+  }
+}
+
+test('followup: waiting and restart use no model, then duplicate wakes resume exactly the bound Session', async () => {
+  const f = await followupFixture()
+  try {
+    assert.equal(f.calls.length, 1)
+    const first = f.fixture.store.snapshot().taskRuns[0]!
+    assert.equal(first.followups[0]?.state, 'waiting')
+    assert.equal(first.resultSummary, null)
+    assert.equal(f.fixture.adapter.workerDeliveryView(deliveryIdentity()).followup?.at, f.dueAt)
+    f.fixture.adapter.wake(); f.fixture.adapter.wake()
+    await f.fixture.adapter.waitForIdle()
+    await f.restart()
+    assert.equal(f.calls.length, 1)
+    f.advance()
+    f.wakeups.at(-1)!.wake(); f.fixture.adapter.wake(); f.fixture.adapter.wake()
+    await f.fixture.adapter.waitForIdle()
+    assert.equal(f.calls.length, 2)
+    assert.equal(f.calls[1]!.threadId, f.calls[0]!.threadId)
+    assert.equal(f.calls[1]!.runtimeId, f.calls[0]!.runtimeId)
+    assert.match(f.calls[1]!.prompt, /do not restart training/u)
+    const run = f.fixture.store.snapshot().taskRuns[0]!
+    assert.equal(run.followups[0]!.state, 'completed')
+    assert.equal(run.state, 'waiting-result-confirm')
+    assert.match(run.deliveryDraft!.summary, /negative result/u)
+    assert.equal(f.cloud.commands.includes('delivery.manifest.seal'), false)
+    // Crash after observation but before applying the result: replay the saved
+    // receipt, rather than starting the same business action again.
+    run.followups[0]!.state = 'dispatching'
+    run.state = 'running'; run.resultSummary = null; run.deliveryDraft = null
+    const snapshot = f.fixture.store.snapshot()
+    snapshot.taskRuns[0] = run
+    await f.restart(snapshot)
+    assert.equal(f.calls.length, 2)
+    assert.equal(f.fixture.store.snapshot().taskRuns[0]!.state, 'waiting-result-confirm')
+  } finally { f.fixture.adapter.stop() }
+})
+
+test('followup: revoked membership at due time stops the original execution without calling the model', async () => {
+  const f = await followupFixture()
+  try {
+    f.cloud.denyPreflight('membership_removal')
+    f.advance(); f.fixture.adapter.wake()
+    await f.fixture.adapter.waitForIdle()
+    assert.equal(f.calls.length, 1)
+    const run = f.fixture.store.snapshot().taskRuns[0]!
+    assert.equal(['failed', 'fenced'].includes(run.state), true)
+    assert.match(run.error ?? '', /preflight|authority/iu)
+    assert.equal(run.followups[0]!.state, 'cancelled')
+  } finally { f.fixture.adapter.stop() }
+})
+
+test('followup: a saved deferral recovers its missing timer intent without another model turn', async () => {
+  const f = await followupFixture()
+  try {
+    const snapshot = f.fixture.store.snapshot()
+    snapshot.taskRuns[0]!.followups = []
+    await f.restart(snapshot)
+    assert.equal(f.calls.length, 1)
+    assert.equal(f.fixture.store.snapshot().taskRuns[0]!.followups.length, 1)
+  } finally { f.fixture.adapter.stop() }
+})
+
+test('followup: an uncertain revisit stays unknown across heartbeat and restart without repeating the business', async () => {
+  const f = await followupFixture()
+  try {
+    f.failNext(); f.advance(); f.fixture.adapter.wake()
+    await f.fixture.adapter.waitForIdle()
+    assert.equal(f.calls.length, 2)
+    assert.equal(f.fixture.store.snapshot().taskRuns[0]!.followups[0]!.state, 'unknown')
+    f.fixture.adapter.wake(); await f.fixture.adapter.waitForIdle()
+    await f.restart()
+    assert.equal(f.calls.length, 2)
+    assert.equal(f.fixture.store.snapshot().taskRuns[0]!.followups[0]!.state, 'unknown')
+  } finally { f.fixture.adapter.stop() }
+})
+
+test('followup: the execution revisit budget stops a chain and preserves its unknown outcome', async () => {
+  const f = await followupFixture()
+  try {
+    const snapshot = f.fixture.store.snapshot()
+    const current = snapshot.taskRuns[0]!.followups[0]!
+    snapshot.taskRuns[0]!.followups = [
+      ...Array.from({ length: 7 }, (_, i) => ({ ...current, id: `previous-${i}`, sourceInvocationId: `previous-source-${i}`, state: 'completed' as const })), current
+    ]
+    await f.restart(snapshot)
+    f.deferAgain(); f.advance(); f.fixture.adapter.wake()
+    await f.fixture.adapter.waitForIdle()
+    assert.equal(f.calls.length, 2)
+    const run = f.fixture.store.snapshot().taskRuns[0]!
+    assert.equal(run.followups.length, 8)
+    assert.equal(run.followups.at(-1)!.state, 'unknown')
+    assert.match(run.error ?? '', /八次/u)
+    f.fixture.adapter.wake(); await f.fixture.adapter.waitForIdle()
+    assert.equal(f.calls.length, 2)
+  } finally { f.fixture.adapter.stop() }
+})
+
+test('followup: changed pinned inputs or a day-old due time never wakes the model', async () => {
+  for (const changed of ['contract', 'inputs', 'overdue'] as const) {
+    const f = await followupFixture(changed === 'inputs')
+    try {
+      const snapshot = f.fixture.store.snapshot()
+      if (changed === 'contract') snapshot.taskRuns[0]!.followups[0]!.contractDigest = 'd'.repeat(64)
+      if (changed === 'inputs') {
+        assert.ok(snapshot.taskRuns[0]!.followups[0]!.inputResources.length)
+        snapshot.taskRuns[0]!.followups[0]!.inputResources[0]!.intentDigest = 'd'.repeat(64)
+      }
+      f.advance(changed === 'overdue' ? 24 * 60 * 60_000 + 1 : 0)
+      await f.restart(snapshot)
+      assert.equal(f.calls.length, 1)
+      assert.equal(f.fixture.store.snapshot().taskRuns[0]!.followups[0]!.state, changed === 'overdue' ? 'unknown' : 'cancelled')
+    } finally { f.fixture.adapter.stop() }
+  }
+})
+after(async () => { await rm(testRunWorkspaceRoot, { recursive: true, force: true }) })
 
 const OFFER_ID = 'ofr_Offer0000001'
 const SUPERSEDING_EXECUTION_ID = 'exe_Exec00000002'
@@ -402,7 +576,7 @@ for (const failure of [
     } }, emptyState())
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
     await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
     await created.adapter.waitForIdle()
     let run = created.store.snapshot().taskRuns[0]!
     const view = collaborationTaskViewForRun(run)
@@ -492,7 +666,7 @@ for (const state of ['failed', 'cancelled'] as const) {
         text: completedWorkerResultText('An existing editable explanation') }) })
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
     await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
     await created.adapter.waitForIdle()
     const run = created.store.snapshot().taskRuns[0]!, ref = { runtimeId: run.runtimeId!, threadId: run.threadId! }
     const failure = { code: state === 'failed' ? 'turn_failed' : 'runtime_cancelled',
@@ -543,7 +717,7 @@ for (const phase of ['direct-delivering-active', 'direct-output-pending', 'queue
       } })
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
     await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
     await created.adapter.waitForIdle()
     const run = created.store.snapshot().taskRuns[0]!, ref = { runtimeId: run.runtimeId!, threadId: run.threadId! }
     memberEvent = { ...ref, revision: 1, turnId: 'member-turn', state: 'completed' }
@@ -621,7 +795,7 @@ for (const { intervention, structured } of [
     })
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
     await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
     await started.promise
     const run = created.store.snapshot().taskRuns[0]!, ref = { runtimeId: run.runtimeId!, threadId: run.threadId! }
     admission = { ...admission, revision: 1, receipts: [...admission.receipts, {
@@ -704,7 +878,7 @@ test('a queued Member completion during owned-turn settlement keeps the newer dr
   })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   created.adapter.wake()
   await created.adapter.waitForIdle()
@@ -734,7 +908,7 @@ for (const unproven of ['different-turn', 'undelivered', 'queue-mode'] as const)
     })
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
     await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
     await created.adapter.waitForIdle()
     const run = created.store.snapshot().taskRuns[0]!
     assert.match(run.agentJournal.find((entry) => entry.origin !== 'session')!.safeError ?? '', /strict Worker JSON result/u)
@@ -752,7 +926,7 @@ async function startSliceAWorker(cloud: FakeWorkerCloud, state: 'completed' | 'c
   } }, emptyState(), { ...runnerOptions, ...(humanActions ? { humanActions } : {}) })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   return created
 }
@@ -768,7 +942,7 @@ async function deliverySubmitInput(adapter: CollaborationTaskAdapter) {
 }
 
 function workerWorkspaceRoot(executionId: string): string {
-  return join(tmpdir(), `sciforge-worker-${executionId}`)
+  return join(testRunWorkspaceRoot, executionId)
 }
 
 function completedWorkerResultText(summary: string): string {
@@ -1133,7 +1307,7 @@ test('permanent Worker loss fences staged bytes and candidate writes through the
   })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
   const candidate = created.store.snapshot().taskRuns[0]!.frozenCandidate!
@@ -1146,6 +1320,14 @@ test('permanent Worker loss fences staged bytes and candidate writes through the
       execute: async () => { sends += 1; throw new Error('Fenced writes cannot send') }
     }),
     authenticatedCloudTransport: { ...cloud.objectTransport(),
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { sends += 1; throw new Error('Fenced bytes cannot upload') },
       execute: async () => { sends += 1; throw new Error('Fenced candidate writes cannot send') }
     }
@@ -1385,7 +1567,7 @@ test('temporary authority suspension aborts an active turn without failing its E
   })
   await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await adapter.waitForIdle()
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await started.promise
   await adapter.suspendLocalAgent(TEST_IDS.agentId, 'Device revalidation is pending')
   await adapter.waitForIdle()
@@ -1432,7 +1614,7 @@ test('a revision offer keeps its instruction through claim and Worker execution'
   await adapter.waitForIdle()
   assert.equal(store.snapshot().pendingTaskOffers[0]?.revisionInstruction, revisionInstruction)
 
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await adapter.waitForIdle()
 
   assert.equal(store.snapshot().taskRuns[0]?.offer.revisionInstruction, revisionInstruction)
@@ -1467,7 +1649,7 @@ test('an extended offer updates an awaiting-manual Device before it claims', asy
   await adapter.acceptOffer({ ...offerPayload(), offerRevision: cloud.offer.revision }, TEST_IDS.agentId)
   assert.equal(store.snapshot().pendingTaskOffers[0]?.offerRevision, cloud.offer.revision)
 
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await adapter.waitForIdle()
   assert.equal(store.snapshot().pendingTaskOffers.length, 0)
   assert.equal(store.snapshot().taskRuns[0]?.offer.offerRevision, cloud.offer.revision)
@@ -1486,7 +1668,7 @@ test('a slow presentation Task read cannot gate a manual claim', async () => {
   await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await started.promise
   await adapter.waitForIdle()
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await adapter.waitForIdle()
   assert.equal(cloud.execution.state, 'accepted')
   assert.equal(store.snapshot().taskRuns[0]?.state, 'waiting-runtime')
@@ -1512,7 +1694,7 @@ test('a claimed Task waits when the local runtime lacks one exact required capab
 
   await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await adapter.waitForIdle()
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await adapter.waitForIdle()
 
   const run = store.snapshot().taskRuns[0]
@@ -1649,7 +1831,7 @@ test('manual acceptance claims without Runtime readiness and waits before execut
   assert.equal(store.snapshot().pendingTaskOffers[0]?.state, 'awaiting-manual')
   assert.deepEqual(store.snapshot().pendingTaskOffers[0]?.preflightReasons, [])
   assert.equal(store.snapshot().tasks[0]?.title, cloud.task.title)
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await adapter.waitForIdle()
 
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), ['task.offer.accept'])
@@ -1705,7 +1887,7 @@ test('manual text execution journals before Agent and uses explicit vNext comman
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
@@ -1757,7 +1939,7 @@ test('a maximum-length Unicode Worker summary reaches local state and Cloud unch
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   const run = created.store.snapshot().taskRuns[0]
@@ -1790,6 +1972,7 @@ test('a malformed Worker result gets one same-Session repair turn before fencing
       assert.equal(request.runtimeId, 'codex')
       assert.equal(request.threadId, 'worker-thread-stable')
       assert.match(request.prompt, /previous Worker response did not match/u)
+      assert.deepEqual(request.allowedTools, [])
       assert.match(request.prompt, /exactly one JSON object/u)
       return {
         runtimeId: 'codex',
@@ -1804,7 +1987,7 @@ test('a malformed Worker result gets one same-Session repair turn before fencing
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.equal(directives.length, 2)
@@ -1854,7 +2037,7 @@ test('a placeholder needs_human question gets one same-Session repair turn befor
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.equal(directives.length, 2)
@@ -1902,7 +2085,7 @@ test('overlong and malformed Worker results journal both failures and fail Cloud
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   const run = created.store.snapshot().taskRuns[0]
@@ -1948,7 +2131,7 @@ test('a paused Worker result resumes submission without repeating the Agent turn
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await runtimeStarted.promise
   const paused = await created.adapter.submitTaskInteraction({
     projectId: TEST_IDS.projectId,
@@ -2023,7 +2206,7 @@ test(`Worker HumanNeeded ${decision ?? 'answer'} targets its Worker User and res
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   const pending = created.store.snapshot().taskRuns[0]
@@ -2052,6 +2235,7 @@ test(`Worker HumanNeeded ${decision ?? 'answer'} targets its Worker User and res
     preflightReasons: [],
     localTurnId: 'worker-human-question-turn',
     needsHumanQuestion: 'Should the ambiguous samples remain in the analysis?',
+    executionMode: 'ai',
     updatedAt: TEST_TIMESTAMP
   })
   const humanRequest = cloud.requests.find((request) => request.type === 'human.needed.create')
@@ -2065,6 +2249,7 @@ test(`Worker HumanNeeded ${decision ?? 'answer'} targets its Worker User and res
     expectedExecutionRevision: 2
   })
   assert.equal(humanRequest.targetUserId, TEST_IDS.userId)
+  assert.deepEqual(humanRequest.interaction, { kind: 'clarification' })
   assert.equal(humanRequest.confirmableAction, null)
 
   await created.store.transact((draft) => {
@@ -2098,6 +2283,9 @@ test(`Worker HumanNeeded ${decision ?? 'answer'} targets its Worker User and res
     payload: {
       protocolVersion: '1.0',
       type: 'human.answer.received',
+      request: { ...humanNeededFixture, status: 'answered', revision: receivedAnswer.requestRevision + 1,
+        interaction: { kind: decision ? 'approval' : 'clarification' },
+        confirmableAction: decision ? { actionType: 'workspace.write', safeSummary: 'Write the reviewed result', effect: 'workspace-write', actionDigest: 'a'.repeat(64) } : null },
       answer: receivedAnswer
     }
   })
@@ -2179,7 +2367,7 @@ test('Worker HumanNeeded preserves an answer received while its Cloud revisions 
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await refreshStarted.promise
   cloud.answerHumanNeeded()
   await created.adapter.handleInbox(agentInboxMessageSchema.parse({
@@ -2189,6 +2377,7 @@ test('Worker HumanNeeded preserves an answer received while its Cloud revisions 
     payload: {
       protocolVersion: '1.0',
       type: 'human.answer.received',
+      request: { ...humanNeededFixture, status: 'answered', revision: humanAnswerFixture.requestRevision + 1 },
       answer: humanAnswerFixture
     }
   }))
@@ -2314,7 +2503,7 @@ test('a claimed Device waits for Runtime and wakes exactly once on recovery', as
   })
   await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await adapter.waitForIdle()
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await adapter.waitForIdle()
   assert.equal(store.snapshot().taskRuns[0]?.state, 'waiting-runtime')
   assert.equal(cloud.execution.state, 'accepted')
@@ -2346,7 +2535,7 @@ test('a terminal AgentRuntime failure is journaled while the member keeps execut
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.deepEqual(cloud.commands.filter((type) => !type.startsWith('worker.')), [
@@ -2407,7 +2596,7 @@ test('a retryable failure parks until each explicit retry creates exactly one ne
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.equal(attempts, 1)
@@ -2494,7 +2683,7 @@ test('sanitizes a structured Runtime failure before durable storage and Task ren
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   const run = created.store.snapshot().taskRuns[0]!
   assert.equal(run.agentJournal[0]?.failure?.message.includes('secret-value'), false)
@@ -2533,7 +2722,7 @@ test('duplicate concurrent retry clicks share one durable interaction and one Ru
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   assert.equal(attempts, 1)
 
@@ -2573,7 +2762,7 @@ test('a retry without an explicit execution id dispatches immediately against th
   }, initial)
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   const retry = await created.adapter.submitTaskInteraction({
@@ -2615,7 +2804,7 @@ test('a nonretryable turn failure keeps the draft open without automatic recover
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   const retry = await created.adapter.submitTaskInteraction({
     projectId: TEST_IDS.projectId,
@@ -2648,7 +2837,7 @@ test('an interrupted prepared retry is quarantined until a fresh click creates a
   }, initial)
   await first.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await first.adapter.waitForIdle()
-  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(first.adapter)
   await first.adapter.waitForIdle()
 
   const journal = new TaskInteractionJournal(first.store, () => new Date(TEST_TIMESTAMP))
@@ -2719,7 +2908,7 @@ test('recovery finalizes an already observed retry success without starting anot
   }, initial)
   await first.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await first.adapter.waitForIdle()
-  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(first.adapter)
   await first.adapter.waitForIdle()
 
   const journal = new TaskInteractionJournal(first.store, () => new Date(TEST_TIMESTAMP))
@@ -2780,7 +2969,7 @@ test('recovery preserves the draft after an observed nonretryable turn without a
   }, initial)
   await first.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await first.adapter.waitForIdle()
-  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(first.adapter)
   await first.adapter.waitForIdle()
 
   const journal = new TaskInteractionJournal(first.store, () => new Date(TEST_TIMESTAMP))
@@ -2859,7 +3048,7 @@ test('local cancellation does not restart a parked transient Runtime failure', a
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await firstAttemptFinished.promise
   const cancelled = await created.adapter.submitTaskInteraction({
     projectId: TEST_IDS.projectId,
@@ -2963,7 +3152,7 @@ test(`a response lost after the Cloud offer claim resumes its durable receipt in
 
   await interrupted.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await interrupted.adapter.waitForIdle()
-  await interrupted.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await interrupted.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(interrupted.adapter)
   await interrupted.adapter.waitForIdle()
 
   assert.equal(interrupted.store.snapshot().pendingTaskOffers[0]?.state, 'claiming')
@@ -3012,6 +3201,8 @@ test(`a response lost after the Cloud offer claim resumes its durable receipt in
   await resumed.adapter.waitForIdle()
   await resumed.outbox.waitForIdle()
 
+  await chooseAi(resumed.adapter)
+  await resumed.adapter.waitForIdle()
   assert.equal(acceptAttempts, 2)
   assert.equal(businessCommits, 1)
   assert.deepEqual(acceptedRequests[1], acceptedRequests[0])
@@ -3060,7 +3251,7 @@ test('an offer claim remains resumable when its outbox retry is already reconcil
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.equal(created.store.snapshot().outbox[0]?.state, 'reconciling')
@@ -3110,7 +3301,7 @@ test('a strict Cloud offer-claim conflict is terminal locally and is not retried
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   await created.adapter.recover()
   await created.adapter.waitForIdle()
@@ -3203,6 +3394,8 @@ test('restart after a durable offer claim receipt persists and runs the same Clo
   await created.adapter.recover()
   await created.adapter.waitForIdle()
 
+  await chooseAi(created.adapter)
+  await created.adapter.waitForIdle()
   assert.equal(agentRuns, 1)
   assert.equal(created.store.snapshot().pendingTaskOffers.length, 0)
   assert.equal(created.store.snapshot().taskRuns.length, 1)
@@ -3420,7 +3613,7 @@ test('Worker return stops and fences the active Runtime, reports failure once an
   })
   await adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await adapter.waitForIdle()
-  await adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(adapter)
   await started.promise
   const input = { projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId,
     executionId: TEST_IDS.executionId, reason: '  模型服务不可用，无法完成  ' }
@@ -3526,7 +3719,7 @@ test('a terminal execution event aborts the active Runtime and journals its fenc
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await runtimeStarted.promise
   cloud.denyPreflight()
   await created.adapter.handleInbox(agentInboxMessageSchema.parse({
@@ -3586,7 +3779,7 @@ test('Project deletion closes active offers and fences the matching active Runti
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await runtimeStarted.promise
   await created.store.transact((draft) => {
     draft.pendingTaskOffers.push({
@@ -3736,7 +3929,7 @@ test('Project deletion while HumanNeeded is in flight cannot restore a fenced ru
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await humanNeededStarted.promise
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'needs-human')
   await created.adapter.handleProjectUnavailable(TEST_IDS.projectId, DELETED_PROJECT_FENCE)
@@ -3782,7 +3975,7 @@ test('Project deletion during the Delivery saga cannot seal a fenced run', async
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
 
   assert.equal(created.store.snapshot().taskRuns[0]?.state, 'waiting-result-confirm')
@@ -3815,7 +4008,7 @@ test('completed Worker authority loss cannot be reopened by a later Owner revisi
   })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
   cloud.completeAfterSeal()
@@ -3856,7 +4049,7 @@ test('Owner revision preserves the sealed version while the same Session prepare
   } })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
   const first = created.adapter.workerDeliveryView(TEST_IDS).candidate!
@@ -3876,6 +4069,9 @@ test('Owner revision preserves the sealed version while the same Session prepare
     executionId: TEST_IDS.executionId, revisionRequestId: cloud.revisionRequest.revisionRequestId,
     executionRevision: cloud.execution.revision } })
   await created.adapter.handleInbox(message)
+  await created.adapter.waitForIdle()
+  assert.equal(created.store.snapshot().taskRuns[0]!.executionMode, 'unselected')
+  await created.adapter.startTask({ ...deliveryIdentity(), mode: 'ai' }, TEST_IDS.userId)
   await revisionStarted.promise
   const draft = created.adapter.workerDeliveryView(TEST_IDS).draft!
   assert.equal(draft.resultRevision, 2)
@@ -3907,7 +4103,7 @@ test('ordinary Session completion updates the draft once and submission freezes 
       return { runtimeId: input.runtimeId!, threadId: input.threadId!, turnId: 'original-turn', state: 'completed', text: completedWorkerResultText('Original summary') } }
   })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId); await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter); await created.adapter.waitForIdle()
   const initial = await deliverySubmitInput(created.adapter)
   const run = created.store.snapshot().taskRuns[0]!, ref = { runtimeId: run.runtimeId!, threadId: run.threadId! }
   const event: SessionOutputEvent = { ...ref, turnId: 'member-revised', revision: 1, state: 'completed' }
@@ -3944,7 +4140,7 @@ for (const outcome of ['failed', 'cancelled', 'plain-text', 'needs-human'] as co
     const created = await createRunner(cloud, { runtimeReadiness: readyRuntimeReadiness, readAdmission: async () => admission,
       run: async (input) => ({ runtimeId: input.runtimeId!, threadId: input.threadId!, turnId: 'original-turn', state: 'completed', text: completedWorkerResultText('Original summary') }) })
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId); await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await created.adapter.waitForIdle()
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter); await created.adapter.waitForIdle()
     const run = created.store.snapshot().taskRuns[0]!, ref = { runtimeId: run.runtimeId!, threadId: run.threadId! }
     const state = outcome === 'plain-text' || outcome === 'needs-human' ? 'completed' : outcome
     const event: SessionOutputEvent = { ...ref, turnId: `member-${outcome}`, revision: 1, state }
@@ -4001,7 +4197,7 @@ async function deliveryHeartbeatRace(phase: 'candidate' | 'review') {
   } as unknown as DurableCloudOutbox) })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   const input = await deliverySubmitInput(created.adapter)
   const submission = created.adapter.submitWorkerDelivery(input)
@@ -4041,7 +4237,7 @@ test('a local checkpoint failure after Cloud seal leaves a complete saga that re
 
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   await assert.rejects(created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter)), /simulated crash/u)
   assert.equal(cloud.manifests.size, 1, 'Cloud seal committed before the local checkpoint failed')
@@ -4074,6 +4270,7 @@ test('restart resumes the same dispatched Agent directive instead of creating an
   const initial = emptyState()
   initial.tasks = [cloud.task]
   initial.taskRuns = [{
+    followups: [],
     offer: offerJournal(),
     task: cloud.task,
     execution: cloud.execution,
@@ -4097,6 +4294,7 @@ test('restart resumes the same dispatched Agent directive instead of creating an
     frozenCandidate: null,
     deliveryDraft: null,
     deliveryHistory: [],
+      cancelledDeliveryAttempts: [],
     deliverySaga: null,
     agentJournal: [{
       logicalInvocationId: `agent.${TEST_IDS.executionId}.1`,
@@ -4192,7 +4390,7 @@ test('Desktop restart reconciles one persisted Session/directive without a secon
 
   await first.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await first.adapter.waitForIdle()
-  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await first.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(first.adapter)
   await firstRunStarted.promise
   first.adapter.stop()
   await first.adapter.waitForIdle()
@@ -4252,6 +4450,7 @@ async function createRunner(
     outboxFactory?: (store: CollaborationLocalStore) => DurableCloudOutbox
     now?: () => Date
     sanitizeText?: (value: string) => string
+    wakeups?: import('@sciforge/domain-sdk/host').DomainMainWakeupsHost
   }> = {}
 ) {
   const store = new CollaborationLocalStore(options.backend ?? new MemoryBackend(initial))
@@ -4259,6 +4458,7 @@ async function createRunner(
   cloud.store = store
   const outbox = options.outboxFactory?.(store) ?? cloud.outbox()
   const adapter = new CollaborationTaskAdapter({
+    wakeups: options.wakeups,
     store,
     connection: cloud.connection(),
     outbox,
@@ -4365,6 +4565,7 @@ function durableTaskRun(
     expectedTaskRevision: cloud.task.revision,
     expectedExecutionRevision: cloud.execution.revision,
     state: 'running',
+    executionMode: 'ai',
     workspaceRoot: workerWorkspaceRoot(TEST_IDS.executionId),
     runtimeId: null,
     threadId: null,
@@ -4372,6 +4573,7 @@ function durableTaskRun(
     humanAnswer: null,
     resources: [],
     agentJournal: [],
+    followups: [],
     externalJournal: [],
     outputs: [],
     recoveryJournalEntryIds: [],
@@ -4379,6 +4581,7 @@ function durableTaskRun(
     frozenCandidate: null,
     deliveryDraft: null,
     deliveryHistory: [],
+      cancelledDeliveryAttempts: [],
     deliverySaga: null,
     lateOutcomes: [],
     startedAt: TEST_TIMESTAMP,
@@ -4428,7 +4631,7 @@ class FakeWorkerCloud {
   recoveryMembershipActive = true
   recoveryReadStarted: (() => void) | undefined
   recoveryReadRelease: Promise<void> | undefined
-  private preflightDenial: 'none' | 'execution_fenced' | 'membership_removal' = 'none'
+  private preflightDenial: 'none' | 'execution_fenced' | 'membership_removal' | 'task_change_pending' = 'none'
   private preflightDelay: Readonly<{
     state: FakeWorkerExecutionState
     started: () => void
@@ -4482,6 +4685,7 @@ class FakeWorkerCloud {
   ) {
     const membershipRemoved = this.preflightDenial === 'membership_removal'
     const decisionReasons = [
+      ...(this.preflightDenial === 'task_change_pending' ? ['task_change_pending' as const] : []),
       ...(membershipRemoved
         ? [
             'membership_not_active' as const,
@@ -4918,7 +5122,7 @@ class FakeWorkerCloud {
     } as unknown as DurableCloudOutbox
   }
 
-  denyPreflight(reason: 'execution_fenced' | 'membership_removal' = 'execution_fenced'): void {
+  denyPreflight(reason: 'none' | 'execution_fenced' | 'membership_removal' | 'task_change_pending' = 'execution_fenced'): void {
     this.preflightDenial = reason
   }
 
@@ -4939,6 +5143,14 @@ class FakeWorkerCloud {
       execute: async () => {
         throw new Error('Unexpected authenticated User command outside the durable outbox.')
       },
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => {
         throw new Error('Object bytes stage only through the durable outbox.')
       },
@@ -5232,6 +5444,9 @@ function canonicalFixture(input: unknown): string {
 function emptyState(): CollaborationLocalState {
   return {
     schemaVersion: 4,
+    taskChatAcceptedInputs: [],
+    taskChatAssociations: [],
+    taskChatClosedSessions: [],
     revision: 0,
     lastInboxSequence: 0,
     endpoints: [],
@@ -5364,7 +5579,7 @@ for (const reason of ['membership_removal', 'execution_fenced'] as const) {
     }, initial)
     await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
     await created.adapter.waitForIdle()
-    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
     await created.adapter.waitForIdle()
     assert.equal(attempts, 1)
 
@@ -5432,7 +5647,7 @@ for (const outcome of ['accepted', 'expired', 'contract-conflict', 'claimed-else
       { backend, outboxFactory })
     await interrupted.adapter.acceptOffer({ ...offerPayload(), ...contract }, TEST_IDS.agentId)
     await interrupted.adapter.waitForIdle()
-    await interrupted.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await interrupted.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(interrupted.adapter)
     await interrupted.adapter.waitForIdle()
     const queued = interrupted.store.snapshot().outbox.find(({ kind }) => kind === 'task.offer-decision')!
     assert.equal(queued.body.type, 'task.offer.accept')
@@ -5475,7 +5690,7 @@ for (const outcome of ['accepted', 'expired', 'contract-conflict', 'claimed-else
     assert.deepEqual(claims[0], queued.body)
     assert.equal(commits, outcome === 'accepted' ? 1 : 0)
     if (outcome === 'accepted') {
-      assert.equal(restored.store.snapshot().taskRuns[0]?.state, 'waiting-runtime')
+      assert.equal(restored.store.snapshot().taskRuns[0]?.state, 'accepting')
       assert.equal(cloud.execution.state, 'accepted')
     } else {
       assert.equal(restored.store.snapshot().taskRuns.length, 0)
@@ -5500,7 +5715,7 @@ test(`a delivered failed Session input (${failure.code}) projects failure, fresh
   })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   const original = created.adapter.workerDeliveryView(TEST_IDS).draft!
   const run = created.store.snapshot().taskRuns[0]!
@@ -5565,7 +5780,7 @@ test('submission exposes Device signing before any upload, then seals one exact 
   } } })
   await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
   await created.adapter.waitForIdle()
-  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
   await created.adapter.waitForIdle()
   const input = await deliverySubmitInput(created.adapter)
   const pending = created.adapter.submitWorkerDelivery(input)
@@ -5606,6 +5821,14 @@ test('offline acceptance enters the canonical User outbox and resumes once autho
       }
       return { contractVersion: 1, status: 200, body: response }
     },
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('No upload before acceptance') },
     readObject: async () => { throw new Error('No file read before acceptance') }
   }
@@ -5658,6 +5881,8 @@ test('offline acceptance enters the canonical User outbox and resumes once autho
     identityReady = true
     cloud.recoveryReadError = null
     created.outbox.wake()
+    await created.outbox.waitForIdle()
+    created.adapter.wake()
     await created.adapter.waitForIdle()
     const delivered = created.store.snapshot().outbox.find((entry) => entry.outboxId === original.outboxId)!
     assert.equal(delivered.state, 'delivered', delivered.error)
@@ -5668,3 +5893,944 @@ test('offline acceptance enters the canonical User outbox and resumes once autho
     assert.equal(created.store.snapshot().taskRuns[0]?.agentJournal.length, 0)
   } finally { created.adapter.stop(); created.outbox.stop() }
 })
+
+
+async function continuationFixture(options: { inspection?: 'missing' | 'quiescent' | 'active' | 'unknown'; admissionPending?: boolean; onPrepare?: () => void; onRelease?: () => void; run?: DomainMainAgentExecutionHost['run'] } = {}) {
+  const cloud = new FakeWorkerCloud()
+  const calls: Array<Parameters<DomainMainAgentExecutionHost['run']>[0]> = []
+  let prepared = 0
+  const created = await createRunner(cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    prepareSession: async () => {
+      prepared += 1
+      if (prepared > 1) options.onPrepare?.()
+      return { runtimeId: 'codex', threadId: prepared === 1 ? 'continuation-old' : `continuation-new-${prepared}` }
+    },
+    inspectSession: async () => ({ state: options.inspection ?? 'missing' }),
+    releaseSubmission: async () => { options.onRelease?.() },
+    readAdmission: async () => ({ revision: 1, recovery: 'ready', submission: null,
+      receipts: options.admissionPending ? [{ clientDirectiveId: 'uncertain-directive', revision: 1,
+        payloadDigest: 'a'.repeat(64), mode: 'direct', delivery: 'uncertain', execution: 'not_started' }] : [] }),
+    run: async (request) => {
+      calls.push(request)
+      if (options.run && calls.length > 1) return options.run(request)
+      return calls.length === 1 ? { runtimeId: 'codex', threadId: request.threadId!, turnId: 'continuation-initial-failed',
+        state: 'failed', text: '', failure: { code: 'session_unavailable', message: 'Session unavailable', retryable: false } }
+        : { runtimeId: 'codex', threadId: request.threadId!, turnId: 'continuation-result', state: 'completed',
+          text: JSON.stringify({ result: { schemaVersion: 1, outcome: 'completed', summary: 'Negative result preserved; no improvement.' } }) }
+    }
+  })
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' }); await chooseAi(created.adapter)
+  await created.adapter.waitForIdle()
+  const input = { projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId,
+    predecessorRuntimeId: 'codex', predecessorThreadId: 'continuation-old', reason: 'Old native Session permanently lost.' }
+  return { ...created, cloud, calls, input, prepared: () => prepared }
+}
+
+test('explicit Session continuation preserves predecessor facts and dispatches the handoff once through the canonical Agent Host', async () => {
+  const fixture = await continuationFixture()
+  const before = fixture.store.snapshot().taskRuns[0]!
+  const receipt = await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  assert.equal(receipt.threadId, 'continuation-new-2')
+  assert.equal(fixture.calls.length, 2)
+  assert.equal(fixture.calls[1]?.clientDirectiveId, receipt.clientDirectiveId)
+  assert.match(fixture.calls[1]?.prompt ?? '', /Predecessor: codex\/continuation-old/u)
+  assert.match(fixture.calls[1]?.prompt ?? '', /Never repeat an external operation/u)
+  const after = fixture.store.snapshot().taskRuns[0]!
+  assert.deepEqual(after.agentJournal[0], before.agentJournal[0], 'predecessor journal is immutable')
+  assert.equal(after.sessionContinuations?.length, 1)
+  assert.equal(after.deliveryDraft?.summary, 'Negative result preserved; no improvement.')
+  assert.equal(after.state, 'waiting-result-confirm')
+  assert.equal(fixture.cloud.manifests.size, 0, 'continuation never delivers or adopts')
+  const duplicate = await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  assert.deepEqual(duplicate, receipt)
+  assert.equal(fixture.calls.length, 2)
+  assert.equal(fixture.prepared(), 2)
+})
+
+test('explicit continuation joins an in-flight heartbeat preflight and reserves one successor against repeated wakes', async () => {
+  const fixture = await continuationFixture({ inspection: 'quiescent' })
+  const started = deferred<void>()
+  const release = deferred<void>()
+  fixture.cloud.delayNextPreflight('running', () => started.resolve(), release.promise)
+  fixture.adapter.wake()
+  await started.promise
+  const first = fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  const duplicate = fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  fixture.adapter.wake()
+  assert.equal(fixture.prepared(), 1, 'the current heartbeat must settle before preparing a successor')
+  release.resolve()
+  try {
+    const [receipt, repeated] = await Promise.all([first, duplicate])
+    assert.deepEqual(repeated, receipt)
+    await fixture.adapter.waitForIdle()
+    assert.equal(fixture.prepared(), 2)
+    assert.equal(fixture.calls.length, 2, 'only the explicit continuation sends a new Agent directive')
+    assert.equal(fixture.store.snapshot().taskRuns[0]?.sessionContinuations?.length, 1)
+    assert.equal(fixture.store.snapshot().taskRuns[0]?.state, 'waiting-result-confirm')
+  } finally { fixture.adapter.stop() }
+})
+
+for (const denial of ['authority', 'receipts'] as const) test(`heartbeat settlement cannot bypass continuation ${denial} checks`, async () => {
+  const fixture = await continuationFixture({ inspection: 'quiescent', admissionPending: denial === 'receipts' })
+  const started = deferred<void>()
+  const release = deferred<void>()
+  fixture.cloud.delayNextPreflight('running', () => started.resolve(), release.promise)
+  fixture.adapter.wake()
+  await started.promise
+  const pending = fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  const rejected = assert.rejects(pending, denial === 'authority' ? /authority|continuation/u : /receipts/u)
+  if (denial === 'authority') fixture.cloud.denyPreflight('membership_removal')
+  release.resolve()
+  try {
+    await rejected
+    await fixture.adapter.waitForIdle()
+    assert.equal(fixture.prepared(), 1)
+    assert.equal(fixture.calls.length, 1)
+    assert.equal(fixture.store.snapshot().taskRuns[0]?.threadId, fixture.input.predecessorThreadId)
+    assert.equal(fixture.store.snapshot().taskRuns[0]?.sessionContinuations?.length ?? 0, 0)
+  } finally { fixture.adapter.stop() }
+})
+
+test('production Session continuation consumes older failures, human corrections and partial results beyond eight turns', async () => {
+  const fixture = await continuationFixture()
+  try {
+    await fixture.store.transact((draft) => {
+      const run = draft.taskRuns[0]!
+      const initial = run.agentJournal[0]!
+      run.agentJournal.push(...Array.from({ length: 12 }, (_, i) => ({ ...initial,
+        logicalInvocationId: `older-journal-${i}`, clientDirectiveId: `older-directive-${i}`,
+        state: 'observed_success' as const, runtimeState: 'completed' as const,
+        turnId: `older-turn-${i}`, safeError: null, safeResultText: `latest-progress-${i}` })))
+    })
+    for (let i = 0; i < 14; i += 1) {
+      await fixture.adapter.appendTaskCheckpoint({ ...fixture.input,
+        idempotencyKey: `idem_continuation-checkpoint-${i}`,
+        kind: i === 0 ? 'human-note' : i === 1 ? 'partial-result' : 'progress', source: i === 0 ? 'human' : 'agent',
+        summary: `continuity-checkpoint-${i}`, detail: `exact-detail-${i}` })
+    }
+    const receipt = await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+    await fixture.adapter.waitForIdle()
+    for (const value of ['Session unavailable', 'continuation-initial-failed', 'continuity-checkpoint-0',
+      'exact-detail-0', 'continuity-checkpoint-1', 'latest-progress-11', 'continuity-checkpoint-13', 'Coverage:']) {
+      assert.ok(receipt.context.includes(value), value)
+      assert.ok(fixture.calls[1]?.prompt.includes(value), value)
+    }
+    assert.ok(receipt.context.length <= 30_000)
+    assert.equal(fixture.store.snapshot().taskRuns[0]?.sessionContinuations?.[0]?.context, receipt.context)
+  } finally { fixture.adapter.stop() }
+})
+
+for (const inspection of ['active', 'unknown'] as const) test(`Session continuation refuses ${inspection} native owner observations`, async () => {
+  const fixture = await continuationFixture({ inspection })
+  await assert.rejects(fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId), /active or unknown/u)
+  assert.equal(fixture.prepared(), 1)
+  assert.equal(fixture.calls.length, 1)
+})
+
+test('Session continuation refuses uncertain input receipts and another User', async () => {
+  const fixture = await continuationFixture({ admissionPending: true })
+  await assert.rejects(fixture.adapter.continueTaskSession(fixture.input, 'usr_Another000001'), /Only this Device/u)
+  await assert.rejects(fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId), /receipts/u)
+  assert.equal(fixture.prepared(), 1)
+})
+
+test('Session continuation refuses unsettled local Runtime directives before preparing a Session', async () => {
+  const fixture = await continuationFixture()
+  await fixture.store.transact((state) => {
+    const journal = state.taskRuns[0]!.agentJournal[0]!
+    Object.assign(journal, { state: 'dispatched', observedAt: null, runtimeState: null })
+  })
+  await assert.rejects(fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId), /pending directives/u)
+  assert.equal(fixture.prepared(), 1)
+})
+
+test('Session continuation rechecks Cloud authority after preparing a replacement and never binds after revocation', async () => {
+  const fixture = await continuationFixture({ onPrepare: () => { fixture.cloud.denyPreflight('membership_removal') } })
+  await assert.rejects(fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId))
+  assert.equal(fixture.store.snapshot().taskRuns[0]?.threadId, 'continuation-old')
+  assert.equal(fixture.calls.length, 1)
+})
+
+
+test('Session continuation restart reconciles the persisted directive identity instead of creating a new Session', async () => {
+  const fixture = await continuationFixture()
+  const receipt = await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  fixture.adapter.stop()
+  const persisted = fixture.store.snapshot()
+  // Crash boundary: the Host received the continuation but Desktop did not
+  // retain its terminal result. The Host directive ledger owns deduplication.
+  const interrupted = structuredClone(persisted)
+  const pending = interrupted.taskRuns[0]!.agentJournal.at(-1)!
+  Object.assign(pending, { state: 'dispatched', observedAt: null, runtimeState: null, safeResultText: null, turnId: null })
+  let prepareCalls = 0
+  const replayed: string[] = []
+  const restarted = await createRunner(fixture.cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    prepareSession: async () => { prepareCalls += 1; throw new Error('must use persisted Session') },
+    run: async (request) => {
+      replayed.push(request.clientDirectiveId!)
+      assert.equal(request.threadId, receipt.threadId)
+      return { runtimeId: 'codex', threadId: receipt.threadId, turnId: 'continuation-result', state: 'completed',
+        text: JSON.stringify({ result: { schemaVersion: 1, outcome: 'completed', summary: 'Negative result preserved; no improvement.' } }) }
+    }
+  }, interrupted)
+  await restarted.adapter.recover()
+  await restarted.adapter.waitForIdle()
+  assert.deepEqual(replayed, [receipt.clientDirectiveId])
+  assert.equal(prepareCalls, 0)
+  assert.equal(restarted.store.snapshot().taskRuns[0]?.agentJournal.length, 2)
+  assert.equal(restarted.store.snapshot().taskRuns[0]?.deliveryDraft?.sourceTurnId, 'continuation-result')
+})
+
+test('Session continuation restart applies an observed success without another model turn', async () => {
+  const fixture = await continuationFixture()
+  await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  fixture.adapter.stop()
+  const interrupted = structuredClone(fixture.store.snapshot())
+  interrupted.taskRuns[0]!.deliveryDraft!.sourceTurnId = null
+  let calls = 0
+  const restarted = await createRunner(fixture.cloud, {
+    runtimeReadiness: readyRuntimeReadiness,
+    run: async () => { calls += 1; throw new Error('observed success must not dispatch') }
+  }, interrupted)
+  await restarted.adapter.recover()
+  await restarted.adapter.waitForIdle()
+  assert.equal(calls, 0)
+  assert.equal(restarted.store.snapshot().taskRuns[0]?.deliveryDraft?.sourceTurnId, 'continuation-result')
+})
+
+test('Session continuation ignores late predecessor output and cannot revive revoked Cloud authority', async () => {
+  const fixture = await continuationFixture()
+  await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  const current = fixture.store.snapshot().taskRuns[0]!
+  await fixture.adapter.acceptSessionOutput({ runtimeId: 'codex', threadId: 'continuation-old', revision: 1,
+    turnId: 'late-old-turn', state: 'completed' }, async () => { throw new Error('late predecessor must not be read') })
+  assert.deepEqual(fixture.store.snapshot().taskRuns[0]?.deliveryDraft, current.deliveryDraft)
+  fixture.cloud.denyPreflight('membership_removal')
+  await assert.rejects(fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId), /authority/u)
+  assert.equal(fixture.calls.length, 2)
+})
+
+
+test('Session continuation releases its own predecessor fence after unknown inspection or failed preparation', async () => {
+  let released = 0
+  const unknown = await continuationFixture({ inspection: 'unknown', onRelease: () => { released += 1 } })
+  await assert.rejects(unknown.adapter.continueTaskSession(unknown.input, TEST_IDS.userId), /unknown/u)
+  assert.equal(released, 1)
+  const failed = await continuationFixture({ onPrepare: () => { throw new Error('preparation interrupted') }, onRelease: () => { released += 1 } })
+  await assert.rejects(failed.adapter.continueTaskSession(failed.input, TEST_IDS.userId), /preparation interrupted/u)
+  assert.equal(released, 2)
+  assert.equal(failed.store.snapshot().taskRuns[0]?.threadId, 'continuation-old')
+  assert.equal(failed.calls.length, 1)
+})
+
+
+test('Session continuation heartbeat cannot reapply the handoff over a later ordinary Session result', async () => {
+  const fixture = await continuationFixture()
+  const receipt = await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  const ref = { runtimeId: receipt.runtimeId, threadId: receipt.threadId }
+  await fixture.adapter.acceptSessionAdmission({ ...ref, kind: 'direct', revision: 2, clientDirectiveId: 'later-member-input' })
+  await fixture.adapter.acceptSessionOutput({ ...ref, turnId: 'later-member-turn', revision: 2, state: 'completed' }, async () => ({ ...ref,
+    id: ref.threadId, watermark: '2', artifacts: [], turns: [{ id: 'later-member-turn', artifacts: [], messages: [{ itemId: 'later-final',
+      kind: 'assistant-final', text: completedWorkerResultText('Later checked result with an explicit counterexample.') }] }] }))
+  const before = fixture.store.snapshot().taskRuns[0]!.deliveryDraft
+  assert.equal(before?.sourceTurnId, 'later-member-turn')
+  // A duplicated public request for the OLD predecessor is an idempotent read,
+  // never a request to reapply its already observed success.
+  await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  assert.deepEqual(fixture.store.snapshot().taskRuns[0]!.deliveryDraft, before)
+  fixture.adapter.wake()
+  await fixture.adapter.waitForIdle()
+  assert.deepEqual(fixture.store.snapshot().taskRuns[0]!.deliveryDraft, before)
+  assert.equal(fixture.calls.length, 2)
+})
+
+
+test('Session continuation reconciliation cannot overwrite an ordinary input completed while awaiting fresh Cloud authority', async () => {
+  const fixture = await continuationFixture()
+  const receipt = await fixture.adapter.continueTaskSession(fixture.input, TEST_IDS.userId)
+  await fixture.adapter.waitForIdle()
+  // Desktop retained the terminal handoff receipt but lost only the draft
+  // application. Reconciliation waits for fresh Cloud authority first.
+  await fixture.store.transact((state) => { state.taskRuns[0]!.deliveryDraft!.sourceTurnId = null })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let started!: () => void
+  const waiting = new Promise<void>((resolve) => { started = resolve })
+  fixture.cloud.delayNextPreflight('running', started, gate)
+  fixture.adapter.wake()
+  await waiting
+  const ref = { runtimeId: receipt.runtimeId, threadId: receipt.threadId }
+  await fixture.adapter.acceptSessionAdmission({ ...ref, kind: 'direct', revision: 2, clientDirectiveId: 'newer-racing-input' })
+  await fixture.adapter.acceptSessionOutput({ ...ref, turnId: 'newer-racing-turn', revision: 2, state: 'completed' }, async () => ({ ...ref,
+    id: ref.threadId, watermark: '2', artifacts: [], turns: [{ id: 'newer-racing-turn', artifacts: [], messages: [{ itemId: 'newer-final',
+      kind: 'assistant-final', text: completedWorkerResultText('Newer counterexample changes the conclusion.') }] }] }))
+  const before = fixture.store.snapshot().taskRuns[0]!.deliveryDraft
+  release()
+  await fixture.adapter.waitForIdle()
+  assert.equal(before?.sourceTurnId, 'newer-racing-turn')
+  assert.deepEqual(fixture.store.snapshot().taskRuns[0]!.deliveryDraft, before)
+  assert.equal(fixture.calls.length, 2)
+})
+
+async function chooseAi(adapter: CollaborationTaskAdapter): Promise<void> {
+  await adapter.waitForIdle()
+  let view
+  try { view = adapter.workerDeliveryView(deliveryIdentity()) } catch { return }
+  if (view.draft?.sourceRound === 0) await adapter.startTask({ ...deliveryIdentity(), mode: 'ai' }, TEST_IDS.userId)
+}
+
+test('acceptance waits for explicit execution choice across wake and recovery; manual draft needs no AI session', async () => {
+  const cloud = new FakeWorkerCloud('offered', false)
+  cloud.validDeliveryManifest = true
+  const created = await createRunner(cloud)
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  created.adapter.wake()
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+  const accepted = created.store.snapshot().taskRuns[0]!
+  assert.equal(accepted.executionMode, 'unselected')
+  assert.equal(accepted.execution!.state, 'accepted')
+  assert.equal(accepted.agentJournal.length, 0)
+  assert.equal(accepted.runtimeId, null)
+  assert.equal(created.adapter.workerDeliveryView(deliveryIdentity()).state, 'waiting_confirmation')
+  await assert.rejects(created.adapter.startTask({ ...deliveryIdentity(), mode: 'ai' }, 'someone-else'), /执行人/u)
+  await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: accepted.deliveryDraft!.revision, summary: 'Human completed the task.' })
+  await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+  assert.equal(created.adapter.workerDeliveryView(deliveryIdentity()).state, 'sealed')
+  assert.equal(created.store.snapshot().taskRuns[0]!.runtimeId, null)
+  assert.equal(created.store.snapshot().taskRuns[0]!.agentJournal.length, 0)
+})
+
+test('manual execution starts without model readiness and stays manual across recovery', async () => {
+  const cloud = new FakeWorkerCloud('offered', false)
+  const created = await createRunner(cloud)
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  await created.adapter.startTask({ ...deliveryIdentity(), mode: 'manual' }, TEST_IDS.userId)
+  await created.adapter.waitForIdle()
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+  const run = created.store.snapshot().taskRuns[0]!
+  assert.equal(run.executionMode, 'manual')
+  assert.equal(run.execution!.state, 'running')
+  assert.equal(run.state, 'waiting-result-confirm')
+  assert.equal(run.runtimeId, null)
+  assert.equal(run.agentJournal.length, 0)
+  assert.equal(cloud.commands.filter((command) => command === 'task.execution.start').length, 1)
+})
+
+test('manual file import and sealing need no model session and preserve unique selected bytes', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  cloud.validDeliveryManifest = true
+  const created = await createRunner(cloud, { ...neverAgent(), prepareSession: async () => { throw new Error('Model access setup is required') } })
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  await created.adapter.startTask({ ...deliveryIdentity(), mode: 'manual' }, TEST_IDS.userId)
+  await created.adapter.waitForIdle()
+  await created.store.transact(state => { state.user = { ...userPrincipalFixture, userId: TEST_IDS.userId } })
+  const input = { ...deliveryIdentity(), fileName: 'human.md', contentBase64: Buffer.from('Human evidence').toString('base64') }
+  const first = await created.adapter.importWorkerDeliveryMaterial(input)
+  const second = await created.adapter.importWorkerDeliveryMaterial({ ...input, contentBase64: Buffer.from('New evidence').toString('base64') })
+  assert.notEqual(first.file.relativePath, second.file.relativePath)
+  const root = created.store.snapshot().taskRuns[0]!.workspaceRoot
+  assert.equal(await readFile(join(root, first.file.relativePath), 'utf8'), 'Human evidence')
+  for (const fileName of ['../outside.md', 'C:\\outside.md', '.sciforge/secret.md', 'bad.exe']) {
+    await assert.rejects(created.adapter.importWorkerDeliveryMaterial({ ...input, fileName }))
+  }
+  await assert.rejects(created.adapter.importWorkerDeliveryMaterial({ ...input, taskId: 'other-task' }), /不匹配/u)
+  await created.store.transact(state => { state.user = { ...userPrincipalFixture, userId: 'usr_AnotherUser0001' } })
+  await assert.rejects(created.adapter.importWorkerDeliveryMaterial(input), /执行人/u)
+  await created.store.transact(state => { state.user = { ...userPrincipalFixture, userId: TEST_IDS.userId } })
+  const view = await created.adapter.refreshWorkerDelivery(deliveryIdentity())
+  await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Human evidence, no model configured.', declaredMaterial: { relativePath: first.file.relativePath, source: 'member' } })
+  await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+  assert.equal(created.adapter.workerDeliveryView(deliveryIdentity()).state, 'sealed')
+  assert.equal(created.store.snapshot().taskRuns[0]!.runtimeId, null)
+  await assert.rejects(created.adapter.importWorkerDeliveryMaterial(input), /只读/u)
+})
+
+test('manual required ZIP imports through bounded material policy and saves exact declared bytes', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  const created = await createRunner(cloud, neverAgent())
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  await created.adapter.startTask({ ...deliveryIdentity(), mode: 'manual' }, TEST_IDS.userId)
+  await created.adapter.waitForIdle()
+  await created.store.transact(state => {
+    state.user = { ...userPrincipalFixture, userId: TEST_IDS.userId }
+    state.taskRuns[0]!.execution!.fileIntent!.output = {
+      kind: 'delivery.output', fileName: 'filehandoff_input_contract.zip', mediaType: 'application/zip', maxBytes: 1024
+    }
+  })
+  const bytes = Buffer.from('UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==', 'base64') // Empty ZIP, copied without extraction.
+  const input = { ...deliveryIdentity(), fileName: 'human-results.ZIP', contentBase64: bytes.toString('base64') }
+  const imported = await created.adapter.importWorkerDeliveryMaterial(input)
+  assert.equal(imported.file.mediaType, 'application/zip')
+  const png = await created.adapter.importWorkerDeliveryMaterial({ ...deliveryIdentity(), fileName: 'evidence.png',
+    contentBase64: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64') })
+  assert.equal(png.file.mediaType, 'image/png')
+  const root = created.store.snapshot().taskRuns[0]!.workspaceRoot
+  assert.deepEqual(await readFile(join(root, imported.file.relativePath)), bytes)
+  const listed = await created.adapter.listWorkerDeliveryMaterials(deliveryIdentity())
+  assert.equal(listed.files.find(file => file.relativePath === imported.file.relativePath)?.mediaType, 'application/zip')
+  const view = await created.adapter.refreshWorkerDelivery(deliveryIdentity())
+  const saved = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Human ZIP delivery', declaredMaterial: { relativePath: imported.file.relativePath, source: 'member' } })
+  assert.equal(saved.draft!.materialError, null)
+  assert.equal(saved.draft!.outputs[0]!.fileName, 'filehandoff_input_contract.zip')
+  assert.equal(saved.draft!.outputs[0]!.mediaType, 'application/zip')
+  assert.equal(saved.draft!.outputs[0]!.sha256, createHash('sha256').update(bytes).digest('hex'))
+  for (const fileName of ['../escape.zip', 'nested\\escape.zip', 'tool.exe', 'archive.zip.exe']) {
+    await assert.rejects(created.adapter.importWorkerDeliveryMaterial({ ...input, fileName }))
+  }
+  await assert.rejects(created.adapter.importWorkerDeliveryMaterial({ ...input, contentBase64: Buffer.from('not a zip').toString('base64') }), /ZIP/u)
+  await created.store.transact(state => { state.taskRuns[0]!.execution!.fileIntent!.output.maxBytes = 1 })
+  await assert.rejects(created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: saved.draft!.revision,
+    summary: saved.draft!.summary, declaredMaterial: { relativePath: imported.file.relativePath, source: 'member' } }), /大小/u)
+  assert.equal(created.store.snapshot().taskRuns[0]!.runtimeId, null)
+  assert.equal(created.store.snapshot().taskRuns[0]!.agentJournal.length, 0)
+})
+
+test('a recovered acceptance with no execution choice or prior Agent turn never starts AI', async () => {
+  const cloud = new FakeWorkerCloud('accepted')
+  const initial = emptyState()
+  initial.taskRuns = [durableTaskRun(cloud, { executionMode: undefined, state: 'accepting', startedAt: null })]
+  const created = await createRunner(cloud, neverAgent(), initial)
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+  assert.equal(created.store.snapshot().taskRuns[0]!.agentJournal.length, 0)
+  assert.equal(cloud.commands.includes('task.execution.start'), false)
+})
+
+
+test('opening a task chat prepares one private session without running AI and seals local provenance only', async () => {
+  const cloud = new FakeWorkerCloud('offered', false)
+  cloud.validDeliveryManifest = true
+  let prepared = 0
+  const created = await createRunner(cloud, { ...neverAgent(), prepareSession: async () => {
+    prepared += 1
+    return { runtimeId: 'codex', threadId: 'private-task-chat' }
+  } })
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  await created.store.transact((state) => { state.user = { ...userPrincipalFixture, userId: TEST_IDS.userId } })
+  await assert.rejects(created.adapter.ensureTaskSession(deliveryIdentity(), 'someone-else'), /执行人/u)
+  const [first, second] = await Promise.all([
+    created.adapter.ensureTaskSession(deliveryIdentity(), TEST_IDS.userId),
+    created.adapter.ensureTaskSession(deliveryIdentity(), TEST_IDS.userId)
+  ])
+  assert.deepEqual(first, second)
+  assert.equal(prepared, 1)
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+  const accepted = created.store.snapshot().taskRuns[0]!
+  assert.equal(accepted.execution!.state, 'accepted')
+  assert.equal(accepted.agentJournal.length, 0)
+  await created.adapter.acceptSessionAdmission({ ...first, kind: 'direct', revision: 1, clientDirectiveId: 'user-first-message' })
+  const afterInput = created.store.snapshot().taskRuns[0]!
+  assert.equal(afterInput.execution!.state, 'running')
+  assert.equal(afterInput.executionMode, 'manual')
+  assert.equal(afterInput.agentJournal.length, 1)
+  assert.equal(afterInput.agentJournal[0]!.origin, 'session')
+  await created.adapter.recover()
+  await created.adapter.waitForIdle()
+  assert.equal(created.store.snapshot().taskRuns[0]!.agentJournal.length, 1)
+  const sourceChat = { runtimeId: 'codex', threadId: 'private-other-chat', turnId: 'source-result' }
+  await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: accepted.deliveryDraft!.revision,
+    summary: 'Reviewed result from an associated chat.' }, sourceChat)
+  await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+  const delivery = created.adapter.workerDeliveryView(deliveryIdentity())
+  assert.deepEqual(delivery.candidate!.sourceChat, sourceChat)
+  assert.deepEqual(delivery.history[0]!.sourceChat, sourceChat)
+  assert.deepEqual(created.store.snapshot().taskRuns[0]!.deliveryHistory[0]!.candidate.sourceChat, sourceChat)
+  assert.equal(JSON.stringify(delivery.candidate!.bundle).includes('private-other-chat'), false)
+  assert.equal(JSON.stringify(cloud.requests).includes('private-other-chat'), false)
+})
+
+test('a pending task content change waits without fencing and resumes after rejection', async () => {
+  const cloud = new FakeWorkerCloud('offered', false)
+  const created = await createRunner(cloud)
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  cloud.denyPreflight('task_change_pending')
+  await created.adapter.startTask({ ...deliveryIdentity(), mode: 'manual' }, TEST_IDS.userId)
+  await created.adapter.waitForIdle()
+  assert.equal(created.store.snapshot().taskRuns[0]!.state, 'waiting-runtime')
+  assert.equal(cloud.commands.includes('task.execution.fail'), false)
+  cloud.denyPreflight('none')
+  created.adapter.wake()
+  await created.adapter.waitForIdle()
+  assert.equal(created.store.snapshot().taskRuns[0]!.state, 'waiting-result-confirm')
+})
+
+test('human uploaded required output seals through the canonical draft and rejects stale selections', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  cloud.validDeliveryManifest = true
+  const created = await createRunner(cloud)
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  await rm(join(created.store.snapshot().taskRuns[0]!.workspaceRoot, 'analysis.md'), { force: true })
+  let view = await created.adapter.refreshWorkerDelivery(deliveryIdentity())
+  assert.equal(view.declaredOutput?.fileName, 'analysis.md')
+  assert.match(view.draft!.materialError!, /analysis.md/u)
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision, summary: 'Human prepared the required result.' })
+  assert.equal(view.draft!.summary, 'Human prepared the required result.')
+  const run = created.store.snapshot().taskRuns[0]!
+  await created.store.transact((state) => { state.user = { ...userPrincipalFixture, userId: TEST_IDS.userId } })
+  const session = await created.adapter.ensureTaskSession(deliveryIdentity(), TEST_IDS.userId)
+  const { workspaceAttachmentSessionDirectory } = await import('@sciforge/domain-sdk/attachment-policy')
+  const directory = workspaceAttachmentSessionDirectory(session.threadId)
+  await mkdir(join(run.workspaceRoot, directory), { recursive: true })
+  const relativePath = `${directory}/human-result.md`
+  await writeFile(join(run.workspaceRoot, relativePath), 'Immutable human evidence')
+  const oldRevision = view.draft!.revision
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: oldRevision, summary: view.draft!.summary,
+    declaredMaterial: { relativePath, source: 'member' } })
+  assert.equal(view.draft!.materialError, null)
+  assert.equal(view.draft!.outputs[0]!.relativePath, 'analysis.md')
+  assert.equal(view.draft!.outputs[0]!.source, 'member')
+  await assert.rejects(created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: oldRevision, summary: 'stale', declaredMaterial: null }), /更新/u)
+  await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+  const sealed = created.store.snapshot().taskRuns[0]!.frozenCandidate!
+  await writeFile(join(run.workspaceRoot, relativePath), 'Changed after submission')
+  assert.equal((await readFile(sealed.outputFiles[0]!.path)).toString(), 'Immutable human evidence')
+  assert.equal(created.adapter.workerDeliveryView(deliveryIdentity()).state, 'sealed')
+  assert.equal(created.store.snapshot().taskRuns[0]!.agentJournal.length, 0)
+})
+
+
+test('trusted associated chat bindings record AI file origin without allowing caller spoofing or relabeling summary-only edits', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  cloud.validDeliveryManifest = true
+  const created = await createRunner(cloud)
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  const run = created.store.snapshot().taskRuns[0]!
+  await writeFile(join(run.workspaceRoot, 'generated.md'), 'Agent generated required evidence')
+  const sourceChat = { runtimeId: 'codex', threadId: 'associated-chat', turnId: 'generated-file-turn' }
+  let view = await created.adapter.refreshWorkerDelivery(deliveryIdentity())
+  await assert.rejects(created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Spoofed AI origin', declaredMaterial: { relativePath: 'generated.md', source: 'ai' } } as never))
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Human selected the evidence', declaredMaterial: { relativePath: 'generated.md', source: 'member' } })
+  assert.equal(view.draft!.outputs[0]!.source, 'member')
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Agent refined only the explanation' }, sourceChat)
+  assert.equal(view.draft!.outputs[0]!.source, 'member')
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Agent supplied the required evidence', declaredMaterial: { relativePath: 'generated.md' } }, sourceChat)
+  assert.equal(view.draft!.declaredMaterial!.source, 'ai')
+  assert.equal(view.draft!.outputs[0]!.source, 'ai')
+  assert.deepEqual(view.draft!.sourceChat, sourceChat)
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Human reviewed the explanation' })
+  assert.equal(view.draft!.outputs[0]!.source, 'ai')
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: view.draft!.summary, declaredMaterial: { relativePath: 'generated.md', source: 'member' } })
+  assert.equal(view.draft!.outputs[0]!.source, 'member')
+  view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+    summary: 'Agent final evidence', declaredMaterial: { relativePath: 'generated.md' } }, sourceChat)
+  await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+  const sealed = created.adapter.workerDeliveryView(deliveryIdentity())
+  assert.equal(sealed.state, 'sealed')
+  const sealedOutput = sealed.history[0]!.bundle.outputs[0]!
+  assert.equal('source' in sealedOutput && sealedOutput.source, 'ai')
+  assert.deepEqual(sealed.history[0]!.sourceChat, sourceChat)
+})
+
+
+test('task status omits an absent optional execution mode and remains strict JSON output', async () => {
+  const created = await createRunner(new FakeWorkerCloud('offered', false))
+  await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+  await created.adapter.waitForIdle()
+  await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+  await created.adapter.waitForIdle()
+  const run = created.store.snapshot().taskRuns[0]!
+  // Existing persisted executions legitimately have no optional executionMode.
+  const { executionMode: _mode, ...withoutMode } = run
+  for (const input of [withoutMode, { ...withoutMode, executionMode: undefined }]) {
+    const output = collaborationTaskViewSchema.parse(collaborationTaskViewForRun(input))
+    assert.equal(Object.hasOwn(output, 'executionMode'), false)
+    assert.equal(domainPackageJsonValueSchema.safeParse(output).success, true)
+    assert.equal(output.executionId, run.offer.executionId)
+  }
+  for (const executionMode of ['unselected', 'manual', 'ai'] as const) {
+    const output = collaborationTaskViewSchema.parse(collaborationTaskViewForRun({ ...withoutMode, executionMode }))
+    assert.equal(output.executionMode, executionMode)
+    assert.equal(domainPackageJsonValueSchema.safeParse(output).success, true)
+  }
+})
+
+
+test('a request-bound candidate validation rejection can be withdrawn without losing frozen evidence', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  cloud.validDeliveryManifest = true
+  const first = await startSliceAWorker(cloud)
+  await first.adapter.submitWorkerDelivery(await deliverySubmitInput(first.adapter))
+  const sealed = first.store.snapshot().taskRuns[0]!
+  const frozen = structuredClone(sealed.frozenCandidate!)
+  const originalBytes = await readFile(frozen.bundleFile.path)
+  cloud.candidates.clear()
+  cloud.manifests.clear()
+  await first.store.transact(state => {
+    const run = state.taskRuns[0]!
+    run.state = 'submitting'
+    run.completedAt = null
+    run.deliverySaga = { ...run.deliverySaga!, state: 'candidate', manifest: null, error: 'Policy rejected' }
+    state.outbox = [{ outboxId: 'out_CandidateRejected01', kind: 'delivery.command',
+      idempotencyKey: `idem_delivery.candidate.create.${run.deliverySaga.operationId}`,
+      body: { type: 'delivery.candidate.create', requestId: 'req_CandidateRejected01', candidateId: frozen.candidateId,
+        ...deliveryIdentity(), workerUserId: TEST_IDS.userId, contractRevision: frozen.bundle.contractRevision,
+        resultRevision: frozen.bundle.resultRevision, bundleDigest: frozen.bundleDigest },
+      state: 'failed', attempts: 1, createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP,
+      response: { protocolVersion: '1.0', type: 'rest.error', requestId: 'req_CandidateRejected01', error: { protocolVersion: '1.0', type: 'error', category: 'validation', httpStatus: 400, code: 'validation_error', retryable: false, message: 'Policy rejected' } } },
+      { outboxId: 'out_StageDelivered001', kind: 'delivery.stage', idempotencyKey: `idem_object.stage.${run.deliverySaga.operationId}.bundle`,
+        body: {}, state: 'delivered', deliveredAt: TEST_TIMESTAMP, attempts: 1, createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP }]
+  })
+  for (const state of ['sending', 'reconciling', 'failed'] as const) {
+    await first.store.transact(draft => { draft.outbox[0]!.state = state; draft.outbox[0]!.response = undefined })
+    assert.equal(first.adapter.workerDeliveryView(deliveryIdentity()).canCancelFailedSubmission, false)
+  }
+  await assert.rejects(first.store.transact(draft => { draft.outbox[0]!.response = { type: 'rest.error', requestId: 'foreign', error: { code: 'validation_error', retryable: false } } }))
+  assert.equal(first.adapter.workerDeliveryView(deliveryIdentity()).canCancelFailedSubmission, false)
+  await first.store.transact(draft => { draft.outbox[0]!.response = { protocolVersion: '1.0', type: 'rest.error', requestId: 'req_CandidateRejected01', error: { protocolVersion: '1.0', type: 'error', category: 'validation', httpStatus: 400, code: 'validation_error', retryable: false, message: 'Policy rejected' } } })
+  assert.equal(first.adapter.workerDeliveryView(deliveryIdentity()).canCancelFailedSubmission, true)
+  first.adapter.wake()
+  await first.adapter.waitForIdle()
+  const restored = await first.adapter.cancelFailedWorkerDelivery({ ...deliveryIdentity(), operationId: sealed.deliverySaga!.operationId })
+  assert.equal(restored.operationId, null)
+  assert.equal(first.adapter.workerDeliveryView(deliveryIdentity()).state, 'waiting_confirmation')
+  const archive = first.store.snapshot().taskRuns[0]!.cancelledDeliveryAttempts[0]!
+  assert.deepEqual(archive.candidate, frozen)
+  assert.deepEqual(await readFile(archive.candidate.bundleFile.path), originalBytes)
+  assert.equal(first.store.snapshot().outbox[0]!.state, 'failed')
+  await assertCancelledDeliveryContinuation(first, cloud)
+})
+
+test('r2 upload cancellation accepts exact sealed r1 revision facts and blocks current or ambiguous registration', async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  cloud.validDeliveryManifest = true
+  let rejectUpload = false
+  const outboxFactory = (store: CollaborationLocalStore) => {
+    const base = cloud.outbox()
+    const staging = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+      agentCloudRuntime: createTestAgentCloudRuntime({}), authenticatedCloudTransport: {
+        ...cloud.objectTransport(), stageObject: async ({ request }) => {
+          if (rejectUpload && request.mediaType !== 'application/json') throw new AuthenticatedCloudTransportError('object_upload_limit', 'Cloud object request returned HTTP 413.')
+          return base.stageAndWait(request, store.snapshot().outbox.find(row => row.idempotencyKey === request.idempotencyKey)!.stageFile!.path)
+        }
+      } })
+    return { ...base, stageAndWait: staging.stageAndWait.bind(staging), waitForIdle: staging.waitForIdle.bind(staging),
+      wake: staging.wake.bind(staging), stop: staging.stop.bind(staging) } as unknown as DurableCloudOutbox
+  }
+  const created = await startSliceAWorker(cloud, 'completed', undefined, { outboxFactory })
+  await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+  const r1 = created.store.snapshot().taskRuns[0]!
+  const r1Candidate = [...cloud.candidates.values()][0]!
+  const r1Manifest = [...cloud.manifests.values()][0]!
+  cloud.completeAfterSeal()
+  cloud.execution = taskExecutionSchema.parse({ ...cloud.execution, state: 'running', terminalAt: null, currentResultSubmissionId: null,
+    revision: cloud.execution.revision + 1, stateRevision: cloud.execution.stateRevision + 1,
+    fence: { ...cloud.execution.fence, status: 'open', reason: null, fencedAt: null } })
+  cloud.task = taskSchema.parse({ ...cloud.task, status: 'revision_requested', currentExecutionState: 'running',
+    revision: cloud.task.revision + 1, completedAt: null })
+  cloud.revisionRequest = { revisionRequestId: 'revision_request_cancel_r2', projectId: TEST_IDS.projectId,
+    taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId, executionRevision: cloud.execution.revision,
+    deliveryManifestId: r1Manifest.deliveryManifestId, instruction: 'Revise the output', requestedByUserId: TEST_IDS.secondUserId, requestedAt: TEST_LATER_TIMESTAMP }
+  await created.adapter.handleInbox(agentInboxMessageSchema.parse({ ...agentInboxMessageFixture, payload: {
+    protocolVersion: '1.0', type: 'task.delivery.revision_requested', ...deliveryIdentity(),
+    revisionRequestId: cloud.revisionRequest.revisionRequestId, executionRevision: cloud.execution.revision } }))
+  await created.adapter.waitForIdle()
+  await created.adapter.startTask({ ...deliveryIdentity(), mode: 'manual' }, TEST_IDS.userId)
+  rejectUpload = true
+  await assert.rejects(created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter)), /HTTP 413/u)
+  const current = created.store.snapshot().taskRuns[0]!
+  assert.equal(current.frozenCandidate!.bundle.resultRevision, 2)
+  const cancelInput = { ...deliveryIdentity(), operationId: current.deliverySaga!.operationId }
+  const candidate = current.frozenCandidate!
+  for (const status of ['private', 'submitted', 'sealed'] as const) {
+    cloud.candidates.clear()
+    cloud.candidates.set(candidate.candidateId, { ...r1Candidate, candidateId: candidate.candidateId,
+      resultRevision: 2, bundleDigest: candidate.bundleDigest, status })
+    await assert.rejects(created.adapter.cancelFailedWorkerDelivery(cancelInput), /不能撤回/u)
+  }
+  cloud.candidates.clear()
+  cloud.candidates.set(r1Candidate.candidateId, r1Candidate)
+  const revision = cloud.revisionRequest
+  cloud.revisionRequest = null
+  await assert.rejects(created.adapter.cancelFailedWorkerDelivery(cancelInput), /不能撤回/u)
+  cloud.revisionRequest = { ...revision, deliveryManifestId: 'mft_UnknownRevision01' }
+  await assert.rejects(created.adapter.cancelFailedWorkerDelivery(cancelInput), /不能撤回/u)
+  cloud.revisionRequest = revision
+  for (const state of ['review', 'seal'] as const) {
+    await created.store.transact(draft => { draft.taskRuns[0]!.deliverySaga!.state = state })
+    await assert.rejects(created.adapter.cancelFailedWorkerDelivery(cancelInput), /仅可撤回/u)
+  }
+  await created.store.transact(draft => { draft.taskRuns[0]!.deliverySaga!.state = 'staging' })
+  const proof = structuredClone(current.deliverySaga!.proof)
+  for (const mismatch of ['factRevision', 'payloadDigest'] as const) {
+    await created.store.transact(draft => {
+      const saga = draft.taskRuns[0]!.deliverySaga!
+      saga.proof = structuredClone(proof)
+      if (mismatch === 'factRevision') saga.proof.deviceSignature.factRevision++
+      else saga.proof.deviceSignature.canonicalPayloadDigest = 'e'.repeat(64)
+    })
+    await assert.rejects(created.adapter.cancelFailedWorkerDelivery(cancelInput), /不能撤回/u)
+  }
+  await created.store.transact(draft => { draft.taskRuns[0]!.deliverySaga!.proof = proof })
+  const result = await created.adapter.cancelFailedWorkerDelivery(cancelInput)
+  assert.equal(result.operationId, null)
+  assert.equal(created.adapter.workerDeliveryView(deliveryIdentity()).state, 'waiting_confirmation')
+  const cancelled = created.store.snapshot().taskRuns[0]!
+  assert.deepEqual(cancelled.deliveryHistory, r1.deliveryHistory)
+  assert.deepEqual(cancelled.cancelledDeliveryAttempts[0]!.candidate, candidate)
+  assert.equal(cancelled.deliveryDraft!.resultRevision, 3)
+  assert.deepEqual([...cloud.manifests.values()], [r1Manifest])
+  created.outbox.stop()
+})
+
+async function assertCancelledDeliveryContinuation(created: Awaited<ReturnType<typeof createRunner>>, cloud: FakeWorkerCloud) {
+  created.adapter.stop()
+  created.outbox.stop?.()
+  const initial = created.store.snapshot()
+  initial.user = { ...userPrincipalFixture, userId: TEST_IDS.userId }
+  const run = initial.taskRuns[0]!
+  const predecessor = { runtimeId: run.runtimeId!, threadId: run.threadId! }
+  const restarted = await createRunner(cloud, {
+    ...neverAgent(), inspectSession: async () => ({ state: 'missing' }),
+    prepareSession: async () => ({ runtimeId: predecessor.runtimeId, threadId: `${predecessor.threadId}-continued` })
+  }, initial)
+  const input = { ...deliveryIdentity(), predecessorRuntimeId: predecessor.runtimeId,
+    predecessorThreadId: predecessor.threadId, reason: 'Continue editing the cancelled failed submission.' }
+  const original = restarted.store.snapshot().outbox
+  const failedIndex = original.findIndex(row => row.state === 'failed')
+  assert.ok(failedIndex >= 0)
+  for (const state of ['pending', 'sending', 'reconciling', 'failed'] as const) {
+    await restarted.store.transact(draft => {
+      draft.outbox = structuredClone(original)
+      draft.outbox[failedIndex]!.state = state
+      draft.outbox[failedIndex]!.response = undefined
+      if (state === 'failed') { draft.outbox[failedIndex]!.failureReason = 'command_failed'; draft.outbox[failedIndex]!.error = 'Unknown outcome'; draft.outbox[failedIndex]!.response = undefined }
+    })
+    await assert.rejects(restarted.adapter.continueTaskSession(input, TEST_IDS.userId), /Cloud receipts/u)
+  }
+  for (const mismatch of ['context', 'operation', 'proof', 'digest', 'factRevision', 'payloadDigest'] as const) {
+    await restarted.store.transact(draft => {
+      draft.outbox = structuredClone(original)
+      draft.taskRuns[0]!.cancelledDeliveryAttempts = structuredClone(run.cancelledDeliveryAttempts)
+      const archived = draft.taskRuns[0]!.cancelledDeliveryAttempts[0]!
+      if (mismatch === 'context') draft.outbox[failedIndex]!.body.projectId = 'prj_ForeignProject01'
+      if (mismatch === 'operation') archived.saga.operationId = 'dop_foreign_attempt'
+      if (mismatch === 'proof') archived.saga.proof.confirmedInputDigest = 'b'.repeat(64)
+      if (mismatch === 'digest') archived.candidate.bundleDigest = 'c'.repeat(64)
+      if (mismatch === 'factRevision') archived.saga.proof.deviceSignature.factRevision++
+      if (mismatch === 'payloadDigest') archived.saga.proof.deviceSignature.canonicalPayloadDigest = 'd'.repeat(64)
+    })
+    await assert.rejects(restarted.adapter.continueTaskSession(input, TEST_IDS.userId), /Cloud receipts/u)
+  }
+  await restarted.store.transact(draft => {
+    draft.outbox = structuredClone(original)
+    draft.taskRuns[0]!.cancelledDeliveryAttempts = structuredClone(run.cancelledDeliveryAttempts)
+  })
+  const result = await restarted.adapter.continueTaskSession(input, TEST_IDS.userId)
+  assert.equal(result.opened, true)
+  await restarted.adapter.waitForIdle()
+  assert.equal(restarted.store.snapshot().taskRuns[0]!.sessionContinuations!.length, 1)
+  assert.deepEqual(restarted.store.snapshot().outbox, original)
+  restarted.adapter.stop()
+  restarted.outbox.stop?.()
+}
+
+for (const cancel of [false, true]) for (const legacy of [false, true]) test(`delivery upload limit parks the saga across wake and restart (legacy=${legacy}, cancel=${cancel})`, async () => {
+  const cloud = new FakeWorkerCloud('offered', true)
+  cloud.validDeliveryManifest = true
+  let rejectUpload = true
+  let sends = 0
+  const backend = new MemoryBackend(emptyState())
+  const humanActions = fakeHumanActions()
+  const outboxFactory = (store: CollaborationLocalStore) => {
+    const base = cloud.outbox()
+    const staging = new DurableCloudOutbox({ store, localAgentId: () => TEST_IDS.agentId,
+      agentCloudRuntime: createTestAgentCloudRuntime({}),
+      authenticatedCloudTransport: { ...cloud.objectTransport(), stageObject: async ({ request, body }) => {
+        sends++
+        assert.equal(createHash('sha256').update(body).digest('hex'), request.sha256)
+        if (rejectUpload && request.mediaType !== 'application/json') {
+          throw new AuthenticatedCloudTransportError('object_upload_limit', 'Cloud object request returned HTTP 413.')
+        }
+        const entry = store.snapshot().outbox.find(row => row.idempotencyKey === request.idempotencyKey)!
+        return base.stageAndWait(request, entry.stageFile!.path)
+      } }
+    })
+    return { ...base, stageAndWait: staging.stageAndWait.bind(staging),
+      wake: staging.wake.bind(staging), start: staging.start.bind(staging), stop: staging.stop.bind(staging),
+      waitForIdle: staging.waitForIdle.bind(staging) } as unknown as DurableCloudOutbox
+  }
+  const first = await startSliceAWorker(cloud, 'completed', humanActions, { backend, outboxFactory })
+  const input = await deliverySubmitInput(first.adapter)
+  await assert.rejects(first.adapter.submitWorkerDelivery(input), /HTTP 413/u)
+  const frozen = first.store.snapshot().taskRuns[0]!
+  assert.ok(frozen.frozenCandidate)
+  assert.equal(frozen.deliverySaga?.manifest, null)
+  assert.equal(sends, 2, 'bundle succeeds before the output rejection')
+  if (legacy) await first.store.transact(draft => {
+    draft.outbox.find(row => row.failureReason === 'object_upload_limit')!.failureReason = 'command_failed'
+  })
+  first.adapter.wake()
+  await first.adapter.waitForIdle()
+  await first.adapter.recover()
+  await first.adapter.waitForIdle()
+  first.outbox.stop()
+  const restarted = await createRunner(cloud, neverAgent(), emptyState(), { backend, outboxFactory, humanActions })
+  await restarted.adapter.recover()
+  restarted.adapter.wake()
+  await restarted.adapter.waitForIdle()
+  assert.equal(sends, 2)
+  assert.deepEqual(restarted.store.snapshot().taskRuns[0]!.frozenCandidate, frozen.frozenCandidate)
+  if (cancel) {
+    const cancelInput = { ...deliveryIdentity(), operationId: frozen.deliverySaga!.operationId }
+    assert.equal(restarted.adapter.workerDeliveryView(deliveryIdentity()).canCancelFailedSubmission, true)
+    await assert.rejects(restarted.adapter.cancelFailedWorkerDelivery({ ...cancelInput, operationId: 'stale-operation' }), /仅可撤回/u)
+    const originalOutbox = restarted.store.snapshot().outbox
+    const originalBytes = await readFile(frozen.frozenCandidate!.bundleFile.path)
+    // Local phase guards must reject even a parked 413 once registration has begun.
+    await restarted.store.transact(draft => { draft.taskRuns[0]!.deliverySaga!.state = 'candidate' })
+    await assert.rejects(restarted.adapter.cancelFailedWorkerDelivery(cancelInput), /仅可撤回/u)
+    await restarted.store.transact(draft => { draft.taskRuns[0]!.deliverySaga!.state = 'staging' })
+    const restored = await restarted.adapter.cancelFailedWorkerDelivery(cancelInput)
+    assert.equal(restored.operationId, null)
+    assert.equal(restored.candidate, null)
+    assert.equal(restored.draft!.resultRevision, frozen.frozenCandidate!.bundle.resultRevision + 1)
+    assert.deepEqual(restarted.store.snapshot().outbox, originalOutbox)
+    const archive = restarted.store.snapshot().taskRuns[0]!.cancelledDeliveryAttempts[0]!
+    assert.deepEqual(archive.candidate, frozen.frozenCandidate)
+    assert.deepEqual(archive.saga, frozen.deliverySaga)
+    assert.deepEqual(await readFile(archive.candidate.bundleFile.path), originalBytes)
+    await restarted.adapter.cancelFailedWorkerDelivery(cancelInput)
+    assert.equal(restarted.store.snapshot().taskRuns[0]!.cancelledDeliveryAttempts.length, 1)
+    restarted.adapter.wake()
+    await restarted.adapter.waitForIdle()
+    await restarted.adapter.recover()
+    await restarted.adapter.waitForIdle()
+    assert.equal(sends, 2)
+    // A separate runner continues the exact persisted cancelled checkpoint.
+    const continuationRunner = await createRunner(cloud, neverAgent(), restarted.store.snapshot())
+    await assertCancelledDeliveryContinuation(continuationRunner, cloud)
+    cloud.store = restarted.store
+    rejectUpload = false
+    const revised = await restarted.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), summary: 'Revised after failed upload', expectedDraftRevision: restored.draft!.revision })
+    await restarted.adapter.submitWorkerDelivery({ target: revised.confirmationTarget! })
+    const replacement = restarted.store.snapshot().taskRuns[0]!
+    assert.equal(replacement.deliverySaga!.state, 'sealed')
+    assert.notEqual(replacement.deliverySaga!.operationId, cancelInput.operationId)
+    assert.notEqual(replacement.frozenCandidate!.candidateId, archive.candidate.candidateId)
+    assert.deepEqual(replacement.cancelledDeliveryAttempts[0], archive)
+    assert.deepEqual(await readFile(archive.candidate.bundleFile.path), originalBytes)
+    restarted.outbox.stop()
+    return
+  }
+  rejectUpload = false
+  await restarted.adapter.submitWorkerDelivery(input)
+  const sealed = restarted.store.snapshot().taskRuns[0]!
+  assert.equal(sealed.deliverySaga?.state, 'sealed')
+  assert.deepEqual(sealed.deliverySaga?.proof, frozen.deliverySaga?.proof)
+  assert.equal(sealed.deliverySaga?.operationId, frozen.deliverySaga?.operationId)
+  assert.deepEqual(sealed.frozenCandidate, frozen.frozenCandidate)
+  assert.equal(cloud.manifests.size, 1)
+  await restarted.adapter.submitWorkerDelivery(input)
+  assert.equal(cloud.manifests.size, 1)
+  assert.equal(sends, 3)
+  restarted.outbox.stop()
+})
+
+for (const route of ['external', 'task-directory'] as const) {
+  test(`scientific scripts via ${route} save and freeze exact bytes as inert text`, async () => {
+    const cloud = new FakeWorkerCloud('offered', true)
+    cloud.validDeliveryManifest = true
+    const created = await createRunner(cloud, neverAgent())
+    await created.adapter.acceptOffer(offerPayload(), TEST_IDS.agentId)
+    await created.adapter.waitForIdle()
+    await created.adapter.decideOffer(OFFER_ID, { decision: 'accept' })
+    await created.adapter.waitForIdle()
+    await created.store.transact(state => { state.user = { ...userPrincipalFixture, userId: TEST_IDS.userId } })
+    const root = created.store.snapshot().taskRuns[0]!.workspaceRoot
+    await writeFile(join(root, 'analysis.md'), 'Required analysis')
+    const external = await mkdtemp(join(tmpdir(), 'sciforge-script-source-'))
+    const bytes = Buffer.from('\ufeff# 科研\r\nraise RuntimeError("must never execute")\r\n')
+    const paths: string[] = []
+    try {
+      for (const name of ['analysis.PY', 'analysis.R', 'analysis.jl', 'analysis.sh', 'analysis.bash', 'analysis.zsh', 'analysis.ps1']) {
+        await writeFile(join(external, name), bytes)
+        if (route === 'external') {
+          const result = await created.adapter.importWorkerDeliveryMaterial({ ...deliveryIdentity(), fileName: name,
+            contentBase64: (await readFile(join(external, name))).toString('base64') })
+          assert.equal(result.file.mediaType, 'text/plain')
+          paths.push(result.file.relativePath)
+        } else {
+          await writeFile(join(root, name), await readFile(join(external, name)))
+          paths.push(name)
+        }
+      }
+      if (route === 'external') {
+        for (const fileName of ['fake.py', 'unknown.bin', 'tool.exe', '../outside.py', 'nested\\analysis.py']) {
+          await assert.rejects(created.adapter.importWorkerDeliveryMaterial({ ...deliveryIdentity(), fileName,
+            contentBase64: Buffer.from([77, 90, 0, 255]).toString('base64') }))
+        }
+      }
+      let view = await created.adapter.refreshWorkerDelivery(deliveryIdentity())
+      view = await created.adapter.saveWorkerDeliveryDraft({ ...deliveryIdentity(), expectedDraftRevision: view.draft!.revision,
+        summary: 'Reviewed scripts as text data.', selectedMaterials: paths.map(relativePath => ({ relativePath })) })
+      assert.equal(view.draft!.materialError, null)
+      await created.adapter.submitWorkerDelivery(await deliverySubmitInput(created.adapter))
+      assert.equal(created.adapter.workerDeliveryView(deliveryIdentity()).state, 'sealed')
+      const frozen = created.store.snapshot().taskRuns[0]!.frozenCandidate!
+      for (const path of paths) {
+        const index = frozen.bundle.outputs.findIndex(file => 'relativePath' in file && file.relativePath === path)
+        const output = frozen.outputFiles[index]!
+        assert.ok(output)
+        assert.deepEqual(await readFile(output.path), bytes)
+        assert.equal(output.mediaType, 'text/plain')
+        assert.equal(output.byteCount, bytes.length)
+        assert.equal(output.sha256, createHash('sha256').update(bytes).digest('hex'))
+      }
+      const staged = [...cloud.stagedObjects.values()].filter(object => object.mediaType === 'text/plain')
+      assert.equal(staged.length, paths.length)
+      for (const object of staged) {
+        assert.deepEqual(cloud.stagedBytes.get(object.objectId), bytes)
+        assert.equal(object.byteCount, bytes.length)
+        assert.equal(object.sha256, createHash('sha256').update(bytes).digest('hex'))
+      }
+      assert.equal(cloud.commands.filter(command => command === 'object.stage').length, paths.length + 2)
+      assert.equal(created.store.snapshot().taskRuns[0]!.agentJournal.length, 0)
+    } finally { await rm(external, { recursive: true, force: true }) }
+  })
+}

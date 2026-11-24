@@ -16,12 +16,26 @@ import { fileURLToPath } from 'node:url'
 import type { PluginAdapterContract, HostServiceClientFactory, HostServiceProvider, HostServiceRequest } from '@sciforge/plugin-sdk'
 import assert from 'node:assert/strict'
 
-export const VISUAL_PORTS = ['visual-capture.read', 'visual-capture.capture'] as const
+export const VISUAL_PORTS = ['visual-capture.read', 'visual-capture.capture', 'agent-discussion.run'] as const
 export const VISUAL_CLIENT: HostServiceClientFactory = {
   serviceId: 'visualCapture',
   modulePath: fileURLToPath(new URL('../../../packages/plugin-sdk/src/host-service-client.mjs', import.meta.url)),
   exportName: 'createHostServiceClient',
   config: { serviceId: 'visualCapture' }
+}
+export const DISCUSSION_CLIENT: HostServiceClientFactory = {
+  ...VISUAL_CLIENT, serviceId: 'agentDiscussion', config: { serviceId: 'agentDiscussion' }
+}
+export const CLOUD_CLIENT: HostServiceClientFactory = {
+  ...VISUAL_CLIENT, serviceId: 'identity-access.authenticated-cloud', config: { serviceId: 'identity-access.authenticated-cloud' }
+}
+export const cloudProvider: HostServiceProvider = {
+  authorize(request) { request.assertCurrent?.() },
+  operations: { status: () => ({ state: 'unavailable' }), execute: () => { throw new Error('Cloud is unavailable in this fixture.') } }
+}
+export const discussionProvider: HostServiceProvider = {
+  authorize(request) { request.assertCurrent?.() },
+  operations: { run: () => ({ state: 'completed', text: 'Fixture explanation', runtimeId: 'codex' }) }
 }
 /** Engineering fixture: no task view is registered, so capture always refuses. */
 export function unavailableVisualProvider(calls: HostServiceRequest[] = [], authorize?: (request: HostServiceRequest) => void): HostServiceProvider {
@@ -46,7 +60,7 @@ import { createWorkspaceAuthority } from '../../../src/main/extensions/workspace
 import { EXPECTED_HOST_GRANTS } from '../src/dsh-adapter/tools.js'
 
 export const PACKAGE_NAME = '@sciforge/plugin-anchored-comments'
-export const PACKAGE_VERSION = '0.2.1'
+export const PACKAGE_VERSION = '0.2.3'
 export const DSH_RUNTIME_VERSION = '0.2.0-rc.2'
 export const PLUGIN_SOURCE = fileURLToPath(new URL('..', import.meta.url))
 export const DECLARED_IDS = Object.values(EXPECTED_HOST_GRANTS).map((grant) => grant.id).sort()
@@ -167,8 +181,8 @@ export function resolveAgent({ identity, rootContext }) {
     dshRuntimeVersion: DSH_RUNTIME_VERSION,
     adapterContracts: contracts,
     authorizeWorkspace: createWorkspaceAuthority({ readTrustedRoots: () => [workspaceRoot] }),
-    resolveHostServiceClients: () => [VISUAL_CLIENT],
-    hostServiceProviders: { visualCapture: unavailableVisualProvider([], (request) => {
+    resolveHostServiceClients: () => [VISUAL_CLIENT, DISCUSSION_CLIENT, CLOUD_CLIENT],
+    hostServiceProviders: { 'identity-access.authenticated-cloud': cloudProvider, agentDiscussion: discussionProvider, visualCapture: unavailableVisualProvider([], (request) => {
       const contract = contracts.get(request.owner.packageName)
       const grant = contract?.dshAuthorization
       const port = request.operation === 'listTargets' ? 'visual-capture.read' : 'visual-capture.capture'

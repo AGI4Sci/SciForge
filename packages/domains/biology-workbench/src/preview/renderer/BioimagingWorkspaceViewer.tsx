@@ -237,9 +237,9 @@ export function BioimagingWorkspaceViewer({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-8 pt-3 sm:px-4">
       <header className="workspace-preview-bioimaging-viewer__header">
         <div>
-          <h3 className="text-base font-semibold leading-6 text-ds-ink">{resolvedModel.title}</h3>
+          <h3 className="text-ds-xl font-semibold leading-6 text-ds-ink">{resolvedModel.title}</h3>
           {resolvedModel.subtitle ? (
-            <p className="mt-1 text-xs leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
+            <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
           ) : null}
         </div>
       </header>
@@ -250,8 +250,8 @@ export function BioimagingWorkspaceViewer({
           role={statusRole}
           data-state-kind={resolvedModel.status.kind}
         >
-          <strong className="block text-sm font-semibold leading-5 text-ds-ink">{resolvedModel.status.title}</strong>
-          <p className="mt-1 text-xs leading-4 text-ds-muted">{resolvedModel.status.message}</p>
+          <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{resolvedModel.status.title}</strong>
+          <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{resolvedModel.status.message}</p>
         </div>
       ) : (
         <>
@@ -264,8 +264,8 @@ export function BioimagingWorkspaceViewer({
                   role="img"
                   aria-label="Bioimaging metadata-only viewport placeholder"
                 >
-                  <strong className="block text-sm font-semibold leading-5 text-ds-ink">{resolvedModel.viewport.title}</strong>
-                  <p className="mt-1 text-xs leading-4 text-ds-muted">{resolvedModel.viewport.message}</p>
+                  <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{resolvedModel.viewport.title}</strong>
+                  <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{resolvedModel.viewport.message}</p>
                 </div>
               )}
 
@@ -277,18 +277,18 @@ export function BioimagingWorkspaceViewer({
             className="workspace-preview-bioimaging-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Bioimaging dimensions and channels"
           >
-            <h4 className="mb-3 text-xs font-semibold uppercase leading-4 text-ds-muted">Image Summary</h4>
+            <h4 className="mb-3 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Image Summary</h4>
             <dl className="grid gap-2 sm:grid-cols-2">
               {resolvedModel.imageRows.map((row) => (
                 <div
                   key={row.id}
                   className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                 >
-                  <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{row.label}</dt>
-                  <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+                  <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{row.label}</dt>
+                  <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
                     {row.value}
                     {row.description ? (
-                      <small className="mt-1 block text-xs font-normal leading-4 text-ds-muted">
+                      <small className="mt-1 block text-ds-sm font-normal leading-4 text-ds-muted">
                         {row.description}
                       </small>
                     ) : null}
@@ -303,8 +303,8 @@ export function BioimagingWorkspaceViewer({
             aria-label="Bioimaging ROI and channel selection"
             data-selection-kind={resolvedModel.selection.kind}
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
-            <p className="text-sm leading-5 text-ds-ink">{resolvedModel.selection.summary}</p>
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
+            <p className="text-ds-lg leading-5 text-ds-ink">{resolvedModel.selection.summary}</p>
             {resolvedModel.selection.groups.length ? (
               <dl className="mt-3 grid gap-2 sm:grid-cols-2">
                 {resolvedModel.selection.groups.map((group) => (
@@ -312,8 +312,8 @@ export function BioimagingWorkspaceViewer({
                     key={group.id}
                     className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                   >
-                    <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{group.title}</dt>
-                    <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+                    <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{group.title}</dt>
+                    <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
                       {group.items.length > 8 ? group.summary : group.items.join(', ')}
                     </dd>
                   </div>
@@ -326,7 +326,7 @@ export function BioimagingWorkspaceViewer({
             className="workspace-preview-bioimaging-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Bioimaging annotations"
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Annotations</h4>
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Annotations</h4>
             {resolvedModel.annotations.length ? (
               <ul className="space-y-2">
                 {resolvedModel.annotations.map((annotation) => (
@@ -336,13 +336,13 @@ export function BioimagingWorkspaceViewer({
                     data-annotation-kind={annotation.kind}
                     className="rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                   >
-                    <strong className="block text-sm font-semibold leading-5 text-ds-ink">{annotation.label}</strong>
-                    <span className="mt-1 block text-xs leading-4 text-ds-muted">{annotation.summary}</span>
+                    <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{annotation.label}</strong>
+                    <span className="mt-1 block text-ds-sm leading-4 text-ds-muted">{annotation.summary}</span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm leading-5 text-ds-muted">No ROI or channel annotations are reported.</p>
+              <p className="text-ds-lg leading-5 text-ds-muted">No ROI or channel annotations are reported.</p>
             )}
           </section>
 
@@ -350,8 +350,8 @@ export function BioimagingWorkspaceViewer({
             className="workspace-preview-bioimaging-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Bioimaging actions"
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Available tools</h4>
-            <p className="mb-3 text-xs leading-4 text-ds-muted">
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Available tools</h4>
+            <p className="mb-3 text-ds-sm leading-4 text-ds-muted">
               These labels describe what the assistant can request. They are not clickable in this preview.
             </p>
             {resolvedModel.actions.length ? (
@@ -361,14 +361,14 @@ export function BioimagingWorkspaceViewer({
                     key={action.id}
                     data-action-id={action.id}
                     data-action-kind={action.kind}
-                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-xs font-medium leading-4 text-ds-ink"
+                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-ds-sm font-medium leading-4 text-ds-ink"
                   >
                     {action.label}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm leading-5 text-ds-muted">
+              <p className="text-ds-lg leading-5 text-ds-muted">
                 No select, annotate, export, or inspect actions are available.
               </p>
             )}
@@ -835,23 +835,23 @@ function renderTileOverview(
         ))}
       </svg>
       <figcaption className="mt-3 space-y-1">
-        <strong className="block text-sm font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
-        <p className="text-xs leading-4 text-ds-muted">{viewport.message}</p>
+        <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
+        <p className="text-ds-sm leading-4 text-ds-muted">{viewport.message}</p>
         {renderedTile.kind === 'ready' ? (
           <small
-            className="block truncate text-xs leading-4 text-ds-faint"
+            className="block truncate text-ds-sm leading-4 text-ds-faint"
             data-bioimaging-rendered-tile-caption
           >
             Rendered tile artifact {renderedTile.artifactId}
           </small>
         ) : null}
         {renderedTile.kind === 'loading' ? (
-          <small className="block text-xs leading-4 text-ds-muted" data-bioimaging-rendered-tile-loading>
+          <small className="block text-ds-sm leading-4 text-ds-muted" data-bioimaging-rendered-tile-loading>
             Preparing bounded tile artifact...
           </small>
         ) : null}
         {renderedTile.kind === 'fallback' ? (
-          <small className="block text-xs leading-4 text-ds-muted" data-bioimaging-rendered-tile-fallback>
+          <small className="block text-ds-sm leading-4 text-ds-muted" data-bioimaging-rendered-tile-fallback>
             Tile artifact fallback: {renderedTile.message}
           </small>
         ) : null}

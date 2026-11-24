@@ -1,9 +1,13 @@
+import { taskChatAssociationSchema } from '../chat-association-contract.js'
+import { workerFollowupSchema } from '../task-followup.js'
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
 import {
   agentNodeSchema,
+  deviceIdSchema,
+  restResponseSchema,
   frozenDeliveryBundleHistorySchema,
   workerDeliveryHumanActionProofSchema,
   DELIVERY_MAX_FILE_COUNT,
@@ -161,6 +165,12 @@ export const collaborationOutboxEntrySchema = z.object({
     'capability.approval.withdraw'
   ]),
   body: z.record(z.string(), z.json()),
+  /** Local creation authority; absent legacy User rows must never be rebound. */
+  userAuthority: z.object({
+    userId: userPrincipalSchema.shape.userId,
+    deviceId: deviceIdSchema,
+    baseUrl: z.url().max(2_048)
+  }).strict().optional(),
   state: z.enum(['pending', 'sending', 'reconciling', 'delivered', 'failed']),
   attempts: z.number().int().nonnegative().max(1_000),
   createdAt: timestampSchema,
@@ -168,7 +178,7 @@ export const collaborationOutboxEntrySchema = z.object({
   deliveredAt: timestampSchema.optional(),
   response: z.record(z.string(), z.json()).optional(),
   error: z.string().trim().min(1).max(4_000).optional(),
-  failureReason: z.enum(['authority_unverified', 'authority_lost', 'transport_unavailable', 'command_failed']).optional(),
+  failureReason: z.enum(['authority_unverified', 'authority_lost', 'transport_unavailable', 'command_failed', 'object_upload_limit']).optional(),
   authorityFence: z.object({
     observedAt: timestampSchema,
     /** Evidence at the fence checkpoint; a later original receipt may settle the outcome. */
@@ -179,7 +189,7 @@ export const collaborationOutboxEntrySchema = z.object({
   if ((entry.state === 'delivered') !== (entry.deliveredAt !== undefined)) {
     context.addIssue({ code: 'custom', path: ['deliveredAt'], message: 'Delivered outbox entry requires deliveredAt.' })
   }
-  if (entry.response !== undefined && entry.state !== 'delivered') {
+  if (entry.response !== undefined && entry.state !== 'delivered' && !isDeliveryCandidateValidationFailure(entry)) {
     context.addIssue({
       code: 'custom',
       path: ['response'],
@@ -313,6 +323,8 @@ export const collaborationAgentInvocationJournalSchema = z.object({
   admissionRevision: z.number().int().nonnegative().optional(),
   clientDirectiveId: clientDirectiveIdSchema,
   retryInteractionId: collaborationTaskInteractionSchema.shape.interactionId.optional(),
+  continuationOperationId: z.string().min(1).max(128).optional(),
+  followupId: z.string().min(1).max(128).optional(),
   state: z.enum([
     'prepared',
     'dispatched',
@@ -409,6 +421,7 @@ const frozenWorkerFileSchema = z.object({
   mediaType: z.string().min(1)
 }).strict()
 export const frozenWorkerCandidateSchema = z.object({
+  sourceChat: workerDeliveryDraftSchema.shape.sourceChat,
   candidateId: z.string().min(1), sourceTurnId: z.string().min(1),
   admissionRevision: z.number().int().nonnegative(), frozenAt: timestampSchema,
   bundle: frozenDeliveryBundleHistorySchema, bundleDigest: sha256Schema,
@@ -445,6 +458,7 @@ export const collaborationTaskRunSchema = z.object({
     'fenced',
     'manual-recovery'
   ]),
+  executionMode: z.enum(['unselected', 'manual', 'ai']).optional(),
   workspaceRoot: z.string().trim().min(1).max(4_096),
   runtimeId: z.string().trim().min(1).max(128).nullable(),
   threadId: z.string().trim().min(1).max(512).nullable(),
@@ -452,6 +466,16 @@ export const collaborationTaskRunSchema = z.object({
   humanAnswer: humanAnswerSchema.nullable(),
   resources: z.array(cloudResourceRefSchema).max(101),
   agentJournal: z.array(collaborationAgentInvocationJournalSchema).max(1_000),
+  followups: z.array(workerFollowupSchema).max(8).default([]),
+  sessionContinuations: z.array(z.object({
+    predecessorRuntimeId: z.string().min(1).max(128), predecessorThreadId: z.string().min(1).max(512),
+    runtimeId: z.string().min(1).max(128), threadId: z.string().min(1).max(512),
+    operationId: z.string().min(1).max(128), targetDigest: sha256Schema,
+    reason: z.string().min(1).max(1_000), context: z.string().min(1).max(32_000),
+    admissionRevision: z.number().int().nonnegative(), taskRevision: taskSchema.shape.revision,
+    executionRevision: taskExecutionSchema.shape.revision,
+    contractDigest: taskSchema.shape.contractDigest, inputResources: z.array(cloudResourceRefSchema).max(101), createdAt: timestampSchema
+  }).strict()).max(1_000).optional(),
   externalJournal: z.array(collaborationExternalOperationJournalSchema).max(1_000),
   outputs: z.array(taskResultOutputSchema).max(100),
   recoveryJournalEntryIds: z.array(
@@ -459,6 +483,7 @@ export const collaborationTaskRunSchema = z.object({
   ).max(100),
   resultSummary: z.string().trim().min(1).max(32_000).nullable(),
   deliveryDraft: workerDeliveryDraftSchema.nullable().default(null),
+  cancelledDeliveryAttempts: z.array(z.object({ candidate: frozenWorkerCandidateSchema, saga: workerDeliverySagaSchema, cancelledAt: timestampSchema }).strict()).default([]),
   deliveryHistory: z.array(z.object({ candidate: frozenWorkerCandidateSchema, manifest: deliveryManifestSchema }).strict()).default([]),
   frozenCandidate: frozenWorkerCandidateSchema.nullable().default(null),
   deliverySaga: workerDeliverySagaSchema.nullable().default(null),
@@ -518,6 +543,9 @@ export const collaborationLocalRemoteApprovalSchema = z.object({
 export type CollaborationOutboxWait = z.infer<typeof collaborationOutboxWaitSchema>
 
 const collaborationLocalStateShape = {
+  taskChatAssociations: z.array(taskChatAssociationSchema).max(100_000).default([]),
+  taskChatClosedSessions: z.array(z.string()).max(10_000).default([]),
+  taskChatAcceptedInputs: z.array(z.string()).max(100_000).default([]),
   revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   lastInboxSequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   user: userPrincipalSchema.optional(),
@@ -571,6 +599,22 @@ export type CollaborationLocalProjection = z.infer<typeof collaborationLocalProj
 export type CollaborationQueueItem = z.infer<typeof collaborationQueueItemSchema>
 export type CollaborationLocalReceipt = z.infer<typeof collaborationLocalReceiptSchema>
 export type CollaborationOutboxEntry = z.infer<typeof collaborationOutboxEntrySchema>
+
+/** Exact pre-fix Identity message is recognized only in its owning object-stage row. */
+export function isObjectUploadLimit(entry: CollaborationOutboxEntry): boolean {
+  return entry.kind === 'delivery.stage' && entry.state !== 'delivered' &&
+    (entry.failureReason === 'object_upload_limit' || entry.error === 'Cloud object request returned HTTP 413.')
+}
+/** Only a persisted, request-bound Cloud validation rejection proves candidate creation failed. */
+export function isDeliveryCandidateValidationFailure(entry: CollaborationOutboxEntry): boolean {
+  const parsed = restResponseSchema.safeParse(entry.response)
+  const response = parsed.success ? parsed.data : undefined
+  return entry.kind === 'delivery.command' && entry.state === 'failed' &&
+    entry.body.type === 'delivery.candidate.create' && response?.type === 'rest.error' &&
+    response.requestId === entry.body.requestId &&
+    typeof response.error === 'object' && response.error !== null && !Array.isArray(response.error) &&
+    response.error.code === 'validation_error' && response.error.retryable === false
+}
 export type CollaborationTaskRun = z.infer<typeof collaborationTaskRunSchema>
 export type { CollaborationTaskInteraction, CollaborationTaskCheckpoint }
 export type CollaborationPendingTaskOffer = z.infer<typeof collaborationPendingTaskOfferSchema>
@@ -587,6 +631,10 @@ export function enforceWorkerOutboxAuthorityFence(
   state: Pick<CollaborationLocalState, 'pendingTaskOffers' | 'taskRuns' | 'outbox'>,
   entry: CollaborationOutboxEntry
 ): boolean {
+  // Archived attempts remain readable but never dispatch again, including explicit retries.
+  if (state.taskRuns.some(run => run.cancelledDeliveryAttempts.some(({ saga }) =>
+    entry.idempotencyKey.startsWith(`idem_object.stage.${saga.operationId}.`) ||
+    entry.body.candidateId === saga.candidateId || entry.body.operationId === saga.operationId))) return true
   if (entry.authorityFence) return true
   if (entry.state === 'delivered') return false // An original receipt remains readable; it dispatches nothing.
   let fencedAt: string | undefined
@@ -624,6 +672,9 @@ export function enforceWorkerOutboxAuthorityFence(
 }
 
 export const EMPTY_COLLABORATION_LOCAL_STATE: CollaborationLocalState = Object.freeze({
+  taskChatAssociations: [],
+  taskChatClosedSessions: [],
+  taskChatAcceptedInputs: [],
   schemaVersion: 4,
   revision: 0,
   lastInboxSequence: 0,

@@ -1,3 +1,4 @@
+import type { AgentRuntimeThreadStatus } from '@shared/agent-runtime-contract'
 import type { ChatState } from '../store/chat-store-types'
 import { workspaceRootIdentityKey } from '../lib/workspace-path'
 import type {
@@ -47,7 +48,8 @@ export function setDomainWorkbenchSideConversationOpener(opener: DomainWorkbench
 /** Resolve the explicit parent, including while a different main Session is visible. */
 export async function openDomainWorkbenchSideConversation(
   input: DomainWorkbenchOpenSideConversationInput,
-  state: Pick<ChatState, 'threads' | 'sideConversations' | 'spawnSideConversation' | 'selectSideConversation' | 'sendSideMessage'>
+  state: Pick<ChatState, 'threads' | 'sideConversations' | 'spawnSideConversation' | 'selectSideConversation' | 'sendSideMessage'> &
+    Partial<Pick<ChatState, 'discussionCheckpoints' | 'attachSideConversation'>>
 ): Promise<string | null> {
   const parent = state.threads.find(thread => thread.id === input.parentThreadId.trim() && thread.runtimeId === input.runtimeId.trim())
   if (!parent?.runtimeId) return null
@@ -56,11 +58,22 @@ export async function openDomainWorkbenchSideConversation(
   if (context && (!context.id.trim() || !context.title.trim() || context.text.length > 40000 ||
     (context.sourceRefs?.length ?? 0) > 100)) return null
   const existing = context && Object.values(state.sideConversations).find(side =>
-    side.parentThreadId === parent.id && side.runtimeId === parent.runtimeId && side.context?.id === context.id)
+    side.parentThreadId === parent.id && side.runtimeId === parent.runtimeId && side.context?.id === context.id &&
+    side.context.text === context.text && side.context.title === context.title &&
+    JSON.stringify(side.context.sourceRefs ?? []) === JSON.stringify(context.sourceRefs ?? []))
   if (existing) {
     state.selectSideConversation(existing.threadId)
     if (input.question?.trim()) await state.sendSideMessage(existing.threadId, input.question.trim())
     return existing.threadId
+  }
+  const saved = context && Object.values(state.discussionCheckpoints ?? {}).find(checkpoint =>
+    checkpoint.parentThreadId === parent.id && checkpoint.runtimeId === parent.runtimeId &&
+    JSON.stringify(checkpoint.context) === JSON.stringify(context))
+  if (saved && state.attachSideConversation) {
+    const id = await state.attachSideConversation({ threadId: saved.threadId, parentThreadId: parent.id,
+      runtimeId: parent.runtimeId, title: saved.title, openPanel: true })
+    if (id && input.question?.trim()) await state.sendSideMessage(id, input.question.trim())
+    return id
   }
   return state.spawnSideConversation(input.question?.trim(), {
     parentThreadId: parent.id,
@@ -93,6 +106,28 @@ export function resolveDomainWorkbenchSession(
   return threads.some(thread => thread.id === threadId && thread.runtimeId === runtimeId &&
     (!input.workspaceRoot || (thread.workspace && workspaceRootIdentityKey(thread.workspace) === workspaceRootIdentityKey(input.workspaceRoot))))
     ? { threadId, runtimeId } : null
+}
+
+/** A main-created Session need not be present in the renderer's paginated catalog yet. */
+export async function hydrateDomainWorkbenchSession(
+  input: DomainWorkbenchOpenSessionInput,
+  get: () => Pick<ChatState, 'threads'>,
+  readStatus: () => Promise<AgentRuntimeThreadStatus>,
+  publish: (thread: ChatState['threads'][number]) => void
+): Promise<{ threadId: string; runtimeId: string } | null> {
+  const existing = resolveDomainWorkbenchSession(input, get().threads)
+  if (existing) return existing
+  // Conflicting cached identities are not cache misses and must never be overwritten.
+  if (get().threads.some(thread => thread.id === input.threadId.trim())) return null
+  if (!input.runtimeId.trim() || !input.threadId.trim()) return null
+  const status = await readStatus()
+  if (status.id !== input.threadId.trim() || status.runtimeId !== input.runtimeId.trim() ||
+    (input.workspaceRoot && (!status.workspace || workspaceRootIdentityKey(input.workspaceRoot) !== workspaceRootIdentityKey(status.workspace)))) return null
+  if (get().threads.some(thread => thread.id === status.id)) return resolveDomainWorkbenchSession(input, get().threads)
+  publish({ id: status.id, runtimeId: status.runtimeId, title: status.id, updatedAt: '', model: '', mode: '',
+    workspace: status.workspace, workspaceLocator: status.workspaceLocator, archived: status.archived,
+    status: status.status, latestTurnId: status.latestTurnId, latestTurnStatus: status.latestTurnStatus })
+  return resolveDomainWorkbenchSession(input, get().threads)
 }
 
 /** Canonical selection, including read-only source views. No send/resume path is invoked. */

@@ -11,7 +11,9 @@ import {
   researchAuditProjectReadRecordsResultSchema,
   researchAuditSessionChangeListChangesOutputSchema,
   researchAuditSubjectSchema,
-  researchAuditScientificReviewSchema
+  researchAuditScientificReviewSchema,
+  researchAuditReviewDecisionsSchema,
+  researchAuditReviewTargetOutcomeSchema
 } from './research-audit.js'
 
 const DIGEST_A = `sha256:${'a'.repeat(64)}`
@@ -155,5 +157,44 @@ describe('research-audit SDK contracts', () => {
         source: 'project-dag'
       }).success
     )
+  })
+})
+
+it('review absence and partial authority coverage are explicit, never an empty success by default', () => {
+  assert.equal(researchAuditReviewDecisionsSchema.safeParse({ status: 'unavailable', records: [], reasons: ['sidecar_offline'] }).success, true)
+  assert.equal(researchAuditReviewDecisionsSchema.safeParse({ status: 'available', records: [], reasons: [], asOf: 'not-a-date' }).success, false)
+  assert.equal(researchAuditReviewDecisionsSchema.safeParse({ records: [] }).success, false)
+})
+
+describe('review decision target outcomes', () => {
+  const decision = {
+    type: 'HumanReviewDecisionRecorded', persistent: true, eventId: 'event-1', sequence: 1, idempotencyKey: 'key-1',
+    occurredAt: '2026-01-01T00:00:00Z', threadId: 'thread-1', snapshotDigest: DIGEST_A, reviewPacketId: 'review-packet:1',
+    action: 'reject', actor: 'human:reviewer', rationale: 'Inspected the sample.',
+    reviewReceipt: { scope: { kind: 'unknown' }, identity: { status: 'unknown', source: 'not-recorded', principal: null },
+      timing: { status: 'unknown', elapsedMs: null, activeMs: null }, previousDecisionEventId: null }
+  }
+  const wrap = (record: unknown) => ({ status: 'available', records: [record], reasons: [] })
+
+  it('keeps decisions without outcomes valid and accepts well-formed per-target outcomes', () => {
+    assert.equal(researchAuditReviewDecisionsSchema.safeParse(wrap(decision)).success, true)
+    const outcomes = [{ targetId: 'node:a', errorFound: true, errorOrigin: 'source' },
+      { targetId: 'node:b', errorFound: true, errorOrigin: 'inherited' },
+      { targetId: 'node:c', errorFound: true, errorOrigin: 'undetermined' },
+      { targetId: 'node:d', errorFound: false, errorOrigin: null }]
+    assert.equal(researchAuditReviewDecisionsSchema.safeParse(wrap({ ...decision, targetOutcomes: outcomes })).success, true)
+  })
+
+  it('rejects an origin without an error, an error without an origin, unknown origins, extra keys and empty lists', () => {
+    for (const bad of [
+      { targetId: 'node:a', errorFound: false, errorOrigin: 'source' },
+      { targetId: 'node:a', errorFound: true, errorOrigin: null },
+      { targetId: 'node:a', errorFound: true, errorOrigin: 'elsewhere' },
+      { targetId: 'node:a', errorFound: 'yes', errorOrigin: null },
+      { targetId: 'node:a', errorFound: false, errorOrigin: null, extra: 1 }
+    ]) {
+      assert.equal(researchAuditReviewTargetOutcomeSchema.safeParse(bad).success, false, JSON.stringify(bad))
+    }
+    assert.equal(researchAuditReviewDecisionsSchema.safeParse(wrap({ ...decision, targetOutcomes: [] })).success, false)
   })
 })

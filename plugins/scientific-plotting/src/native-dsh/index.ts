@@ -136,8 +136,8 @@ export function apply(ctx: NativeContext, config: ConfigInput = {}): void {
     let outcome: Record<string, Json> = { exitCode: null, stdout: '', stderr: '', status: 'failed' }
     try {
       signal.throwIfAborted()
-      const confined = await ctx.sandbox.confine(prepared.argv, { mode: 'workspace-write', workspaceRoot: prepared.stageRoot, sessionId: policy.sessionId }, controller.signal)
-      if (confined.enforcement !== 'full') throw new Error('Python requires complete file-write confinement')
+      const confined = await ctx.sandbox.confine(prepared.argv, { mode: 'workspace-write', workspaceRoot: prepared.stageRoot, ...(policy.sessionId === undefined ? {} : { sessionId: policy.sessionId }) }, controller.signal)
+      if (confined.enforcement !== 'full') throw new Error(`Python requires complete file-write confinement; the Host reported ${confined.enforcement} on ${process.platform}/${process.arch}. Configure a Host sandbox provider that supports this platform.`)
       handle = ctx.subprocess.spawn({ argv: confined.argv, cwd: prepared.cwd, stdio: { stdin: { data: '' }, stdout: { maxBytes: 128 * 1024 }, stderr: { maxBytes: 128 * 1024 } }, graceMs: 1000, signal: controller.signal, env: { ...prepared.env, PYTHONDONTWRITEBYTECODE: '1' } })
       const done = await handle.done
       outcome = { ...outcome, exitCode: done.exitCode }

@@ -1,6 +1,8 @@
 import type {
   CloudIdentityInspectOutput,
   CloudIdentitySnapshot,
+  IdentityCloudConfiguration,
+  IdentityCloudConfigurationInput,
   IdentityListAccountsOutput,
   IdentityUiState,
   LocalAccount
@@ -90,6 +92,10 @@ export class IdentityRendererProjection {
     await this.mutate(() => this.client.renameAccount(userId, username))
   }
 
+  async deleteAccount(accountId: string): Promise<void> {
+    await this.mutate(() => this.client.deleteAccount(accountId))
+  }
+
   async exitAccount(): Promise<void> {
     await this.mutate(() => this.client.exitAccount())
   }
@@ -138,6 +144,22 @@ export class IdentityRendererProjection {
 
   async revokeCloudDevice(deviceId: string): Promise<void> {
     await this.mutateCloud(() => this.client.revokeCloudDevice(deviceId))
+  }
+
+  async inspectCloudConfiguration(): Promise<IdentityCloudConfiguration> {
+    return this.client.inspectCloudConfiguration()
+  }
+
+  async configureCloud(
+    input: IdentityCloudConfigurationInput
+  ): Promise<IdentityCloudConfiguration> {
+    const configuration = await this.client.configureCloud(input)
+    try {
+      await this.reloadCloud()
+    } catch (error) {
+      this.setError(error)
+    }
+    return configuration
   }
 
   dispose(): void {

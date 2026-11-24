@@ -1,3 +1,4 @@
+import { restRequestSchema } from '@sciforge/collaboration-contracts'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +19,69 @@ afterEach(() => {
 })
 
 describe('CloudIdentityRuntime', () => {
+  it('renames through schema-valid revision-checked cloud commands and reloads the profile', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-profile-command-'))
+    roots.push(root)
+    const runtime = await CloudIdentityRuntime.create({ userDataDir: root, appRoot: root,
+      environment: {}, appVersion: '1.0.0', installationId: 'installation-1', privateVault: memoryVault() })
+    vi.spyOn(DesktopIdentityService.prototype, 'sessionIdentity').mockReturnValue({ generation: 1, userId: 'usr_CloudUser000001' })
+    const refresh = vi.spyOn(DesktopIdentityService.prototype, 'refreshProfile').mockResolvedValue()
+    const execute = vi.spyOn(runtime, 'executeAuthenticatedCloud').mockImplementation(async (request) => {
+      const parsed = restRequestSchema.parse(request.payload)
+      expect(['user.get', 'user.update']).toContain(parsed.type)
+      return { contractVersion: 1, status: 200, body: { type: 'rest.entity',
+        entity: { type: 'user_principal', userId: 'usr_CloudUser000001', revision: 4 } } } as never
+    })
+    try {
+      await runtime.renameProfile('usr_CloudUser000001', 'New Name')
+      expect(execute).toHaveBeenCalledTimes(2)
+      expect(execute.mock.calls[1]![0].payload).toMatchObject({ type: 'user.update',
+        displayName: 'New Name', expectedRevision: 4, idempotencyKey: expect.stringMatching(/^idem_/) })
+      expect(refresh).toHaveBeenCalledOnce()
+      await expect(runtime.renameProfile('usr_OtherUser000001', 'Wrong')).rejects.toThrow('Sign in to this account')
+      expect(execute).toHaveBeenCalledTimes(2)
+    } finally { runtime.close() }
+  })
+
+  it('fences preflight identity and same-account session generations before any credential dispatch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-cloud-host-fence-'))
+    roots.push(root)
+    let generation = 1
+    let userId = 'usr_CloudUser000001'
+    vi.spyOn(DesktopIdentityService.prototype, 'sessionIdentity').mockImplementation(() => ({ generation, userId }))
+    const credentials = vi.spyOn(DesktopIdentityService.prototype, 'useAccessToken')
+    const dispatch = vi.fn()
+    const runtime = await CloudIdentityRuntime.create({ userDataDir: root, appRoot: root, appVersion: '1.0.0',
+      environment: { SCIFORGE_OIDC_ISSUER: 'https://identity.example.test/realms/SciForge', SCIFORGE_CLOUD_BASE_URL: 'https://cloud.example.test' },
+      installationId: 'installation-1', privateVault: memoryVault(), fetchImpl: dispatch })
+    const status = vi.spyOn(runtime, 'authenticatedCloudTransportStatus').mockImplementation(() => ({
+      state: 'ready', baseUrl: 'https://cloud.example.test', userId, deviceId: 'dev_CloudDevice0001', deviceRevision: 1
+    }))
+    const { state: _state, ...expectedBinding } = runtime.authenticatedCloudHostStatus()
+    const request = { contractVersion: 1 as const, operationId: 'sciforge.cloud.command' as const,
+      payload: { protocolVersion: '1.0' as const, type: 'project.list' as const, requestId: 'req_CloudFence000001', limit: 50 } }
+    try {
+      userId = 'usr_OtherUser000001'
+      await expect(runtime.executeAuthenticatedCloud(request, { expectedBinding })).rejects.toThrow(/binding changed/)
+      userId = expectedBinding.userId
+      generation++
+      await expect(runtime.executeAuthenticatedCloud(request, { expectedBinding })).rejects.toThrow(/binding changed/)
+      expect(credentials).not.toHaveBeenCalled()
+      expect(dispatch).not.toHaveBeenCalled()
+
+      const fresh = runtime.authenticatedCloudHostStatus()
+      const { state: _freshState, ...currentBinding } = fresh
+      vi.spyOn(runtime, 'revalidateCurrentDevice').mockResolvedValue(status.getMockImplementation()!())
+      credentials.mockImplementation(async (operation) => {
+        generation++ // Switch during asynchronous credential freshness work.
+        return operation('test-only-token')
+      })
+      await expect(runtime.executeAuthenticatedCloud(request, { expectedBinding: currentBinding })).rejects.toThrow()
+      expect(credentials).toHaveBeenCalledOnce()
+      expect(dispatch).not.toHaveBeenCalled()
+    } finally { runtime.close() }
+  })
+
   it('uses the real HTTP client only when both endpoints are explicitly configured', () => {
     expect(resolveDesktopIdentityRuntimeConfig({
       oidcIssuer: 'https://identity.example.test/realms/SciForge',
@@ -140,6 +204,88 @@ describe('CloudIdentityRuntime', () => {
         identity: { state: 'signed-out' }
       })
       expect(runtime.snapshot().revision).toMatch(/^cloud-\d+$/)
+    } finally {
+      runtime.close()
+    }
+  })
+
+  it('applies package-scoped settings in place without replacing the runtime instance', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-cloud-runtime-'))
+    roots.push(root)
+    const runtime = await CloudIdentityRuntime.create({
+      userDataDir: root,
+      appRoot: root,
+      appVersion: '1.0.0',
+      environment: {},
+      installationId: 'installation-1',
+      privateVault: memoryVault(),
+      externalNavigation: {
+        issueTarget: vi.fn(() => ({
+          handle: 'navigation-handle',
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        })),
+        openTarget: vi.fn(async () => undefined)
+      }
+    })
+
+    try {
+      expect((await runtime.initialize()).error).toMatchObject({
+        code: 'OIDC_CONFIGURATION_ERROR'
+      })
+      expect(runtime.authenticatedCloudTransportStatus().state).toBe('unavailable')
+
+      const configured = await runtime.reconfigure({
+        oidcIssuer: 'https://identity.example.test/realms/SciForge',
+        cloudBaseUrl: 'https://cloud.example.test'
+      })
+      expect(configured.error).toBeUndefined()
+      expect(configured.identity.state).toBe('signed-out')
+      expect(runtime.authenticatedCloudTransportStatus()).toEqual({
+        state: 'identity_required',
+        baseUrl: 'https://cloud.example.test'
+      })
+
+      const cleared = await runtime.reconfigure(null)
+      expect(cleared.error).toMatchObject({ code: 'OIDC_CONFIGURATION_ERROR' })
+      expect(runtime.authenticatedCloudTransportStatus().state).toBe('unavailable')
+    } finally {
+      runtime.close()
+    }
+  })
+
+  it('uses package-scoped settings ahead of the deployment environment', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-cloud-runtime-'))
+    roots.push(root)
+    const runtime = await CloudIdentityRuntime.create({
+      userDataDir: root,
+      appRoot: root,
+      appVersion: '1.0.0',
+      environment: {},
+      settings: {
+        oidcIssuer: 'https://identity.example.test/realms/SciForge',
+        cloudBaseUrl: 'https://cloud.example.test'
+      },
+      installationId: 'installation-1',
+      privateVault: memoryVault(),
+      externalNavigation: {
+        issueTarget: vi.fn(() => ({
+          handle: 'navigation-handle',
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        })),
+        openTarget: vi.fn(async () => undefined)
+      }
+    })
+
+    try {
+      await expect(runtime.initialize()).resolves.toMatchObject({
+        identity: { state: 'signed-out' },
+        device: { state: 'signed-out' }
+      })
+      expect(runtime.snapshot().error).toBeUndefined()
+      expect(runtime.authenticatedCloudTransportStatus()).toEqual({
+        state: 'identity_required',
+        baseUrl: 'https://cloud.example.test'
+      })
     } finally {
       runtime.close()
     }

@@ -15,6 +15,8 @@ import type { z } from 'zod'
 import { ANCHORED_COMMENT_CAPABILITY_IDS, anchoredCommentDeleteResultSchema, anchoredCommentReadAssetResultSchema } from '../src/core/contract.js'
 import { createAnchoredCommentsCapabilityFactory } from '../src/core/main/index.js'
 import { AnchoredCommentService } from '../src/core/main/comment-service.js'
+import { ProseTranslationService } from '../src/core/main/prose-translation.js'
+import type { DiscussionPort } from '../src/ports/discussion.js'
 import { AnchoredCommentFeedbackService } from '../src/core/main/feedback-service.js'
 import { createAnchoredCommentsOperations } from '../src/core/operations.js'
 import { EXPECTED_HOST_GRANTS } from '../src/dsh-adapter/tools.js'
@@ -84,12 +86,40 @@ async function callFactory(
 }
 
 describe('anchored-comments factory/plugin parity', () => {
+  test('translation factory and workspace operation return identical protected prose results', async () => {
+    const root = await tempRoot('translation-parity-')
+    const discussion: DiscussionPort = { async run() { return { state: 'completed', runtimeId: 'selected', text: '{"translations":["说明 "]}' } } }
+    const service = new ProseTranslationService(discussion)
+    const operations = createAnchoredCommentsOperations({ discussion, env: {} })
+    const factory = createAnchoredCommentsCapabilityFactory<CapabilityDefinition>({
+      defineCapability: definition => definition as unknown as CapabilityDefinition,
+      getComments: () => new AnchoredCommentService(root), getFeedback: () => { throw new Error('Unused') },
+      getTranslation: () => service
+    })
+    const surface = { definitions: factory.createDefinitions(), comments: new AnchoredCommentService(root) }
+    const input = { text: 'Explain `x`', targetLanguage: 'zh-CN' }
+    try {
+      assert.deepEqual(await operations.invoke(ANCHORED_COMMENT_CAPABILITY_IDS.translate, input, root),
+        await callFactory(surface, ANCHORED_COMMENT_CAPABILITY_IDS.translate, input))
+    } finally { operations.dispose(); service.dispose() }
+  })
   test('capability ids and effects match the factory surface, the grant table and the manifest', async () => {
     const surface = factorySurface(await tempRoot('anchored-parity-meta-'))
     const declared = surface.definitions
       .map((definition) => [definition.id, definition.effect] as const)
       .sort()
     assert.deepEqual(declared, [
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard, 'workspace-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.translate, 'workspace-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, 'workspace-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects, 'read'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull, 'read'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry, 'external-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit, 'external-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish, 'external-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reply, 'workspace-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.cancel, 'workspace-write'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.fork, 'workspace-write'],
       [ANCHORED_COMMENT_CAPABILITY_IDS.list, 'read'],
       [ANCHORED_COMMENT_CAPABILITY_IDS.get, 'read'],
       [ANCHORED_COMMENT_CAPABILITY_IDS.upsert, 'workspace-write'],
@@ -128,6 +158,17 @@ describe('anchored-comments factory/plugin parity', () => {
       surface.definitions.map((definition) => [definition.id, definition.approval] as const)
     )
     assert.deepEqual([...factoryApproval.entries()].sort(), [
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.translate, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry, 'confirmation'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit, 'confirmation'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish, 'confirmation'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reply, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.cancel, 'none'],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.fork, 'none'],
       [ANCHORED_COMMENT_CAPABILITY_IDS.list, 'none'],
       [ANCHORED_COMMENT_CAPABILITY_IDS.get, 'none'],
       [ANCHORED_COMMENT_CAPABILITY_IDS.upsert, 'none'],
@@ -362,6 +403,8 @@ describe('anchored-comments factory/plugin parity', () => {
     const operations = createAnchoredCommentsOperations({ env: {} })
 
     const invalid: ReadonlyArray<readonly [string, unknown]> = [
+      [ANCHORED_COMMENT_CAPABILITY_IDS.translate, { text: 'hello', targetLanguage: 'en', command: 'run' }],
+      [ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, { threadId: 'x', current: { filePath: '../bad' } }],
       [ANCHORED_COMMENT_CAPABILITY_IDS.list, { unknownField: true }],
       [ANCHORED_COMMENT_CAPABILITY_IDS.get, {}],
       [ANCHORED_COMMENT_CAPABILITY_IDS.get, { threadId: '' }],

@@ -51,6 +51,7 @@ print(json.dumps(results))
 describe('TS immutable delta → actual Python envelope validator', () => {
   for (const [label, payload] of [
     ['historically compatible decimal', { value: 0.9 }],
+    ['JSON optional fields and explicit null', { trace: [{ kind: 'system', detail: undefined, explicit: null }], values: [undefined, null, { absent: undefined }] }],
     ['fixed small decimal', { value: 0.00001 }],
     ['negative exponent', { value: 1e-7 }],
     ['JS signed zero and integral floats', { values: [-0, 0, 1, -1, 1000000000000000100] }],

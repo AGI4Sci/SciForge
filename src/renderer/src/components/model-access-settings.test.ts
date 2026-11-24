@@ -1,3 +1,5 @@
+import enSettings from '../locales/en/settings.json'
+import zhSettings from '../locales/zh/settings.json'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
@@ -89,6 +91,19 @@ function settings(mode?: 'api' | 'coding-plan'): AppSettingsV1 {
 }
 
 describe('ModelAccessSettings', () => {
+  for (const [language, messages] of Object.entries({ en: enSettings, zh: zhSettings })) {
+    it(`resolves context-window controls from the ${language} settings namespace`, () => {
+      const html = renderToStaticMarkup(createElement(ModelAccessSettings, {
+        form: settings('api'),
+        update: vi.fn(),
+        t: (key: string) => (messages as Record<string, string>)[key] ?? key
+      }))
+      expect(html).toContain(messages.modelRouterRoleContextWindow)
+      expect(html).toContain(messages.modelRouterRoleContextWindowHint)
+      expect(html).not.toContain('modelRouterRoleContextWindow')
+    })
+  }
+
   it('shows provider credentials and an explicit upstream protocol selector', () => {
     const html = renderToStaticMarkup(createElement(ModelAccessSettings, {
       form: settings('api'),

@@ -203,3 +203,89 @@ it('offers a historical failed-input reexecution while the runnable queue is emp
   await act(async () => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(send).toHaveBeenCalledWith('请直接按新要求继续')
 })
+
+it('selects a contributed mention with the keyboard without sending or requiring a workspace', async () => {
+  const composerInput = createWorkbenchComposerInput()
+  composerInput.getState().setInput('@evidence')
+  const send = vi.fn()
+  const search = vi.fn(async () => ({ items: [{ id: 'fixture.task', title: 'Project / Evidence', content: 'tsk_evidence' }] }))
+  useChatStore.setState({ route: 'chat', workspaceRoot: '', activeThreadId: 'mention-thread', blocks: [] })
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await act(async () => root!.render(<WorkbenchComposer
+    composerInput={composerInput} mode="agent" setMode={() => undefined}
+    busy={false} runtimeReady hasActiveThread
+    composerModel="" composerPickList={[]} onComposerModelChange={() => undefined}
+    queuedMessages={[]} onRemoveQueuedMessage={() => undefined}
+    changeSummaryWorkspaceRoot="" searchContextMentions={search}
+    onSend={send} onInterrupt={() => undefined}
+  />))
+  const textarea = container.querySelector('textarea')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '@evidence')
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 200)) })
+  expect(search).toHaveBeenCalledWith(expect.objectContaining({ query: 'evidence' }))
+  expect(container.querySelector('[role="option"]')?.textContent).toBe('Project / Evidence')
+  await act(async () => container.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
+  expect(composerInput.getState().input).toBe('tsk_evidence ')
+  expect(container.querySelector('[aria-label="移除引用：Project / Evidence"]')).not.toBeNull()
+  expect(send).not.toHaveBeenCalled()
+})
+
+it('ends an active reference through an explicit draft instruction without sending', async () => {
+  const composerInput = createWorkbenchComposerInput()
+  const send = vi.fn()
+  const active = vi.fn(async () => ({ items: [{ id: 'fixture.active', title: '正在处理：Evidence', content: '[end-reference]' }] }))
+  useChatStore.setState({ route: 'chat', workspaceRoot: '', activeThreadId: 'active-ref', blocks: [] })
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await act(async () => root!.render(<WorkbenchComposer
+    composerInput={composerInput} mode="agent" setMode={() => undefined}
+    busy={false} runtimeReady hasActiveThread
+    composerModel="" composerPickList={[]} onComposerModelChange={() => undefined}
+    queuedMessages={[]} onRemoveQueuedMessage={() => undefined}
+    changeSummaryWorkspaceRoot="" readActiveContextMentions={active}
+    onSend={send} onInterrupt={() => undefined}
+  />))
+  const remove = container.querySelector<HTMLButtonElement>('[aria-label="结束关联：正在处理：Evidence"]')!
+  expect(remove).not.toBeNull()
+  await act(async () => remove.click())
+  expect(composerInput.getState().input).toBe('[end-reference]')
+  expect(container.querySelector('textarea')!.value).not.toContain('[end-reference]')
+  expect(container.querySelector('[aria-label="关联变更"]')?.textContent).toContain('下次发送结束关联')
+  expect(container.querySelector('[aria-label="结束关联：正在处理：Evidence"]')).toBeNull()
+  expect(send).not.toHaveBeenCalled()
+})
+
+it('resolves a pasted reference into a removable unsent chip', async () => {
+  const composerInput = createWorkbenchComposerInput()
+  const send = vi.fn()
+  const resolve = vi.fn(async () => ({ items: [{ id: 'fixture.pasted', title: 'Project / Pasted task', content: 'tsk_pasted' }] }))
+  useChatStore.setState({ route: 'chat', workspaceRoot: '', activeThreadId: 'pasted-ref', blocks: [] })
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await act(async () => root!.render(<WorkbenchComposer
+    composerInput={composerInput} mode="agent" setMode={() => undefined}
+    busy={false} runtimeReady hasActiveThread
+    composerModel="" composerPickList={[]} onComposerModelChange={() => undefined}
+    queuedMessages={[]} onRemoveQueuedMessage={() => undefined}
+    changeSummaryWorkspaceRoot="" resolveDraftContextMentions={resolve}
+    onSend={send} onInterrupt={() => undefined}
+  />))
+  const textarea = container.querySelector('textarea')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'Discuss tsk_pasted')
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)) })
+  const remove = container.querySelector<HTMLButtonElement>('[aria-label="移除引用：Project / Pasted task"]')!
+  expect(remove).not.toBeNull()
+  await act(async () => remove.click())
+  expect(composerInput.getState().input).toBe('Discuss')
+  expect(send).not.toHaveBeenCalled()
+})

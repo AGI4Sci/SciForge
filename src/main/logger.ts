@@ -151,8 +151,11 @@ export function logWarn(category: string, message: string, detail?: unknown): vo
   void writeLogLine('warn', category, full)
 }
 
-export function logInfo(category: string, message: string): void {
-  void writeLogLine('info', category, message)
+export function logInfo(category: string, message: string, detail?: unknown): void {
+  const full = detail !== undefined
+    ? `${message} — detail: ${safeStringify(detail)}`
+    : message
+  void writeLogLine('info', category, full)
 }
 
 /**
@@ -173,10 +176,29 @@ function scheduleLogPruning(): void {
   logPruneTimer.unref()
 }
 
+function serializeLogDetail(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (!value || typeof value !== 'object') return value
+  if (seen.has(value)) return '[Circular]'
+  seen.add(value)
+  if (Array.isArray(value)) return value.map((item) => serializeLogDetail(item, seen))
+  const detail: Record<string, unknown> = value instanceof Error
+    ? {
+        name: value.name,
+        message: value.message,
+        ...('cause' in value ? { cause: serializeLogDetail(value.cause, seen) } : {}),
+        ...(value instanceof AggregateError ? { errors: serializeLogDetail(value.errors, seen) } : {})
+      }
+    : {}
+  for (const [key, item] of Object.entries(value)) {
+    if (!(key in detail)) detail[key] = serializeLogDetail(item, seen)
+  }
+  return detail
+}
+
 function safeStringify(value: unknown): string {
   try {
     if (typeof value === 'string') return redactSecretText(value).slice(0, 2000)
-    return JSON.stringify(redactSecrets(value), null, 2).slice(0, 2000)
+    return JSON.stringify(redactSecrets(serializeLogDetail(value)), null, 2).slice(0, 2000)
   } catch {
     return redactSecretText(String(value)).slice(0, 2000)
   }

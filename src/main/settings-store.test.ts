@@ -238,7 +238,7 @@ describe('JsonSettingsStore', () => {
     const next = await store.patch({
       agents: {
         dsh: {
-          executablePath: '/opt/dsh/bin/dsh',
+          command: '/opt/dsh/bin/dsh',
           selectedModel: 'deepseek-chat',
           reasoningEffort: 'high'
         }
@@ -247,14 +247,14 @@ describe('JsonSettingsStore', () => {
 
     expect(next.agents.sciforge).toEqual(loaded.agents.sciforge)
     expect(getDshRuntimeSettings(next)).toEqual(expect.objectContaining({
-      executablePath: '/opt/dsh/bin/dsh',
+      command: '/opt/dsh/bin/dsh',
       selectedModel: 'deepseek-chat',
       reasoningEffort: 'high'
     }))
     // A fresh Store instance proves the disk reload path, rather than returning
     // the original Store's in-memory cache.
     expect(getDshRuntimeSettings(await new JsonSettingsStore(userDataDir).load())).toEqual(expect.objectContaining({
-      executablePath: '/opt/dsh/bin/dsh',
+      command: '/opt/dsh/bin/dsh',
       selectedModel: 'deepseek-chat',
       reasoningEffort: 'high'
     }))

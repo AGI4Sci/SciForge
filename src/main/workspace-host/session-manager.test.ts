@@ -131,6 +131,121 @@ function event(sequence: number): WorkspaceHostEvent {
 }
 
 describe('WorkspaceHostSessionManager', () => {
+  it('closes a late attachment after manager disposal instead of registering it', async () => {
+    const { manager, provider, client } = harness()
+    let complete!: (client: WorkspaceHostClient) => void
+    vi.mocked(provider.attach).mockReturnValueOnce(new Promise((resolve) => { complete = resolve }))
+    const attaching = manager.attach({ providerId: PROVIDER_ID, authorizedSessionId: 'authorized-session-1' })
+    const outcome = expect(attaching).rejects.toMatchObject({ code: 'manager-disposed' })
+    await manager.dispose()
+    complete(client)
+    await outcome
+    expect(manager.list()).toEqual([])
+    expect(client.close).toHaveBeenCalledOnce()
+    expect(client.subscribe).not.toHaveBeenCalled()
+  })
+
+  it('refuses an attachment completed after caller cancellation', async () => {
+    const { manager, provider, client } = harness()
+    const controller = new AbortController()
+    const reason = new Error('Attachment cancelled')
+    let complete!: (client: WorkspaceHostClient) => void
+    vi.mocked(provider.attach).mockReturnValueOnce(new Promise((resolve) => { complete = resolve }))
+    const attaching = manager.attach({ providerId: PROVIDER_ID, authorizedSessionId: 'authorized-session-1', signal: controller.signal })
+    const outcome = expect(attaching).rejects.toBe(reason)
+    controller.abort(reason)
+    complete(client)
+    try {
+      await outcome
+      expect(manager.list()).toEqual([])
+      expect(client.close).toHaveBeenCalledOnce()
+    } finally {
+      await manager.dispose()
+    }
+  })
+
+  it('settles cancellation during reconnect backoff and allows an explicit retry', async () => {
+    const controller = new AbortController()
+    const reason = new Error('Reconnect cancelled')
+    let started!: () => void
+    const waiting = new Promise<void>((resolve) => { started = resolve })
+    const { manager, client } = harness(session(), {
+      wait: (_milliseconds, signal) => new Promise((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+        started()
+      })
+    })
+    await manager.attach({ providerId: PROVIDER_ID, authorizedSessionId: 'authorized-session-1' })
+    vi.mocked(client.reconnect).mockRejectedValueOnce(new Error('Transport disconnected'))
+    const reconnecting = manager.reconnect(SESSION_ID, { signal: controller.signal })
+    const outcome = reconnecting.catch((error: unknown) => error)
+    try {
+      await waiting
+      controller.abort(reason)
+      expect(await outcome).toMatchObject({ code: 'reconnect-failed', cause: reason })
+      expect(manager.get(SESSION_ID)).toMatchObject({ phase: 'failed' })
+      expect(manager.get(SESSION_ID)?.reconnectAttempt).toBeUndefined()
+      expect(client.reconnect).toHaveBeenCalledOnce()
+      await expect(manager.reconnect(SESSION_ID)).resolves.toMatchObject({ phase: 'connected' })
+    } finally {
+      await manager.dispose()
+    }
+  })
+
+  it('settles a pre-cancelled reconnect without contacting the provider', async () => {
+    const { manager, client } = harness()
+    const controller = new AbortController()
+    const reason = new Error('Reconnect cancelled')
+    await manager.attach({ providerId: PROVIDER_ID, authorizedSessionId: 'authorized-session-1' })
+    controller.abort(reason)
+    try {
+      await expect(manager.reconnect(SESSION_ID, { signal: controller.signal }))
+        .rejects.toMatchObject({ code: 'reconnect-failed', cause: reason })
+      expect(manager.get(SESSION_ID)).toMatchObject({ phase: 'failed' })
+      expect(client.reconnect).not.toHaveBeenCalled()
+    } finally {
+      await manager.dispose()
+    }
+  })
+
+  it('keeps a session closed when shutdown interrupts reconnect backoff', async () => {
+    let started!: () => void
+    const waiting = new Promise<void>((resolve) => { started = resolve })
+    const { manager, client } = harness(session(), {
+      wait: (_milliseconds, signal) => new Promise((_resolve, reject) => {
+        signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+        started()
+      })
+    })
+    await manager.attach({ providerId: PROVIDER_ID, authorizedSessionId: 'authorized-session-1' })
+    vi.mocked(client.reconnect).mockRejectedValueOnce(new Error('Transport disconnected'))
+    const reconnecting = manager.reconnect(SESSION_ID).catch((error: unknown) => error)
+    await waiting
+    await manager.close(SESSION_ID)
+    await reconnecting
+    expect(manager.get(SESSION_ID)).toMatchObject({ phase: 'closed' })
+    expect(client.reconnect).toHaveBeenCalledOnce()
+    await manager.dispose()
+  })
+
+  it('rejects a late reconnect success after caller cancellation', async () => {
+    const { manager, client } = harness()
+    const controller = new AbortController()
+    let complete!: (value: WorkspaceHostSession) => void
+    vi.mocked(client.reconnect).mockReturnValueOnce(new Promise((resolve) => { complete = resolve }))
+    await manager.attach({ providerId: PROVIDER_ID, authorizedSessionId: 'authorized-session-1' })
+    const reconnecting = manager.reconnect(SESSION_ID, { signal: controller.signal })
+    const outcome = expect(reconnecting).rejects.toMatchObject({ code: 'reconnect-failed' })
+    controller.abort(new Error('Reconnect cancelled'))
+    complete(session())
+    try {
+      await outcome
+      expect(manager.get(SESSION_ID)).toMatchObject({ phase: 'failed' })
+    } finally {
+      await manager.dispose()
+    }
+  })
+
   it('attaches through an owner-aware provider without exposing authorization in snapshots', async () => {
     const { manager, provider } = harness()
 

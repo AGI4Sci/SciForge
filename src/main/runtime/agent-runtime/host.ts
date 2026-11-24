@@ -4,7 +4,7 @@ import { assertWorkspaceMutationIdentity, workspaceMutationReceipt } from '../..
 import type { DomainUserInputRequest, DomainUserInputResult } from '@sciforge/domain-sdk/user-input'
 import {
   SessionAdmissionError,
-  type SessionAdmissionRef, type SessionAdmissionSnapshot, type SessionAdmissionEvent,
+  type SessionAcceptedInputEvent, type SessionAdmissionRef, type SessionAdmissionSnapshot, type SessionAdmissionEvent,
   type SessionOutputEvent, type SessionSubmissionAcquire, type SessionSubmissionRelease,
   type SessionAdmissionLease, type SessionHumanInput, type SessionHumanInputEvent, type SessionHumanDecision, type SessionHumanDecisionLease, type SessionInputRecovery,
   type SessionQueuedInput, type SessionQueuedMutation, type SessionInputReceipt, type SessionQueuedInputSnapshot
@@ -29,9 +29,10 @@ import {
   getAgentCapabilitySettings,
   getClaudeRuntimeSettings,
   getCodexRuntimeSettings,
+  getDshRuntimeSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
-import { permissionLevelFromRuntime } from '../../../shared/app-settings-permissions'
+import { AGENT_PERMISSION_LEVELS, isFullAccessPermission, permissionLevelFromRuntime, runtimePatchForPermissionLevel } from '../../../shared/app-settings-permissions'
 import type { AgentPermissionLevel } from '../../../shared/app-settings-permissions'
 import {
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
@@ -138,6 +139,7 @@ import type {
   TurnArtifactWatch
 } from '../../services/turn-artifact-outbox'
 import type { RuntimeContextStateService } from '../../services/runtime-context-state-service'
+import { MAX_RESEARCH_MEMORY_CONTEXT_BYTES, RESEARCH_MEMORY_OMITTED_PROMPT, renderResearchMemory } from '../../services/research-memory'
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
 import type { VisibleContextService } from '../../services/visible-context-service'
@@ -147,6 +149,7 @@ import {
   type CapabilityAgentApprovalRequest,
   type CapabilityAgentToolRequestContext
 } from '../../capabilities/agent-tools'
+import { directiveReceipt } from '../../services/runtime-context-ledger-service'
 import type { RuntimeGoalPatch, RuntimeGoalService } from '../../services/runtime-goal-service'
 import type {
   RuntimeContextLedgerPatch,
@@ -318,7 +321,7 @@ type NativeRemoteApprovalRecord = Readonly<{
     childId: string
     parentThreadId: string
     parentTurnId: string
-    parentPermissionLevel?: ReturnType<typeof permissionLevelFromRuntime>
+    parentPermissionLevel?: AgentPermissionLevel
   }>
   approval: DomainRemoteCapabilityApproval
 }>
@@ -350,6 +353,7 @@ export type PreparedHumanSessionDecision = Readonly<{
 export class AgentRuntimeHost {
   private readonly sessionLifecycleEpochs = new Map<string, number>()
   private readonly humanInputSubscribers = new Set<(event: SessionHumanInputEvent) => SessionHumanDecisionLease | null | Promise<SessionHumanDecisionLease | null>>()
+  private readonly acceptedInputSubscribers = new Set<(event: SessionAcceptedInputEvent) => void | Promise<void>>()
   private readonly requiredAdmissionSubscribers = new Set<(event: SessionAdmissionEvent) => void | SessionAdmissionLease | Promise<void | SessionAdmissionLease>>()
   private readonly requiredOutputSubscribers = new Set<(event: SessionOutputEvent) => void | Promise<void>>()
   private readonly adapters: Map<AgentRuntimeId, AgentRuntimeAdapter>
@@ -416,6 +420,8 @@ export class AgentRuntimeHost {
   private readonly terminalTurnPrincipalOrder: string[] = []
   private readonly turnArtifactPatchReceiptDrains = new Map<string, Promise<void>>()
   private readonly terminalArtifactBoundaries = new Map<string, Promise<void>>()
+  private readonly terminalArtifactFileEffects = new Map<string, Promise<TurnArtifactIntent['fileEffects']>>()
+  private readonly replayedTurnArtifactCaptures = new Set<string>()
   private readonly nativeApprovalObservations = new Map<string, Promise<boolean>>()
   private readonly userInputs = new RuntimeUserInputService()
   private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
@@ -805,6 +811,15 @@ export class AgentRuntimeHost {
     }
   }
 
+  subscribeAcceptedInput(listener: (event: SessionAcceptedInputEvent) => void | Promise<void>): () => void {
+    this.acceptedInputSubscribers.add(listener)
+    return () => { this.acceptedInputSubscribers.delete(listener) }
+  }
+
+  private async publishAcceptedInput(event: SessionAcceptedInputEvent): Promise<void> {
+    for (const listener of this.acceptedInputSubscribers) await listener(event)
+  }
+
   subscribeRequiredAdmission(listener: (event: SessionAdmissionEvent) => void | SessionAdmissionLease | Promise<void | SessionAdmissionLease>): () => void {
     this.requiredAdmissionSubscribers.add(listener)
     return () => { this.requiredAdmissionSubscribers.delete(listener) }
@@ -861,9 +876,16 @@ export class AgentRuntimeHost {
     await this.admissionLedger().releaseSubmission(input, assertCurrent)
   }
 
-  async acceptQueuedInput(input: SessionQueuedInput): Promise<SessionInputReceipt> {
+  async acceptQueuedInput(input: SessionQueuedInput, source?: 'native-composer'): Promise<SessionInputReceipt> {
+    const captured = this.captureCurrentPrincipalContext()
     const assertCurrent = await this.authorizeAdmission(input, 'queue')
-    return this.admissionLedger().acceptQueuedInput(input, assertCurrent)
+    this.assertCapturedPrincipalContextCurrent(captured)
+    const receipt = await this.admissionLedger().acceptQueuedInput(input, assertCurrent)
+    if (source === 'native-composer') await this.publishAcceptedInput({
+      runtimeId: input.runtimeId, threadId: input.threadId, text: typeof input.payload.displayText === 'string' ? input.payload.displayText : input.text, receipt,
+      principalContext: captured, ...(captured.principal ? { principal: captured.principal } : {})
+    })
+    return receipt
   }
 
   async abandonQueuedInput(input: SessionQueuedMutation): Promise<void> {
@@ -975,7 +997,14 @@ export class AgentRuntimeHost {
     const existing = this.threadStatusReadsInFlight.get(key)
     if (existing) return existing
     const pending = adapter.readThreadStatus(context, input)
-      .then((status) => withWorkspaceHostOnStatus(status, context.workspaceHost))
+      .then(async (status) => {
+        const summary = await this.readThreadSummaryFromAdapter(adapter, context, input.threadId)
+        return withWorkspaceHostOnStatus({
+          ...status,
+          workspace: summary.workspace,
+          archived: summary.archived
+        }, context.workspaceHost)
+      })
       .finally(() => {
         if (this.threadStatusReadsInFlight.get(key) === pending) this.threadStatusReadsInFlight.delete(key)
       })
@@ -1120,7 +1149,7 @@ export class AgentRuntimeHost {
     }, context.workspaceHost))
   }
 
-  async startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {
+  async startTurn(input: AgentRuntimeTurnStartInput, source?: 'native-composer'): Promise<AgentRuntimeTurnHandle> {
     if (this.closing || this.disposed) throw new Error('Agent runtime Host is closing.')
     if (this.eventCaptureFailures().length) throw new Error('Agent event capture requires recovery before accepting another turn.')
     this.activeTurnOperations += 1
@@ -1135,7 +1164,7 @@ export class AgentRuntimeHost {
           beginDirectiveDelivery
         })
         return { value: handle, turnId: handle.turnId }
-      }, (turnId) => ({ threadId: input.threadId, turnId }))
+      }, (turnId) => ({ threadId: input.threadId, turnId }), source)
     } finally { this.endTurnOperation() }
   }
 
@@ -1721,6 +1750,7 @@ export class AgentRuntimeHost {
     )
     if (this.turnArtifactCaptureTasks.has(key)) return
     this.turnArtifactWatches.set(key, watch)
+    if (!initial) this.replayedTurnArtifactCaptures.add(key)
     const controller = new AbortController()
     const trustedInitial = initial
       ? {
@@ -1830,11 +1860,15 @@ export class AgentRuntimeHost {
           watch
         )
         if (state && isAgentRuntimeTerminalTurnState(state)) {
+          if (this.terminalArtifactFileEffects.has(turnGovernanceKey(resolved.adapter.id, watch.threadId, watch.turnId))) {
+            throw new Error('Terminal artifact persistence is still pending; status-only recovery cannot release its boundary.')
+          }
           await this.releaseAcceptedTurnBoundaryFromStatus(resolved.adapter.id, watch, state)
           return
         }
-      } catch {
+      } catch (error) {
         if (signal.aborted || this.disposed) return
+        console.warn('Durable turn artifact capture failed; the accepted boundary remains pending.', error)
         resolved = undefined
       }
       await abortableSleep(retryMs, signal)
@@ -1948,25 +1982,40 @@ export class AgentRuntimeHost {
     terminalOccurredAt: string
   ): Promise<void> {
     const key = turnGovernanceKey(runtimeId, event.threadId, watch.turnId)
+    if (!Number.isSafeInteger(event.seq) || Number(event.seq) <= 0) {
+      throw new Error('Terminal artifact capture requires a positive durable terminal sequence.')
+    }
     await this.drainExecutorFilePatchReceipts(key)
     const existing = this.terminalArtifactBoundaries.get(key)
     if (existing) return existing
     const operation = (async () => {
       const capturedWatch = this.turnArtifactWatches.get(key) ?? watch
-      const terminalFileEffects = state === 'completed' && capturedWatch.workspaceRoot && capturedWatch.filePatchReceipts?.length
-        ? await captureDeclaredTurnFileEffects(
-            capturedWatch.workspaceRoot,
-            capturedWatch.filePatchReceipts,
-            terminalOccurredAt
-          )
-        : undefined
-      if (state === 'completed') {
-        await this.publishCompletedTurnArtifactIntent(
+      if (capturedWatch.filePatchReceipts?.some(receipt => receipt.executorSequence >= Number(event.seq))) {
+        throw new Error('Executor file patch receipt does not precede the terminal sequence.')
+      }
+      let capturedEffects = this.terminalArtifactFileEffects.get(key)
+      if (!capturedEffects) {
+        capturedEffects = capturedWatch.workspaceRoot && capturedWatch.filePatchReceipts?.length
+          ? captureDeclaredTurnFileEffects(
+              capturedWatch.workspaceRoot,
+              capturedWatch.filePatchReceipts,
+              terminalOccurredAt,
+              undefined,
+              undefined,
+              this.replayedTurnArtifactCaptures.has(key) ? 'replayed' : 'live'
+            )
+          : Promise.resolve(undefined)
+        this.terminalArtifactFileEffects.set(key, capturedEffects)
+      }
+      const terminalFileEffects = await capturedEffects
+      if (isAgentRuntimeTerminalTurnState(state)) {
+        await this.publishTerminalTurnArtifactIntent(
           runtimeId,
           event,
           this.turnArtifactWatches.get(key),
           terminalFileEffects
         )
+        this.terminalArtifactFileEffects.delete(key)
       }
     })()
     let guarded!: Promise<void>
@@ -2251,7 +2300,7 @@ export class AgentRuntimeHost {
     await adapter.interruptTurn(context, input)
   }
 
-  async steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
+  async steerTurn(input: AgentRuntimeTurnSteerInput, source?: 'native-composer'): Promise<void> {
     if (this.closing || this.disposed) throw new Error('Agent runtime Host is closing.')
     if (this.eventCaptureFailures().length) throw new Error('Agent event capture requires recovery before accepting another turn.')
     this.activeTurnOperations += 1
@@ -2292,7 +2341,7 @@ export class AgentRuntimeHost {
         )
       })
       return { value: undefined, turnId: input.turnId }
-      }, () => undefined)
+      }, () => undefined, source)
     } finally { this.endTurnOperation() }
   }
 
@@ -2315,17 +2364,20 @@ export class AgentRuntimeHost {
       clientDirectiveId?: string,
       beginDirectiveDelivery?: () => Promise<void>
     ) => Promise<{ value: T; turnId: string }>,
-    duplicate: (turnId: string) => T
+    duplicate: (turnId: string) => T,
+    source?: 'native-composer'
   ): Promise<T> {
     const service = this.options.services?.contextLedger
     const existingDirectiveId = input.clientDirectiveId?.trim()
     const clientDirectiveId = existingDirectiveId || `directive-${randomUUID()}`
     if (!service) {
-      if (this.requiredAdmissionSubscribers.size) this.admissionLedger()
+      if (this.requiredAdmissionSubscribers.size || (source === 'native-composer' && this.acceptedInputSubscribers.size)) this.admissionLedger()
       const directiveId = 'turnId' in input ? existingDirectiveId : clientDirectiveId
       return (await deliver(directiveId)).value
     }
+    const capturedInputPrincipal = this.captureCurrentPrincipalContext()
     const assertCurrent = await this.authorizeAdmission({ runtimeId: input.runtimeId, threadId: input.threadId, clientDirectiveId }, 'turnId' in input ? 'steer' : 'direct')
+    this.assertCapturedPrincipalContextCurrent(capturedInputPrincipal)
     const accepted = await service.acceptDirective({
       runtimeId: input.runtimeId,
       threadId: input.threadId,
@@ -2336,6 +2388,12 @@ export class AgentRuntimeHost {
       deliveryPayload: input,
       assertCurrent
     })
+    if (source === 'native-composer') {
+      const receipt = directiveReceipt(accepted)
+      await this.publishAcceptedInput({ runtimeId: input.runtimeId, threadId: input.threadId,
+        text: accepted.text, receipt, principalContext: capturedInputPrincipal,
+        ...(capturedInputPrincipal.principal ? { principal: capturedInputPrincipal.principal } : {}) })
+    }
     if (accepted.delivery === 'delivered') {
       const turnId = accepted.turnId?.trim()
       if (!turnId) throw new Error(`Delivered runtime directive ${clientDirectiveId} has no turn id.`)
@@ -2733,8 +2791,10 @@ export class AgentRuntimeHost {
     const policyTurn = child?.parentTurnId ?? context.turnId
     const override = policyTurn ? this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, policyThread, policyTurn)) : undefined
     const level = override ?? runtimePermissionLevel(resolved.context.settings, runtimeId)
-    const configured = runtimeId === 'codex' ? getCodexRuntimeSettings(resolved.context.settings).sandboxMode : runtimeId === 'claude' ? getClaudeRuntimeSettings(resolved.context.settings).sandboxMode : 'workspace-write'
-    return level === 'full-access' ? 'danger-full-access' : !override && configured === 'read-only' ? 'read-only' : 'workspace-write'
+    const mode = runtimePatchForPermissionLevel(level).sandboxMode
+    // Native Host execution has no external sandbox implementation; retain its
+    // existing workspace confinement without rewriting the provider setting.
+    return mode === 'external-sandbox' ? 'workspace-write' : mode
   }
 
   async requestCapabilityApproval(
@@ -2765,7 +2825,9 @@ export class AgentRuntimeHost {
     // turn: it must both tighten a Full Access global setting and honor a
     // one-shot Full Access request made under a stricter global setting.
     const turnPermissionLevel = this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, threadId, turnId))
-    if (!options.forceHuman && (turnPermissionLevel ?? livePermissionLevel) === 'full-access') return 'allowed'
+    const effectiveLevel = turnPermissionLevel ?? livePermissionLevel
+    if (effectiveLevel === 'read-only' && request.effect !== 'read') return 'denied'
+    if (!options.forceHuman && isFullAccessPermission(effectiveLevel)) return 'allowed'
     const pendingCount = [...this.capabilityApprovals.values()].filter((record) => Boolean(record.resolve)).length
     if (pendingCount >= CAPABILITY_APPROVAL_PENDING_LIMIT) return Promise.resolve('cancelled')
 
@@ -2873,7 +2935,7 @@ export class AgentRuntimeHost {
   ): Promise<void> {
     const child = record.childApproval
     if (!child || !record.resolve || this.disposed) return
-    let level: ReturnType<typeof permissionLevelFromRuntime>
+    let level: AgentPermissionLevel
     try {
       const parentKey = turnGovernanceKey(
         record.runtimeId,
@@ -2891,7 +2953,7 @@ export class AgentRuntimeHost {
       return
     }
     if (!level) return
-    const allow = level === 'full-access' || (level === 'assisted-approval' && request.effect === 'compute')
+    const allow = isFullAccessPermission(level) || (level === 'assisted-approval' && request.effect === 'compute')
     if (!allow || !record.resolve) return
     child.decisionSource = 'parent-policy'
     const event = record.requestedEvent
@@ -3001,7 +3063,7 @@ export class AgentRuntimeHost {
       const turnPermissionLevel = ownerThreadId && ownerTurnId
         ? this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, ownerThreadId, ownerTurnId))
         : undefined
-      return (turnPermissionLevel ?? runtimePermissionLevel(settings, runtimeId)) === 'full-access'
+      return isFullAccessPermission(turnPermissionLevel ?? runtimePermissionLevel(settings, runtimeId))
     }
     let settled = 0
     for (const record of this.capabilityApprovals.values()) {
@@ -3120,6 +3182,8 @@ export class AgentRuntimeHost {
     this.terminalTurnPrincipalOrder.splice(0)
     this.turnArtifactPatchReceiptDrains.clear()
     this.terminalArtifactBoundaries.clear()
+    this.terminalArtifactFileEffects.clear()
+    this.replayedTurnArtifactCaptures.clear()
     this.turnBoundaryBindings.clear()
     this.pendingTurnBoundaries.clear()
     this.turnGovernanceProfiles.clear()
@@ -3515,12 +3579,14 @@ export class AgentRuntimeHost {
         const service = this.options.services?.memory
         if (!service) return { handled: false }
         const scope = memoryScope(payload.scope)
-        const workspace = optionalString(payload.workspace) || (scope === 'project' ? context.settings.workspaceRoot : undefined)
+        if (payload.scope !== undefined && !scope) throw new Error('Invalid memory scope.')
+        const workspace = optionalString(payload.workspace) || (scope === 'project' || payload.research !== undefined ? context.settings.workspaceRoot : undefined)
         const project = optionalString(payload.project) || (scope === 'project' ? projectKeyForWorkspace(workspace) : undefined)
         return {
           handled: true,
           value: await service.create({
             text: requiredString(payload, 'text'),
+            ...(Object.hasOwn(payload, 'research') ? { research: payload.research ?? null } : {}),
             ...(scope ? { scope } : {}),
             ...(workspace ? { workspace } : {}),
             ...(project ? { project } : {}),
@@ -4851,7 +4917,16 @@ export class AgentRuntimeHost {
       const turnPermissionLevel = this.turnPermissionLevels.get(
         turnGovernanceKey(runtimeId, event.threadId, turnId)
       )
-      if ((turnPermissionLevel ?? runtimePermissionLevel(context.settings, runtimeId)) === 'full-access') {
+      const effectivePermission = turnPermissionLevel ?? runtimePermissionLevel(context.settings, runtimeId)
+      if (effectivePermission === 'read-only') {
+        if (!adapter.resolveApproval) return false
+        await adapter.resolveApproval(context, {
+          runtimeId, threadId: event.threadId, approvalId: event.approvalId,
+          decision: 'denied', message: 'Read-only permission does not allow native permission escalation.'
+        })
+        return true
+      }
+      if (isFullAccessPermission(effectivePermission)) {
         if (!adapter.resolveApproval) return false
         await adapter.resolveApproval(context, {
           runtimeId,
@@ -4931,12 +5006,12 @@ export class AgentRuntimeHost {
           childTurnId: turnId,
           parentThreadId: ownerThreadId,
           parentTurnId: ownerTurnId,
-          decisionSource: parentPermissionLevel === 'full-access' ? 'parent-policy' : 'user',
+          decisionSource: isFullAccessPermission(parentPermissionLevel) ? 'parent-policy' : 'user',
           ...(parentPermissionLevel ? { parentPermissionLevel } : {})
         }
       })
     }
-    if (childContext && parentPermissionLevel === 'full-access') {
+    if (childContext && isFullAccessPermission(parentPermissionLevel)) {
       void requestedPublication.then(() => this.resolveApproval({
         runtimeId,
         threadId: event.threadId,
@@ -4957,7 +5032,7 @@ export class AgentRuntimeHost {
 
   private async applyLiveNativeApprovalPolicy(record: NativeRemoteApprovalRecord): Promise<void> {
     if (record.approval.state !== 'pending') return
-    if (record.childApproval?.parentPermissionLevel === 'full-access') return
+    if (isFullAccessPermission(record.childApproval?.parentPermissionLevel)) return
     const runtimeId = optionalRuntimeId(record.approval.runtimeId)
     if (!runtimeId) return
     const { context } = await this.resolveRequiredRuntime(runtimeId, record.providerThreadId)
@@ -4968,7 +5043,7 @@ export class AgentRuntimeHost {
     const turnPermissionLevel = ownerThreadId && ownerTurnId
       ? this.turnPermissionLevels.get(turnGovernanceKey(runtimeId, ownerThreadId, ownerTurnId))
       : undefined
-    if ((turnPermissionLevel ?? runtimePermissionLevel(context.settings, runtimeId)) !== 'full-access') return
+    if (!isFullAccessPermission(turnPermissionLevel ?? runtimePermissionLevel(context.settings, runtimeId))) return
     await this.resolveApproval({
       runtimeId,
       threadId: record.providerThreadId,
@@ -5293,7 +5368,10 @@ export class AgentRuntimeHost {
     handle: AgentRuntimeTurnHandle
   ): Promise<void> {
     const store = this.options.workStore
-    if (!store) return
+    // A trusted answer intent requests a provider response, not an execution
+    // deliverable. Its terminal history remains authoritative; it must not
+    // create or advance an audited work objective or continuation.
+    if (!store || input.executionIntent?.mode === 'answer') return
     const threadId = (handle.threadId || input.threadId).trim()
     const turnId = handle.turnId.trim()
     if (!threadId || !turnId) return
@@ -5781,16 +5859,18 @@ export class AgentRuntimeHost {
       if (this.terminalLifecyclePublications.get(key) === publication) {
         this.terminalLifecyclePublications.delete(key)
       }
-      this.turnBoundaryBindings.delete(key)
-      this.turnGovernanceProfiles.delete(key)
-      this.turnWorkspaces.delete(key)
-      if (boundaryLeaseId) {
-        const pendingKey = threadTurnKey(runtimeId, event.threadId)
-        if (this.pendingTurnBoundaries.get(pendingKey)?.boundaryLeaseId === boundaryLeaseId) {
-          this.pendingTurnBoundaries.delete(pendingKey)
+      if (settled || !this.options.turnArtifacts) {
+        this.turnBoundaryBindings.delete(key)
+        this.turnGovernanceProfiles.delete(key)
+        this.turnWorkspaces.delete(key)
+        if (boundaryLeaseId) {
+          const pendingKey = threadTurnKey(runtimeId, event.threadId)
+          if (this.pendingTurnBoundaries.get(pendingKey)?.boundaryLeaseId === boundaryLeaseId) {
+            this.pendingTurnBoundaries.delete(pendingKey)
+          }
         }
+        this.markTurnPrincipalTerminal(key)
       }
-      if (settled) this.markTurnPrincipalTerminal(key)
     }
   }
 
@@ -6178,7 +6258,7 @@ export class AgentRuntimeHost {
     return ledger ? { ...page, turns: mergeDeliveredDirectiveItems(page.turns, ledger) } : page
   }
 
-  private async publishCompletedTurnArtifactIntent(
+  private async publishTerminalTurnArtifactIntent(
     runtimeId: AgentRuntimeId,
     event: AgentRuntimeEvent,
     watch?: Pick<
@@ -6204,7 +6284,7 @@ export class AgentRuntimeHost {
     if (!publisher) return
     if (
       event.kind !== 'turn_lifecycle' ||
-      normalizeAgentRuntimeTurnState(event.state) !== 'completed'
+      !isAgentRuntimeTerminalTurnState(normalizeAgentRuntimeTurnState(event.state))
     ) return
     const threadId = event.threadId.trim()
     const turnId = event.turnId?.trim()
@@ -6214,7 +6294,9 @@ export class AgentRuntimeHost {
     const workspaceLocator = watch.workspaceLocator ?? this.threadWorkspaceHosts.get(
       threadTurnKey(runtimeId, threadId)
     )?.locator
+    const state = normalizeAgentRuntimeTurnState(event.state)
     await publisher.publish(Object.freeze({
+      terminalState: state === 'completed' ? 'completed' : state === 'failed' ? 'failed' : 'cancelled',
       runtimeId,
       threadId,
       turnId,
@@ -6295,6 +6377,12 @@ export class AgentRuntimeHost {
   async materializeCompletedTurnArtifact(
     intent: TurnArtifactReplayIntent
   ): Promise<DomainTurnArtifactEvent> {
+    if (intent.terminalState && intent.terminalState !== 'completed' &&
+      (!intent.boundaryLeaseId || !intent.deliveryAttemptId || !intent.issuerEpoch ||
+        !Number.isSafeInteger(intent.deliveryAttemptOrdinal) || Number(intent.deliveryAttemptOrdinal) <= 0 ||
+        !intent.clientDirectiveId || !intent.principalContext || !intent.workspaceRoot)) {
+      throw new Error('Terminated turn artifact has no exact authorized boundary/workspace binding.')
+    }
     const runtimeId = optionalRuntimeId(intent.runtimeId)
     if (!runtimeId) throw new Error(`Unsupported Agent runtime: ${intent.runtimeId}`)
     const { adapter, context } = await this.resolveRequiredRuntime(
@@ -6329,6 +6417,9 @@ export class AgentRuntimeHost {
         ...(cursor ? { cursor } : {}),
         limit: 20
       })
+      if (page.runtimeId !== runtimeId || page.threadId.trim() !== intent.threadId) {
+        throw new Error('Turn artifact history page resolved to a different thread.')
+      }
       latestSeq = Math.max(latestSeq, page.latestSeq)
       turn = page.turns.find((candidate) => candidate.id === intent.turnId)
       if (turn) break
@@ -6342,7 +6433,9 @@ export class AgentRuntimeHost {
     const turnState = normalizeAgentRuntimeTurnState(
       turn?.status ?? (latestTurnMatches ? status.latestTurnStatus : undefined)
     )
-    if (turnState === 'failed' || turnState === 'cancelled' || turnState === 'aborted') {
+    const expectedState = intent.terminalState ?? 'completed'
+    const normalizedState = turnState === 'aborted' ? 'cancelled' : turnState
+    if (expectedState === 'completed' && (normalizedState === 'failed' || normalizedState === 'cancelled')) {
       throw new TurnArtifactTerminalStateError(
         runtimeId,
         intent.threadId,
@@ -6350,9 +6443,9 @@ export class AgentRuntimeHost {
         turnState === 'failed' ? 'failed' : 'cancelled'
       )
     }
-    if (turnState !== 'completed') {
+    if (normalizedState !== expectedState) {
       throw new Error(
-        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} is not durably completed yet.`
+        `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} is not durably ${expectedState} yet.`
       )
     }
     if (
@@ -6363,8 +6456,11 @@ export class AgentRuntimeHost {
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} has not reached sequence ${intent.sequence}.`
       )
     }
+    if (turn && turn.threadId !== intent.threadId) {
+      throw new Error('Turn artifact resolved to a different thread.')
+    }
     const artifacts = turn?.items ?? []
-    if (!artifacts.length) {
+    if (!artifacts.length && expectedState === 'completed') {
       throw new Error(
         `Completed Agent turn ${runtimeId}:${intent.threadId}:${intent.turnId} is not materialized yet.`
       )
@@ -6389,7 +6485,9 @@ export class AgentRuntimeHost {
     }
     return Object.freeze({
       contractVersion: 1,
-      kind: 'turn-completed',
+      ...(expectedState === 'completed'
+        ? { kind: 'turn-completed' as const }
+        : { kind: 'turn-terminated' as const, terminalState: expectedState }),
       runtimeId,
       threadId: intent.threadId,
       turnId: intent.turnId,
@@ -6687,13 +6785,13 @@ function durableTurnOccurredAt(event: AgentRuntimeEvent): string {
 }
 
 /** Never inherit another provider's permission policy for a new runtime. */
-function runtimePermissionLevel(settings: AppSettingsV1, runtimeId: AgentRuntimeId): ReturnType<typeof permissionLevelFromRuntime> {
+function runtimePermissionLevel(settings: AppSettingsV1, runtimeId: AgentRuntimeId): AgentPermissionLevel {
   const runtime = runtimeId === 'codex'
     ? getCodexRuntimeSettings(settings)
     : runtimeId === 'claude'
       ? getClaudeRuntimeSettings(settings)
       : undefined
-  return runtime ? permissionLevelFromRuntime(runtime.approvalPolicy, runtime.sandboxMode) : 'request-approval'
+  return runtime ? permissionLevelFromRuntime(runtime.approvalPolicy, runtime.sandboxMode) : runtimeId === 'dsh' ? getDshRuntimeSettings(settings).sandboxMode : 'request-approval'
 }
 
 function optionalRuntimeId(value: unknown): AgentRuntimeId | undefined {
@@ -6750,8 +6848,8 @@ function governanceProfile(value: unknown): AgentRuntimeGovernanceProfile | unde
 }
 
 function agentPermissionLevel(value: unknown): AgentPermissionLevel | undefined {
-  return value === 'request-approval' || value === 'assisted-approval' || value === 'full-access'
-    ? value
+  return typeof value === 'string' && (AGENT_PERMISSION_LEVELS as readonly string[]).includes(value)
+    ? value as AgentPermissionLevel
     : undefined
 }
 
@@ -7016,10 +7114,21 @@ function isWindowsAbsolutePath(value: string): boolean {
 }
 
 function renderSharedMemory(records: AgentRuntimeMemoryRecord[]): string {
-  const lines = records
+  const selected = records
     .filter((record) => !record.disabled && !record.deleted)
     .slice(0, 8)
+  let remainingResearchRecords = selected.filter((record) => record.research).length
+  let remainingResearchBytes = MAX_RESEARCH_MEMORY_CONTEXT_BYTES
+  const omittedBytes = Buffer.byteLength(RESEARCH_MEMORY_OMITTED_PROMPT, 'utf8') + 1
+  const lines = selected
     .map((record) => {
+      if (record.research) {
+        const reserved = (remainingResearchRecords - 1) * omittedBytes
+        const rendered = renderResearchMemory(record, remainingResearchBytes - reserved - 1)
+        remainingResearchBytes -= Buffer.byteLength(rendered, 'utf8') + 1
+        remainingResearchRecords--
+        return rendered
+      }
       const scope = record.scope === 'user'
         ? 'user'
         : record.scope === 'project'
@@ -7806,6 +7915,8 @@ function withWorkspaceHostOnStatus(
     id: status.id,
     runtimeId: status.runtimeId,
     latestSeq: status.latestSeq,
+    ...(status.workspace === undefined ? {} : { workspace: status.workspace }),
+    ...(status.archived === undefined ? {} : { archived: status.archived }),
     ...(status.status === undefined ? {} : { status: status.status }),
     ...(status.latestTurnId === undefined ? {} : { latestTurnId: status.latestTurnId }),
     ...(status.latestTurnStatus === undefined ? {} : { latestTurnStatus: status.latestTurnStatus }),

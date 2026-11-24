@@ -21,12 +21,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .extractor import ExtractionOutputError
+from .human_review import DEFAULT_POLICY, policy_with_random_audit
 from .llm import LLMCallError, ModelRouterLLM
 from .service import Engine, ReviewDecisionConflict, evidence_update_error
 
 SERVICE_ID = "evidence-dag-engine"
 _UI_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "ui", "index.html")
 API_TOKEN_ENV = "SCIFORGE_EVIDENCE_DAG_API_KEY"
+RANDOM_AUDIT_FRACTION_ENV = "EDAG_RANDOM_AUDIT_FRACTION"
 MAX_JSON_BODY_BYTES_ENV = "SCIFORGE_EVIDENCE_DAG_MAX_BODY_BYTES"
 DEFAULT_MAX_JSON_BODY_BYTES = 1_048_576
 _READ_CHUNK_BYTES = 64 * 1024
@@ -332,14 +334,28 @@ class Handler(BaseHTTPRequestHandler):
         if not tid:
             return self._send(404, err("NOT_FOUND", f"no route for {path}", operation="get", request_id=rid, started=started))
         try:
-            if action == "graph":
-                g = self.engine.require(tid)
-                return self._send(200, ok({
-                                           "summary": self.engine.graph_summary(tid),
-                                           "graph": self.engine.graph_view(tid),
-                                           "snapshot": self.engine.snapshot_view(tid)},
-                                          summary=f"{len(g.nodes)} nodes / {len(g.edges)} edges",
-                                          operation="graph", request_id=rid, started=started))
+            if action in ("graph", "human-reviews"):
+                selectors = parse_qs(parsed.query, keep_blank_values=True)
+                if any(len(selectors.get(key, [])) > 1 for key in ("snapshotDigest", "artifactVersionRef", "asOf")):
+                    raise ValueError("read selectors must be unambiguous")
+                digest = (selectors.get("snapshotDigest") or [None])[0]
+                raw_ref = (selectors.get("artifactVersionRef") or [None])[0]
+                if digest is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                    raise ValueError("invalid snapshotDigest")
+                if raw_ref is not None and len(raw_ref) > 16000:
+                    raise ValueError("artifactVersionRef exceeds read limit")
+                ref = json.loads(raw_ref) if raw_ref is not None else None
+                if raw_ref is not None and not isinstance(ref, dict):
+                    raise ValueError("artifactVersionRef must be an object")
+                if action == "human-reviews":
+                    if not digest:
+                        raise ValueError("human review reads require snapshotDigest")
+                    data = self.engine.human_review_read(
+                        tid, snapshot_digest=digest, artifact_ref=ref,
+                        as_of=(selectors.get("asOf") or [None])[0])
+                else:
+                    data = self.engine.graph_read(tid, snapshot_digest=digest, artifact_ref=ref)
+                return self._send(200, ok(data, operation=action, request_id=rid, started=started))
             if action == "staging":
                 g = self.engine.provisional_graph(tid)
                 if g is None:
@@ -434,6 +450,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, err("ACCESS_RESTRICTED", str(exc), operation=action or "get", request_id=rid, started=started))
         except KeyError as exc:
             return self._send(404, err("NOT_FOUND", f"not found: {exc}", operation=action or "get", request_id=rid, started=started))
+        except ValueError as exc:
+            return self._send(400, err("INVALID_ARGUMENT", str(exc), operation=action or "get", request_id=rid, started=started))
         except Exception as exc:  # noqa: BLE001
             return self._send(500, err("INTERNAL_ERROR", str(exc), operation=action or "get", request_id=rid, started=started))
         return self._send(404, err("NOT_FOUND", f"no route for {path}", operation="get", request_id=rid, started=started))
@@ -525,6 +543,7 @@ class Handler(BaseHTTPRequestHandler):
                     rationale=str(body.get("rationale") or ""),
                     idempotency_key=body.get("idempotencyKey"),
                     correlation_id=body.get("correlationId"),
+                    target_outcomes=body.get("targetOutcomes"),
                 )
                 return self._send(200, ok(
                     result,
@@ -586,7 +605,14 @@ def build_engine() -> Engine:
     llm = None
     if os.environ.get("EDAG_MODEL_ROUTER_BASE_URL"):
         llm = ModelRouterLLM()
-    return Engine(llm, storage_dir=storage)
+    policy = DEFAULT_POLICY
+    raw_fraction = os.environ.get(RANDOM_AUDIT_FRACTION_ENV, "").strip()
+    if raw_fraction:
+        try:
+            policy = policy_with_random_audit(float(raw_fraction))
+        except ValueError as exc:
+            raise ValueError(f"{RANDOM_AUDIT_FRACTION_ENV} must be a number in [0, 1): {exc}") from exc
+    return Engine(llm, storage_dir=storage, review_policy=policy)
 
 
 def serve(host: str = "127.0.0.1", port: int = 3897, engine: Optional[Engine] = None) -> None:

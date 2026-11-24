@@ -8,7 +8,8 @@ import type {
 import {
   TEST_IDS,
   humanNeededFixture,
-  projectRecordFixture
+  projectRecordFixture,
+  taskFixture
 } from '@sciforge/collaboration-contracts/testing'
 import {
   projectRequirementsDocumentSchema,
@@ -23,12 +24,76 @@ import {
 const createdAt = '2026-08-25T01:00:00.000Z'
 const updatedAt = '2026-08-25T01:05:00.000Z'
 
+test('project creation preserves the cloud rejection code and message', async () => {
+  const port = createProjectCoordinatorCloudWorkspacePort({
+    transport: { status: () => ({ state: 'ready', userId: TEST_IDS.userId, deviceId: TEST_IDS.deviceId }) } as AuthenticatedCloudTransport,
+    coordinatorCloudCommands: {
+      executeUser: async () => { throw new Error('Unexpected User command.') },
+      resumeUser: async () => null,
+      localAgentId: () => TEST_IDS.agentId,
+      resume: async () => null,
+      execute: async (command) => ({ protocolVersion: '1.0', type: 'rest.error', requestId: command.requestId,
+        error: { protocolVersion: '1.0', type: 'error', code: 'validation_error', category: 'validation',
+          httpStatus: 400, retryable: false, message: 'Project description must not be empty.' } }),
+      subscribe: () => () => undefined
+    }
+  })
+  await assert.rejects(port.createProject({
+    createIntentId: 'pct_CloudRejection0001', displayName: 'Name only', goal: '',
+    budget: { maxTasks: 8, maxTasksPerRound: 4, maxTaskRetries: 2, maxCoordinationRounds: 3 }
+  }), /validation_error: Project description must not be empty\./u)
+})
+
+test('workspace delivery reads overlap within a bound and preserve exact task identities', async () => {
+  const project = projectFixture(TEST_IDS.projectId, 'Many deliveries')
+  const tasks = Array.from({ length: 9 }, (_, index) => ({ ...taskFixture, taskId: `tsk_ParallelTask000${index}` }))
+  let active = 0
+  let maximum = 0
+  let completed = 0
+  const transport = {
+    status: () => ({ state: 'ready', baseUrl: 'https://cloud.run0.invalid/', userId: project.ownerUserId,
+      deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
+    execute: async ({ payload }: AuthenticatedCloudRequest) => {
+      if (payload.type === 'project.list') return response(200, { protocolVersion: '1.0', type: 'rest.project_page',
+        requestId: payload.requestId, limit: 250, projects: [project], observedAt: updatedAt })
+      if (payload.type === 'worker.availability.list') return emptyWorkerDirectoryResponse(payload.requestId as `req_${string}`)
+      if (payload.type === 'project.coordination.read') return response(200, { protocolVersion: '1.0', type: 'rest.project_coordination',
+        requestId: payload.requestId, project, observedAt: updatedAt, finalSummary: null,
+        pages: payload.collections.map(({ collection, limit }) => collection === 'tasks'
+          ? { collection, limit, items: tasks } : { collection, limit, items: [] }) })
+      if (payload.type === 'delivery.drive.list') return emptyDriveResponse(payload)
+      if (payload.type === 'delivery.task.get') {
+        active += 1
+        maximum = Math.max(maximum, active)
+        await new Promise(resolve => setTimeout(resolve, 5))
+        active -= 1
+        completed += 1
+        return response(200, { protocolVersion: '1.0', type: 'rest.task.delivery', requestId: payload.requestId,
+          facts: { taskId: payload.taskId, candidate: null, manifest: null, receipt: null, result: null, revisionRequest: null } })
+      }
+      throw new Error(`Unexpected ${payload.type}`)
+    }
+  } as AuthenticatedCloudTransport
+  const workspace = await createProjectCoordinatorCloudWorkspacePort({ transport }).readWorkspace({ projectId: project.projectId })
+  assert.equal(completed, tasks.length)
+  assert.ok(maximum > 1 && maximum <= 4)
+  assert.deepEqual(workspace.projects[0]!.tasks.map(({ task }) => task.taskId).sort(), tasks.map(task => task.taskId).sort())
+})
+
 test('workspace cancellation reaches the canonical Cloud request and prevents further reads', async () => {
   const controller = new AbortController()
   let requests = 0
   let dispatched!: () => void
   const started = new Promise<void>((resolve) => { dispatched = resolve })
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('unused') },
     readObject: async () => { throw new Error('unused') },
     status: () => ({ state: 'ready', baseUrl: 'https://cloud.run0.invalid/',
@@ -93,6 +158,14 @@ test('current Device Agent Project create returns a workspace focused on the exa
     })
   ]
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -205,6 +278,14 @@ test('Agent-authored Project create rejects a Cloud response that changes the cr
     status: 'draft' as const
   }
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -295,6 +376,14 @@ test('invited User workspace reads only the bounded invitation fact collections'
     })
   ]
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -347,6 +436,14 @@ test('workspace reads every listed Project\'s own Membership so an unselected in
   }
   const requests: AuthenticatedCloudRequest[] = []
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -436,7 +533,7 @@ test('workspace reads every listed Project\'s own Membership so an unselected in
       .map(({ payload }) => payload.type === 'project.coordination.read'
         ? payload.collections.map(({ collection }) => collection)
         : []),
-    [['user_label_facts', 'memberships', 'plans', 'requirements_documents']]
+    [['memberships', 'user_label_facts']]
   )
   assert.equal(requests.filter(({ payload }) => payload.type === 'delivery.drive.list').length, 1)
 })
@@ -544,6 +641,14 @@ test('invited User workspace maps the requirements draft summary beside confirme
     })
   ]
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -630,6 +735,14 @@ test('Cloud-global online Worker Users stay visible outside current Project memb
     })
   ]
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -721,6 +834,14 @@ test('Project read selects the one non-superseded Plan instead of relying on pag
     })
   ]
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -811,6 +932,14 @@ test('Project read projects pending member-targeted HumanNeeded and accepted Coo
     })
   ]
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -862,6 +991,8 @@ function projectFixture(projectId: string, displayName: string) {
     createdAt,
     updatedAt,
     type: 'project' as const,
+    executionMode: 'manual' as const,
+    dispatchAuthorization: null,
     projectId,
     ownerUserId: 'usr_Owner0000001',
     displayName,
@@ -1016,6 +1147,14 @@ for (const reasonCode of ['authority_unverified', 'authority_rejected'] as const
     const transport: AuthenticatedCloudTransport = {
       status: () => ({ state: 'unavailable', reasonCode, reason: 'Device check status' }),
       execute: async () => { throw new Error('No read while authority is unavailable') },
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('No upload') },
       readObject: async () => { throw new Error('No file read') }
     }
@@ -1024,3 +1163,58 @@ for (const reasonCode of ['authority_unverified', 'authority_rejected'] as const
     assert.deepEqual(workspace.projects, [])
   })
 }
+
+test('leader proposal projection binds the requirements entity revision, not its document revision', async () => {
+  const project = { ...projectFixture('prj_LeaderRevision01', 'Leader revision'), executionMode: 'ai_leader' as const }
+  const requirements = projectRequirementsDocumentSchema.parse({
+    schemaVersion: 1, revision: 9, documentRevision: 4, createdAt, updatedAt,
+    type: 'project_requirements_document', requirementsDocumentId: 'rqd_LeaderRevision00000001', projectId: project.projectId,
+    state: 'confirmed', goalsDeliverables: 'Review evidence', inputsBoundaries: 'Shared inputs', inputReferences: [],
+    workModules: [{ planItemId: 'item_review', title: 'Review', objective: 'Review evidence', dependencyPlanItemIds: [] }],
+    acceptanceCriteria: [{ target: '$project', criteria: 'Evidence reviewed', evidenceMethod: 'Owner review' }],
+    contentDigest: 'a'.repeat(64), confirmedByUserId: project.ownerUserId, confirmedAt: updatedAt, supersededAt: null
+  })
+  for (const proposalRevision of [9, 4, 8]) {
+    const proposal = {
+      key: 'b'.repeat(64), title: 'Review the evidence', rationale: 'Inputs are ready', blockers: [], decisions: [], assignments: [],
+      projectId: project.projectId, projectRevision: project.revision, coordinatorAuthorityEpoch: project.coordinatorAuthorityEpoch,
+      requirementsDocumentId: requirements.requirementsDocumentId, requirementsRevision: proposalRevision,
+      requirementsContentDigest: requirements.contentDigest, createdAt, runtimeId: 'codex', threadId: 'leader-session'
+    }
+    const responses = [
+      response(200, { protocolVersion: '1.0', type: 'rest.project_page', requestId: 'req_LeaderProjects01',
+        limit: 250, projects: [project], observedAt: updatedAt }),
+      emptyWorkerDirectoryResponse('req_LeaderWorkers01'),
+      response(200, { protocolVersion: '1.0', type: 'rest.project_coordination', requestId: 'req_LeaderProject01', project,
+        observedAt: updatedAt, pages: [
+          { collection: 'user_label_facts', limit: 250, items: [] },
+          { collection: 'memberships', limit: 250, items: [] },
+          { collection: 'requirements_documents', limit: 250, items: [requirements] }
+        ], finalSummary: null })
+    ]
+    const transport: AuthenticatedCloudTransport = {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      stageObject: async () => { throw new Error('Unexpected staging.') }, readObject: async () => { throw new Error('Unexpected reading.') },
+      status: () => ({ state: 'ready', baseUrl: 'https://cloud.run0.invalid/', userId: project.ownerUserId,
+        deviceId: 'dev_LeaderDevice01', deviceRevision: 1 }),
+      execute: async request => {
+        if (request.payload.type === 'delivery.drive.list') return emptyDriveResponse(request.payload)
+        const next = responses.shift()
+        if (!next) throw new Error('Unexpected Cloud request.')
+        return next
+      }
+    }
+    const workspace = await createProjectCoordinatorCloudWorkspacePort({ transport, readLeaderProposal: async () => proposal })
+      .readWorkspace({ projectId: project.projectId })
+    assert.equal(workspace.projects[0]?.confirmedRequirements?.revision, 9)
+    assert.equal(workspace.projects[0]?.confirmedRequirements?.documentRevision, 4)
+    assert.deepEqual(workspace.projects[0]?.leaderProposal, proposalRevision === 9 ? proposal : null)
+  }
+})

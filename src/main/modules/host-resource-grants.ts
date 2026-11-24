@@ -37,7 +37,7 @@ export type HostResourceGrantInvocation = Readonly<{
   approval?: CapabilityApprovalMode
   approved?: boolean
   scope?: CapabilityScope
-  autonomousWrite?: 'resource-authorized'
+  autonomousWrite?: 'resource-authorized' | 'human-decision-request'
   /** Broker-resolved input resource; never copied from a package request. */
   authorizedResource?: Readonly<{
     resourceRef: string
@@ -60,7 +60,7 @@ type HostResourceGrantInvocationSnapshot = Readonly<{
   approval?: CapabilityApprovalMode
   approved?: boolean
   scope?: CapabilityScope
-  autonomousWrite?: 'resource-authorized'
+  autonomousWrite?: 'resource-authorized' | 'human-decision-request'
   authorizedResource?: Readonly<{
     resourceRef: string
     resourceKind: string

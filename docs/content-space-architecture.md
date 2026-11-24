@@ -1,3 +1,5 @@
+> **Historical architecture — public migration (2026-11-24):** Content Space and its mock provider runtime have been retired after the independent SiYuan client replacement was reviewed. Their original public license texts remain archived. Cloud Notes now owns its `siyuan.*` capabilities and native editor through the canonical Broker/Identity client transport. This document describes the former architecture, not current installed composition or a claim of completed GUI/cloud acceptance. Private historical runbooks and ledgers remain excluded.
+
 > **Status (2026-10-29):** the OpenContent Connector, the OpenContent Content Space Provider and the
 > Content Space admin/extended/native-document operations that only they served were retired. The
 > provider-neutral contracts, Host service and renderer in this document remain. See

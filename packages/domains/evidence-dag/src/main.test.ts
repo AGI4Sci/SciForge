@@ -20,6 +20,7 @@ import type { EvidenceDagRuntimePort } from './main/runtime.js'
 
 const now = '2026-07-26T06:00:00.000Z'
 const unusedRecords: EvidenceDagRuntimePort['records'] = {
+  submitHumanReview: async () => { throw new Error('Unused in lifecycle fixture') },
   view: async () => { throw new Error('Unused in lifecycle fixture') },
   edit: async () => { throw new Error('Unused in lifecycle fixture') },
   review: async () => { throw new Error('Unused in lifecycle fixture') },
@@ -60,6 +61,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   let hostUserDataDirReads = 0
   const createRuntime = (instance: number): EvidenceDagRuntimePort => ({
     rerunSpec: async () => { throw new Error('Not exercised') },
+    submitClaims: async () => { throw new Error('Not exercised') },
     rerunCompare: async () => { throw new Error('Not exercised') },
     records: unusedRecords,
     activate: async () => {
@@ -141,7 +143,11 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   const capabilities = factory.createDefinitions()
   assert.equal(hostUserDataDirReads, 0)
   assert.deepEqual(runtimeUserDataDirs, [])
-  assert.deepEqual(capabilities.map(({ id }) => id), [...Object.values(RESEARCH_RECORD_ACTIONS), ...Object.values(EVIDENCE_DAG_CAPABILITY_IDS)])
+  assert.deepEqual(capabilities.map(({ id }) => id), ['evidence-dag.record.human-review', ...Object.values(RESEARCH_RECORD_ACTIONS), ...Object.values(EVIDENCE_DAG_CAPABILITY_IDS)])
+  const humanReview = capabilities.find(({ id }) => id === 'evidence-dag.record.human-review')!
+  assert.deepEqual(humanReview.audiences, ['ui'])
+  assert.equal(humanReview.approval, 'confirmation')
+  assert.deepEqual(humanReview.concurrency, { revision: 'none', idempotency: 'required' })
   const updateCapability = capabilities.find(
     ({ id }) => id === EVIDENCE_DAG_CAPABILITY_IDS.update
   )
@@ -163,7 +169,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
   assert.ok(capabilities.every((definition) => definition.tags.includes('evidence')))
   assert.ok(capabilities.every((definition) => definition.scope === 'workspace'))
   await assert.rejects(
-    () => capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } }),
+    () => capabilities.find(({ id }) => id === RESEARCH_RECORD_ACTIONS.view)!.handler({}, { caller: { workspaceId: '/workspace' } }),
     /Evidence DAG runtime is not active/
   )
   assert.deepEqual(runtimeUserDataDirs, [])
@@ -217,7 +223,7 @@ test('lazily activates one runtime shared by every Evidence contribution', async
     '1:deactivate'
   ])
   await assert.rejects(
-    () => capabilities[0]!.handler({}, { caller: { workspaceId: '/workspace' } }),
+    () => capabilities.find(({ id }) => id === RESEARCH_RECORD_ACTIONS.view)!.handler({}, { caller: { workspaceId: '/workspace' } }),
     /Evidence DAG runtime is not active/
   )
 
@@ -254,6 +260,7 @@ test('disposal during activation stays fail-closed and deactivates exactly once'
   })
   const runtime: EvidenceDagRuntimePort = {
     rerunSpec: async () => { throw new Error('Not exercised') },
+    submitClaims: async () => { throw new Error('Not exercised') },
     rerunCompare: async () => { throw new Error('Not exercised') },
     records: unusedRecords,
     activate: () => {
@@ -336,6 +343,7 @@ test('keeps the dedicated system snapshot path read-only and reports no global c
   let auditQueryInput: unknown
   const runtime: EvidenceDagRuntimePort = {
     rerunSpec: async () => { throw new Error('Not exercised') },
+    submitClaims: async () => { throw new Error('Not exercised') },
     rerunCompare: async () => { throw new Error('Not exercised') },
     records: unusedRecords,
     activate: async () => () => undefined,

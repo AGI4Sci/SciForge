@@ -193,7 +193,7 @@ function PaneSurface({
               value={pane.paneId}
               aria-label={labels.switchPane}
               title={labels.switchPane}
-              className="h-7 w-20 max-w-[35%] shrink-0 truncate rounded-md border border-ds-border bg-ds-card px-1 text-[11.5px] font-medium text-ds-ink outline-none transition hover:bg-ds-hover focus:border-accent/40"
+              className="h-7 w-20 max-w-[35%] shrink-0 truncate rounded-md border border-ds-border bg-ds-card px-1 text-ds-xs font-medium text-ds-ink outline-none transition hover:bg-ds-hover focus:border-accent/40"
               data-right-panel-pane-switcher
               data-right-panel-pane-switcher-for={pane.paneId}
               onChange={(event) => {
@@ -218,7 +218,7 @@ function PaneSurface({
             value={pane.mode}
             aria-label={labels.binding}
             aria-controls={contentId}
-            className="h-7 min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1.5 text-[11.5px] font-medium text-ds-muted outline-none transition hover:border-ds-border hover:bg-ds-hover hover:text-ds-ink focus:border-accent/40 focus:text-ds-ink"
+            className="h-7 min-w-0 flex-1 truncate rounded-md border border-transparent bg-transparent px-1.5 text-ds-xs font-medium text-ds-muted outline-none transition hover:border-ds-border hover:bg-ds-hover hover:text-ds-ink focus:border-accent/40 focus:text-ds-ink"
             data-right-panel-binding-selector
             onChange={(event) => {
               onRebindPane(

@@ -1,3 +1,4 @@
+import { DELIVERY_VALIDATION_ACTION } from './delivery-validation-contract.js'
 import { projectRequirementsDocumentSchema } from '@sciforge/collaboration-contracts'
 import type {
   AuthenticatedCloudRequest,
@@ -111,6 +112,8 @@ test('current capability policies keep human-only actions and confirmed Agent wr
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectActivationAcknowledge,
     PROJECT_COORDINATOR_CAPABILITY_IDS.sessionOwnershipRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.adoptionDecide,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededDefer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.resultPublish,
     PROJECT_COORDINATOR_CAPABILITY_IDS.projectComplete]) {
     assert.deepEqual(definitions.find((definition) => definition.id === id)?.audiences, ['ui'])
@@ -118,17 +121,19 @@ test('current capability policies keep human-only actions and confirmed Agent wr
   for (const definition of definitions.filter(({ audiences, effect }) => (
     audiences.includes('agent') && ['external-write', 'destructive'].includes(effect)
   ))) {
-    assert.equal(definition.approval, 'confirmation', definition.id)
+    assert.equal(definition.approval, definition.id === PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate ? 'none' : 'confirmation', definition.id)
     assert.equal(definition.concurrency.idempotency, 'required', definition.id)
   }
-  assert.equal(definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate)?.version, '2.0.0')
+  assert.equal(definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate)?.version, '3.0.0')
   assert.equal(definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectDelete)?.effect, 'destructive')
   assert.equal(definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.sessionProjectionRead)?.version, '3.0.0')
   for (const id of [PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd, PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove, PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer]) {
+    PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove, PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer]) {
     assert.equal(definitions.find((definition) => definition.id === id)?.version, '2.0.0', id)
+  }
+  for (const id of [PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate, PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer]) {
+    assert.equal(definitions.find(definition => definition.id === id)?.version, '3.0.0')
   }
   const create = definitions.find(({ id }) => id === PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate)!
   assert.deepEqual(await create.handler({
@@ -189,6 +194,14 @@ test('production main assembly wires every requirements capability to its real p
     body
   })
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -532,7 +545,7 @@ test('Project delete requires exact Coordinator Session authority and derives a 
   assert.equal(calls.length, 2)
 })
 
-test('main requirements draft save starts Coordinator completion for the saved revision', async () => {
+test('main requirements draft save never starts Coordinator completion', async () => {
   const at = '2026-08-25T01:05:00.000Z'
   const projectId = 'prj_ProjectCreated01'
   const saved = projectRequirementsDocumentSchema.parse({
@@ -556,9 +569,6 @@ test('main requirements draft save starts Coordinator completion for the saved r
     supersededAt: null
   })
   const completions: Array<{ projectId: string; expectedRequirementsRevision?: number }> = []
-  let finish!: () => void
-  let completed = false
-  const pending = new Promise<void>((resolve) => { finish = resolve })
   const factory = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
     defineCapability: (input) => input,
     ports: {
@@ -575,8 +585,6 @@ test('main requirements draft save starts Coordinator completion for the saved r
         saveDraft: async () => saved,
         complete: async (input) => {
           completions.push(input)
-          await pending
-          completed = true
           return saved
         },
         confirm: async () => { throw new Error('unused') }
@@ -600,20 +608,24 @@ test('main requirements draft save starts Coordinator completion for the saved r
     expectedRequirementsRevision: 1,
     goalsDeliverables: saved.goalsDeliverables,
     inputsBoundaries: saved.inputsBoundaries,
-    inputReferences: [],
-    workModules: [],
-    acceptanceCriteria: []
+    inputReferences: []
   }, uiInvocationContext('invocation-requirements-save-auto'))
   await Promise.resolve()
 
   assert.deepEqual(response, { output: saved })
-  assert.equal(completed, false, 'save returns while background completion remains pending')
-  finish()
-  await Promise.resolve()
-  assert.deepEqual(completions, [{
-    projectId,
-    expectedRequirementsRevision: saved.revision
-  }])
+  assert.deepEqual(completions, [])
+  const explicitModules = [{ planItemId: 'item_ManualEdit0001', title: 'Data table', objective: 'Produce data.csv using UTF-8.', dependencyPlanItemIds: [] }]
+  await save.handler({ projectId, expectedProjectRevision: 5, expectedRequirementsRevision: saved.revision,
+    goalsDeliverables: saved.goalsDeliverables, inputsBoundaries: saved.inputsBoundaries,
+    workModules: explicitModules, acceptanceCriteria: [{ target: 'item_ManualEdit0001', criteria: 'UTF-8 CSV', evidenceMethod: 'Read file encoding' }]
+  }, uiInvocationContext('invocation-requirements-save-manual'))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(completions.length, 0, 'saving explicitly edited modules must never start an AI overwrite')
+  await save.handler({ projectId, expectedProjectRevision: 5, expectedRequirementsRevision: saved.revision,
+    acceptanceCriteria: []
+  }, uiInvocationContext('invocation-requirements-clear-criteria'))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(completions.length, 0, 'an explicit empty acceptance section is also a human edit')
 })
 
 test('requirements completion capability returns only a bounded package-owned failure reason', async () => {
@@ -671,6 +683,7 @@ function coordinatorActionPort() {
     transferCoordinator: async () => { throw new Error('unused') },
     createHumanNeeded: async () => { throw new Error('unused') },
     answerHumanNeeded: async () => { throw new Error('unused') },
+    deferHumanNeeded: async () => { throw new Error('unused') },
     reviewResult: async () => { throw new Error('unused') },
     completeProject: async () => { throw new Error('unused') },
     handleInbox: async () => { throw new Error('unused') }
@@ -721,6 +734,7 @@ function projectCreatePorts(
 
 function createdProjectResult() {
   return {
+    initializationState: 'ready' as const,
     createIntentId: 'pct_MainCreateIntent001',
     createdProjectId: 'prj_ProjectCreated01',
     workspace: {
@@ -758,6 +772,8 @@ function createdProjectView() {
     project: {
       schemaVersion: 1 as const,
       type: 'project' as const,
+      executionMode: 'manual' as const,
+      dispatchAuthorization: null,
       projectId: 'prj_ProjectCreated01',
       ownerUserId: 'usr_Owner0000001',
       displayName: 'Meeting',
@@ -865,6 +881,7 @@ test('navigation ownership capability is UI-only and never enters Cloud authoriz
 
 function coordinatorDeliveryPort() {
   return {
+    validate: async () => { throw new Error('unused') },
     readObject: async () => { throw new Error('unused') },
     read: async () => { throw new Error('unused') },
     listDrive: async () => { throw new Error('unused') },
@@ -885,6 +902,14 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   let userDataDirCalls = 0
   const acquired: Array<{ serviceId: string; contractVersion: string }> = []
   const transport: AuthenticatedCloudTransport = {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -964,6 +989,14 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
   const factory = entry.contributions[0]!.value as
     ProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>
   assert.deepEqual(factory.createDefinitions().map(({ id }) => id), [
+    PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalRetry,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalDefer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectRename,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectExecutionModeSet,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDispatchAuthorize,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentUpdate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentDecide,
+    DELIVERY_VALIDATION_ACTION,
     DELIVERY_CONTENT_ACTIONS.open,
     DELIVERY_CONTENT_ACTIONS.describe,
     DELIVERY_CONTENT_ACTIONS.readRange,
@@ -985,6 +1018,7 @@ test('main entry acquires Identity reads/signing and Collaboration Agent command
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededDefer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
 
@@ -1047,14 +1081,12 @@ test('Agent reads target an explicit Project independently of ordinary Session b
     PROJECT_COORDINATOR_CAPABILITY_IDS.requirementsComplete,
     PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferWithdraw,
     PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferExtend,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign,
 
 
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAdd,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipAccept,
     PROJECT_COORDINATOR_CAPABILITY_IDS.membershipRemove,
     PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
-    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
     PROJECT_COORDINATOR_CAPABILITY_IDS.coordinatorTransfer,
 
 
@@ -1077,4 +1109,19 @@ test('Agent reads target an explicit Project independently of ordinary Session b
   assert.equal((workspaceResult.output as { focusedProjectId?: string }).focusedProjectId,
     'prj_ProjectCreated01')
   assert.equal(workspaceReads, 1)
+})
+
+test('human project decisions cannot be invoked by an Agent even with a confirmed capability context', async () => {
+  const definitions = createProjectCoordinatorCapabilityFactory<ProjectCoordinatorCapabilityOptions>({
+    defineCapability: input => input,
+    ports: {} as never, sessions: {} as never, projectCreation: {} as never
+  }).createDefinitions()
+  for (const id of [DELIVERY_VALIDATION_ACTION, PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalRetry, PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalDefer, PROJECT_COORDINATOR_CAPABILITY_IDS.projectRename, PROJECT_COORDINATOR_CAPABILITY_IDS.projectExecutionModeSet,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededDefer,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.projectDispatchAuthorize, PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentUpdate,
+    PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentDecide, PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign]) {
+    const definition = definitions.find(item => item.id === id)!
+    await assert.rejects(definition.handler({}, { caller: { audience: 'agent' } } as never), /human|User/)
+  }
+  assert.equal(definitions.find(item => item.id === DELIVERY_VALIDATION_ACTION)!.concurrency.idempotency, 'required')
 })

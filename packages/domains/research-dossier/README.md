@@ -42,6 +42,34 @@ Rich Artifact history is requested only through the additive Artifact Versions
 add fields to the existing V1 list, export receipt, verification, issue, or
 reference wires, preserving strict clients built from `origin/gui`.
 
+## Register existing workspace materials
+
+In Research → 档案与版本, expand **Register local material / 登记本机材料**.
+Enter an exact workspace-relative file path, choose a declared material role,
+and optionally add a title and description. The UI calls the public
+`artifact-versions.observe` capability with snapshot retention. The Artifact
+Versions owner reads the real workspace file, enforces containment, hashes the
+bytes, and returns the committed immutable version; the renderer never supplies
+file bytes, a claimed digest, execution receipts, or scientific dependencies.
+
+Registration creates a `research-material` entry in the existing artifact history.
+The receipt shows the exact Version ID, SHA-256, byte count, and saved-snapshot
+availability. **Open exact version** navigates to that returned
+version and digest. The existing verified-preview action materializes CAS bytes
+and preserves a safe suffix from the observed filename so installed preview
+owners can select the file format. Unsupported formats remain an honest viewer
+limitation. No mutable workspace file is substituted for the saved version.
+
+The selected version also retains the declared role, description and observed
+source path. Session grouping uses explicit registration session/runtime metadata;
+this associates the UI registration with a session without claiming a historical
+execution. Registration preserves current bytes only. It does not establish a
+scientific source, analysis execution, causal lineage, review approval, or an
+Evidence DAG. Those relationships remain unknown until their canonical owners
+record genuine supporting evidence. The form creates no inferred scientific
+edges or historical producer receipts. Export remains the existing exact-version
+Bundle V2 action; this entry does not add a second bundle implementation.
+
 ## Researcher-facing presentation
 
 Current-session records precede a collapsed list of other sessions and unknown
@@ -68,7 +96,7 @@ claimed evidence, failed reproduction, and blocking provenance limitations stay
 visible and fail closed. The loader never substitutes current or latest data.
 
 The ordinary chat is only an exact navigation surface. A committed turn may
-render one neutral “打开科研档案” button bound to the Version ID and expected
+render one neutral “打开科研证据链” button bound to the Version ID and expected
 digest; the expanded checkpoint, output cards, version badges, warnings, raw
 identifiers, and recording status strip do not appear in the transcript or
 composer.

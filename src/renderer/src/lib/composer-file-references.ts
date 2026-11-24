@@ -7,6 +7,8 @@ export type ComposerFileReference = {
   workspaceRoot?: string
   kind?: AgentRuntimeWorkspaceReferenceKind
   mimeType?: string
+  /** Byte size when known, used by the composer attachment tray. */
+  size?: number
 }
 
 export type ComposerFileMention = {

@@ -14,14 +14,28 @@ describe('independent DSH runtime settings', () => {
     } } as unknown as AppSettingsV1)
     expect(settings.activeAgentRuntime).toBe('dsh')
     expect(settings.agents.dsh).toEqual({
+      sandboxMode: 'workspace-write',
       command: '/opt/dsh',
-      executablePath: '',
       selectedModel: '',
       reasoningEffort: '',
       commandExecution: false
     })
     expect(settings.agents.codex?.command).toBe('/opt/codex')
     expect(settings.agents.claude?.command).toBe('/opt/claude')
+  })
+  it('keeps only command as the executable source and restores discovery when cleared', () => {
+    const settings = normalizeAppSettings({ agents: { dsh: {
+      command: ' /opt/canonical-dsh ', executablePath: '/opt/obsolete-dsh',
+      selectedModel: 'v4-pro', reasoningEffort: 'high', commandExecution: true
+    } } } as unknown as AppSettingsV1)
+    expect(settings.agents.dsh).toEqual({
+      sandboxMode: 'workspace-write',
+      command: '/opt/canonical-dsh', selectedModel: 'v4-pro', reasoningEffort: 'high', commandExecution: true
+    })
+    expect(applyDshRuntimePatch(settings, { command: ' ' }).agents.dsh).toEqual({
+      sandboxMode: 'workspace-write',
+      command: 'dsh', selectedModel: 'v4-pro', reasoningEffort: 'high', commandExecution: true
+    })
   })
   it('keeps the reviewed shell switch fail-closed and only accepts an explicit opt-in', () => {
     // Fail-closed by default: absent, malformed or inherited values never enable.
@@ -35,8 +49,8 @@ describe('independent DSH runtime settings', () => {
     expect(isDshCommandExecutionEnabled({ agents: { dsh: { commandExecution: true } } })).toBe(true)
     const normalized = normalizeAppSettings({ agents: { dsh: { commandExecution: true, command: ' /opt/dsh ' } } } as unknown as AppSettingsV1)
     expect(normalized.agents.dsh).toEqual({
+      sandboxMode: 'workspace-write',
       command: '/opt/dsh',
-      executablePath: '',
       selectedModel: '',
       reasoningEffort: '',
       commandExecution: true

@@ -410,3 +410,30 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   }
   assert.fail('Condition was not reached before timeout.')
 }
+
+test('disable and re-enable while preparing cannot publish or acknowledge the old lifecycle page', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'evidence-lifecycle-generation-')))
+  const alpha = artifactRef('alpha', 'a')
+  const client = createEvidenceArtifactVersionClient(() => ({ commit: async () => { throw new Error('No commit') } }), lifecycleReadFactory)
+  const threads = [thread('alpha-thread', alpha)]
+  let ready!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => { ready = resolve })
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  let wait = true, writes = 0
+  const consumer = new EvidenceArtifactVersionLifecycleConsumer({ storagePath: join(root, 'state.json'),
+    eventListPort: pagedEvents([lifecycleEvent(1, alpha)], []), discoverThreads: async () => threads,
+    prepareThread: async value => { if (wait) { ready(); await waiting }; return prepareKnownThread(client, threads)(value) },
+    identities: client.identities, withLifecycle: client.withLifecycle,
+    append: async input => { writes++; return appendRecorded([], input) }, pollIntervalMs: 60000 })
+  await consumer.start(false)
+  const old = consumer.pollNow(true, threads[0])
+  await entered
+  await consumer.setEnabled(false); await consumer.setEnabled(true)
+  release()
+  await assert.rejects(old, /interrupted/)
+  assert.equal(writes, 0)
+  wait = false
+  await consumer.pollNow(true, threads[0])
+  await consumer.close()
+  assert.equal(writes, 1)
+})

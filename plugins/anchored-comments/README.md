@@ -7,7 +7,7 @@ built-in domain or host-private implementation.
 
 ## Artifact and public contract
 
-- Identity: `@sciforge/plugin-anchored-comments`.
+- Identity: `@sciforge/plugin-anchored-comments`; current package version: `0.2.3`.
 - Manifest: `sciforge.dsh.json`; Cordis patch: `cordis.patch.yml`.
 - Runtime entry: independent single-file ESM `dist/main.js`. The approved
   `@deepseek-ai/*` runtime packages remain external; business dependencies are
@@ -41,9 +41,21 @@ full-access approval.
 
 ## State and evidence
 
+Threads are versioned documents (`ANCHORED_COMMENT_THREAD_SCHEMA_VERSION`, now 2).
+Version 2 adds an optional `parentThreadId` so a conversation can branch from an
+existing thread; the parent must exist, must not be the thread itself and must
+not form a cycle, and a thread with children cannot be deleted. This version is
+independent of the feedback wire protocol version
+(`ANCHORED_COMMENT_SCHEMA_VERSION`, still 1). Version-1 threads migrate by
+gaining the current version number with no parent and no other field rewritten.
+
 A research anchor's optional `contentDigest` is an opaque preview snapshot or
 content revision identifier; its contract does not promise raw-file SHA-256.
-Preserve it with the canonical target on updates. Exact quote and line ranges
+Preserve it with the canonical target on updates. A code selection's `code:<digest>`
+resource ID identifies the immutable selected range. Screenshot capture selects the
+source through its saved `codeAnchor.filePath`, then requires the Host's registered
+target path and workspace provenance to match. The resource ID and code anchor
+remain unchanged when screenshot evidence is attached. Exact quote and line ranges
 allow independent relocation checks; submitted `anchorResolution` is not a
 claim that the plugin ran a document resolver.
 

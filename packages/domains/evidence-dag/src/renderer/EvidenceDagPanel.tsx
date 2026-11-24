@@ -35,10 +35,11 @@ import { handleEvidenceDagPreviewMessage } from './evidence-dag-preview-bridge'
 
 export type EvidenceDagPanelProps = Readonly<{
   active: boolean
+  embedded?: boolean
   className?: string
   onCollapse: () => void
   session: DomainWorkbenchRightPanelSession
-  surfaceId: string
+  surfaceId?: string
   activation?: DomainWorkbenchRightPanelActivation
   client: EvidenceDagCapabilityClient
   workspacePreview?: DomainRendererWorkspacePreviewHost
@@ -49,15 +50,20 @@ export type EvidenceDagPanelTarget = Readonly<{
   threadId?: string
   workspaceRoot?: string
   snapshotDigest?: string
+  artifactVersionRef?: EvidenceDagViewInput['artifactVersionRef']
   nodeId?: string
+  invalidSelection?: boolean
 }>
 
 /** Workspace authorization follows the owning surface; never infer it from a global default. */
 export function evidenceDagPanelViewInput(target: EvidenceDagPanelTarget): EvidenceDagViewInput | null {
   const workspaceRoot = target.workspaceRoot?.trim()
+  if (target.invalidSelection || (target.snapshotDigest || target.artifactVersionRef) && (!target.runtimeId || !target.threadId)) return null
   if (!workspaceRoot || Boolean(target.runtimeId) !== Boolean(target.threadId)) return null
   return {
     workspaceRoot,
+    ...(target.snapshotDigest ? { snapshotDigest: target.snapshotDigest } : {}),
+    ...(target.artifactVersionRef ? { artifactVersionRef: target.artifactVersionRef } : {}),
     ...(target.runtimeId && target.threadId ? { runtimeId: target.runtimeId, threadId: target.threadId } : {})
   }
 }
@@ -67,6 +73,7 @@ export function evidenceDagPanelTarget(
   activation?: DomainWorkbenchRightPanelActivation
 ): EvidenceDagPanelTarget {
   const parsed = evidenceDagActivationPayloadSchema.safeParse(activation?.payload)
+  if (activation?.payload !== undefined && !parsed.success) return { invalidSelection: true }
   const payload: EvidenceDagActivationPayload | undefined = parsed.success
     ? parsed.data
     : undefined
@@ -75,6 +82,7 @@ export function evidenceDagPanelTarget(
       runtimeId: payload.runtimeId,
       threadId: payload.threadId,
       ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
+      ...(payload.artifactVersionRef ? { artifactVersionRef: payload.artifactVersionRef } : {}),
       ...(payload.snapshotDigest ? { snapshotDigest: payload.snapshotDigest } : {}),
       ...(payload.nodeId ? { nodeId: payload.nodeId } : {})
     }
@@ -82,6 +90,7 @@ export function evidenceDagPanelTarget(
   return {
     ...(session.runtimeId ? { runtimeId: session.runtimeId, threadId: session.id } : {}),
     ...(session.workspaceRoot ? { workspaceRoot: session.workspaceRoot } : {}),
+    ...(payload?.artifactVersionRef ? { artifactVersionRef: payload.artifactVersionRef } : {}),
     ...(payload?.snapshotDigest ? { snapshotDigest: payload.snapshotDigest } : {}),
     ...(payload?.nodeId ? { nodeId: payload.nodeId } : {})
   }
@@ -112,6 +121,7 @@ export function evidenceDagCommittedFrameKey(
 
 export function EvidenceDagPanel({
   active,
+  embedded = false,
   className = '',
   onCollapse,
   session,
@@ -126,7 +136,9 @@ export function EvidenceDagPanel({
     [activation, session]
   )
   const identityKey =
-    `${target.runtimeId ?? ''}:${target.threadId ?? ''}:${target.workspaceRoot ?? ''}`
+    JSON.stringify([target.runtimeId, target.threadId, target.workspaceRoot, target.snapshotDigest, target.artifactVersionRef, target.invalidSelection])
+  const pinned = Boolean(target.snapshotDigest || target.artifactVersionRef)
+  const [loadedIdentity, setLoadedIdentity] = useState<string | null>(null)
   const [view, setView] = useState<EvidenceDagViewOutput | null>(null)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -136,21 +148,21 @@ export function EvidenceDagPanel({
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const viewInput = useMemo(
     () => evidenceDagPanelViewInput(target),
-    [target.runtimeId, target.threadId, target.workspaceRoot]
+    [target.runtimeId, target.threadId, target.workspaceRoot, target.snapshotDigest, target.artifactVersionRef, target.invalidSelection]
   )
-  const workspaceError = !viewInput ? t('evidenceDagWorkspaceRequired') : null
+  const workspaceError = !viewInput ? t(target.invalidSelection ? 'evidenceDagSnapshotUnavailable' : 'evidenceDagWorkspaceRequired') : null
   const frameUrl = useMemo(
-    () => view
+    () => loadedIdentity === identityKey && view?.url
       ? evidenceDagViewUrlWithNode(
           view.url,
           target.nodeId,
           Boolean(target.runtimeId && target.threadId)
         )
       : null,
-    [target.nodeId, target.runtimeId, target.threadId, view]
+    [identityKey, loadedIdentity, target.nodeId, target.runtimeId, target.threadId, view]
   )
-  const status = view?.status
-  const committedDigest = status?.committed?.digest
+  const status = loadedIdentity === identityKey ? view?.status : undefined
+  const committedDigest = view?.binding?.snapshotDigest ?? status?.committed?.digest
 
   useEffect(() => {
     setView(null)
@@ -166,10 +178,10 @@ export function EvidenceDagPanel({
     setError(null)
     void client.view(viewInput)
       .then((result) => {
-        if (!cancelled) setView(result)
+        if (!cancelled) { setView(result); setLoadedIdentity(identityKey) }
       })
       .catch((cause: unknown) => {
-        if (!cancelled) setError(errorMessage(cause))
+        if (!cancelled) setError(pinned ? t('evidenceDagSnapshotUnavailable') : errorMessage(cause))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -177,20 +189,20 @@ export function EvidenceDagPanel({
     return () => {
       cancelled = true
     }
-  }, [active, client, requestRevision, viewInput])
+  }, [active, client, identityKey, pinned, requestRevision, t, viewInput])
 
   useEffect(() => {
-    const interval = evidenceDagPollInterval(active, status?.pending)
+    const interval = evidenceDagPollInterval(active && !pinned, status?.pending)
     if (interval === null) return
     const timer = window.setTimeout(
       () => setRequestRevision((revision) => revision + 1),
       interval
     )
     return () => window.clearTimeout(timer)
-  }, [active, status?.pending])
+  }, [active, pinned, status?.pending])
 
   useEffect(() => {
-    if (!target.runtimeId || !target.threadId || !viewInput?.workspaceRoot) return
+    if (!surfaceId || pinned || !target.runtimeId || !target.threadId || !viewInput?.workspaceRoot) return
     void client.priority({
       runtimeId: target.runtimeId,
       threadId: target.threadId,
@@ -207,7 +219,7 @@ export function EvidenceDagPanel({
         visible: false
       }).catch(() => undefined)
     }
-  }, [active, client, surfaceId, target.runtimeId, target.threadId, viewInput?.workspaceRoot])
+  }, [active, client, pinned, surfaceId, target.runtimeId, target.threadId, viewInput?.workspaceRoot])
 
   useEffect(() => {
     if (!frameUrl || !viewInput?.workspaceRoot) return
@@ -247,6 +259,7 @@ export function EvidenceDagPanel({
   ])
 
   const submitUpdate = (): void => {
+    if (pinned) return
     if (!target.runtimeId || !target.threadId || !viewInput?.workspaceRoot) {
       setError(workspaceError ?? t('evidenceDagUnavailable'))
       return
@@ -259,6 +272,7 @@ export function EvidenceDagPanel({
       threadId: target.threadId,
       workspaceRoot: viewInput.workspaceRoot
     }).then((result) => {
+      setLoadedIdentity(identityKey)
       setView({
         url: result.url,
         threadId: result.threadId,
@@ -277,18 +291,7 @@ export function EvidenceDagPanel({
   const subtitle = target.threadId
     ? t('evidenceDagCurrentThread')
     : t('evidenceDagAllThreads')
-  const pendingMeta = pending
-    ? [
-        t('evidenceDagLastActivity', { time: formatTime(pending.updatedAt) }),
-        ...(pending.completedBatches !== undefined && pending.totalBatches !== undefined
-          ? [t('evidenceDagBatchProgress', {
-              completed: pending.completedBatches,
-              total: pending.totalBatches
-            })]
-          : []),
-        t('evidenceDagAttempt', { count: pending.attempt })
-      ].join(' · ')
-    : null
+  const pendingMeta = pending ? t('evidenceDagLastActivity', { time: formatTime(pending.updatedAt) }) : null
   const pendingError = pending?.state === 'failed' ? pending.error.message : null
 
   return (
@@ -297,21 +300,21 @@ export function EvidenceDagPanel({
       data-domain-panel="evidence-dag"
     >
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink">
+        {!embedded && <div className="min-w-0">
+          <div className="flex items-center gap-2 text-ds-md font-semibold text-ds-ink">
             <Network className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <span>{t('rightPanelEvidenceDag')}</span>
           </div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">
+          <div className="mt-1 truncate text-ds-xs text-ds-faint">
             {summary ?? subtitle}
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
+        </div>}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={submitUpdate}
-            disabled={loading || updateBusy || !target.runtimeId || !target.threadId || !viewInput}
-            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={pinned || loading || updateBusy || !target.runtimeId || !target.threadId || !viewInput}
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-ds-xs font-medium text-ds-ink hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {updateBusy
               ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -328,7 +331,7 @@ export function EvidenceDagPanel({
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button
+          {!embedded && <button
             type="button"
             onClick={onCollapse}
             className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
@@ -336,7 +339,7 @@ export function EvidenceDagPanel({
             title={t('evidenceDagCollapse')}
           >
             <PanelRightClose className="h-4 w-4" />
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -351,14 +354,14 @@ export function EvidenceDagPanel({
         </div>
       ) : null}
       {pendingMeta ? (
-        <div className="shrink-0 border-b border-ds-border-muted px-3 py-1.5 text-[10.5px] text-ds-faint">
+        <div className="shrink-0 border-b border-ds-border-muted px-3 py-1.5 text-ds-2xs text-ds-faint">
           {pendingMeta}
         </div>
       ) : null}
       {workspaceError || error || pendingError ? (
         <div
           role="alert"
-          className="flex shrink-0 items-start gap-2 border-b border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-4 text-rose-700"
+          className="flex shrink-0 items-start gap-2 border-b border-rose-200 bg-rose-50 px-3 py-2 text-ds-xs leading-4 text-rose-700"
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{workspaceError ?? error ?? pendingError}</span>
@@ -367,7 +370,7 @@ export function EvidenceDagPanel({
 
       <div className="min-h-0 flex-1 bg-ds-main">
         {loading && !view && viewInput ? (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-ds-muted">
+          <div className="flex h-full items-center justify-center gap-2 text-ds-lg text-ds-muted">
             <Loader2 className="h-4 w-4 animate-spin" />
             {t('evidenceDagLoading')}
           </div>
@@ -383,15 +386,15 @@ export function EvidenceDagPanel({
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ds-muted">
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ds-lg text-ds-muted">
             <Network className="h-8 w-8 text-ds-faint" />
-            <span>{error ? t('evidenceDagUnavailable') : t('evidenceDagEmpty')}</span>
-            {target.runtimeId && target.threadId && viewInput ? (
+            <span>{view?.binding?.status === 'missing' ? t(view.binding.reason === 'snapshot_search_bounded' ? 'evidenceDagHistoricalSearchBounded' : view.binding.reason === 'material_snapshot_missing' ? 'evidenceDagMaterialSnapshotMissing' : 'evidenceDagSnapshotUnavailable') : error ? t('evidenceDagUnavailable') : t('evidenceDagEmpty')}</span>
+            {!pinned && target.runtimeId && target.threadId && viewInput ? (
               <button
                 type="button"
                 onClick={submitUpdate}
                 disabled={submitting}
-                className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-xs text-ds-ink hover:bg-ds-hover disabled:opacity-50"
+                className="rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-ds-sm text-ds-ink hover:bg-ds-hover disabled:opacity-50"
               >
                 {t('evidenceDagUpdate')}
               </button>

@@ -7,7 +7,9 @@ import { entityMetadataShape, executionIdSchema, planItemIdSchema, projectIdSche
 } from './core.js'
 
 export const taskFileDestinationNameSchema = z.string().trim().min(1).max(128)
-  .regex(/^[\x20-\x7e]+$/u, 'Task file names must use portable printable ASCII.')
+  .regex(/^(?=[\x20-\x7e]+$)[^<>:"/\\|?*]*[^<>:"/\\|?*. ]$/u,
+    'File names must be a basename without directories, reserved characters, or trailing dots/spaces.')
+  .describe('One portable printable-ASCII basename, 1–128 characters; no directory, slash, backslash, reserved characters or device names, and no trailing dot or space. Example: results.zip, never outputs/results.zip.')
   .refine((value) => value !== '.' && value !== '..', 'Destination names cannot be traversal segments.')
   .refine(isPortableWorkspacePathSegment,
     'Destination names must be one portable path component.')

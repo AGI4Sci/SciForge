@@ -105,7 +105,13 @@ let refreshThreadsRequestSeq = 0
 let runtimeProbeRequestSeq = 0
 const DEFAULT_THREAD_LIST_LIMIT = 80
 const EXPANDED_THREAD_LIST_LIMIT = 200
-const RUNTIME_PROBE_TIMEOUT_MS = 8_000
+/**
+ * A cold runtime boot is slow: the DSH ACP handshake loads the whole plugin
+ * graph and measures ~17s on Windows, well past the old 8s gate, which made a
+ * healthy runtime look disconnected. Match the runtime's cold-start budget
+ * instead of inventing a shorter one here.
+ */
+const RUNTIME_PROBE_TIMEOUT_MS = 90_000
 
 function withRuntimeProbeTimeout<T>(task: Promise<T>, label: string): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null
@@ -474,6 +480,15 @@ export function createNavigationActions(
         }
         return null
       }
+      let movedActiveThread = false
+      if (ownerSessionId && !createThreadAfter) {
+        const provider = getProvider()
+        if (typeof provider.updateThreadWorkspace !== 'function') {
+          throw new Error('The current runtime cannot change this session’s working directory.')
+        }
+        await provider.updateThreadWorkspace(ownerSessionId, picked.path)
+        movedActiveThread = true
+      }
       const next = await rendererRuntimeClient.setSettings({ workspaceRoot: picked.path })
       const workspaceRoot = normalizeWorkspaceRoot(next.workspaceRoot)
       const hiddenCodeWorkspaceRoots = restoreHiddenCodeWorkspaceRoots(
@@ -482,31 +497,12 @@ export function createNavigationActions(
       )
       const codeWorkspaceRoots = rememberCodeWorkspaceRoots(get().codeWorkspaceRoots, [workspaceRoot], { explicit: true })
 
-      // Update the active thread's workspace so the current session
-      // moves to the newly picked directory instead of creating a
-      // new thread or switching away. Only treat the thread as moved
-      // when the PATCH actually succeeds — otherwise we must fall
-      // through to the fallback selection below, or the global
-      // workspaceRoot and the active thread would diverge.
-      let movedActiveThread = false
-      if (ownerSessionId && workspaceRoot) {
-        const p = getProvider()
-        if (typeof p.updateThreadWorkspace === 'function') {
-          try {
-            await p.updateThreadWorkspace(ownerSessionId, workspaceRoot)
-            // Update the local threads list so the sidebar shows the
-            // thread under the new workspace immediately.
-            set((s) => ({
-              threads: s.threads.map((thread) =>
-                thread.id === ownerSessionId ? { ...thread, workspace: workspaceRoot } : thread
-              )
-            }))
-            movedActiveThread = true
-          } catch {
-            // PATCH failed — leave movedActiveThread false so we fall
-            // through to the existing fallback selection below.
-          }
-        }
+      if (movedActiveThread) {
+        set((s) => ({
+          threads: s.threads.map((thread) =>
+            thread.id === ownerSessionId ? { ...thread, workspace: workspaceRoot } : thread
+          )
+        }))
       }
 
       set((state) => ({

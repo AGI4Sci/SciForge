@@ -3161,7 +3161,7 @@ export function WritePdfViewer({
             >
               <Minus className="h-4 w-4" strokeWidth={1.9} />
             </button>
-            <span className="min-w-[52px] text-center text-[12px] font-semibold text-ds-muted">
+            <span className="min-w-[52px] text-center text-ds-sm font-semibold text-ds-muted">
               {Math.round(scale * 100)}%
             </span>
             <button
@@ -3199,7 +3199,7 @@ export function WritePdfViewer({
                 aria-label={label('writePdfPageInput', 'PDF page')}
                 onChange={(event) => setPageInput(event.target.value)}
               />
-              <span className="text-[12px] text-ds-faint">/ {pageCount || '-'}</span>
+              <span className="text-ds-sm text-ds-faint">/ {pageCount || '-'}</span>
             </form>
             <button
               type="button"
@@ -3232,12 +3232,12 @@ export function WritePdfViewer({
           <div className="flex min-w-[190px] flex-1 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1 dark:bg-white/6 sm:max-w-[280px]">
             <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.9} />
             <input
-              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ds-ink outline-none placeholder:text-ds-faint"
+              className="min-w-0 flex-1 bg-transparent text-ds-sm text-ds-ink outline-none placeholder:text-ds-faint"
               value={searchQuery}
               placeholder={label('writePdfSearchPlaceholder', 'Search PDF')}
               onChange={(event) => setSearchQuery(event.target.value)}
             />
-            <span className="min-w-[42px] shrink-0 text-right text-[11px] text-ds-faint">
+            <span className="min-w-[42px] shrink-0 text-right text-ds-xs text-ds-faint">
               {matchLabel}
             </span>
             <button
@@ -3277,18 +3277,18 @@ export function WritePdfViewer({
         onScroll={handleScrollerScroll}
       >
         {loading ? (
-          <div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-[13px] text-ds-muted">
+          <div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-ds-md text-ds-muted">
             <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.9} />
             {label('writePdfLoading', 'Opening PDF...')}
           </div>
         ) : error ? (
-          <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-red-600 dark:text-red-300">
+          <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-ds-md leading-6 text-red-600 dark:text-red-300">
             {label('writePdfLoadFailed', 'PDF failed to open: {{message}}', { message: error })}
           </div>
         ) : pdfDocument ? (
           <div className="mx-auto flex w-max max-w-full flex-col items-center gap-5">
             {allPageTextLoaded && !pdfHasText ? (
-              <div className="max-w-[560px] rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] leading-5 text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/36 dark:text-amber-100">
+              <div className="max-w-[560px] rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-ds-md leading-5 text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/36 dark:text-amber-100">
                 {label(
                   'writePdfNoTextLayer',
                   'This PDF has no extractable text layer. Visual selection mode is available for image-region anchors.'
@@ -3319,7 +3319,7 @@ export function WritePdfViewer({
                   onAnnotationSelect={onAnnotationSelect}
                   onPageSize={updatePageSize}
                 />
-                <div className="mt-1 text-center text-[11px] text-ds-faint">
+                <div className="mt-1 text-center text-ds-xs text-ds-faint">
                   {label('writePdfPageLabel', 'Page {{page}}', { page: pageNumber })}
                 </div>
               </div>
@@ -3331,7 +3331,7 @@ export function WritePdfViewer({
       {contextMenu && contextMenuVisible ? (
         <div
           data-selection-ignore="true"
-          className="fixed z-[60] min-w-[174px] rounded-lg border border-ds-border bg-ds-card p-1 text-[12px] font-semibold text-ds-ink shadow-[0_18px_42px_rgba(15,23,42,0.2)]"
+          className="fixed z-[60] min-w-[174px] rounded-lg border border-ds-border bg-ds-card p-1 text-ds-sm font-semibold text-ds-ink shadow-[0_18px_42px_rgba(15,23,42,0.2)]"
           style={{ left: contextMenu.left, top: contextMenu.top }}
           onPointerDown={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.preventDefault()}
@@ -3403,7 +3403,7 @@ export function WritePdfViewer({
       {(onQuoteSelection || onAnnotationAction) && committedSelectionHasAnchor && quoteButtonStyle ? (
         <div
           data-selection-ignore="true"
-          className="fixed z-50 inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-ds-border bg-ds-card px-1.5 text-[12px] font-semibold text-ds-ink shadow-[0_14px_34px_rgba(15,23,42,0.16)]"
+          className="fixed z-50 inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-ds-border bg-ds-card px-1.5 text-ds-sm font-semibold text-ds-ink shadow-[0_14px_34px_rgba(15,23,42,0.16)]"
           style={quoteButtonStyle}
           onMouseDown={(event) => event.preventDefault()}
         >

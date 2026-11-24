@@ -226,7 +226,7 @@ function BiologyIndexTransportSummary({
   return (
     <section className="flex h-full min-h-0 flex-col justify-center gap-2 overflow-y-auto p-6" data-biology-index-transport>
       <strong>Biology index transport</strong>
-      <p className="text-sm text-ds-text-muted">
+      <p className="text-ds-lg text-ds-text-muted">
         {observation
           ? `Index metadata is available for ${observation.file.path}.`
           : 'Open a biology index file to inspect its transport metadata.'}

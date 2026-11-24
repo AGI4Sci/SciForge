@@ -1411,7 +1411,7 @@ function TimelineImageTile({
           ) : null}
         </div>
         {metadata ? (
-          <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-ds-card/90 px-2 py-1 text-[11px] text-ds-faint opacity-0 transition group-hover/image:opacity-100">
+          <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-ds-card/90 px-2 py-1 text-ds-xs text-ds-faint opacity-0 transition group-hover/image:opacity-100">
             {metadata}
           </figcaption>
         ) : null}
@@ -1440,10 +1440,10 @@ function TimelineImageTile({
           )}
         </span>
         <div className="min-w-0">
-          <div className="line-clamp-2 break-words text-[12.5px] font-semibold leading-5 text-ds-ink">
+          <div className="line-clamp-2 break-words text-ds-sm font-semibold leading-5 text-ds-ink">
             {title}
           </div>
-          <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-ds-faint">
+          <div className="mt-0.5 line-clamp-2 text-ds-xs leading-4 text-ds-faint">
             {failure || t('generatedFilePreviewUnavailable')}
           </div>
         </div>
@@ -1452,7 +1452,7 @@ function TimelineImageTile({
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className="mt-3 inline-flex h-7 w-fit items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-card/90 px-2 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+          className="mt-3 inline-flex h-7 w-fit items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-card/90 px-2 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
         >
           {actionIcon(copyState, <Copy className="h-3.5 w-3.5" strokeWidth={1.9} />)}
           {copyState === 'done' ? t('copySuccess') : t('artifactCopyFilePath')}
@@ -1538,10 +1538,10 @@ function TimelineVisualReviewArtifactTile({
           <FileText className="h-5 w-5" strokeWidth={1.8} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13.5px] font-semibold text-ds-ink">{title}</span>
-          <span className="mt-0.5 block truncate text-[12px] text-ds-faint">{subtitle}</span>
+          <span className="block truncate text-ds-md font-semibold text-ds-ink">{title}</span>
+          <span className="mt-0.5 block truncate text-ds-sm text-ds-faint">{subtitle}</span>
           {sourcePath ? (
-            <span className="mt-1 block truncate font-mono text-[11px] text-ds-faint">{sourcePath}</span>
+            <span className="mt-1 block truncate font-mono text-ds-xs text-ds-faint">{sourcePath}</span>
           ) : null}
         </span>
       </button>
@@ -1698,13 +1698,13 @@ export function TimelineImageResultsPanel({
     <div className="flex min-w-0 flex-col gap-2">
       {images.length > 0 ? (
         <>
-          <div className="text-[12px] font-semibold text-ds-faint">{t('generatedFilesTitle')}</div>
+          <div className="text-ds-sm font-semibold text-ds-faint">{t('generatedFilesTitle')}</div>
           <TimelineImageGallery images={images} variant="conversation" onOpenVisualReview={onOpenVisualReview} />
         </>
       ) : null}
       {artifacts.length > 0 ? (
         <div className="flex min-w-0 flex-col gap-2">
-          <div className="text-[12px] font-semibold text-ds-faint">{t('generatedArtifactsTitle')}</div>
+          <div className="text-ds-sm font-semibold text-ds-faint">{t('generatedArtifactsTitle')}</div>
           {artifacts.map((artifact) => (
             <TimelineVisualReviewArtifactTile
               key={visualReviewArtifactKey(artifact)}

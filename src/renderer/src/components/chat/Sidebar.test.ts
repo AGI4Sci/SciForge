@@ -80,7 +80,7 @@ describe('Sidebar collapsed rail', () => {
     const html = renderToStaticMarkup(
       createElement(Sidebar, {
         collapsed: true,
-        mainAreaPages: [{ id: 'fixture.page', label: 'fixturePage', active: true }],
+        mainAreaPages: [{ id: 'fixture.page', label: 'fixturePage', active: true, navigationIcon: 'book-open' }],
         threads: [],
         activeThreadId: null,
         activeView: 'chat',
@@ -108,6 +108,7 @@ describe('Sidebar collapsed rail', () => {
       expect(html).toContain(`aria-label="${label}"`)
     }
     expect(html).toContain('aria-current="page"')
+    expect(html).toContain('lucide-book-open')
     expect(html).not.toContain('sidebarLocalWorkspaces')
   })
 })

@@ -218,15 +218,17 @@ test('loads the first owner pages without requiring an activation', async () => 
   } as never, '/workspace/lab')
   assert.deepEqual(calls, [
     { kind: 'research-checkpoint', currentOnly: false, metadataQuery: '', limit: 25 },
-    { kind: 'research-output', currentOnly: false, metadataQuery: '', limit: 25 }
+    { kind: 'research-output', currentOnly: false, metadataQuery: '', limit: 25 },
+    { kind: 'research-material', currentOnly: false, metadataQuery: '', limit: 25 }
   ])
   assert.deepEqual(result.artifacts.items.map((item) => item.artifact.kind), [
     'research-output',
-    'research-checkpoint'
+    'research-checkpoint',
+    'research-material'
   ])
 })
 
-test('continues both kind cursors beyond 25 records, deduplicates ties and exhausts every accessible page', async () => {
+test('continues populated kind cursors beyond 25 records, deduplicates ties and exhausts every accessible page', async () => {
   const calls: Array<{ kind: string; beforeSequence?: number }> = []
   const rows = (kind: string) => Array.from({ length: 62 }, (_, index) => ({
     ...descriptor,
@@ -240,6 +242,7 @@ test('continues both kind cursors beyond 25 records, deduplicates ties and exhau
   outputRows[0] = checkpointRows[0]!
   const client = { listArtifactVersions: async (_workspace: string, input: { kind: string; beforeSequence?: number }) => {
     calls.push(input)
+    if (input.kind === 'research-material') return { ok: true, value: { items: [] } }
     const candidates = (input.kind === 'research-checkpoint' ? checkpointRows : outputRows)
       .filter(item => !input.beforeSequence || item.version.sequence < input.beforeSequence)
     const items = candidates.slice(0, 25)
@@ -252,8 +255,9 @@ test('continues both kind cursors beyond 25 records, deduplicates ties and exhau
   const last = await loadResearchDossierBrowse(client, '/workspace/lab', second)
   assert.equal(last.artifacts.items.length, 123)
   assert.equal(new Set(last.artifacts.items.map(item => item.version.versionId)).size, 123)
-  assert.ok(last.streams.every(stream => stream.complete && stream.pagesRead === 3 && stream.scanned === 62))
-  assert.deepEqual(calls.map(call => call.beforeSequence), [undefined, undefined, 176, 176, 151, 151])
+  assert.ok(last.streams.every(stream => stream.complete && (stream.kind === 'research-material'
+    ? stream.pagesRead === 1 && stream.scanned === 0 : stream.pagesRead === 3 && stream.scanned === 62)))
+  assert.deepEqual(calls.map(call => call.beforeSequence), [undefined, undefined, undefined, 176, 176, 151, 151])
   assert.ok(last.artifacts.items.find(item => item.version.versionId === 'artifact-version:research-output:61'))
   for (let index = 1; index < last.artifacts.items.length; index++) {
     const left = last.artifacts.items[index - 1]!.version
@@ -261,7 +265,7 @@ test('continues both kind cursors beyond 25 records, deduplicates ties and exhau
     assert.ok(left.sequence > right.sequence || (left.sequence === right.sequence && left.versionId.localeCompare(right.versionId) <= 0))
   }
   await loadResearchDossierBrowse(client, '/workspace/lab', last)
-  assert.equal(calls.length, 6, 'exhausted streams do not restart at latest')
+  assert.equal(calls.length, 7, 'exhausted streams do not restart at latest')
   await assert.rejects(() => loadResearchDossierBrowse(client, '/workspace/other', last), /another workspace/u)
 })
 
@@ -270,7 +274,7 @@ test('a refused continuation keeps the failed cursor and does not restart exhaus
   const calls: unknown[] = []
   const client = { listArtifactVersions: async (_workspace: string, input: { kind: string; beforeSequence?: number }) => {
     calls.push(input)
-    if (input.kind === 'research-output') return { ok: true, value: { items: [] } }
+    if (input.kind !== 'research-checkpoint') return { ok: true, value: { items: [] } }
     if (input.beforeSequence && denied) return { ok: false, issue: { code: 'access-restricted', message: 'denied history' } }
     return { ok: true, value: { items: [{ ...descriptor, artifact: { ...descriptor.artifact, kind: 'research-checkpoint' } }],
       ...(!input.beforeSequence ? { nextBeforeSequence: 12 } : {}) } }
@@ -280,12 +284,12 @@ test('a refused continuation keeps the failed cursor and does not restart exhaus
   assert.equal(failed.artifacts.items.length, 1)
   assert.equal(failed.streams[0]!.nextBeforeSequence, 12)
   assert.match(failed.issues.artifacts!, /access-restricted.*denied history/u)
-  assert.equal(calls.length, 3)
+  assert.equal(calls.length, 4)
   denied = false
   const recovered = await loadResearchDossierBrowse(client, '/workspace/lab', failed)
   assert.equal(recovered.issues.artifacts, undefined)
   assert.ok(recovered.streams.every(stream => stream.complete))
-  assert.equal(calls.length, 4)
+  assert.equal(calls.length, 5)
 })
 
 test('does not accept a nonadvancing history cursor', async () => {

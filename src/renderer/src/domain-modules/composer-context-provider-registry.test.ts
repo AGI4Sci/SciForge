@@ -72,6 +72,22 @@ describe('ComposerContextProviderRegistry', () => {
     })).rejects.toThrow()
   })
 
+  it('validates read-only mention search and active references through the same registry', async () => {
+    const registry = new ComposerContextProviderRegistry()
+    registry.register({ id: 'fixture.references', ownerId: 'fixture.module',
+      contract: { location: 'composer.context', label: 'References' },
+      value: {
+        provide: () => ({ items: [] }),
+        search: request => ({ items: [{ id: 'fixture.item', title: request.query, content: 'item-id' }] }),
+        active: () => ({ items: [{ id: 'fixture.item', title: 'Active item', content: 'end-item' }] })
+      }
+    })
+    const provider = registry.resolve('fixture.references')!.contribution
+    const request = { draftText: '', signal: new AbortController().signal }
+    expect((await provider.search!({ ...request, query: 'Search' })).items[0].content).toBe('item-id')
+    expect((await provider.active!(request)).items[0].content).toBe('end-item')
+  })
+
   it('rejects duplicate IDs and disposes idempotently', () => {
     const registry = new ComposerContextProviderRegistry()
     const contribution = {

@@ -186,7 +186,7 @@ export function PlanPanel({
           </button>
           <div className="flex min-w-0 flex-1 items-center gap-2 rounded-[12px] bg-ds-surface-subtle px-3 py-1.5 dark:bg-white/8">
             <ClipboardList className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
-            <span className="min-w-0 truncate text-[13px] font-medium text-ds-ink">
+            <span className="min-w-0 truncate text-ds-md font-medium text-ds-ink">
               {activePlan?.featureName || t('planPanelTitle')}
             </span>
           </div>
@@ -202,10 +202,10 @@ export function PlanPanel({
           </button>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 pb-3">
-          <div className="min-w-0 flex-1 truncate rounded-full border border-ds-border-muted bg-ds-surface-subtle px-3 py-1.5 text-[11.5px] font-medium text-ds-muted dark:bg-white/6">
+          <div className="min-w-0 flex-1 truncate rounded-full border border-ds-border-muted bg-ds-surface-subtle px-3 py-1.5 text-ds-xs font-medium text-ds-muted dark:bg-white/6">
             {activePlan?.relativePath ?? t('planNoActiveFile')}
           </div>
-          <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-ds-border-muted bg-ds-card px-2.5 py-1.5 text-[11.5px] font-medium text-ds-muted">
+          <div className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-ds-border-muted bg-ds-card px-2.5 py-1.5 text-ds-xs font-medium text-ds-muted">
             {saveStatus === 'saving' || operationStatus === 'drafting' || operationStatus === 'refining' || operationStatus === 'building' ? (
               <Loader2 className="h-3 w-3 animate-spin" strokeWidth={2} />
             ) : (
@@ -216,11 +216,11 @@ export function PlanPanel({
         </div>
         {trace && trace.blocks.length > 0 ? (
           <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 pb-3">
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-[11.5px] font-semibold text-accent">
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-ds-xs font-semibold text-accent">
               {t('planCoverageLabel', { covered: traceCovered, total: trace.blocks.length })}
             </span>
             {trace.uncoveredIds.length > 0 ? (
-              <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-amber-500/12 px-2.5 py-1 text-[11.5px] font-semibold text-amber-700 dark:text-amber-300">
+              <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-amber-500/12 px-2.5 py-1 text-ds-xs font-semibold text-amber-700 dark:text-amber-300">
                 <TriangleAlert className="h-3 w-3 shrink-0" strokeWidth={2} />
                 <span className="truncate">
                   {t('planCoverageUncovered', { ids: trace.uncoveredIds.join(', ') })}
@@ -232,14 +232,14 @@ export function PlanPanel({
                 type="button"
                 onClick={onVerifyPlan}
                 disabled={!canUseAgent}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-ds-border-muted bg-ds-card px-2.5 py-1 text-[11.5px] font-semibold text-ds-ink transition hover:border-accent/30 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-ds-border-muted bg-ds-card px-2.5 py-1 text-ds-xs font-semibold text-ds-ink transition hover:border-accent/30 hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               >
                 <ShieldCheck className="h-3 w-3" strokeWidth={2} />
                 {busy ? t('planVerifyRunning') : t('planVerify')}
               </button>
             ) : null}
             {traceDriftIds.length > 0 ? (
-              <div className="flex min-w-0 flex-1 basis-full items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50/90 px-3 py-1.5 text-[11.5px] text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100">
+              <div className="flex min-w-0 flex-1 basis-full items-center gap-2 rounded-xl border border-amber-200/80 bg-amber-50/90 px-3 py-1.5 text-ds-xs text-amber-900 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-100">
                 <TriangleAlert className="h-3 w-3 shrink-0" strokeWidth={2} />
                 <span className="min-w-0 flex-1 truncate">
                   {t('sddChangedBanner', { ids: traceDriftIds.join(', ') })}
@@ -263,7 +263,7 @@ export function PlanPanel({
 
       <div className="min-h-0 flex-1 overflow-hidden bg-ds-main/45 dark:bg-transparent">
         {!normalizeWorkspaceRoot(workspaceRoot) ? (
-          <div className="flex h-full items-center justify-center px-5 text-center text-[13.5px] leading-6 text-ds-muted">
+          <div className="flex h-full items-center justify-center px-5 text-center text-ds-md leading-6 text-ds-muted">
             {t('planNoWorkspace')}
           </div>
         ) : !hasPlan ? (
@@ -271,8 +271,8 @@ export function PlanPanel({
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/10 text-accent">
               <ClipboardList className="h-5 w-5" strokeWidth={1.9} />
             </div>
-            <div className="mt-4 text-[16px] font-semibold text-ds-ink">{t('planEmptyTitle')}</div>
-            <p className="mt-2 max-w-[22rem] text-[13px] leading-6 text-ds-muted">
+            <div className="mt-4 text-ds-xl font-semibold text-ds-ink">{t('planEmptyTitle')}</div>
+            <p className="mt-2 max-w-[22rem] text-ds-md leading-6 text-ds-muted">
               {t('planEmptySub')}
             </p>
           </div>
@@ -318,16 +318,16 @@ export function PlanPanel({
       {hasPlan ? (
         <div className="shrink-0 border-t border-ds-border-muted bg-white/94 p-3 dark:bg-ds-card">
           {error ? (
-            <div className="mb-2 rounded-lg border border-red-300/70 bg-red-500/10 px-3 py-2 text-[12px] leading-5 text-red-700 dark:border-red-800/60 dark:text-red-300">
+            <div className="mb-2 rounded-lg border border-red-300/70 bg-red-500/10 px-3 py-2 text-ds-sm leading-5 text-red-700 dark:border-red-800/60 dark:text-red-300">
               {error}
             </div>
           ) : null}
-          <p className="mb-2 text-[12px] leading-5 text-ds-muted">{t('planRefineHint')}</p>
+          <p className="mb-2 text-ds-sm leading-5 text-ds-muted">{t('planRefineHint')}</p>
           <button
             type="button"
             disabled={!canUseAgent}
             onClick={onBuildPlan}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 text-ds-md font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Hammer className="h-3.5 w-3.5" strokeWidth={1.9} />
             {t('planBuild')}

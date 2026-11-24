@@ -201,6 +201,8 @@ export class WorkspaceHostSessionManager {
           ownerId
         })
       }))
+      this.#assertActive()
+      throwIfAborted(controller.signal)
       const session = workspaceHostSessionSchema.parse(client.getSession())
       const existing = this.#sessions.get(session.sessionId)
       if (existing && !existing.closed) {
@@ -350,15 +352,16 @@ export class WorkspaceHostSessionManager {
 
     let lastError: unknown
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      throwIfAborted(signal)
       managed.reconnectAttempt = attempt
       this.#touch(managed)
       try {
+        throwIfAborted(signal)
         const session = workspaceHostSessionSchema.parse(await managed.client.reconnect({
           lastAcknowledgedSequence: managed.lastAcknowledgedSequence,
           signal
         }))
         if (managed.closed) return this.#snapshot(managed)
+        throwIfAborted(signal)
         this.#assertSameSession(managed, session)
         managed.session = session
         managed.phase = 'connected'
@@ -378,13 +381,19 @@ export class WorkspaceHostSessionManager {
           return this.#snapshot(managed)
         }
         if (attempt === attempts || signal.aborted) break
-        await this.#wait(reconnectDelayFor(
-          this.#reconnectDelayMilliseconds,
-          attempt
-        ), signal)
+        try {
+          await this.#wait(reconnectDelayFor(
+            this.#reconnectDelayMilliseconds,
+            attempt
+          ), signal)
+        } catch (waitError) {
+          lastError = waitError
+          break
+        }
       }
     }
 
+    if (managed.closed) return this.#snapshot(managed)
     managed.phase = 'failed'
     managed.failure = failureFrom(lastError, 'disconnected')
     managed.reconnectAttempt = undefined

@@ -1,3 +1,4 @@
+import { TASK_CHAT_READ, taskChatReadInputSchema, taskChatReadResultSchema } from './chat-association-contract.js'
 import type { z } from 'zod'
 import {
   defineDomainMainInternalServiceDescriptor,
@@ -56,6 +57,10 @@ import {
   collaborationTaskCheckpointAppendInputSchema,
   collaborationTaskCheckpointAppendResultSchema,
   collaborationTaskOfferDecisionInputSchema,
+  collaborationTaskPauseInputSchema,
+  collaborationTaskPauseResultSchema,
+  collaborationTaskStartInputSchema,
+  collaborationTaskStartResultSchema,
   collaborationTaskReturnInputSchema,
   collaborationTaskReturnResultSchema,
   collaborationActivityCommentInputSchema,
@@ -65,6 +70,8 @@ import {
   collaborationTaskOfferDecisionResultSchema,
   collaborationTaskSessionOpenInputSchema,
   collaborationTaskSessionOpenResultSchema,
+  collaborationTaskSessionContinueInputSchema,
+  collaborationTaskSessionContinueResultSchema,
   type CollaborationConnectionConfigureInput,
   type CollaborationConnectionConnectInput,
   type CollaborationEndpointChallengePollInput,
@@ -85,8 +92,11 @@ import {
   workerDeliveryReadInputSchema,
   workerDeliveryMaterialsInputSchema,
   workerDeliveryMaterialsResultSchema,
+  workerDeliveryMaterialImportInputSchema,
+  workerDeliveryMaterialImportResultSchema,
   workerDeliveryDraftSaveInputSchema,
   workerDeliveryResultSchema,
+  workerDeliveryCancelInputSchema,
   workerDeliverySubmitInputSchema,
   workerResidualDisposeInputSchema
 } from './worker-delivery.js'
@@ -615,6 +625,13 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         }
       ),
       capability(
+        TASK_CHAT_READ,
+        '读取任务关联聊天',
+        '读取当前用户本机的任务聊天来源；不会向其他项目成员公开私人聊天。',
+        'read', taskChatReadInputSchema, taskChatReadResultSchema,
+        async (raw) => ({ output: options.getRuntime().readTaskChats(taskChatReadInputSchema.parse(raw)) })
+      ),
+      capability(
         COLLABORATION_CAPABILITY_IDS.taskList,
         'List collaboration Tasks',
         'Reads local canonical cloud Task projections and restart reconciliation state.',
@@ -639,16 +656,17 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         collaborationTaskInteractionReadResultSchema,
         async (raw, context) => {
           const input = collaborationTaskInteractionReadInputSchema.parse(raw) as CollaborationTaskInteractionReadInput
-          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
-          return {
-            output: {
-              view: options.getRuntime().taskInteractionView(
-                input.projectId,
-                input.taskId,
-                input.executionId
-              )
-            }
-          }
+          if (!context?.caller.principal) throw new Error('This Task read requires a current Host Principal.')
+          context.assertPrincipalCurrent()
+          const userId = context.caller.principal.subject
+          const runtime = options.getRuntime()
+          authorizeAgentTaskInteraction(runtime, input, context)
+          const view = await runtime.readTaskInteractionView(input, {
+            userId, assertCurrent: () => context.assertPrincipalCurrent()
+          })
+          context.assertPrincipalCurrent()
+          runtime.authorizeTaskInteractionRead(userId)
+          return { output: { view } }
         },
         '1.0.0',
         ['ui', 'agent']
@@ -660,14 +678,17 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         'read',
         workerDeliveryReadInputSchema,
         workerDeliveryResultSchema,
-        async (raw) => ({
-          output: {
-            delivery: await options.getRuntime().workerDeliveryView(
-              workerDeliveryReadInputSchema.parse(raw)
-            )
-          }
-        }),
-        '1.0.0'
+        async (raw, context) => {
+          const input = workerDeliveryReadInputSchema.parse(raw)
+          if (context?.caller.audience !== 'agent') return { output: { delivery: await options.getRuntime().workerDeliveryView(input) } }
+          context.assertPrincipalCurrent()
+          if (!context.caller.principal || !context.ordinarySession) throw new Error('读取任务草稿需要当前用户及已关联的聊天。')
+          return { output: { delivery: await options.getRuntime().workerDeliveryView(input, {
+            ...context.ordinarySession, userId: context.caller.principal.subject,
+            assertCurrent: () => context.assertPrincipalCurrent()
+          }) } }
+        },
+        '1.3.0', ['ui', 'agent']
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.workerDeliveryMaterialsList,
@@ -681,16 +702,48 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         ['ui']
       ),
       capability(
+        COLLABORATION_CAPABILITY_IDS.workerDeliveryMaterialImport,
+        'Import a local Task delivery material',
+        'Copies explicitly selected file bytes into the owned local Task execution workspace without creating an AI Session or publishing to Cloud.',
+        'workspace-write',
+        workerDeliveryMaterialImportInputSchema,
+        workerDeliveryMaterialImportResultSchema,
+        async (raw) => ({ output: await options.getRuntime().importWorkerDeliveryMaterial(workerDeliveryMaterialImportInputSchema.parse(raw)) }),
+        '1.0.0', ['ui'], 'none'
+      ),
+      capability(
         COLLABORATION_CAPABILITY_IDS.workerDeliveryDraftSave,
         'Save the local Worker Delivery draft',
-        'Saves the member explanation and explicit AI suggestion decision in the exact local Task execution without publishing files.',
+        'Saves the member explanation, required-output material binding, additional selections and AI suggestion decision in the exact local Task execution without publishing files.',
         'workspace-write',
         workerDeliveryDraftSaveInputSchema,
         workerDeliveryResultSchema,
-        async (raw) => ({ output: { delivery: await options.getRuntime().saveWorkerDeliveryDraft(workerDeliveryDraftSaveInputSchema.parse(raw)) } }),
-        '1.0.0',
-        ['ui'],
+        async (raw, context) => {
+          const input = workerDeliveryDraftSaveInputSchema.parse(raw)
+          if (context?.caller.audience !== 'agent') {
+            return { output: { delivery: await options.getRuntime().saveWorkerDeliveryDraft(input) } }
+          }
+          context.assertPrincipalCurrent()
+          if (!context.caller.principal || !context.ordinarySession) throw new Error('写入任务草稿需要当前用户及已关联的聊天。')
+          const delivery = await options.getRuntime().saveWorkerDeliveryDraft(input, {
+            ...context.ordinarySession, userId: context.caller.principal.subject,
+            assertCurrent: () => context.assertPrincipalCurrent()
+          })
+          return { output: { delivery } }
+        },
+        '1.3.0',
+        ['ui', 'agent'],
         'none'
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.workerDeliveryCancel,
+        'Cancel an uncommitted failed Worker submission',
+        'Archives the exact frozen snapshot and human proof, verifies Cloud precommit authority, and restores editing only for a parked object upload limit failure.',
+        'workspace-write', workerDeliveryCancelInputSchema, workerDeliveryResultSchema,
+        async (raw, context) => {
+          if (context && context.caller.audience !== 'ui') throw new Error('撤回失败提交需要用户从界面确认。')
+          return { output: { delivery: await options.getRuntime().cancelFailedWorkerDelivery(workerDeliveryCancelInputSchema.parse(raw)) } }
+        }, '1.0.0', ['ui']
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.deliverySubmit,
@@ -710,7 +763,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
             }
           }
         },
-        '1.0.0',
+        '1.2.0',
         ['ui']
       ),
       capability(
@@ -727,7 +780,7 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
             )
           }
         }),
-        '1.0.0'
+        '1.2.0'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.taskCheckpointAppend,
@@ -738,21 +791,21 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         collaborationTaskCheckpointAppendResultSchema,
         async (raw, context) => {
           const input = collaborationTaskCheckpointAppendInputSchema.parse(raw) as CollaborationTaskCheckpointAppendInput
-          authorizeAgentTaskInteraction(options.getRuntime(), input, context)
-          const checkpoint = await options.getRuntime().appendTaskCheckpoint(
-            context?.caller.audience === 'agent' ? { ...input, source: 'agent' } : input
+          const runtime = options.getRuntime()
+          authorizeAgentTaskInteraction(runtime, input, context)
+          if (!context?.caller.principal) throw new Error('This Task read requires a current Host Principal.')
+          context.assertPrincipalCurrent()
+          const userId = context.caller.principal.subject
+          runtime.authorizeTaskInteractionRead(userId)
+          const checkpoint = await runtime.appendTaskCheckpoint(
+            context.caller.audience === 'agent' ? { ...input, source: 'agent' } : input
           )
-          return {
-            output: {
-              checkpoint,
-              view: options.getRuntime().taskInteractionView(
-                input.projectId,
-                input.taskId,
-                input.executionId ?? undefined
-              )
-            },
-            changed: true
-          }
+          const view = await runtime.readTaskInteractionView({ ...input, executionId: input.executionId ?? undefined }, {
+            userId, assertCurrent: () => context.assertPrincipalCurrent()
+          })
+          context.assertPrincipalCurrent()
+          runtime.authorizeTaskInteractionRead(userId)
+          return { output: { checkpoint, view }, changed: true }
         },
         '1.0.0',
         ['ui', 'agent']
@@ -771,6 +824,28 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
           return { output: { accepted: true as const } }
         },
         '1.1.0'
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskPause,
+        '暂停本机任务执行',
+        '当前执行人明确暂停本机已授权任务；不改变其他成员的执行权限。',
+        'workspace-write', collaborationTaskPauseInputSchema, collaborationTaskPauseResultSchema,
+        async (raw, context) => {
+          if (context && context.caller.audience !== 'ui') throw new Error('暂停任务需要成员明确决定。')
+          await options.getRuntime().pauseTask(collaborationTaskPauseInputSchema.parse(raw))
+          return { output: { paused: true as const } }
+        }, '1.0.0', ['ui']
+      ),
+      capability(
+        COLLABORATION_CAPABILITY_IDS.taskStart,
+        '选择任务执行方式',
+        '成员明确选择自行完成或启动 AI；接受派单本身不会授权 AI 执行。',
+        'external-write', collaborationTaskStartInputSchema, collaborationTaskStartResultSchema,
+        async (raw, context) => {
+          if (context && context.caller.audience !== 'ui') throw new Error('启动任务需要成员明确授权。')
+          await options.getRuntime().startTask(collaborationTaskStartInputSchema.parse(raw))
+          return { output: { started: true as const } }
+        }, '1.0.0', ['ui']
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.taskReturn,
@@ -816,31 +891,29 @@ export function createCollaborationCapabilityFactory<CapabilityDefinition>(
         })
       ),
       capability(
+        COLLABORATION_CAPABILITY_IDS.taskSessionContinue,
+        '显式创建任务接续会话',
+        '核对当前执行权限、旧会话停机和已决回执，封住旧输入并创建可追溯接续；通过持久指令接续原授权任务，不重发旧回合。',
+        'workspace-write', collaborationTaskSessionContinueInputSchema, collaborationTaskSessionContinueResultSchema,
+        async (raw, context) => {
+          if (context && context.caller.audience !== 'ui') throw new Error('接续任务需要成员在协作页明确确认。')
+          return { output: await options.getRuntime().continueTaskSession(collaborationTaskSessionContinueInputSchema.parse(raw)) }
+        }, '1.0.0', ['ui']
+      ),
+      capability(
         COLLABORATION_CAPABILITY_IDS.taskSessionOpen,
-        'Open the current private Worker Task Session',
-        'Resolves the authenticated local Worker execution binding so the generic Workbench can navigate to the exact private Session.',
-        'read',
+        '打开任务协作聊天',
+        '为当前执行人打开或创建任务聊天并带入上下文；不会发送消息或启动 AI。',
+        'workspace-write',
         collaborationTaskSessionOpenInputSchema,
         collaborationTaskSessionOpenResultSchema,
-        async (raw) => {
-          const input = collaborationTaskSessionOpenInputSchema.parse(raw)
-          const binding = (await options.getRuntime().listWorkerSessionBindings()).find((candidate) => (
-            candidate.projectId === input.projectId &&
-            candidate.taskId === input.taskId &&
-            (input.executionId === undefined || candidate.executionId === input.executionId)
-          ))
-          if (!binding) throw new Error('The current user has no private Session bound to this Task execution.')
-          return {
-            output: collaborationTaskSessionOpenResultSchema.parse({
-              opened: true,
-              sessionId: binding.threadId,
-              runtimeId: binding.runtimeId,
-              threadId: binding.threadId
-            })
-          }
+        async (raw, context) => {
+          if (context && context.caller.audience !== 'ui') throw new Error('打开任务聊天需要用户操作。')
+          return { output: await options.getRuntime().openTaskSession(collaborationTaskSessionOpenInputSchema.parse(raw)) }
         },
-        '1.0.0',
-        ['ui']
+        '2.0.0',
+        ['ui'],
+        'none'
       ),
       capability(
         COLLABORATION_CAPABILITY_IDS.managedContainerInspect,

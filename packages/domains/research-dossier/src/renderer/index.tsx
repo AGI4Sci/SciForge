@@ -8,6 +8,7 @@ import {
   RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND,
   RENDERER_EXTENSION_CONTRIBUTION_KIND,
   type DomainRendererCommandHandler,
+  type DomainRendererAuditWorkspaceValue,
   type DomainRendererResourceNavigationValue,
   type DomainRendererWorkbenchRightPanelValue,
   type DomainRendererWorkbenchToolbarActionValue,
@@ -15,6 +16,8 @@ import {
 } from '@sciforge/domain-sdk/renderer'
 
 import {
+  RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRIBUTION,
+  RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRACT,
   RESEARCH_DOSSIER_RENDERER_COMMAND_CONTRIBUTION,
   RESEARCH_DOSSIER_RENDERER_I18N_CONTRIBUTION,
   RESEARCH_DOSSIER_RENDERER_RESOURCE_NAVIGATION_CONTRACT,
@@ -43,6 +46,7 @@ export type ResearchDossierRightPanelContribution =
 export type ResearchDossierToolbarActionContribution =
   DomainRendererWorkbenchToolbarActionValue<typeof LibraryBig>
 export type ResearchDossierRendererContribution =
+  | DomainRendererAuditWorkspaceValue<ReactElement>
   | ResearchDossierRightPanelContribution
   | DomainRendererCommandHandler
   | ResearchDossierToolbarActionContribution
@@ -112,6 +116,26 @@ export function createResearchDossierRightPanelContribution(
   })
 }
 
+/** Shared production audit workspace, hosted by a global surface without a fake pane id. */
+export function createResearchAuditWorkspaceContribution(host: DomainRendererHost): DomainRendererAuditWorkspaceValue<ReactElement> {
+  const client = createResearchDossierCapabilityClient(host.capabilityInvoker)
+  let researchSummaries: readonly DomainRendererContribution[] | undefined
+  let researchViews: readonly DomainRendererContribution[] | undefined
+  return Object.freeze({ render: context => {
+    researchSummaries ??= host.contributions?.list(RENDERER_RESEARCH_SUMMARY_CONTRIBUTION_KIND) ?? []
+    researchViews ??= host.contributions?.list(RENDERER_EXTENSION_CONTRIBUTION_KIND) ?? []
+    const workbench = host.workbench ? { ...host.workbench,
+      openRightPanel: (input: Parameters<NonNullable<DomainRendererHost['workbench']>['openRightPanel']>[0]) => { host.workbench!.openRightPanel(input); context.onClose() },
+      ...(host.workbench.openResource ? { openResource: (input: Parameters<NonNullable<NonNullable<DomainRendererHost['workbench']>['openResource']>>[0]) => { const opened = host.workbench!.openResource!(input); if (opened) context.onClose(); return opened } } : {})
+    } : undefined
+    return <ResearchWorkspacePanel active={context.active} focused={context.active} className={context.className}
+      session={context.session} activation={context.activation ? { ...context.activation, contributionId: RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRIBUTION.id } : undefined}
+      onCollapse={context.onClose} onReturnToSide={context.onReturnToSide} sourcePresentation="global-overlay"
+      client={client} workbench={workbench} workspacePreview={host.workspacePreview ? {open: target => {host.workspacePreview!.open(target);context.onClose()}} : undefined}
+      researchSummaries={researchSummaries} researchViews={researchViews} />
+  } })
+}
+
 export function createResearchDossierCommand(
   host: DomainRendererHost
 ): DomainRendererCommandHandler {
@@ -148,6 +172,7 @@ export function createDomainRendererEntry(
   return defineTrustedRendererDomainPackageEntry<ResearchDossierRendererContribution>({
     definition: domainPackageDefinition,
     contributions: [
+      { ...RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRIBUTION, contract: RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRACT, value: createResearchAuditWorkspaceContribution(host) },
       {
         ...RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRIBUTION,
         contract: RESEARCH_DOSSIER_RENDERER_RIGHT_PANEL_CONTRACT,

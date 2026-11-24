@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { deliveryManifestSchema, frozenDeliveryBundleHistorySchema, frozenDeliveryBundleSchema, deliveryRelativePathSchema, DELIVERY_MAX_FILE_COUNT, workerDeliveryConfirmationTargetSchema } from '@sciforge/collaboration-contracts'
+import { workerFollowupViewSchema } from './task-followup.js'
+import { taskFileOutputIntentSchema, deliveryManifestSchema, frozenDeliveryBundleHistorySchema, frozenDeliveryBundleSchema, deliveryRelativePathSchema, DELIVERY_MAX_FILE_COUNT, DELIVERY_MAX_FILE_BYTES, workerDeliveryConfirmationTargetSchema } from '@sciforge/collaboration-contracts'
 
 export const workerDeliveryReadInputSchema = z.object({
   projectId: z.string().min(1), taskId: z.string().min(1), executionId: z.string().min(1)
@@ -18,7 +19,16 @@ export const workerDeliveryMaterialSchema = z.object({
 export const workerDeliveryMaterialsResultSchema = z.object({
   files: z.array(workerDeliveryMaterialSchema).max(100), nextCursor: z.string().nullable(), truncated: z.boolean()
 }).strict()
+export const workerDeliveryMaterialImportInputSchema = workerDeliveryReadInputSchema.extend({
+  fileName: z.string().min(1).max(180).refine((name) => !name.includes('/') && deliveryRelativePathSchema.safeParse(name).success,
+    'Choose one canonical portable filename without path or reserved characters.'),
+  contentBase64: z.string().max(Math.ceil(DELIVERY_MAX_FILE_BYTES / 3) * 4).regex(/^[A-Za-z0-9+/]*={0,2}$/u)
+}).strict()
+export const workerDeliveryMaterialImportResultSchema = z.object({ file: workerDeliveryMaterialSchema }).strict()
+export type WorkerDeliveryMaterialImportInput = z.infer<typeof workerDeliveryMaterialImportInputSchema>
 export const workerDeliveryDraftSchema = z.object({
+  declaredMaterial: workerDeliverySelectedMaterialSchema.extend({ source: z.enum(['ai', 'member', 'attachment']).optional() }).nullable().optional(),
+  sourceChat: z.object({ runtimeId: z.string().min(1), threadId: z.string().min(1), turnId: z.string().min(1) }).strict().optional(),
   revision: z.number().int().positive(), resultRevision: z.number().int().positive(),
   basedOnResultRevision: z.number().int().positive().nullable(),
   summary: z.string().max(32_000), aiSummary: z.string().max(32_000).nullable(), summaryEdited: z.boolean(),
@@ -29,22 +39,30 @@ export const workerDeliveryDraftSchema = z.object({
   materialError: z.string().nullable().default(null)
 }).strict()
 export const workerDeliveryDraftSaveInputSchema = workerDeliveryReadInputSchema.extend({
+  declaredMaterial: workerDeliverySelectedMaterialSchema.nullable().optional(),
   summary: z.string().max(32_000), expectedDraftRevision: z.number().int().positive(),
   aiSummaryDecision: z.enum(['replace', 'keep']).optional(),
   selectedMaterials: z.array(workerDeliverySelectedMaterialSchema).max(DELIVERY_MAX_FILE_COUNT).optional()
 }).strict()
+export const workerDeliveryCancelInputSchema = workerDeliveryReadInputSchema.extend({ operationId: z.string().min(1) }).strict()
+export type WorkerDeliveryCancelInput = z.infer<typeof workerDeliveryCancelInputSchema>
 export const workerDeliverySubmitInputSchema = z.object({ target: workerDeliveryConfirmationTargetSchema }).strict()
 export const workerDeliveryViewSchema = z.object({
+  followup: workerFollowupViewSchema.optional(),
+  declaredOutput: taskFileOutputIntentSchema.nullable().optional(),
   projectId: z.string(), taskId: z.string(), executionId: z.string(),
   state: z.enum(['executing', 'waiting_confirmation', 'submitting', 'sealed', 'returned', 'blocked']),
+  canCancelFailedSubmission: z.boolean().optional(),
   submissionProgress: z.enum(['preparing', 'signing', 'staging', 'candidate', 'review', 'seal']).optional(),
   draft: workerDeliveryDraftSchema.nullable(),
   confirmationTarget: workerDeliveryConfirmationTargetSchema.nullable(),
   history: z.array(z.object({
+    sourceChat: workerDeliveryDraftSchema.shape.sourceChat,
     bundle: frozenDeliveryBundleHistorySchema, sourceTurnId: z.string(), frozenAt: z.string(),
     manifest: deliveryManifestSchema, deliveryManifestId: z.string(), submittedByUserId: z.string(), submittedAt: z.string()
   }).strict()),
   candidate: z.object({
+    sourceChat: workerDeliveryDraftSchema.shape.sourceChat,
     target: workerDeliveryConfirmationTargetSchema,
     bundle: frozenDeliveryBundleHistorySchema,
     sourceTurnId: z.string(), frozenAt: z.string(), dirty: z.boolean()

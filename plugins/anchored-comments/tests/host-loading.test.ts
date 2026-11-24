@@ -13,13 +13,13 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { HostServiceProviderRegistry, type HostServiceRequest } from '@sciforge/plugin-sdk'
-import { VISUAL_CLIENT, unavailableVisualProvider } from './harness.js'
+import { VISUAL_CLIENT, DISCUSSION_CLIENT, CLOUD_CLIENT, cloudProvider, discussionProvider, unavailableVisualProvider } from './harness.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { ProcessExtensionHost } from '../../../packages/plugin-sdk/src/process-extension-host.js'
 import packageJson from '../package.json' with { type: 'json' }
-import { ANCHORED_COMMENT_CAPABILITY_IDS } from '../src/core/contract.js'
+import { ANCHORED_COMMENT_CAPABILITY_IDS, proseTranslationResultSchema } from '../src/core/contract.js'
 import { EXPECTED_HOST_GRANTS } from '../src/dsh-adapter/tools.js'
 import { feedbackPacket, PNG_BYTES, productFeedbackThread, researchThread } from './fixtures.js'
 
@@ -39,7 +39,7 @@ async function tempRoot(prefix: string): Promise<string> {
 }
 
 test('activation fails closed when the host grants no tool', async () => {
-  const host = new ProcessExtensionHost({ resolveServiceClients: () => [VISUAL_CLIENT] })
+  const host = new ProcessExtensionHost({ resolveServiceClients: () => [VISUAL_CLIENT, DISCUSSION_CLIENT, CLOUD_CLIENT] })
   try {
     await assert.rejects(
       host.replace({
@@ -75,12 +75,15 @@ export function resolveAgent({ identity, rootContext }) {
   const ordinarySession = { runtimeId: 'test-runtime', threadId: 'thread-1', sessionId: 'session-1' }
   let leaseActive = true
   const hostServices = {
-    authority: { caller, ordinarySession }, services: ['visualCapture'],
+    authority: { caller, ordinarySession }, services: ['visualCapture', 'agentDiscussion'],
     assertCurrent() { assert.ok(leaseActive, 'fixture Host lease is inactive') }
   }
   const host = new ProcessExtensionHost({
-    resolveServiceClients: () => [VISUAL_CLIENT],
-    hostServices: new HostServiceProviderRegistry({ visualCapture: unavailableVisualProvider(serviceCalls, (request) => {
+    resolveServiceClients: () => [VISUAL_CLIENT, DISCUSSION_CLIENT, CLOUD_CLIENT],
+    hostServices: new HostServiceProviderRegistry({ 'identity-access.authenticated-cloud': cloudProvider, agentDiscussion: { ...discussionProvider, operations: { run: request => {
+      const prompt = (request.input as { prompt: string }).prompt
+      return { state: 'completed', runtimeId: 'codex', text: prompt.startsWith('Translate only') ? JSON.stringify({ translations: ['说明 '] }) : 'Fixture explanation' }
+    } } }, visualCapture: unavailableVisualProvider(serviceCalls, (request) => {
       assert.equal(request.owner.packageName, PACKAGE.name)
       assert.equal(request.owner.version, PACKAGE.version)
       assert.ok(['listTargets', 'captureRegisteredTarget'].includes(request.operation))
@@ -206,6 +209,27 @@ export function resolveAgent({ identity, rootContext }) {
     ) as { threads: Array<{ id: string }> }
     assert.deepEqual(stored.threads.map((item) => item.id).sort(), ['thread-feedback', 'thread-host-1'])
 
+    const codeThread = researchThread('code-parent')
+    codeThread.anchor.codeAnchor = { filePath: 'src/test.ts', side: 'new', line: 1,
+      hunkHeader: '', code: 'value', baseRevision: 'abc', contentDigest: 'a'.repeat(64) }
+    await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.upsert, { workspaceRoot, thread: codeThread })
+    const translation = proseTranslationResultSchema.parse(await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.translate, { workspaceRoot, text: 'Explain `value`', targetLanguage: 'zh-CN' }))
+    assert.equal(translation.translation, '说明 `value`')
+    assert.equal(translation.original, 'Explain `value`')
+    assert.equal(translation.machineTranslated, true)
+    const stale = await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, { workspaceRoot, threadId: codeThread.id,
+      current: { ...codeThread.anchor.codeAnchor, contentDigest: 'b'.repeat(64) } }) as { anchorResolution: string; anchor: unknown }
+    assert.equal(stale.anchorResolution, 'needs_retargeting')
+    assert.deepEqual(stale.anchor, codeThread.anchor)
+    const forked = await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.fork, { workspaceRoot,
+      threadId: codeThread.id, messageId: codeThread.messages[0]!.id, childId: 'code-child', body: 'Why?' })
+    assert.equal((forked as { fork: { parentThreadId: string } }).fork.parentThreadId, codeThread.id)
+    const reply = await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.reply, { workspaceRoot,
+      threadId: codeThread.id, requestId: 'b9d4b35c-e50f-4a2f-b248-1d048f10c711', body: 'Explain this' })
+    assert.equal((reply as { state: string }).state, 'completed')
+    assert.deepEqual(await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.cancel, { workspaceRoot,
+      threadId: codeThread.id, requestId: 'b9d4b35c-e50f-4a2f-b248-1d048f10c711' }), { cancelled: false })
+
     assert.deepEqual(
       await invoke(ANCHORED_COMMENT_CAPABILITY_IDS.delete, {
         threadId: 'thread-host-1',
@@ -214,6 +238,17 @@ export function resolveAgent({ identity, rootContext }) {
       { deleted: true }
     )
 
+    const projectId = 'prj_CodeConversation01'
+    await assert.rejects(invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedDiscard, { workspaceRoot, projectId, idempotencyKey: 'idem_code_publish_0001' }), /No live Host service invocation grant/u)
+    await assert.rejects(invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects, { workspaceRoot }), /No live Host service invocation grant/u)
+    for (const id of [ANCHORED_COMMENT_CAPABILITY_IDS.sharedPull, ANCHORED_COMMENT_CAPABILITY_IDS.sharedRetry]) {
+      await assert.rejects(invoke(id, { workspaceRoot, projectId }), /No live Host service invocation grant/u)
+    }
+    await assert.rejects(invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedPublish, { workspaceRoot, projectId,
+      threadId: codeThread.id, requestId: 'req_CodePublish00001', idempotencyKey: 'idem_code_publish_0001', messageIds: [codeThread.messages[0]!.id] }), /Retarget stale code before publishing/u)
+    await assert.rejects(invoke(ANCHORED_COMMENT_CAPABILITY_IDS.sharedSubmit, { workspaceRoot, projectId,
+      command: { protocolVersion: '1.0', type: 'project.code_conversation.append', projectId, conversationId: 'root',
+        requestId: 'req_CodePublish00001', idempotencyKey: 'idem_code_publish_0001', message: { messageId: 'm1', kind: 'user', body: 'Question' } } }), /No live Host service invocation grant/u)
     assert.deepEqual(
       [...new Set(authorizations)].sort(),
       Object.values(ANCHORED_COMMENT_CAPABILITY_IDS).sort()

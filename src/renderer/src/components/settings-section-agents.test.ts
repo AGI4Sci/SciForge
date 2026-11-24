@@ -16,11 +16,8 @@ import {
   codexRuntimeSettingsPatch,
   dshRuntimeSettingsPatch,
   chooseCodexRuntimeExecutable,
-  chooseDshRuntimeExecutable,
   probeCodexRuntimeCandidate,
-  probeDshRuntimeCandidate,
-  runLatestCodexRuntimeProbe,
-  runLatestDshRuntimeProbe
+  runLatestCodexRuntimeProbe
 } from './settings-section-agents'
 import enSettings from '../locales/en/settings.json'
 import zhSettings from '../locales/zh/settings.json'
@@ -116,8 +113,8 @@ const labels: Record<string, string> = {
   approvalUntrusted: 'Untrusted',
   approvalNever: 'Never',
   permissionLevel: 'Permission level',
-  permissionRequestApproval: 'Request approval',
-  permissionAssistedApproval: 'Help approve',
+  permissionReadOnly: 'Read only',
+  permissionWorkspaceWrite: 'Edit workspace',
   permissionFullAccess: 'Full access',
   approvalAuto: 'Auto',
   sandboxMode: 'Sandbox mode',
@@ -186,7 +183,7 @@ const labels: Record<string, string> = {
 }
 
 function t(key: string): string {
-  return labels[key] ?? key
+  return labels[key] ?? (enSettings as Record<string, string>)[key] ?? key
 }
 
 function baseCtx(): Record<string, unknown> {
@@ -210,7 +207,7 @@ function baseCtx(): Record<string, unknown> {
   }
   const dsh = {
     ...defaultDshRuntimeSettings(),
-    executablePath: '/opt/tools/dsh',
+    command: '/opt/tools/dsh',
     selectedModel: 'v4-flash',
     reasoningEffort: 'low'
   }
@@ -284,13 +281,22 @@ describe('AgentsSettingsSection', () => {
       agents: { claude: { command: '/opt/tools/claude' } }
     })
     expect(
-      dshRuntimeSettingsPatch({ executablePath: '/opt/tools/dsh' })
+      dshRuntimeSettingsPatch({ command: '/opt/tools/dsh' })
     ).toEqual({
-      agents: { dsh: { executablePath: '/opt/tools/dsh' } }
+      agents: { dsh: { command: '/opt/tools/dsh' } }
     })
   })
 
   it('maps the three product permission levels to canonical runtime settings', () => {
+    expect(runtimePatchForPermissionLevel('read-only')).toEqual({ sandboxMode: 'read-only' })
+    expect(runtimePatchForPermissionLevel('workspace-write')).toEqual({ sandboxMode: 'workspace-write' })
+    for (const approvalPolicy of ['never', 'auto', 'untrusted', 'on-request'] as const) {
+      expect({ approvalPolicy, ...runtimePatchForPermissionLevel('workspace-write') }.approvalPolicy).toBe(approvalPolicy)
+      expect({ approvalPolicy, ...runtimePatchForPermissionLevel('read-only') }.approvalPolicy).toBe(approvalPolicy)
+    }
+    expect(runtimePatchForPermissionLevel('external-sandbox')).toEqual({ sandboxMode: 'external-sandbox' })
+    expect(permissionLevelFromRuntime('never', 'external-sandbox')).toBe('external-sandbox')
+    expect(permissionLevelFromRuntime('never', 'read-only')).toBe('read-only')
     expect(runtimePatchForPermissionLevel('request-approval')).toEqual({
       approvalPolicy: 'on-request',
       sandboxMode: 'workspace-write'
@@ -307,9 +313,9 @@ describe('AgentsSettingsSection', () => {
       approvalPolicy: 'auto',
       sandboxMode: 'danger-full-access'
     })
-    expect(permissionLevelFromRuntime('on-request', 'workspace-write')).toBe('request-approval')
-    expect(permissionLevelFromRuntime('untrusted', 'workspace-write')).toBe('assisted-approval')
-    expect(permissionLevelFromRuntime('never', 'danger-full-access')).toBe('full-access')
+    expect(permissionLevelFromRuntime('on-request', 'workspace-write')).toBe('workspace-write')
+    expect(permissionLevelFromRuntime('untrusted', 'workspace-write')).toBe('workspace-write')
+    expect(permissionLevelFromRuntime('never', 'danger-full-access')).toBe('danger-full-access')
   })
 
   it('keeps runtime settings focused on labels, values, actions, and folded technical details', () => {
@@ -322,8 +328,8 @@ describe('AgentsSettingsSection', () => {
     expect(html).toContain('value="sonnet"')
     expect(html).toContain('Approval policy')
     expect(html).toContain('Permission level')
-    expect(html).toContain('Request approval')
-    expect(html).toContain('Help approve')
+    expect(html).toContain('Read only')
+    expect(html).toContain('Edit workspace')
     expect(html).toContain('Full access')
     expect(html).toContain('Sandbox mode')
     expect(html).toContain('--search')
@@ -366,7 +372,15 @@ describe('AgentsSettingsSection', () => {
     expect(html).toContain('value="low" selected="">')
     expect(html).toContain('value="off"')
     expect(html).toContain('value="max"')
-    expect(html).toContain('DSH is unavailable')
+    expect(html).toContain(enSettings.runtimeDiscoveryUnavailable)
+    expect(html.match(/data-runtime-settings="dsh"/gu)).toHaveLength(1)
+    expect(html.match(/value="\/opt\/tools\/dsh"/gu)).toHaveLength(1)
+    const card = html.match(/<section data-runtime-settings="dsh"[\s\S]*?<\/section>/u)?.[0]
+    expect(card).toBeDefined()
+    expect(card).toContain('value="v4-pro"')
+    expect(card).toContain('Reasoning effort')
+    expect(card).toContain('Shell command execution')
+    expect(card?.match(/<input/gu)).toHaveLength(1)
   })
 
   it('shows structured DSH discovery status reported by the neutral probe', () => {
@@ -384,9 +398,9 @@ describe('AgentsSettingsSection', () => {
     }
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
 
-    expect(html).toContain('DSH is ready')
+    expect(html).toContain(enSettings.runtimeDiscoveryAvailable)
     expect(html).toContain('0.9.0')
-    expect(html).toContain('ACP session')
+    expect(html).toContain('acp')
     expect(html).toContain('Supported')
     expect(html).toContain('/opt/tools/dsh')
     // Diagnostics name where the executable came from and how its deployment
@@ -514,13 +528,6 @@ describe('AgentsSettingsSection', () => {
     )
   })
 
-  it('probes the DSH candidate through the neutral runtime id', async () => {
-    const probe = vi.fn().mockResolvedValue({ runtimeId: 'dsh', available: false })
-
-    await probeDshRuntimeCandidate(probe, '/opt/tools/dsh')
-
-    expect(probe).toHaveBeenCalledWith('dsh', '/opt/tools/dsh')
-  })
 
   it('ignores an older settings probe that resolves after a newer command', async () => {
     const resolvers = new Map<string, (value: { runtimeId: 'codex'; available: boolean }) => void>()
@@ -538,21 +545,6 @@ describe('AgentsSettingsSection', () => {
     await expect(older).resolves.toEqual({ status: 'stale' })
   })
 
-  it('ignores an older DSH probe that resolves after a newer executable path', async () => {
-    const resolvers = new Map<string, (value: { runtimeId: 'dsh'; available: boolean }) => void>()
-    const probe = vi.fn((_: AgentRuntimeId | undefined, command?: string) => new Promise<{
-      runtimeId: 'dsh'
-      available: boolean
-    }>((resolve) => resolvers.set(command ?? '', resolve)))
-    const sequence = { current: 0 }
-
-    const older = runLatestDshRuntimeProbe(probe, '/old/dsh', sequence)
-    const newer = runLatestDshRuntimeProbe(probe, '/new/dsh', sequence)
-    resolvers.get('/new/dsh')?.({ runtimeId: 'dsh', available: true })
-    await expect(newer).resolves.toMatchObject({ status: 'current' })
-    resolvers.get('/old/dsh')?.({ runtimeId: 'dsh', available: false })
-    await expect(older).resolves.toEqual({ status: 'stale' })
-  })
 
   it('persists only a path explicitly selected by the user', async () => {
     const update = vi.fn()
@@ -571,22 +563,6 @@ describe('AgentsSettingsSection', () => {
     })
   })
 
-  it('persists only a DSH path explicitly selected by the user', async () => {
-    const update = vi.fn()
-    await chooseDshRuntimeExecutable(
-      async () => ({ canceled: true, path: null }),
-      update
-    )
-    expect(update).not.toHaveBeenCalled()
-
-    await chooseDshRuntimeExecutable(
-      async () => ({ canceled: false, path: '/opt/tools/dsh' }),
-      update
-    )
-    expect(update).toHaveBeenCalledWith({
-      executablePath: '/opt/tools/dsh'
-    })
-  })
 
   it('explains app-managed runtime directories without exposing editable directory fields', () => {
     const html = renderToStaticMarkup(

@@ -13,24 +13,31 @@ import { defineTool, ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createAnchoredCommentsOperations } from '../core/operations.js'
 import { createNodeNetworkPort } from '../ports/network.js'
 import { createHostVisualCapturePort, type VisualCaptureClient } from '../ports/visual-capture.js'
+import { createHostDiscussionPort, type DiscussionClient } from '../ports/discussion.js'
+import { createHostCloudPort, type CloudHostClient, AUTHENTICATED_CLOUD_HOST_SERVICE } from '../ports/cloud.js'
 import {
   registerAnchoredCommentsTools,
   type DshToolDefinition
 } from './tools.js'
 
-export const inject = ['tools', 'visualCapture']
+export const inject = ['tools', 'visualCapture', 'agentDiscussion', AUTHENTICATED_CLOUD_HOST_SERVICE]
 
-/** Discovered through the same installed plugin generation as the eight tools. */
+/** Discovered through the same installed plugin generation as its tools. */
 export function getRendererContributions() {
   return [{ id: 'anchored-comments.panel', kind: 'panel', resourceKinds: ['resource-text-selection'], title: '锚定批注 / Anchored Comments' }] as const
 }
 
-export function apply(ctx: Context & { tools: ToolRuntime; visualCapture: VisualCaptureClient }, _config?: unknown): void {
+export function apply(ctx: Context & { tools: ToolRuntime; visualCapture: VisualCaptureClient; agentDiscussion: DiscussionClient; 'identity-access.authenticated-cloud': CloudHostClient }, _config?: unknown): void {
   if (!ctx.visualCapture || typeof ctx.visualCapture.invoke !== 'function') {
     throw new Error('Anchored Comments requires the authorized visualCapture Host service.')
   }
   const visualCapture = createHostVisualCapturePort(ctx.visualCapture)
-  const operations = createAnchoredCommentsOperations({ network: createNodeNetworkPort(), visualCapture })
+  if (!ctx.agentDiscussion || typeof ctx.agentDiscussion.request !== 'function') {
+    throw new Error('Anchored Comments requires the authorized agentDiscussion Host service.')
+  }
+  const operations = createAnchoredCommentsOperations({ network: createNodeNetworkPort(), visualCapture,
+    cloud: createHostCloudPort(ctx[AUTHENTICATED_CLOUD_HOST_SERVICE]),
+    discussion: createHostDiscussionPort(ctx.agentDiscussion) })
   // `tools.register()` returns the exact disposer. Keep them so a half-finished
   // activation can be rolled back and so disable/unload removes every tool.
   const disposers: Array<() => void> = []

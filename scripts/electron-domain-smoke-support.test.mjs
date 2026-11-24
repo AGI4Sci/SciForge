@@ -8,8 +8,9 @@ import { runInNewContext } from 'node:vm'
 import {
   CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
   COLLABORATION_SMOKE_CAPABILITY_IDS,
-  CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
+  CLOUD_NOTES_SMOKE_CAPABILITY_IDS,
   IDENTITY_SMOKE_CAPABILITY_IDS,
+  KNOWLEDGE_NET_SMOKE_CAPABILITY_IDS,
   PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS,
   REQUIRED_CAPABILITY_IDS,
   cleanupElectronSmoke,
@@ -139,18 +140,11 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
     'identity.local.dismiss-first-prompt',
     'identity.local.backup-and-reset'
   ])
-  assert.deepEqual(CONTENT_SPACE_SMOKE_CAPABILITY_IDS, [
-    'content-space.list-provider-instances',
-    'content-space.describe-capabilities',
-    'content-space.list-containers',
-    'content-space.list-entries',
-    'content-space.observe-entry',
-    'content-space.create-folder',
-    'content-space.upload-new',
-    'content-space.download',
-    'content-space.resolve-portal-target',
-    'content-space.open-portal-target',
-    'content-space.observe-immutable-version'
+  assert.deepEqual(CLOUD_NOTES_SMOKE_CAPABILITY_IDS, [
+  'siyuan.service.status',
+  'siyuan.space.list',
+  'siyuan.document.open',
+  'siyuan.document.create'
   ])
   assert.deepEqual(CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS, [
     'identity.cloud.inspect',
@@ -173,6 +167,7 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
     'collaboration.sync.retry',
     'collaboration.task.list',
     'collaboration.task.offer.decide',
+    'collaboration.task.session.continue',
     'collaboration.worker-delivery.read',
     'collaboration.delivery.submit',
     'collaboration.worker-residual.dispose',
@@ -202,6 +197,13 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
     'collaboration.project.complete'
   ])
   assert.equal(new Set(REQUIRED_CAPABILITY_IDS).size, REQUIRED_CAPABILITY_IDS.length)
+  assert.deepEqual(KNOWLEDGE_NET_SMOKE_CAPABILITY_IDS, [
+    'knowledge-net.note.commit', 'knowledge-net.lookup', 'knowledge-net.annotate',
+    'knowledge-net.library.import', 'knowledge-net.library.status'
+  ])
+  for (const capabilityId of KNOWLEDGE_NET_SMOKE_CAPABILITY_IDS) {
+    assert.equal(REQUIRED_CAPABILITY_IDS.filter((candidate) => candidate === capabilityId).length, 1)
+  }
   for (const agentOnlyBrowserCapabilityId of [
     'browser-preview.click',
     'browser-preview.fill',
@@ -222,7 +224,7 @@ test('domain smoke requires every Stage 2 collaboration capability exactly once'
   for (const capabilityId of [
     ...IDENTITY_SMOKE_CAPABILITY_IDS,
     ...CLOUD_IDENTITY_SMOKE_CAPABILITY_IDS,
-    ...CONTENT_SPACE_SMOKE_CAPABILITY_IDS,
+    ...CLOUD_NOTES_SMOKE_CAPABILITY_IDS,
     ...COLLABORATION_SMOKE_CAPABILITY_IDS,
     ...PROJECT_COORDINATOR_SMOKE_CAPABILITY_IDS
   ]) {
@@ -258,7 +260,7 @@ test('fresh-profile renderer executes only the static workflow without installed
   const expectedInvocations = [
     [{ request: { actionId: 'identity.local.create-account', invocationId: identityInvocationId, input: { username: 'electron_smoke' } } }, { status: 'available', currentAccount: { username: 'electron_smoke' } }],
     [{ request: { actionId: 'identity.cloud.inspect', input: {} } }, { snapshot: { identity: { state: 'signed-out' }, device: { state: 'signed-out' } } }],
-    [{ request: { actionId: 'content-space.list-provider-instances', input: {} } }, { ok: true, value: { items: [{ providerInstanceRef: 'installed-provider' }] } }],
+    [{ request: { actionId: 'siyuan.service.status', input: {} } }, { mode: 'managed', identity: { state: 'signed-out' } }],
     [{ request: { actionId: 'collaboration.status.read', input: {} } }, { connection: { configured: false, state: 'unconfigured' } }],
     [{ request: { actionId: 'collaboration.workspace.read', input: {} } }, { connection: { state: 'cloud_unavailable' }, projects: [] }],
     [{ workspaceId: workspaceDirectory, request: { actionId: 'create-loop.read', input: {} } }, { settings: { workflows: [] } }],
@@ -342,7 +344,7 @@ test('smoke CLI requires one strict Cloud/OIDC deployment pair', () => {
   )
 })
 
-test('smoke result requires the selected Identity and a composed Content Space Provider', () => {
+test('smoke result requires the selected Identity and independent cloud notes', () => {
   const valid = validSmokeResult()
   assert.doesNotThrow(() => validateSmokeResult(valid, { expectedRendererUrl: valid.url }))
   assert.throws(
@@ -352,10 +354,10 @@ test('smoke result requires the selected Identity and a composed Content Space P
     /Identity account/u
   )
   assert.throws(
-    () => validateSmokeResult({ ...valid, contentSpaceProviderInstanceCount: 0 }, {
+    () => validateSmokeResult({ ...valid, cloudNotesIdentityState: 'signed-in' }, {
       expectedRendererUrl: valid.url
     }),
-    /Content Space Provider Instance/u
+    /Cloud notes independent managed service/u
   )
   assert.throws(
     () => validateSmokeResult({ ...valid, collaborationConnectionState: 'connected' }, {
@@ -423,9 +425,9 @@ function validSmokeResult() {
     cloudIdentityState: 'signed-out',
     cloudDeviceState: 'signed-out',
     cloudIdentityErrorCode: null,
-    contentSpaceProviderActionId: 'content-space.list-provider-instances',
-    contentSpaceProviderInstanceRef: 'installed-provider',
-    contentSpaceProviderInstanceCount: 1,
+    cloudNotesActionId: 'siyuan.service.status',
+    cloudNotesMode: 'managed',
+    cloudNotesIdentityState: 'signed-out',
     collaborationActionId: 'collaboration.status.read',
     collaborationConfigured: false,
     collaborationConnectionState: 'unconfigured',

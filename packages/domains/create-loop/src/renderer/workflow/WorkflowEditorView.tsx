@@ -397,7 +397,7 @@ function WorkflowEditorInner({
   )
 
   return (
-    <div className="ds-no-drag fixed inset-0 z-[60] flex flex-col bg-ds-main">
+    <div data-native-view-occluder="true" className="ds-no-drag fixed inset-0 z-[60] flex flex-col bg-ds-main">
       <header
         className="ds-drag flex shrink-0 items-center gap-3 border-b border-ds-border py-2.5 pr-4"
         style={{ paddingLeft: 'calc(var(--ds-window-controls-safe-inset) + 2.5rem)' }}
@@ -405,13 +405,13 @@ function WorkflowEditorInner({
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 text-[13px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 text-ds-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
         >
           <ArrowLeft className="h-4 w-4" strokeWidth={1.8} />
           {t('workflowBack')}
         </button>
         <input
-          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-[15px] font-medium text-ds-ink outline-none focus:border-ds-border focus:bg-ds-card"
+          className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-ds-xl font-medium text-ds-ink outline-none focus:border-ds-border focus:bg-ds-card"
           value={name}
           placeholder={t('workflowNamePlaceholder')}
           onChange={(event) => {
@@ -419,7 +419,7 @@ function WorkflowEditorInner({
             markDirty()
           }}
         />
-        <label className="inline-flex shrink-0 items-center gap-2 text-[13px] font-medium text-ds-muted">
+        <label className="inline-flex shrink-0 items-center gap-2 text-ds-md font-medium text-ds-muted">
           {t('workflowEnabled')}
           <input
             type="checkbox"
@@ -443,7 +443,7 @@ function WorkflowEditorInner({
           type="button"
           onClick={() => void save()}
           disabled={saving}
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-3 text-ds-md font-medium text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
         >
           <Save className="h-4 w-4" strokeWidth={1.8} />
           {dirty ? t('workflowSave') : t('workflowSaved')}
@@ -452,7 +452,7 @@ function WorkflowEditorInner({
           <button
             type="button"
             onClick={() => void onStop()}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-500/90 px-4 text-[13px] font-semibold text-white transition hover:bg-red-500"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-500/90 px-4 text-ds-md font-semibold text-white transition hover:bg-red-500"
           >
             <Square className="h-3.5 w-3.5" strokeWidth={2} />
             {t('workflowStop')}
@@ -461,7 +461,7 @@ function WorkflowEditorInner({
           <button
             type="button"
             onClick={() => void runWorkflow()}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ds-userbubble px-4 text-[13px] font-semibold text-ds-userbubbleFg transition hover:opacity-90"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ds-userbubble px-4 text-ds-md font-semibold text-ds-userbubbleFg transition hover:opacity-90"
           >
             <Play className="h-4 w-4" strokeWidth={2} />
             {t('workflowRunNow')}
@@ -471,10 +471,10 @@ function WorkflowEditorInner({
 
       <div ref={inspectorContainerRef} className="flex min-h-0 flex-1">
         <aside className={`${inspectorExpanded ? 'hidden' : 'flex'} w-[196px] shrink-0 flex-col gap-3 overflow-y-auto border-r border-ds-border bg-ds-card/40 p-3`}>
-          <span className="text-[11px] font-semibold uppercase text-ds-faint">{t('workflowPalette')}</span>
+          <span className="text-ds-xs font-semibold uppercase text-ds-faint">{t('workflowPalette')}</span>
           {WORKFLOW_PALETTE_GROUPS.map((group) => (
             <section key={group.id} className="flex flex-col gap-1">
-              <h2 className="px-1 text-[10.5px] font-semibold uppercase text-ds-faint">{t(`workflowGroup_${group.id}`)}</h2>
+              <h2 className="px-1 text-ds-2xs font-semibold uppercase text-ds-faint">{t(`workflowGroup_${group.id}`)}</h2>
               {group.kinds.map((kind) => {
                 const Icon = NODE_ICONS[kind]
                 return (
@@ -482,7 +482,7 @@ function WorkflowEditorInner({
                     type="button"
                     key={kind}
                     onClick={() => addNode(kind)}
-                    className="flex h-9 items-center gap-2 rounded-lg border border-transparent px-2 text-left text-[12.5px] text-ds-ink transition hover:border-ds-border hover:bg-ds-hover"
+                    className="flex h-9 items-center gap-2 rounded-lg border border-transparent px-2 text-left text-ds-sm text-ds-ink transition hover:border-ds-border hover:bg-ds-hover"
                   >
                     <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
                       <Icon className="h-3.5 w-3.5" strokeWidth={1.8} />
@@ -497,7 +497,7 @@ function WorkflowEditorInner({
           {resourceProviders.length > 0 ? (
             <section className="flex flex-col gap-1 border-t border-ds-border pt-3">
               <div className="flex items-center justify-between gap-2 px-1">
-                <h2 className="text-[10.5px] font-semibold uppercase text-ds-faint">
+                <h2 className="text-ds-2xs font-semibold uppercase text-ds-faint">
                   {t('workflowGroup_resources')}
                 </h2>
                 <button
@@ -511,22 +511,22 @@ function WorkflowEditorInner({
                 </button>
               </div>
               {resourceActionError ? (
-                <span className="px-2 py-1 text-[11px] leading-4 text-red-600">{resourceActionError}</span>
+                <span className="px-2 py-1 text-ds-xs leading-4 text-red-600">{resourceActionError}</span>
               ) : null}
               {resourceCatalog.map(({ provider, resources, loading, error }) => (
                 <div key={provider.id} className="flex flex-col gap-1">
                   {resourceProviders.length > 1 ? (
-                    <span className="px-2 pt-1 text-[10px] font-medium text-ds-faint">{provider.title}</span>
+                    <span className="px-2 pt-1 text-ds-2xs font-medium text-ds-faint">{provider.title}</span>
                   ) : null}
                   {loading ? (
-                    <span className="flex h-9 items-center gap-2 px-2 text-[11.5px] text-ds-faint">
+                    <span className="flex h-9 items-center gap-2 px-2 text-ds-xs text-ds-faint">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       {t('workflowResourcesLoading')}
                     </span>
                   ) : error ? (
-                    <span className="px-2 py-1 text-[11px] leading-4 text-red-600">{error}</span>
+                    <span className="px-2 py-1 text-ds-xs leading-4 text-red-600">{error}</span>
                   ) : resources.every((resource) => resource.paletteVisibility === 'hidden') ? (
-                    <span className="px-2 py-1 text-[11px] leading-4 text-ds-faint">
+                    <span className="px-2 py-1 text-ds-xs leading-4 text-ds-faint">
                       {t('workflowResourcesEmpty')}
                     </span>
                   ) : (
@@ -545,11 +545,11 @@ function WorkflowEditorInner({
                               <Database className="h-3.5 w-3.5" strokeWidth={1.8} />
                             </span>
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-[12px] font-medium">
+                              <span className="block truncate text-ds-sm font-medium">
                                 {resource.nameKey ? t(resource.nameKey) : resource.name}
                               </span>
                               {resource.detail ? (
-                                <span className="block truncate text-[10.5px] text-ds-faint">{resource.detail}</span>
+                                <span className="block truncate text-ds-2xs text-ds-faint">{resource.detail}</span>
                               ) : null}
                             </span>
                             <Plus className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.8} />
@@ -595,7 +595,7 @@ function WorkflowEditorInner({
             </WorkflowNodeActionsContext.Provider>
           </WorkflowRunStatusContext.Provider>
           {nodes.length === 0 ? (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8 text-center text-[13px] text-ds-faint">
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8 text-center text-ds-md text-ds-faint">
               {t('workflowEmptyCanvas')}
             </div>
           ) : null}
@@ -649,7 +649,7 @@ function WorkflowEditorInner({
                   stopInspectorFollow()
                   setMode(tab)
                 }}
-                className={`relative px-3 py-2 text-[12.5px] font-medium transition ${
+                className={`relative px-3 py-2 text-ds-sm font-medium transition ${
                   mode === tab ? 'text-ds-ink' : 'text-ds-faint hover:text-ds-muted'
                 }`}
               >

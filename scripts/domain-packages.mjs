@@ -28,6 +28,12 @@ const DOMAIN_RUNTIME_MCP_EXPORT = './runtime-mcp'
 const DOMAIN_RUNTIME_MCP_RUNNER_EXPORT = 'runDomainRuntimeMcpServerFromArgv'
 const SCOPED_PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/
 
+import { readdirSync } from 'node:fs'
+import { isLicenseOnlyArchiveEntries } from './domain-license-archive.cjs'
+export function isLicenseOnlyDomainArchive(directory) {
+  return isLicenseOnlyArchiveEntries(readdirSync(directory, { withFileTypes: true }))
+}
+
 export async function discoverDomainPackages(
   root,
   options = {}
@@ -45,6 +51,7 @@ export async function discoverDomainPackages(
   const parseDefinition = options.parseDefinition ?? await loadDefinitionParser(root)
   const discovered = []
   for (const packageRoot of packageDirectories) {
+    if (await isLicenseOnlyDomainArchive(packageRoot)) continue
     const manifestPath = path.join(packageRoot, 'sciforge.domain.json')
     await requireFile(manifestPath, `Domain package ${path.basename(packageRoot)} is missing sciforge.domain.json.`)
     const rawManifest = parseJson(await readFile(manifestPath, 'utf8'), manifestPath)
@@ -352,7 +359,7 @@ function renderMain(packages) {
   return `${GENERATED_HEADER}import type {\n  DomainMainHost,\n  DomainMainPackageStorageHost,\n  DomainMainSystemCapabilityInvoker,\n  DomainRuntimeContributionOwner\n} from '@sciforge/domain-sdk/host'\nimport { defineInstalledMainDomainEntrySet } from '@sciforge/domain-sdk/main'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}import type { z } from 'zod'\nimport { installedDomainPackages } from '../../shared/installed-domain-packages'\nimport { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'\n\nexport type InstalledMainDomainHost = Omit<\n  DomainMainHost,\n  | 'defineCapability'\n  | 'capabilities'\n  | 'packageSettings'\n  | 'packageSecrets'\n  | 'fileTransfers'\n  | 'externalNavigation'\n  | 'portableResources'\n  | 'internalServices'\n> & Readonly<{\n  capabilityInvokerFor: (owner: DomainRuntimeContributionOwner) => DomainMainSystemCapabilityInvoker\n  packageStorageFor: (owner: DomainRuntimeContributionOwner) => DomainMainPackageStorageHost\n  fileTransfersFor?: (owner: DomainRuntimeContributionOwner) => NonNullable<DomainMainHost['fileTransfers']>\n  externalNavigationFor?: (owner: DomainRuntimeContributionOwner) => NonNullable<DomainMainHost['externalNavigation']>\n  portableResourcesFor?: (owner: DomainRuntimeContributionOwner) => NonNullable<DomainMainHost['portableResources']>\n  internalServicesFor?: (owner: DomainRuntimeContributionOwner) => NonNullable<DomainMainHost['internalServices']>\n}>\n\nexport function createInstalledMainDomainEntries(host: InstalledMainDomainHost) {\n  const {\n    capabilityInvokerFor,\n    packageStorageFor,\n    fileTransfersFor,\n    externalNavigationFor,\n    portableResourcesFor,\n    internalServicesFor,\n    ...sharedHost\n  } = host\n  const domainHostFor = (packageName: string): DomainMainHost => {\n    const definition = installedDomainPackages.definitions.find(\n      (candidate) => candidate.packageName === packageName\n    )\n    if (!definition) throw new Error(\`Installed main domain package \${packageName} is unavailable.\`)\n    const owner = Object.freeze({\n      moduleId: definition.module.id,\n      moduleVersion: definition.module.version\n    })\n    const packageStorage = packageStorageFor(owner)\n    return {\n      ...sharedHost,\n      capabilities: capabilityInvokerFor(owner),\n      packageSettings: packageStorage.settings,\n      packageSecrets: packageStorage.secrets,\n      ...(fileTransfersFor ? { fileTransfers: fileTransfersFor(owner) } : {}),\n      ...(externalNavigationFor ? { externalNavigation: externalNavigationFor(owner) } : {}),\n      ...(portableResourcesFor ? { portableResources: portableResourcesFor(owner) } : {}),\n      ...(internalServicesFor ? { internalServices: internalServicesFor(owner) } : {}),\n      defineCapability: (options) => defineCapability(\n        options as DefineCapabilityOptions<z.ZodType, z.ZodType>\n      )\n    }\n  }\n  return defineInstalledMainDomainEntrySet<unknown>(\n    installedDomainPackages,\n    [\n${values.join(',\n')}\n    ]\n  ).entries\n}\n`
 }
 
-function renderMainHostServices(packages) {
+export function renderMainHostServices(packages) {
   const hostServicePackages = packages.filter((candidate) =>
     isRecord(candidate.packageJson.exports) && Object.hasOwn(candidate.packageJson.exports, './host-services')
   )
@@ -379,14 +386,23 @@ function renderMainHostServices(packages) {
     '  const resolvers = [',
     ...values.map((value, index) => `${value}${index === values.length - 1 ? '' : ','}`),
     '  ].map((create) => create(options))',
-    '  const resolveHostServiceProviders = (packageName: string, version: string, generation: number) =>',
-    '    resolvers.map((resolver) => resolver.resolve(packageName, version, generation))',
-    '      .find((value): value is Readonly<Record<string, HostServiceProvider>> => value !== undefined)',
+    '  const serviceIds = resolvers.flatMap((resolver) => resolver.serviceIds)',
+    '  if (new Set(serviceIds).size !== serviceIds.length) throw new Error("Duplicate installed domain Host service ID.")',
+    '  const resolveHostServiceProviders = (packageName: string, version: string, generation: number) => {',
+    '    const providers: Record<string, HostServiceProvider> = Object.create(null)',
+    '    for (const resolver of resolvers) {',
+    '      for (const [serviceId, provider] of Object.entries(resolver.resolve(packageName, version, generation) ?? {})) {',
+    '        if (Object.hasOwn(providers, serviceId)) throw new Error(`Duplicate installed domain Host service ID: ${serviceId}`)',
+    '        providers[serviceId] = provider',
+    '      }',
+    '    }',
+    '    return Object.keys(providers).length === 0 ? undefined : Object.freeze(providers)',
+    '  }',
     '  return Object.freeze({',
     '    resolveHostServiceProviders,',
     '    resolveHostServiceClients: (packageName, version, generation) =>',
     '      resolvers.flatMap((resolver) => resolver.resolveClients(packageName, version, generation)),',
-    '    hostServiceIds: Object.freeze([...new Set(resolvers.flatMap((resolver) => resolver.serviceIds))])',
+    '    hostServiceIds: Object.freeze(serviceIds)',
     '  })',
     '}',
     ''
@@ -400,7 +416,7 @@ function renderRenderer(packages) {
   const values = packages.map((candidate, index) =>
     `    createDomainRendererEntry${index}(domainHostFor(${JSON.stringify(candidate.packageName)}))`
   )
-  return `${GENERATED_HEADER}import type { DomainRendererContribution, DomainRendererHost } from '@sciforge/domain-sdk/host'\nimport { defineInstalledRendererDomainEntrySet } from '@sciforge/domain-sdk/renderer'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}import { installedDomainPackages } from '@shared/installed-domain-packages'\nimport type { VisibleContextComponentSnapshot } from '@shared/visible-context'\nimport { rendererCapabilityClient } from '../lib/capability-client'\nimport { rendererFileTransferHostFor } from '../lib/file-transfer-client'\nimport { importSessionWorkspaceAttachments } from '../lib/domain-workspace-attachments'\nimport { openResourcePreview } from '../lib/resource-preview'\nimport { openSafeExternalUrl } from '../lib/open-external'\nimport {\n  inspectRegisteredVisibleContextTargetAt,\n  inspectRegisteredVisibleContextTextSelection,\n  registerVisibleContextComponent,\n  registerVisibleContextVisualTarget\n} from '../lib/visible-context'\nimport { domainRendererNavigationHost } from './domain-renderer-navigation'\n\nlet rendererContributions: readonly DomainRendererContribution[] = []\nconst domainHostFor = (packageName: string): DomainRendererHost => {\n  const definition = installedDomainPackages.definitions.find(\n    (candidate) => candidate.packageName === packageName\n  )\n  if (!definition) {\n    throw new Error(\`Installed renderer domain package \${packageName} is unavailable.\`)\n  }\n  const ownerId = definition.module.id\n  return {\n    capabilityInvoker: rendererCapabilityClient,\n    contributions: {\n      list: (kind) => rendererContributions.filter((contribution) => contribution.kind === kind)\n    },\n    openExternal: async (url) => {\n      await openSafeExternalUrl(url)\n    },\n    fileTransfers: rendererFileTransferHostFor(ownerId),\n    resourcePreview: { open: openResourcePreview },\n    workspace: {\n      importAttachments: importSessionWorkspaceAttachments,\n      pickFile: (request) => window.sciforge.pickFile(request),\n      openRemoteSession: async (input) => {\n        await window.sciforge.remoteWorkspace.attach(input)\n      }\n    },\n    ...domainRendererNavigationHost,\n    visibleContext: {\n      registerComponent: (component) => registerVisibleContextComponent(\n        component as VisibleContextComponentSnapshot\n      ),\n      registerVisualTarget: ({ element, ...input }) => registerVisibleContextVisualTarget({\n        ...input,\n        ...(element ? { element: element as () => Element | null } : {})\n      }),\n      inspectRegisteredTargetAt: inspectRegisteredVisibleContextTargetAt,\n      inspectRegisteredTextSelection: inspectRegisteredVisibleContextTextSelection\n    }\n  }\n}\n\nexport const installedRendererDomainEntrySet = defineInstalledRendererDomainEntrySet<unknown>(\n  installedDomainPackages,\n  [\n${values.join(',\n')}\n  ]\n)\nrendererContributions = Object.freeze(installedRendererDomainEntrySet.contributions.map((contribution) => Object.freeze({\n  id: contribution.declaration.id,\n  kind: contribution.declaration.kind,\n  packageName: contribution.packageName,\n  owner: contribution.owner,\n  ...(contribution.contract === undefined ? {} : { contract: contribution.contract }),\n  value: contribution.value\n})))\n`
+  return `${GENERATED_HEADER}import type { DomainRendererContribution, DomainRendererHost } from '@sciforge/domain-sdk/host'\nimport { defineInstalledRendererDomainEntrySet } from '@sciforge/domain-sdk/renderer'\n${imports.join('\n')}${imports.length > 0 ? '\n' : ''}import { installedDomainPackages } from '@shared/installed-domain-packages'\nimport type { VisibleContextComponentSnapshot } from '@shared/visible-context'\nimport { rendererCapabilityClient } from '../lib/capability-client'\nimport { rendererFileTransferHostFor } from '../lib/file-transfer-client'\nimport { importSessionWorkspaceAttachments } from '../lib/domain-workspace-attachments'\nimport { openResourcePreview } from '../lib/resource-preview'\nimport { openSafeExternalUrl } from '../lib/open-external'\nimport {\n  inspectRegisteredVisibleContextTargetAt,\n  inspectRegisteredVisibleContextTextSelection,\n  registerVisibleContextComponent,\n  registerVisibleContextRefresh,\n  registerVisibleContextVisualTarget\n} from '../lib/visible-context'\nimport { domainRendererNavigationHost } from './domain-renderer-navigation'\n\nlet rendererContributions: readonly DomainRendererContribution[] = []\nconst domainHostFor = (packageName: string): DomainRendererHost => {\n  const definition = installedDomainPackages.definitions.find(\n    (candidate) => candidate.packageName === packageName\n  )\n  if (!definition) {\n    throw new Error(\`Installed renderer domain package \${packageName} is unavailable.\`)\n  }\n  const ownerId = definition.module.id\n  return {\n    capabilityInvoker: rendererCapabilityClient,\n    contributions: {\n      list: (kind) => rendererContributions.filter((contribution) => contribution.kind === kind)\n    },\n    openExternal: async (url) => {\n      await openSafeExternalUrl(url)\n    },\n    fileTransfers: rendererFileTransferHostFor(ownerId),\n    resourcePreview: { open: openResourcePreview },\n    workspace: {\n      importAttachments: importSessionWorkspaceAttachments,\n      pickFile: (request) => window.sciforge.pickFile(request),\n      openRemoteSession: async (input) => {\n        await window.sciforge.remoteWorkspace.attach(input)\n      }\n    },\n    ...domainRendererNavigationHost,\n    visibleContext: {\n      registerComponent: (component, options) => registerVisibleContextComponent(\n        component as VisibleContextComponentSnapshot, undefined, options\n      ),\n      registerRefresh: registerVisibleContextRefresh,\n      registerVisualTarget: ({ element, ...input }) => registerVisibleContextVisualTarget({\n        ...input,\n        ...(element ? { element: element as () => Element | null } : {})\n      }),\n      inspectRegisteredTargetAt: inspectRegisteredVisibleContextTargetAt,\n      inspectRegisteredTextSelection: inspectRegisteredVisibleContextTextSelection\n    }\n  }\n}\n\nexport const installedRendererDomainEntrySet = defineInstalledRendererDomainEntrySet<unknown>(\n  installedDomainPackages,\n  [\n${values.join(',\n')}\n  ]\n)\nrendererContributions = Object.freeze(installedRendererDomainEntrySet.contributions.map((contribution) => Object.freeze({\n  id: contribution.declaration.id,\n  kind: contribution.declaration.kind,\n  packageName: contribution.packageName,\n  owner: contribution.owner,\n  ...(contribution.contract === undefined ? {} : { contract: contribution.contract }),\n  value: contribution.value\n})))\n`
 }
 
 function renderWorkspaceServer(packages) {

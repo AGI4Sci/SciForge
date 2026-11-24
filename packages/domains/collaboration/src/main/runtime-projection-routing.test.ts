@@ -16,6 +16,7 @@ import {
   agentInboxMessageFixture,
   agentNodeFixture,
   humanAnswerFixture,
+  humanNeededFixture,
   humanEndpointBindingFixture,
   participantProfileFixture,
   projectFixture,
@@ -27,6 +28,8 @@ import {
   TEST_TIMESTAMP,
   userPrincipalFixture
 } from '@sciforge/collaboration-contracts/testing'
+import { domainPackageJsonValueSchema } from '@sciforge/domain-sdk/contract'
+import { taskChatReadResultSchema } from '../chat-association-contract.js'
 import type { AuthenticatedCloudTransport } from '@sciforge/domain-identity-access/authenticated-cloud-transport'
 import type {
   DomainMainRuntimeLifecycleContext
@@ -334,7 +337,7 @@ test('runtime mounts and disposes the required Worker Session admission and outp
   assert.equal(disposed, 2)
 })
 
-test('runtime routes rejected, timed-out, and withdrawn Coordinator offers into requirements re-dispatch', async () => {
+test('runtime records offer closures without automatically reassigning manual work', async () => {
   for (const outcome of ['rejected', 'timed_out', 'withdrawn'] as const) {
     const fixture = createOfferClosureRuntimeFixture({ outcome })
     const abortController = new AbortController()
@@ -344,14 +347,10 @@ test('runtime routes rejected, timed-out, and withdrawn Coordinator offers into 
         if (fixture.handlerError) throw fixture.handlerError
         return fixture.handlerCalls === 1
       })
-      assert.equal(fixture.reassignedWorkers.length, 1)
+      assert.equal(fixture.reassignedWorkers.length, 0)
       await waitForImmediateCondition(() => fixture.backend.snapshot().lastInboxSequence === 1)
-      assert.deepEqual(fixture.reassignedWorkers, [TEST_IDS.secondUserId])
-      assert.equal(fixture.state.offers.at(-1)?.state, 'pending')
-      assert.equal(
-        fixture.state.offers.at(-1)?.workerUserId,
-        TEST_IDS.secondUserId
-      )
+      assert.deepEqual(fixture.reassignedWorkers, [])
+      assert.equal(fixture.state.offers.at(-1)?.state, outcome)
     } finally {
       abortController.abort()
       await dispose()
@@ -359,7 +358,7 @@ test('runtime routes rejected, timed-out, and withdrawn Coordinator offers into 
   }
 })
 
-test('runtime offer-closure dispatch excludes the failed Worker, raises one Owner todo without an alternate, and is idempotent', async () => {
+test('runtime duplicate offer closure stays read-only in manual mode', async () => {
   const fixture = createOfferClosureRuntimeFixture({
     outcome: 'rejected',
     includeAlternateWorker: false,
@@ -374,8 +373,8 @@ test('runtime offer-closure dispatch excludes the failed Worker, raises one Owne
     })
     assert.equal(fixture.backend.snapshot().lastInboxSequence, 2)
     assert.deepEqual(fixture.reassignedWorkers, [])
-    assert.equal(fixture.ownerTodoCount, 1)
-    assert.equal(fixture.state.pendingHumanNeeded.length, 1)
+    assert.equal(fixture.ownerTodoCount, 0)
+    assert.equal(fixture.state.pendingHumanNeeded.length, 0)
   } finally {
     abortController.abort()
     await dispose()
@@ -429,6 +428,7 @@ test('a stale Coordinator-only Project event is ACKed before the following delet
     payload: {
       protocolVersion: '1.0',
       type: 'human.answer.received',
+      request: { ...humanNeededFixture, status: 'answered', revision: humanAnswerFixture.requestRevision + 1, context: { scope: 'coordinator_project', coordinatorAuthorityEpoch: 1 } },
       answer: {
         ...humanAnswerFixture,
         context: {
@@ -1319,34 +1319,6 @@ function createOfferClosureRuntimeFixture(input: Readonly<{
     resume: async () => null,
     subscribe: () => () => undefined,
     execute: async (command: import('../coordinator-cloud-command.js').CoordinatorCloudCommand): Promise<RestResponse> => {
-      if (command.type === 'task.offer.reassign') {
-        reassignedWorkers.push(command.workerUserId)
-        state.task = taskSchema.parse({
-          ...state.task,
-          status: 'offered',
-          revision: state.task.revision + 1,
-          updatedAt: TEST_LATER_TIMESTAMP
-        })
-        const reassigned = taskOfferSchema.parse({
-          ...offer,
-          taskOfferId: 'ofr_RuntimeClosureOffer0002',
-          workerUserId: command.workerUserId,
-          state: 'pending',
-          reassignmentTaskRevision: null,
-          respondedAt: null,
-          offeredAt: TEST_LATER_TIMESTAMP,
-          expiresAt: command.offerExpiresAt,
-          revision: 1,
-          updatedAt: TEST_LATER_TIMESTAMP
-        })
-        state.offers.push(reassigned)
-        return {
-          protocolVersion: '1.0',
-          type: 'rest.collection',
-          requestId: command.requestId,
-          items: [state.task, reassigned]
-        }
-      }
       if (command.type === 'human.needed.create') {
         if (command.context.scope !== 'coordinator_project') {
           throw new Error('Unexpected Worker HumanNeeded command.')
@@ -1600,6 +1572,7 @@ function cachedRunningProjectState(): CollaborationLocalState {
       humanAnswer: null,
       resources: [],
       agentJournal: [],
+      followups: [],
       externalJournal: [],
       outputs: [],
       recoveryJournalEntryIds: [],
@@ -1607,6 +1580,7 @@ function cachedRunningProjectState(): CollaborationLocalState {
       frozenCandidate: null,
       deliveryDraft: null,
       deliveryHistory: [],
+      cancelledDeliveryAttempts: [],
       deliverySaga: null,
       lateOutcomes: [],
       startedAt: TEST_TIMESTAMP,
@@ -1666,6 +1640,14 @@ function unusedAuthenticatedCloudTransport(): AuthenticatedCloudTransport {
     execute: async () => {
       throw new Error('Authenticated Cloud transport is not expected in this test.')
     },
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => {
       throw new Error('Object staging is not expected in this test.')
     },
@@ -2039,3 +2021,106 @@ test('a Cloud sign-in after startup binds the current Agent for Offer intake and
     await dispose()
   }
 })
+
+test('native accepted messages persist task history before execution, deduplicate retries, and end association', async () => {
+  const state = cachedRunningProjectState()
+  state.user = userPrincipalFixture
+  const runtime = new CollaborationRuntime({ statePath: 'unused', packageSettings: configuredSettings(),
+    authenticatedCloudTransport: { ...unusedAuthenticatedCloudTransport(), status: () => ({ state: 'ready', userId: TEST_IDS.userId, deviceId: TEST_IDS.deviceId }) } as AuthenticatedCloudTransport,
+    humanActions: unusedHumanActions(), signing: unusedSigning(), agentCloudRuntime: createTestAgentCloudRuntime({}), stateBackend: new MemoryBackend(state) })
+  await runtime.listWorkerSessionBindings()
+  const principal = { authority: 'identity-access', subject: TEST_IDS.userId, deviceId: TEST_IDS.deviceId, identityVersion: 1, assurance: 'cloud-authenticated' as const }
+  const event = { runtimeId: 'codex', threadId: 'arbitrary-chat', text: `讨论 ${TEST_IDS.taskId}`, principal, principalContext: { identityVersion: 1, principal }, receipt: { clientDirectiveId: 'directive-task-1', revision: 0, payloadDigest: 'a'.repeat(64), mode: 'direct' as const, delivery: 'accepted' as const, execution: 'not_started' as const } }
+  await runtime['recordAcceptedTaskChatInput'](event)
+  await runtime['recordAcceptedTaskChatInput'](event)
+  const history = taskChatReadResultSchema.parse(runtime.readTaskChats({ runtimeId: 'codex', threadId: 'arbitrary-chat' }))
+  assert.equal(history.associations.length, 1)
+  assert.equal(history.activeTaskId, TEST_IDS.taskId)
+  // The output-schema parse precedes the broker's JSON check. A pre-execution
+  // accepted receipt has no turnId; optional undefined must not survive either.
+  assert.equal(Object.hasOwn(history.associations[0]!, 'turnId'), false)
+  assert.equal(domainPackageJsonValueSchema.safeParse(history).success, true)
+  assert.equal(Object.hasOwn(runtime['store'].snapshot().taskChatAssociations[0]!, 'turnId'), false)
+  await runtime['store'].transact(draft => {
+    Object.assign(draft.taskChatAssociations[0]!, {
+      turnId: undefined, clientDirectiveId: undefined, endedAt: undefined, endMessageId: undefined
+    })
+  })
+  const existing = taskChatReadResultSchema.parse(runtime.readTaskChats({ runtimeId: 'codex', threadId: 'arbitrary-chat' }))
+  assert.equal(domainPackageJsonValueSchema.safeParse(existing).success, true)
+  assert.deepEqual(Object.keys(existing.associations[0]!).sort(), [
+    'userId', 'projectId', 'taskId', 'runtimeId', 'threadId', 'messageId', 'occurredAt'
+  ].sort())
+  assert.equal(existing.activeTaskId, TEST_IDS.taskId)
+  await runtime['recordAcceptedTaskChatInput']({ ...event, text: '[结束任务关联]', receipt: { ...event.receipt, clientDirectiveId: 'directive-task-end' } })
+  assert.equal(runtime.readTaskChats({ runtimeId: 'codex', threadId: 'arbitrary-chat' }).activeTaskId, null)
+  assert.equal(runtime.readTaskChats({ taskId: TEST_IDS.taskId }).associations[0]?.endMessageId, 'directive-task-end')
+  await runtime['recordAcceptedTaskChatInput']({ ...event, threadId: 'spoofed', principal: { ...principal, subject: 'usr_SomeoneElse001' } })
+  assert.equal(runtime.readTaskChats({ threadId: 'spoofed' }).associations.length, 0)
+  await assert.rejects(runtime.workerDeliveryView({ projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId }, { runtimeId: 'codex', threadId: 'spoofed', userId: 'usr_SomeoneElse001', assertCurrent() {} }), /只有当前任务执行人/u)
+  const context = runtimeContext(new AbortController().signal)
+  runtime['context'] = { ...context, agentThreads: { ...context.agentThreads, read: async () => ({ id: 'arbitrary-chat', runtimeId: 'codex', watermark: '1', artifacts: [], turns: [canonicalTurn('turn-draft-source', 'result')] }) } }
+  await assert.rejects(runtime['authorizeAgentDraftContext']({ projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId }, { runtimeId: 'codex', threadId: 'arbitrary-chat', userId: TEST_IDS.userId, assertCurrent() {} }), /请先在当前聊天中引用/u)
+  await runtime['recordAcceptedTaskChatInput']({ ...event, receipt: { ...event.receipt, clientDirectiveId: 'directive-task-reopen' } })
+  const source = await runtime['authorizeAgentDraftContext']({ projectId: TEST_IDS.projectId, taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId }, { runtimeId: 'codex', threadId: 'arbitrary-chat', userId: TEST_IDS.userId, assertCurrent() {} })
+  assert.deepEqual(source, { runtimeId: 'codex', threadId: 'arbitrary-chat', turnId: 'turn-draft-source' })
+  // Retrying the older close receipt cannot close a later association.
+  await runtime['recordAcceptedTaskChatInput']({ ...event, text: '[结束任务关联]', receipt: { ...event.receipt, clientDirectiveId: 'directive-task-end' } })
+  assert.equal(runtime.readTaskChats({ runtimeId: 'codex', threadId: 'arbitrary-chat' }).activeTaskId, TEST_IDS.taskId)
+
+})
+
+for (const coordinator of [true, false]) {
+  test(`project updates refresh canonical local facts and ACK through the real Coordinator consumer (coordinator=${coordinator})`, async () => {
+    const project = { ...projectFixture, displayName: 'Renamed shared project', revision: projectFixture.revision + 1,
+      coordinatorAgentId: coordinator ? agentNodeFixture.agentId : TEST_IDS.secondAgentId }
+    const first = agentInboxMessageSchema.parse({ ...agentInboxMessageFixture,
+      inboxMessageId: 'ibx_ProjectUpdateAck01', recipientAgentId: agentNodeFixture.agentId,
+      payload: { protocolVersion: '1.0', type: 'project.updated', projectId: project.projectId, revision: project.revision } })
+    const second = agentInboxMessageSchema.parse({ ...first, inboxMessageId: 'ibx_ProjectUpdateAck02', sequence: first.sequence + 1 })
+    const third = agentInboxMessageSchema.parse({ ...first, inboxMessageId: 'ibx_ProjectUpdateAck03', sequence: first.sequence + 2,
+      payload: { protocolVersion: '1.0', type: 'task.updated', projectId: project.projectId,
+        taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId, revision: taskFixture.revision + 1, status: taskFixture.status } })
+    const fourth = agentInboxMessageSchema.parse({ ...first, inboxMessageId: 'ibx_ProjectUpdateAck04', sequence: first.sequence + 3,
+      payload: { protocolVersion: '1.0', type: 'task.execution.fenced', projectId: project.projectId,
+        taskId: TEST_IDS.taskId, executionId: TEST_IDS.executionId, reason: 'Task content changed after mutual approval.' } })
+    const messages = [first, second, third, fourth]
+
+    const backend = new MemoryBackend({ ...EMPTY_COLLABORATION_LOCAL_STATE, revision: 1, agents: [agentNodeFixture], projects: [projectFixture] })
+    const commandTypes: string[] = []
+    const handled: string[] = []
+    let workspaceReads = 0
+    const workspace: ProjectCoordinatorWorkspace = { connection: { state: 'ready', userId: project.ownerUserId, deviceId: TEST_IDS.deviceId },
+      observedAt: TEST_TIMESTAMP, availableWorkerUsers: [], projects: [{ project,
+        coordinatorTransferFeedback: null, plan: null, requirementsDraft: null, confirmedRequirements: null,
+        memberUsers: [], workerGroups: [], tasks: [], offers: [], pendingHumanNeeded: [], records: [],
+        finalSummary: null, memberships: [], deliveryDrive: null, legacyHistory: { readOnly: true, plans: [], tasks: [], executions: [] } }] }
+    const actionPort = createProjectCoordinatorActionPort({
+      workspace: { readWorkspace: async () => { workspaceReads += 1; return workspace } },
+      coordinatorCloudCommands: { executeUser: async () => { throw new Error('A project update must not write.') },
+        resumeUser: async () => null, resume: async () => null, subscribe: () => () => undefined,
+        execute: async () => { throw new Error('A project update must not dispatch.') } },
+      transport: unusedAuthenticatedCloudTransport(), state: emptyCoordinatorState(),
+      requirementsDispatch: { reconcileProject: async () => { throw new Error('A project update must not dispatch.') } }
+    })
+    const runtime = new CollaborationRuntime({ statePath: 'unused', packageSettings: configuredSettings(),
+      authenticatedCloudTransport: unusedAuthenticatedCloudTransport(), humanActions: unusedHumanActions(), signing: unusedSigning(),
+      agentCloudRuntime: createTestAgentCloudRuntime({ authorityStatus: readyAuthority,
+        execute: async (_agentId, request) => { commandTypes.push(request.type)
+          return request.type === 'project.get' ? { protocolVersion: '1.0', type: 'rest.entity', requestId: request.requestId, entity: project }
+            : workerCloudResponse(request) },
+        pullAgentInbox: async ({ afterSequence }) => ({ messages: messages.filter(({ sequence }) => sequence > afterSequence), nextSequence: fourth.sequence }) }),
+      coordinatorInboxHandler: () => async (message) => { await actionPort.handleInbox(message); handled.push(message.payload.type) },
+      stateBackend: backend })
+    const abort = new AbortController()
+    const dispose = await runtime.activate(runtimeContext(abort.signal))
+    try {
+      await waitForImmediateCondition(() => backend.snapshot().lastInboxSequence === fourth.sequence)
+      assert.deepEqual(handled, ['project.updated', 'project.updated'])
+      assert.equal(workspaceReads, 2)
+      assert.equal(backend.snapshot().projects.find(({ projectId }) => projectId === project.projectId)?.displayName, project.displayName)
+      assert.deepEqual(backend.snapshot().outbox.filter(({ body }) => body.type === 'inbox.ack').map(({ body }) => body.sequence), messages.map(({ sequence }) => sequence))
+      assert.equal(commandTypes.some((type) => ['task.offer.create', 'project.transition'].includes(type)), false)
+    } finally { abort.abort(); await dispose() }
+  })
+}

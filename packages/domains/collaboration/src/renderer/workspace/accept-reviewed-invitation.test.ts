@@ -226,6 +226,14 @@ test('the real membership port handles an intervening Cloud CAS rejection with o
     transport: {
       status: () => ({ state: 'ready', baseUrl: 'https://cloud.test', userId: TEST_IDS.secondUserId, deviceId: TEST_IDS.deviceId, deviceRevision: 1 }),
       readObject: async () => { throw new Error('No object read.') },
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('No object stage.') },
       execute: async ({ payload }) => {
         assert.equal(payload.type, 'project.membership.accept')

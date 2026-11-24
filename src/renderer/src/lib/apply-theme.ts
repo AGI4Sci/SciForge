@@ -38,12 +38,15 @@ export function applyTheme(pref: ThemePreference): void {
 
 export function applyUiFontScale(scale: UiFontScale): void {
   const root = document.documentElement
+  // The scale magnifies an already readable 100% baseline. It must never shrink
+  // the UI below 1: the old mapping rendered everything at 82% by default, which
+  // is what made every label feel too small.
   const factor =
     scale === 'small'
-      ? 0.82
+      ? 0.9
       : scale === 'large'
-        ? 1
-        : 0.88
+        ? 1.15
+        : 1
   const setNativeZoom = typeof window !== 'undefined'
     ? window.sciforge?.setUiZoomFactor
     : undefined

@@ -3,6 +3,8 @@ import test from 'node:test'
 
 import {
   artifactHistoryInput,
+  comparisonTargetVersionId,
+  type ResearchDossierExactRecord,
   decodeComputeRunSpec,
   exactRecordDigest,
   fiveAxisStatus,
@@ -122,4 +124,32 @@ test('binds exact digest and safe preview path to the selected version', () => {
 test('exact artifact history forwards the owner cursor without combining numeric paging and retains continuation', () => {
   assert.deepEqual(artifactHistoryInput('artifact:one', 200, 'owner-cursor'), { artifactId: 'artifact:one', limit: 25, cursor: 'owner-cursor' })
   assert.equal(mergeArtifactHistory({ items: [] }, { items: [], nextBeforeSequence: 100, nextCursor: 'next-owner-cursor' }).nextCursor, 'next-owner-cursor')
+})
+
+
+test('comparison uses explicit same-artifact current identity or parent, never an arbitrary latest row', () => {
+  type Record = Extract<ResearchDossierExactRecord, { kind: 'artifact-version' }>
+  const item = (id: string, current = false, artifactId = 'artifact:a') => ({ artifact: { artifactId }, version: { artifactId, versionId: id }, ref: { artifactId, versionId: id }, isCurrent: current })
+  const record = { kind: 'artifact-version', descriptor: item('old'), history: { items: [item('newest'), item('foreign', true, 'artifact:b')] } } as unknown as Record
+  assert.equal(comparisonTargetVersionId(record), undefined)
+  record.history.items.push(item('current', true) as never)
+  assert.equal(comparisonTargetVersionId(record), 'current')
+  record.history.items.push(item('conflicting', true) as never)
+  assert.equal(comparisonTargetVersionId(record), undefined)
+  record.descriptor.artifact.currentVersionId = 'explicit-current'
+  assert.equal(comparisonTargetVersionId(record), 'explicit-current')
+  record.descriptor.isCurrent = true
+  assert.equal(comparisonTargetVersionId(record), undefined)
+  record.descriptor.version.parentVersionId = 'parent'
+  assert.equal(comparisonTargetVersionId(record), 'parent')
+  record.descriptor.ref.artifactId = 'artifact:other'
+  assert.equal(comparisonTargetVersionId(record), undefined)
+})
+
+test('registered source suffix selects the installed file viewer without using a mutable source path for bytes', () => {
+  const reference = { versionId: 'artifact-version:observed:1', contentDigest: 'a'.repeat(64) } as never
+  assert.match(previewDestination(reference, 'data/results.CSV'), /-aaaaaaaaaaaa\.csv$/u)
+  assert.match(previewDestination(reference, 'models/molecule.sdf'), /\.sdf$/u)
+  assert.match(previewDestination(reference, '../../outside/results.csv'), /^\.sciforge\/research-dossier\/previews\/artifact-version-observed-1-aaaaaaaaaaaa\.csv$/u)
+  assert.match(previewDestination(reference, 'file.bad?query'), /\.bin$/u)
 })

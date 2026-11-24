@@ -1,3 +1,4 @@
+import { evidenceDagViewOutputSchema } from './contract.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
@@ -242,4 +243,13 @@ test('requires explicit DataCite publication identity for pinned snapshot export
       creators: [{ name: 'Ada', givenName: 'Ada' }]
     }
   }).success, false)
+})
+
+test('explicit graph selectors require a thread and missing binding permits no URL', () => {
+  const snapshotDigest = 'sha256:' + 'a'.repeat(64)
+  assert.equal(evidenceDagViewInputSchema.safeParse({ snapshotDigest }).success, false)
+  assert.equal(evidenceDagViewInputSchema.safeParse({ snapshotDigest, runtimeId: 'codex', threadId: 'one' }).success, true)
+  assert.equal(evidenceDagViewOutputSchema.shape.url.safeParse(null).success, true)
+  assert.equal(evidenceDagAuditQueryInputSchema.safeParse({ subject: { threadId: 'codex:one' }, asOf: '2026-01-01T00:00:00Z' }).success, true)
+  assert.equal(evidenceDagAuditQueryInputSchema.safeParse({ subject: { threadId: 'codex:one', asOf: '2026-01-01T00:00:00Z' } }).success, false)
 })

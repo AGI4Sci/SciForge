@@ -613,6 +613,6 @@ test('browse groups exact current identity without inferring another session pur
 test('missing primary provider stays explicit and leaves archives reachable without owner calls', async () => {
   const { ResearchWorkspacePanel } = await import('./ResearchWorkspacePanel.js')
   const html = renderToStaticMarkup(<ResearchWorkspacePanel client={{} as never} session={{ id: 'main' }} active focused surfaceId="missing-view" onCollapse={() => undefined} researchViews={[]} />)
-  assert.match(html, /阶段视图当前不可用/)
-  assert.match(html, /查看档案与版本/)
+  assert.match(html, /研究摘要暂不可用/)
+  assert.match(html, /查看研究材料/)
 })

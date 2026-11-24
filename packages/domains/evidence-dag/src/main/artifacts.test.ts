@@ -125,3 +125,20 @@ test('does not mint a trusted execution marker for a split explicit scope', () =
     undefined
   )
 })
+
+
+test('preserves failed and cancelled artifact provenance without claiming completion', () => {
+  for (const terminalState of ['failed', 'cancelled'] as const) {
+    const trace = evidenceTraceFromArtifactEvent({
+      contractVersion: 1, kind: 'turn-terminated', terminalState,
+      runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1',
+      targetWatermark: '7', occurredAt: '2026-11-10T00:00:00.000Z',
+      artifacts: [{ kind: 'assistant_message', text: 'Interrupted partial output.' }]
+    })
+    assert.equal(trace[0]!.id, 'turn-1:artifact:0')
+    assert.deepEqual(trace[0]!.sciforgeEvidenceEvent, {
+      eventKind: 'turn-terminated', terminalState, turnId: 'turn-1',
+      occurredAt: '2026-11-10T00:00:00.000Z', targetWatermark: '7'
+    })
+  }
+})

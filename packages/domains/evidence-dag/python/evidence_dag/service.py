@@ -44,18 +44,21 @@ from .assessment import assessment_identity, bind_target_digest, run_a0, run_a1,
 from .digraph import descendants
 from .human_review import (
     DEFAULT_POLICY,
+    HumanReviewPolicy,
     attach_human_reviews,
     remap_review_packet_assessment_ids,
     select_a2_targets,
 )
 from .events import EventStore, utc_now_iso
+from .review_receipt import build_review_receipt, project_review_receipt
 from .secure_storage import EvidenceStorage
 from .extractor import ExtractionOutputError, extract_dag
 from .graph import ThreadGraph
 from .incremental import TraceStagingCache, compare_watermarks, watermark_regresses
 from .lineage import ingest_trace_lineage
 from .llm import LLM, LLMCallError
-from .model import EdgeRel, HumanReviewStatus, NodeStatus, NodeType
+from .model import ERROR_ORIGINS, Artifact, ArtifactVersion, SourceAnchor, SourceSelector, Node, EdgeRel, HumanReviewStatus, NodeStatus, NodeType, ReviewPacket
+from .artifact_versions import ArtifactVersionRefV1
 from .rerun import build_rerun_spec, compare_rerun_specs, output_values_for_spec
 from .snapshot import (
     EXTRACTOR_VERSION,
@@ -188,10 +191,73 @@ def _partition_delta_envelopes(
                     not isinstance(child, dict) for child in embedded
                 ):
                     raise ValueError("Evidence delta envelope contains an invalid embedded trace")
-                semantic.extend(embedded)
+                semantic.extend(child for child in embedded if child.get('kind') != 'sciforge.claim-submission.v1')
         else:
             semantic.append(item)
     return envelopes, semantic
+
+
+def _replay_submitted_claims(graph: ThreadGraph, envelopes: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Project explicit assertions only from validated closure envelopes."""
+    nodes, edges = set(), set()
+    projection = ArtifactVersionProjectionClient(
+        item for envelope in envelopes for item in envelope['delta']['payload'].get('trace', [])
+        if isinstance(item, dict) and item.get('kind') == 'sciforge.claim-submission.v1')
+    for envelope in envelopes:
+        delta = envelope['delta']
+        for item in delta['payload'].get('trace', []):
+            if item.get('kind') != 'sciforge.claim-submission.v1':
+                continue
+            claims = item.get('claims')
+            if not isinstance(claims, list) or not claims:
+                raise ValueError('explicit submission requires claims')
+            for claim in claims:
+                if claim.get('reviewStatus') != 'pending' or not claim.get('sources') \
+                        or not isinstance(claim.get('text'), str) or not claim['text'].strip() \
+                        or not str(claim.get('id', '')).startswith('claim:'):
+                    raise ValueError('invalid explicit claim')
+                node = Node(id=claim['id'], type=NodeType.CLAIM, content=claim['text'],
+                            created_at=delta['createdAt'], created_by='explicit-submission',
+                            attributes={'reviewStatus': 'pending'})
+                prior = graph.nodes.get(node.id)
+                if prior and (prior.type != node.type or prior.content != node.content):
+                    raise ValueError('explicit claim identity collision')
+                graph.nodes.setdefault(node.id, node)
+                nodes.add(node.id)
+                for source in claim['sources']:
+                    ref = ArtifactVersionRefV1.from_dict(source['ref'])
+                    start, end, quote = source['startByte'], source['endByte'], source['quote']
+                    if type(start) is not int or type(end) is not int or start < 0 \
+                            or end > ref.byte_length or end <= start or not isinstance(quote, str) \
+                            or len(quote.encode('utf-8')) != end - start:
+                        raise ValueError('invalid explicit source byte range')
+                    selector = SourceSelector(type='text', quote=quote,
+                                              query={'unit': 'utf8-byte', 'start': start, 'end': end})
+                    identity = canonical_delta_json({'ref': source['ref'], 'selector': selector.to_dict()})
+                    suffix = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+                    anchor = SourceAnchor(anchor_id='anchor:' + suffix, artifact_id=ref.artifact_id,
+                                          artifact_version_id=ref.version_id, selector=selector,
+                                          anchor_digest='sha256:' + hashlib.sha256(quote.encode('utf-8')).hexdigest(),
+                                          created_at=delta['createdAt'], access_policy=ref.access_policy)
+                    artifact = projection.artifacts.get(ref.artifact_id)
+                    version = projection.versions.get(ref.version_id)
+                    if artifact is None or version is None or projection.refs.get(ref.version_id) != ref:
+                        raise ValueError('explicit claim requires authoritative source projection')
+                    prior_ref = graph.artifact_version_refs.get(ref.version_id)
+                    if prior_ref is not None and prior_ref != ref:
+                        raise ValueError('conflicting immutable ArtifactVersionRef')
+                    graph.attach_registry_records(artifact=artifact,
+                                                  artifact_version=version,
+                                                  source_anchor=anchor, artifact_version_ref=ref)
+                    assertion = graph.add_or_get_node(NodeType.SOURCE_ASSERTION, quote,
+                        identity_scope=anchor.anchor_id, artifact_id=ref.artifact_id,
+                        artifact_version_id=ref.version_id, source_anchor_id=anchor.anchor_id,
+                        created_at=delta['createdAt'], created_by='explicit-submission')
+                    nodes.add(assertion.id)
+                    edge = graph.add_edge(assertion.id, node.id, EdgeRel.SUPPORTS)
+                    if edge:
+                        edges.add(edge.id)
+    return {'new_nodes': sorted(nodes), 'new_edges': sorted(edges)}
 
 
 def _replay_delta_graphs(graph: ThreadGraph, envelopes: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -609,7 +675,11 @@ def evidence_update_error(error: BaseException) -> dict[str, Any]:
 
 
 class Engine:
-    def __init__(self, llm: Optional[LLM] = None, *, storage_dir: Optional[str] = None) -> None:
+    def __init__(
+        self, llm: Optional[LLM] = None, *, storage_dir: Optional[str] = None,
+        review_policy: HumanReviewPolicy = DEFAULT_POLICY,
+    ) -> None:
+        self.review_policy = review_policy
         self.llm = llm
         self._storage = EvidenceStorage(storage_dir) if storage_dir else None
         storage_dir = self._storage.root if self._storage else None
@@ -808,7 +878,10 @@ class Engine:
                     committed_scope=committed_scope,
                 )
             artifact_versions = ArtifactVersionProjectionClient(
-                semantic_trace, workspace_roots=(project,), locator_root=workspace,
+                semantic_trace + [item for envelope in incremental_envelopes
+                                  for item in envelope['delta']['payload'].get('trace', [])
+                                  if item.get('kind') == 'sciforge.claim-submission.v1'],
+                workspace_roots=(project,), locator_root=workspace,
             )
             committed_projection_digest = current_graph.meta.get(
                 "artifactVersionProjectionDigest"
@@ -981,6 +1054,8 @@ class Engine:
                     ]
 
                 replayed = _replay_delta_graphs(graph, incremental_envelopes)
+                submitted = _replay_submitted_claims(graph, incremental_envelopes)
+                replayed = {key: sorted(set(replayed[key]) | set(submitted[key])) for key in replayed}
                 delta = {"new_nodes": [], "new_edges": []}
                 declared_execution_bundle = False
                 if semantic_trace:
@@ -1053,7 +1128,7 @@ class Engine:
                     "traceStaging": staged.summary(),
                 })
                 self._persist_update_status(thread_id)
-                if declared_execution_bundle:
+                if declared_execution_bundle or (submitted['new_nodes'] and not semantic_trace):
                     declared_status_changes = _mark_declared_semantic_nodes(graph)
                     verification = {
                         "threshold": threshold,
@@ -1121,9 +1196,9 @@ class Engine:
                 computed_at = utc_now_iso()
                 pending, graph.review_packets = attach_human_reviews(
                     graph, pending, delta=delta, computed_at=computed_at,
-                    policy=DEFAULT_POLICY,
+                    policy=self.review_policy,
                 )
-                graph.review_policy_version = DEFAULT_POLICY.version
+                graph.review_policy_version = self.review_policy.version
                 prior_assessment_count = len(graph.assessments)
                 graph.assessments.extend(pending)
 
@@ -1267,6 +1342,14 @@ class Engine:
     def provisional_graph(self, thread_id: str) -> Optional[ThreadGraph]:
         """Return the isolated compile candidate, never the committed read model."""
         return self._trace_staging.provisional_graph(thread_id)
+
+    def graph_read(self, thread_id: str, *, snapshot_digest=None, artifact_ref=None):
+        from .historical_read import read_graph
+        return read_graph(self, thread_id, snapshot_digest, artifact_ref)
+
+    def human_review_read(self, thread_id: str, *, snapshot_digest: str, artifact_ref=None, as_of=None):
+        from .historical_read import read_reviews
+        return read_reviews(self, thread_id, snapshot_digest, artifact_ref, as_of)
 
     def graph_view(self, thread_id: str) -> dict[str, Any]:
         """Return the committed graph after applying fail-closed read projection."""
@@ -1466,6 +1549,8 @@ class Engine:
         action: str,
         actor: str,
         reviewed_at: str,
+        rationale: str,
+        snapshot_digest: str,
     ) -> dict[str, Any]:
         status = cls._decision_status(action)
         index = next((
@@ -1485,6 +1570,8 @@ class Engine:
             blocking=blocking,
             reviewed_by=actor,
             reviewed_at=reviewed_at,
+            review_rationale=rationale,
+            reviewed_snapshot_digest=snapshot_digest,
         )
         graph.review_packets[index] = updated
         for assessment_index, assessment in enumerate(graph.assessments):
@@ -1499,14 +1586,14 @@ class Engine:
                     blocking=blocking,
                     reviewed_by=actor,
                     reviewed_at=reviewed_at,
+                    review_rationale=rationale,
+                    reviewed_snapshot_digest=snapshot_digest,
                 ),
             )
         return updated.to_dict()
 
     def _apply_review_decisions(self, graph: ThreadGraph, snapshot_digest: str) -> None:
-        events = self._event_store.read(
-            event_types=("HumanReviewDecisionRecorded",), limit=5000,
-        )
+        events = self._review_decision_events(graph.thread_id)
         for event in events:
             payload = event.get("payload") or {}
             if payload.get("threadId") != graph.thread_id:
@@ -1520,11 +1607,64 @@ class Engine:
                     action=str(payload.get("action") or ""),
                     actor=str(payload.get("actor") or ""),
                     reviewed_at=str(event.get("occurredAt") or payload.get("reviewedAt") or ""),
+                    rationale=str(payload.get("rationale") or ""),
+                    snapshot_digest=snapshot_digest,
                 )
             except (KeyError, ValueError):
                 # The immutable event remains auditable even if a later policy
                 # version no longer exposes the packet in this read model.
                 continue
+
+    @staticmethod
+    def _normalise_target_outcomes(
+        packet: ReviewPacket, action: str, outcomes: Optional[list[dict[str, Any]]],
+    ) -> Optional[list[dict[str, Any]]]:
+        """Validate per-target review outcomes against the server's matched packet; None means not supplied."""
+        audit = packet.selection is not None and packet.selection.mechanism == "random_audit"
+        if outcomes is None:
+            if audit and action in ("approve", "reject"):
+                raise ValueError(
+                    "a random-audit packet needs per-target outcomes for every target to be approved or rejected"
+                )
+            return None
+        if not isinstance(outcomes, list) or not outcomes:
+            raise ValueError("targetOutcomes must be a non-empty array")
+        seen: dict[str, dict[str, Any]] = {}
+        for item in outcomes:
+            if not isinstance(item, dict) or set(item) - {"targetId", "errorFound", "errorOrigin"}:
+                raise ValueError("each target outcome may only contain targetId, errorFound and errorOrigin")
+            target_id = item.get("targetId")
+            if not isinstance(target_id, str) or target_id not in packet.target_ids:
+                raise ValueError("a target outcome must refer to a target of the review packet")
+            if target_id in seen:
+                raise ValueError("duplicate target outcome")
+            found = item.get("errorFound")
+            if not isinstance(found, bool):
+                raise ValueError("errorFound must be a boolean")
+            origin = item.get("errorOrigin")
+            if found and origin not in ERROR_ORIGINS:
+                raise ValueError(f"errorOrigin must be one of {ERROR_ORIGINS} when an error is found")
+            if not found and origin is not None:
+                raise ValueError("errorOrigin must be null when no error is found")
+            seen[target_id] = {"targetId": target_id, "errorFound": found, "errorOrigin": origin}
+        if audit and action in ("approve", "reject") and set(seen) != set(packet.target_ids):
+            raise ValueError("a random-audit decision must record an outcome for every sampled target")
+        return [seen[target_id] for target_id in sorted(seen)]
+
+    def _review_decision_events(self, thread_id: str):
+        after_sequence = 0
+        while True:
+            page = self._event_store.read(
+                event_types=("HumanReviewDecisionRecorded",),
+                aggregate_id=thread_id, after_sequence=after_sequence, limit=5000,
+            )
+            if not page:
+                return
+            for event in page:
+                if (event.get("aggregateType") == "EvidenceThread"
+                        and (event.get("payload") or {}).get("threadId") == thread_id):
+                    yield event
+            after_sequence = page[-1]["sequence"]
 
     def record_review_decision(
         self,
@@ -1537,8 +1677,13 @@ class Engine:
         rationale: str,
         idempotency_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        target_outcomes: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
-        """Record a human disposition without rewriting an immutable snapshot."""
+        """Record a human disposition without rewriting an immutable snapshot.
+
+        ``target_outcomes`` optionally records, per target of the packet, whether an error was found and where
+        it originates. A random-audit packet cannot be approved or rejected without them for every target.
+        """
         packet_id = str(packet_id or "").strip()
         actor = str(actor or "").strip()
         rationale = str(rationale or "").strip()
@@ -1559,8 +1704,11 @@ class Engine:
                 )
             graph = self.require(thread_id)
             require_unrestricted(graph, "human review decision")
-            if not any(packet.review_packet_id == packet_id for packet in graph.review_packets):
+            matched_packet = next((packet for packet in graph.review_packets
+                                   if packet.review_packet_id == packet_id), None)
+            if matched_packet is None:
                 raise KeyError(packet_id)
+            outcomes = self._normalise_target_outcomes(matched_packet, action, target_outcomes)
             decision_time = utc_now_iso()
             if idempotency_key:
                 event_key = str(idempotency_key).strip()
@@ -1572,6 +1720,7 @@ class Engine:
                     "action": action,
                     "actor": actor,
                     "rationale": rationale,
+                    **({"targetOutcomes": outcomes} if outcomes is not None else {}),
                 }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
                 event_key = "review-decision:" + hashlib.sha256(
                     identity.encode("utf-8")
@@ -1590,6 +1739,41 @@ class Engine:
                     "authority": "override",
                 },
             }
+            if outcomes is not None:
+                decision_payload["targetOutcomes"] = outcomes
+            previous_event = None
+            replay = None
+            # Compare the original request semantics before deriving metadata:
+            # a retry's previous link would otherwise point to itself or a later
+            # decision and conflict with the original immutable payload.
+            for candidate in self._review_decision_events(thread_id):
+                payload = candidate.get("payload") or {}
+                if candidate.get("idempotencyKey") == event_key:
+                    if any(payload.get(key) != value for key, value in decision_payload.items()):
+                        raise ReviewDecisionConflict(
+                            "idempotency key was already used for a different review decision"
+                        )
+                    replay = candidate
+                if (payload.get("snapshotDigest") == snapshot.digest
+                        and payload.get("reviewPacketId") == packet_id):
+                    previous_event = candidate
+            if replay is not None:
+                # Rebuild in event order; replaying an older approve must never
+                # overwrite a later reject, even after a process restart.
+                self._apply_review_decisions(graph, snapshot.digest)
+                packet = next(packet for packet in graph.review_packets
+                              if packet.review_packet_id == packet_id)
+                return {
+                    "snapshot": snapshot.to_dict(),
+                    "reviewPacket": packet.to_dict(),
+                    "decision": dict(replay["payload"]),
+                    "event": replay,
+                    "reviewReceipt": project_review_receipt(replay["payload"]),
+                }
+            decision_payload["reviewReceipt"] = build_review_receipt(
+                snapshot.digest, matched_packet,
+                previous_event["eventId"] if previous_event else None,
+            )
             try:
                 event = self._event_store.append(
                     "HumanReviewDecisionRecorded",
@@ -1616,12 +1800,15 @@ class Engine:
                 action=str(event["payload"]["action"]),
                 actor=str(event["payload"]["actor"]),
                 reviewed_at=str(event["occurredAt"]),
+                rationale=str(event["payload"]["rationale"]),
+                snapshot_digest=snapshot.digest,
             )
             return {
                 "snapshot": snapshot.to_dict(),
                 "reviewPacket": packet,
                 "decision": dict(event["payload"]),
                 "event": event,
+                "reviewReceipt": project_review_receipt(event["payload"]),
             }
 
     def latest_snapshot(self, thread_id: str) -> Optional[EvidenceSnapshot]:
@@ -1769,17 +1956,21 @@ class Engine:
         # Audit/Finding events aggregate by their own identity, so thread
         # filtering also checks the durable payload instead of inventing a
         # duplicate per-thread event.
-        events = self._event_store.read(
-            event_types=event_types, after_sequence=after_sequence, limit=5000,
-        )
-        if thread_id is not None:
-            events = [
-                event for event in events
-                if event.get("aggregateId") == thread_id
+        selected = []
+        while len(selected) < limit:
+            page = self._event_store.read(
+                event_types=event_types, after_sequence=after_sequence, limit=5000,
+            )
+            if not page:
+                break
+            selected.extend(
+                event for event in page
+                if thread_id is None or event.get("aggregateId") == thread_id
                 or (isinstance(event.get("payload"), dict)
                     and event["payload"].get("threadId") == thread_id)
-            ]
-        return events[:limit]
+            )
+            after_sequence = page[-1]["sequence"]
+        return selected[:limit]
 
     def _event_restricted(self, event: dict[str, Any]) -> bool:
         """Resolve event access from its owning thread/artifact; unknown is closed."""

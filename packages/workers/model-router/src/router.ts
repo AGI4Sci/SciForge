@@ -1,3 +1,4 @@
+import { isClientToolCall, isClientToolOutput } from './response-tool-transcript';
 import { publicTextPrefixStream } from './public-text-stream';
 import { createHash } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
@@ -475,6 +476,13 @@ type TextControl =
 const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES;
 const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = MODEL_ROUTER_MAX_REQUEST_BYTES;
 const MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES = 512;
+/** Provider-hosted tool calls whose payload lives in the item itself and has no transcript output to pair with. */
+const RESPONSE_SERVER_TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'web_search_call',
+  'file_search_call',
+  'image_generation_call',
+  'code_interpreter_call',
+]);
 const MAX_TEXT_MODALITY_BYTES = 256 * 1024;
 const RECENT_PROVIDER_AUTH_ERROR_TTL_MS = 30 * 60 * 1000;
 const modelRouterInFlightRequests = new WeakMap<Server, Set<Promise<void>>>();
@@ -765,6 +773,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               preferredProtocol: preferredResponsesProtocol(options.config, body, request),
               traceSession: fullTraceSession,
             })),
+            responseContinuationCache,
           );
         }
         const result = await routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
@@ -795,7 +804,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         const streamedReasoning = { text: '', responseId: makeId('resp'), content: newLiveTextState() };
         const resultPromise = routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
           responseId: streamedReasoning.responseId,
-          onTextDelta: body.stream === true ? (text, phase) => writeLiveText(response, streamedReasoning.content, 'chat', streamedReasoning.responseId, publicModelAlias, text, phase) : undefined,
+          onTextDelta: body.stream === true ? (text, phase, outputIndex) => writeLiveText(response, streamedReasoning.content, 'chat', streamedReasoning.responseId, publicModelAlias, text, phase, outputIndex) : undefined,
           onReasoningDelta: body.stream === true ? (text) => {
             if (response.destroyed || response.writableEnded) return;
             streamedReasoning.text += text;
@@ -1719,7 +1728,7 @@ async function routeResponsesRequest(
     upstreamNegotiator: UpstreamProtocolNegotiator;
     preferredProtocol: UpstreamWireProtocol;
     onReasoningDelta?: (text: string) => void;
-  onTextDelta?: (text: string, phase?: string) => void;
+  onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void;
     traceSession?: ModelRouterTraceSession;
     responseId?: string;
     providerSignal?: AbortSignal;
@@ -1956,7 +1965,7 @@ async function routeResponsesRequest(
       responseStatus = textResult.status;
       incompleteDetails = textResult.incompleteDetails;
       terminalDetails = textResult.terminalDetails;
-      const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
+      const hasToolCall = textResult.outputItems.some(isClientToolCall);
       const reasoningItems = textResult.outputItems.filter((item) => item.type === 'reasoning');
       if (hasToolCall) {
         outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
@@ -1989,7 +1998,16 @@ async function routeResponsesRequest(
           );
         }
         outputText = textResult.outputText;
-        outputItems = [messageOutputItem(textResult.outputText)];
+        let structuredMessageEmitted = false;
+        outputItems = textResult.outputItems.flatMap(item => {
+          if (item.type !== 'message') return [item];
+          if (structuredMessageEmitted) return [];
+          structuredMessageEmitted = true;
+          const message = messageOutputItem(textResult.outputText, stringField(item.id));
+          if (item.phase === 'commentary' || item.phase === 'final_answer') message.phase = item.phase;
+          return [message];
+        });
+        if (!structuredMessageEmitted) outputItems.push(messageOutputItem(textResult.outputText));
         break;
       }
 
@@ -3454,7 +3472,7 @@ async function callTextReasoner(options: {
   upstreamNegotiator: UpstreamProtocolNegotiator;
   preferredProtocol: UpstreamWireProtocol;
   onReasoningDelta?: (text: string) => void;
-  onTextDelta?: (text: string, phase?: string) => void;
+  onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void;
   traceSession?: ModelRouterTraceSession;
 }) {
   const outputContractInstruction = options.structuredOutput
@@ -3541,7 +3559,7 @@ async function callCanonicalProvider(options: {
   upstreamNegotiator: UpstreamProtocolNegotiator;
   preferredProtocol: UpstreamWireProtocol;
   onReasoningDelta?: (text: string) => void;
-  onTextDelta?: (text: string, phase?: string) => void;
+  onTextDelta?: (text: string, phase?: string, outputIndex?: number) => void;
   traceSession?: ModelRouterTraceSession;
 }) {
   try {
@@ -3574,13 +3592,21 @@ async function callCanonicalProvider(options: {
     const message = detail
       ? `${prefix}: ${boundedProviderTraceText(detail, options.provider, [options.secret])}`
       : prefix;
-    throw routerError(error.status, error.code, message, options.role);
+    // Name the final reason distinctly without changing the established `code`
+    // contract: `upstream_http_429` stays the code, `reasonCode` says whether the
+    // retry budget was exhausted (`upstream_http_429_exhausted`).
+    throw routerError(error.status, error.code, message, options.role, {
+      stage: 'model-router-upstream',
+      reasonCode: error.retryState?.reasonCode ?? error.code,
+      retryable: error.retryable,
+      ...(error.retryState ? { attempts: error.retryState.attempts } : {}),
+    });
   }
 }
 
 function canonicalStopReason(response: JsonObject): ProviderCallRecord['stopReason'] {
   const output = Array.isArray(response.output) ? response.output : [];
-  if (output.some((item) => isRecord(item) && item.type === 'function_call')) return 'tool_calls';
+  if (output.some((item) => isRecord(item) && isClientToolCall(item))) return 'tool_calls';
   if (response.status === 'incomplete') return 'length';
   return response.status === 'completed' || response.object === 'response' ? 'stop' : 'unknown';
 }
@@ -3750,7 +3776,7 @@ function chatMaxTokens(value: unknown): number | undefined {
 function responseInputHasToolTranscript(input: unknown): boolean {
   return Array.isArray(input) && input.some((item) => {
     if (!isRecord(item)) return false;
-    return item.type === 'function_call' || item.type === 'function_call_output';
+    return isClientToolCall(item) || isClientToolOutput(item);
   });
 }
 
@@ -3761,14 +3787,14 @@ function restoreResponseContinuation(
   if (!Array.isArray(input) || !continuation?.length) return input;
   const callIds = new Set(
     continuation
-      .filter((item) => item.type === 'function_call')
+      .filter((item) => isClientToolCall(item))
       .map(responseToolTranscriptCallId)
       .filter(Boolean),
   );
   if (callIds.size === 0) return input;
   const stateItemKeys = new Set(
     continuation
-      .filter(isResponseContinuationStateItem)
+      .filter(item => !isClientToolCall(item))
       .map(responseContinuationStateItemKey),
   );
   const insertionIndex = input.findIndex((item) => (
@@ -3791,11 +3817,10 @@ function responseContinuationReferencesItem(
   callIds: ReadonlySet<string>,
   stateItemKeys: ReadonlySet<string>,
 ): boolean {
-  if (item.type === 'function_call' || item.type === 'function_call_output') {
+  if (isClientToolCall(item) || isClientToolOutput(item)) {
     return callIds.has(responseToolTranscriptCallId(item));
   }
-  return isResponseContinuationStateItem(item)
-    && stateItemKeys.has(responseContinuationStateItemKey(item));
+  return stateItemKeys.has(responseContinuationStateItemKey(item));
 }
 
 function isReplayedResponseContinuationItem(
@@ -3803,9 +3828,8 @@ function isReplayedResponseContinuationItem(
   callIds: ReadonlySet<string>,
   stateItemKeys: ReadonlySet<string>,
 ): boolean {
-  if (item.type === 'function_call') return callIds.has(responseToolTranscriptCallId(item));
-  return isResponseContinuationStateItem(item)
-    && stateItemKeys.has(responseContinuationStateItemKey(item));
+  if (isClientToolCall(item)) return callIds.has(responseToolTranscriptCallId(item));
+  return stateItemKeys.has(responseContinuationStateItemKey(item));
 }
 
 function responseContinuationStateItemKey(item: Record<string, unknown>): string {
@@ -3845,7 +3869,7 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
       continue;
     }
 
-    if (item.type === 'function_call') {
+    if (isClientToolCall(item)) {
       const callId = responseToolTranscriptCallId(item);
       if (!callId) {
         changed = true;
@@ -3863,7 +3887,7 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
       continue;
     }
 
-    if (item.type === 'function_call_output') {
+    if (isClientToolOutput(item)) {
       const callId = responseToolTranscriptCallId(item);
       if (!callId || !pendingCallIds.has(callId) || pendingOutputIds.has(callId)) {
         changed = true;
@@ -3877,6 +3901,11 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
 
     if (pendingCallIds.size > 0 && isResponseContinuationStateItem(item)) {
       pendingItems.push(item as JsonObject);
+      continue;
+    }
+
+    if (pendingCallIds.size > 0 && isResponseServerToolItem(item)) {
+      changed = true;
       continue;
     }
 
@@ -3895,6 +3924,11 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
 
 function responseToolTranscriptCallId(item: Record<string, unknown>): string {
   return stringField(item.call_id) ?? stringField(item.id) ?? '';
+}
+
+function isResponseServerToolItem(item: Record<string, unknown>): boolean {
+  const type = stringField(item.type);
+  return type !== undefined && RESPONSE_SERVER_TOOL_ITEM_TYPES.has(type);
 }
 
 function isResponseToolTranscriptBridgeItem(item: Record<string, unknown>): boolean {
@@ -3928,10 +3962,8 @@ function rememberResponseContinuation(
   responseId: string,
   outputItems: JsonObject[],
 ): void {
-  const continuation = outputItems
-    .filter((item) => item.type === 'function_call' || isResponseContinuationStateItem(item))
-    .map((item) => ({ ...item }));
-  if (!continuation.some((item) => item.type === 'function_call')) return;
+  const continuation = outputItems.map((item) => ({ ...item }));
+  if (!continuation.some((item) => isClientToolCall(item))) return;
   cache.delete(responseId);
   cache.set(responseId, continuation);
   while (cache.size > MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES) {
@@ -4112,7 +4144,7 @@ function responseObject(result: RoutedResponse, messageItemId?: string): JsonObj
 function responseOutputItems(result: RoutedResponse, messageItemId?: string): JsonObject[] {
   if (messageItemId && result.outputItems.length) {
     return result.outputItems.map((item) => (
-      item.type === 'message' ? { ...item, id: messageItemId } : item
+      item.type === 'message' && !stringField(item.id) ? { ...item, id: messageItemId } : item
     ));
   }
   if (result.outputItems.length) return result.outputItems;
@@ -4344,25 +4376,29 @@ function chatCompletionUsageFromResponse(usage: unknown): JsonObject {
   };
 }
 
-type LiveTextState = { text: string; messageId: string; phase?: string };
-function newLiveTextState(): LiveTextState { return { text: '', messageId: makeId('msg') }; }
+type LiveTextState = { text: string; messageId: string; phase?: string; outputIndex: number };
+function newLiveTextState(): LiveTextState { return { text: '', messageId: makeId('msg'), outputIndex: 0 }; }
 
-function writeLiveText(response: ServerResponse, state: LiveTextState, wire: 'responses' | 'chat' | 'messages', responseId: string, model: string, text: string, phase?: string) {
+function writeLiveText(response: ServerResponse, state: LiveTextState, wire: 'responses' | 'chat' | 'messages', responseId: string, model: string, text: string, phase?: string, outputIndex = 0) {
   if (!text || response.destroyed || response.writableEnded) return;
+  // A later output cannot open before its opaque predecessors are complete.
+  // Preserve fast prose for index zero; emit later prose with the final ordered block.
+  if (outputIndex > 0) return;
   if (!state.text) {
     state.phase = phase;
+    state.outputIndex = outputIndex;
     if (wire === 'responses') {
-      writeSse(response, 'response.output_item.added', { type: 'response.output_item.added', output_index: 0,
+      writeSse(response, 'response.output_item.added', { type: 'response.output_item.added', output_index: state.outputIndex,
         item: { id: state.messageId, type: 'message', role: 'assistant', status: 'in_progress', ...(phase ? { phase } : {}), content: [] } });
-      writeSse(response, 'response.content_part.added', { type: 'response.content_part.added', item_id: state.messageId, output_index: 0, content_index: 0,
+      writeSse(response, 'response.content_part.added', { type: 'response.content_part.added', item_id: state.messageId, output_index: state.outputIndex, content_index: 0,
         part: { type: 'output_text', text: '', annotations: [] } });
     } else if (wire === 'messages') {
-      writeSse(response, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+      writeSse(response, 'content_block_start', { type: 'content_block_start', index: state.outputIndex, content_block: { type: 'text', text: '' } });
     }
   }
   state.text += text;
-  if (wire === 'responses') writeSse(response, 'response.output_text.delta', { type: 'response.output_text.delta', item_id: state.messageId, output_index: 0, content_index: 0, delta: text });
-  else if (wire === 'messages') writeSse(response, 'content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } });
+  if (wire === 'responses') writeSse(response, 'response.output_text.delta', { type: 'response.output_text.delta', item_id: state.messageId, output_index: state.outputIndex, content_index: 0, delta: text });
+  else if (wire === 'messages') writeSse(response, 'content_block_delta', { type: 'content_block_delta', index: state.outputIndex, delta: { type: 'text_delta', text } });
   else writeChatCompletionChunk(response, { id: responseId, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model,
     choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }] });
 }
@@ -4374,8 +4410,9 @@ function reconcileLiveText(result: RoutedResponse, state: LiveTextState): Routed
   const parts = item && Array.isArray(item.content) ? item.content : [];
   const text = isRecord(parts[0]) ? losslessStringField(parts[0].text) : undefined;
   if (!item || !text?.startsWith(state.text)) throw routerError(502, 'stream_output_mismatch', 'The final response disagrees with the streamed text.');
-  // Keep public indices and IDs stable even if reasoning preceded prose upstream.
-  return { ...result, outputItems: [{ ...item, id: state.messageId }, ...result.outputItems.filter((_, i) => i !== index)] };
+  // Streaming must not move commentary ahead of the reasoning that owns it.
+  if (index !== state.outputIndex) throw routerError(502, 'stream_output_mismatch', 'The final response disagrees with the streamed output index.');
+  return { ...result, outputItems: result.outputItems.map((value, i) => i === index ? { ...value, id: state.messageId } : value) };
 }
 
 function sendResponseStream(response: ServerResponse, result: RoutedResponse) {
@@ -4387,12 +4424,16 @@ function sendDeferredResponseStream(
   response: ServerResponse,
   responseId: string,
   model: string,
-  startResult: (onTextDelta: (text: string, phase?: string) => void) => Promise<RoutedResponse>,
+  startResult: (onTextDelta: (text: string, phase?: string, outputIndex?: number) => void) => Promise<RoutedResponse>,
+  continuationCache: ResponseContinuationCache,
 ) {
   const streamed = newLiveTextState();
   beginResponseStream(response, responseId, model);
-  void startResult((text, phase) => writeLiveText(response, streamed, 'responses', responseId, model, text, phase)).then((result) => {
-    writeResponseStreamResult(response, reconcileLiveText(result, streamed), streamed);
+  void startResult((text, phase, outputIndex) => writeLiveText(response, streamed, 'responses', responseId, model, text, phase, outputIndex)).then((result) => {
+    const reconciled = reconcileLiveText(result, streamed);
+    // The continuation must use the same public message IDs just emitted live.
+    rememberResponseContinuation(continuationCache, responseId, reconciled.outputItems);
+    writeResponseStreamResult(response, reconciled, streamed);
   }).catch((error) => {
     const routerError = normalizeRouterError(error);
     writeSse(response, 'response.failed', {
@@ -4477,11 +4518,11 @@ function sendDeferredAnthropicMessageStream(
   messageId: string,
   model: string,
   request: Pick<AnthropicMessagesRequest, 'model'>,
-  startResult: (onTextDelta: (text: string, phase?: string) => void) => Promise<RoutedResponse>,
+  startResult: (onTextDelta: (text: string, phase?: string, outputIndex?: number) => void) => Promise<RoutedResponse>,
 ) {
   const streamed = newLiveTextState();
   beginAnthropicMessageStream(response, messageId, model);
-  void startResult((text, phase) => writeLiveText(response, streamed, 'messages', messageId, model, text, phase)).then((result) => {
+  void startResult((text, phase, outputIndex) => writeLiveText(response, streamed, 'messages', messageId, model, text, phase, outputIndex)).then((result) => {
     writeAnthropicMessageStreamResult(response, messageId, responseToAnthropicMessage(responseObject(reconcileLiveText(result, streamed)), request), streamed);
   }).catch((error) => {
     const routerError = normalizeRouterError(error);
@@ -4544,7 +4585,7 @@ function writeAnthropicMessageStreamResult(
   content.forEach((block, index) => {
     const contentBlock = isRecord(block) ? block : { type: 'text', text: '' };
     const blockType = typeof contentBlock.type === 'string' ? contentBlock.type : 'text';
-    if (!(index === 0 && streamed?.text)) writeSse(response, 'content_block_start', {
+    if (!(index === streamed?.outputIndex && streamed.text)) writeSse(response, 'content_block_start', {
       type: 'content_block_start',
       index,
       content_block: anthropicStreamStartBlock(contentBlock),
@@ -4555,7 +4596,7 @@ function writeAnthropicMessageStreamResult(
         index,
         delta: {
           type: 'text_delta',
-          text: typeof contentBlock.text === 'string' ? contentBlock.text.slice(index === 0 ? streamed?.text.length ?? 0 : 0) : '',
+          text: typeof contentBlock.text === 'string' ? contentBlock.text.slice(index === streamed?.outputIndex ? streamed.text.length : 0) : '',
         },
       });
     }
@@ -4610,11 +4651,17 @@ function anthropicStreamStartBlock(contentBlock: JsonObject): JsonObject {
 function writeResponseStreamResult(response: ServerResponse, result: RoutedResponse, streamed?: LiveTextState) {
   if (streamed?.text) {
     const output = result.outputItems;
-    const item = output[0]!;
+    const index = streamed.outputIndex;
+    const emitItem = (item: JsonObject, outputIndex: number): void => {
+      writeSse(response, 'response.output_item.added', { type: 'response.output_item.added', output_index: outputIndex, item });
+      writeSse(response, 'response.output_item.done', { type: 'response.output_item.done', output_index: outputIndex, item });
+    };
+    output.slice(0, index).forEach(emitItem);
+    const item = output[index]!;
     const parts = Array.isArray(item.content) ? item.content : [];
     const part = isRecord(parts[0]) ? parts[0] : {};
     const text = losslessStringField(part.text) ?? '';
-    const address = { item_id: streamed.messageId, output_index: 0, content_index: 0 };
+    const address = { item_id: streamed.messageId, output_index: index, content_index: 0 };
     writeSse(response, 'response.output_text.delta', { type: 'response.output_text.delta', ...address, delta: text.slice(streamed.text.length) });
     writeSse(response, 'response.output_text.done', { type: 'response.output_text.done', ...address, text });
     writeSse(response, 'response.content_part.done', { type: 'response.content_part.done', ...address, part: part as JsonObject });
@@ -4622,11 +4669,8 @@ function writeResponseStreamResult(response: ServerResponse, result: RoutedRespo
       writeSse(response, 'response.content_part.added', { type: 'response.content_part.added', ...address, content_index: index + 1, part: value });
       writeSse(response, 'response.content_part.done', { type: 'response.content_part.done', ...address, content_index: index + 1, part: value });
     });
-    writeSse(response, 'response.output_item.done', { type: 'response.output_item.done', output_index: 0, item });
-    output.slice(1).forEach((value, index) => {
-      writeSse(response, 'response.output_item.added', { type: 'response.output_item.added', output_index: index + 1, item: value });
-      writeSse(response, 'response.output_item.done', { type: 'response.output_item.done', output_index: index + 1, item: value });
-    });
+    writeSse(response, 'response.output_item.done', { type: 'response.output_item.done', output_index: index, item });
+    output.slice(index + 1).forEach((value, offset) => emitItem(value, index + 1 + offset));
     writeResponseStreamTerminal(response, result);
     response.write('data: [DONE]\n\n');
     response.end();
@@ -4634,10 +4678,12 @@ function writeResponseStreamResult(response: ServerResponse, result: RoutedRespo
   }
   let outputIndex = 0;
   const contentIndex = 0;
-  const messageItemId = makeId('msg');
-  const outputItems = responseOutputItems(result, messageItemId);
-  const reasoningItems = outputItems.filter((item) => item.type === 'reasoning');
-  const nonReasoningItems = outputItems.filter((item) => item.type !== 'reasoning');
+  const outputItems = responseOutputItems(result);
+  const lastItem = outputItems.at(-1);
+  const completedMessage = lastItem?.type === 'message' && outputItems.slice(0, -1).every(item => item.type === 'reasoning') ? lastItem : undefined;
+  const messageItemId = stringField(completedMessage?.id) ?? makeId('msg');
+  const reasoningItems = completedMessage ? outputItems.slice(0, -1) : [];
+  const nonReasoningItems = completedMessage ? [completedMessage] : outputItems;
 
   reasoningItems.forEach((item) => {
     writeSse(response, 'response.output_item.added', {
@@ -4653,9 +4699,6 @@ function writeResponseStreamResult(response: ServerResponse, result: RoutedRespo
     outputIndex += 1;
   });
 
-  const completedMessage = nonReasoningItems.length === 1 && nonReasoningItems[0]?.type === 'message'
-    ? nonReasoningItems[0]
-    : undefined;
   if (!completedMessage) {
     nonReasoningItems.forEach((item, index) => {
       writeSse(response, 'response.output_item.added', {

@@ -155,11 +155,11 @@ export function GitCheckpointsPanel({
     <aside className={`flex min-h-0 min-w-0 flex-col border-l border-ds-border bg-ds-sidebar ${className}`}>
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-ds-ink">
+          <div className="flex items-center gap-2 text-ds-md font-semibold text-ds-ink">
             <RotateCcw className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
             <span>{t('gitCheckpointsTitle')}</span>
           </div>
-          <div className="mt-1 truncate text-[11.5px] text-ds-faint">{sessionId}</div>
+          <div className="mt-1 truncate text-ds-xs text-ds-faint">{sessionId}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <button
@@ -186,7 +186,7 @@ export function GitCheckpointsPanel({
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
         {notice ? (
-          <div className={`rounded-lg border px-3 py-2 text-[12px] ${
+          <div className={`rounded-lg border px-3 py-2 text-ds-sm ${
             notice.tone === 'success'
               ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
               : 'border-red-300/50 bg-red-500/10 text-red-700 dark:text-red-200'
@@ -196,7 +196,7 @@ export function GitCheckpointsPanel({
         ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-[12px] text-ds-muted">
+          <span className="text-ds-sm text-ds-muted">
             {t('gitCheckpointsCount', { count: checkpoints.length })}
           </span>
         </div>
@@ -221,20 +221,20 @@ export function GitCheckpointsPanel({
                 }`}
               >
                 <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="truncate text-[12.5px] font-semibold">
+                  <span className="truncate text-ds-sm font-semibold">
                     {checkpoint.turnId ?? checkpoint.phase}
                   </span>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold ${statusTone(checkpoint.status)}`}>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-ds-2xs font-semibold ${statusTone(checkpoint.status)}`}>
                     {checkpoint.status}
                   </span>
                 </div>
-                <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-ds-faint">
+                <div className="mt-1 flex flex-wrap gap-1.5 text-ds-xs text-ds-faint">
                   <span>{checkpoint.phase}</span>
                   <span>{checkpoint.provider}</span>
                   <span>{formatTime(checkpoint.createdAt)}</span>
                 </div>
                 {checkpoint.changeSummary ? (
-                  <pre className="mt-2 max-h-12 overflow-hidden whitespace-pre-wrap font-mono text-[10.5px] leading-4 text-ds-faint">
+                  <pre className="mt-2 max-h-12 overflow-hidden whitespace-pre-wrap font-mono text-ds-2xs leading-4 text-ds-faint">
                     {checkpoint.changeSummary}
                   </pre>
                 ) : null}
@@ -246,7 +246,7 @@ export function GitCheckpointsPanel({
         {selected ? (
           <section className="flex shrink-0 flex-col gap-2 border-t border-ds-border pt-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2 text-[12.5px] font-semibold text-ds-ink">
+              <div className="flex min-w-0 items-center gap-2 text-ds-sm font-semibold text-ds-ink">
                 <FileText className="h-4 w-4 text-ds-muted" strokeWidth={1.75} />
                 <span className="truncate">{t('gitCheckpointsPreview')}</span>
               </div>
@@ -254,7 +254,7 @@ export function GitCheckpointsPanel({
                 type="button"
                 onClick={() => void restore()}
                 disabled={restoring}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 text-[12px] font-semibold text-amber-800 transition hover:bg-amber-500/15 disabled:opacity-50 dark:text-amber-200"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 text-ds-sm font-semibold text-amber-800 transition hover:bg-amber-500/15 disabled:opacity-50 dark:text-amber-200"
               >
                 {restoring
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -268,7 +268,7 @@ export function GitCheckpointsPanel({
             ) : preview?.patch ? (
               <div className="grid gap-2">
                 {preview.truncated ? (
-                  <div className="flex gap-2 rounded-lg border border-amber-300/60 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-200">
+                  <div className="flex gap-2 rounded-lg border border-amber-300/60 bg-amber-500/10 px-3 py-2 text-ds-sm text-amber-800 dark:text-amber-200">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>{t('gitCheckpointsPreviewTruncated')}</span>
                   </div>
@@ -287,7 +287,7 @@ export function GitCheckpointsPanel({
 
 function EmptyState({ text }: { text: string }): ReactElement {
   return (
-    <div className="rounded-lg border border-ds-border-muted bg-ds-card px-3 py-3 text-[13px] text-ds-faint">
+    <div className="rounded-lg border border-ds-border-muted bg-ds-card px-3 py-3 text-ds-md text-ds-faint">
       {text}
     </div>
   )
@@ -295,7 +295,7 @@ function EmptyState({ text }: { text: string }): ReactElement {
 
 function LoadingState({ text }: { text: string }): ReactElement {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card px-3 py-3 text-[13px] text-ds-muted">
+    <div className="flex items-center gap-2 rounded-lg border border-ds-border-muted bg-ds-card px-3 py-3 text-ds-md text-ds-muted">
       <Loader2 className="h-4 w-4 animate-spin" />
       {text}
     </div>
@@ -305,8 +305,8 @@ function LoadingState({ text }: { text: string }): ReactElement {
 function PatchBlock({ title, text }: { title: string; text: string }): ReactElement {
   return (
     <div className="rounded-lg border border-ds-border-muted bg-ds-card px-3 py-2">
-      <div className="text-[11.5px] font-semibold text-ds-muted">{title}</div>
-      <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-ds-faint">
+      <div className="text-ds-xs font-semibold text-ds-muted">{title}</div>
+      <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-ds-xs leading-5 text-ds-faint">
         {text}
       </pre>
     </div>

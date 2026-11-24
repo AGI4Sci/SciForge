@@ -238,7 +238,7 @@ try {
   phase('restart preserved the compact entry and exact artifact reference')
 
   const isolatedManagedCodexConfig = await readFile(
-    join(temporaryDirectory, '.codex-runtime', 'codex-home', 'config.toml'),
+    join(userDataDirectory, 'runtime-codex', 'codex-home', 'config.toml'),
     'utf8'
   )
   if (!isolatedManagedCodexConfig.includes(router.baseUrl)) {
@@ -668,9 +668,9 @@ async function openCompactTimelineAndVerifyExact(window, { threadTitle, versionI
       `[data-research-checkpoint-version-id="${versionId}"]`
     ).first()
     await entry.waitFor({ state: 'visible', timeout: uiTimeoutMs })
-    const button = entry.getByRole('button', { name: /Open research dossier|打开科研档案/u, exact: true })
+    const button = entry.getByRole('button', { name: /Open research evidence chain|打开科研证据链/u, exact: true })
     await button.waitFor({ state: 'visible', timeout: uiTimeoutMs })
-    if ((await entry.innerText()).trim().match(/^(?:Open research dossier|打开科研档案)$/u) === null) {
+    if ((await entry.innerText()).trim().match(/^(?:Open research evidence chain|打开科研证据链)$/u) === null) {
       throw new Error(`Compact entry exposed details: ${(await entry.innerText()).trim()}`)
     }
     if (await entry.locator('button').count() !== 1) throw new Error('Compact entry has more than one action.')

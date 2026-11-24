@@ -10,7 +10,7 @@ function activity(kind: 'delivery' | 'review' | 'adoption', summary: string, seq
   return {
     schemaVersion: 1, type: 'dashboard_activity_item', revision: sequence, createdAt: at, updatedAt: at,
     public: true, actorDisplayName: null,
-    event: { schemaVersion: 1, type: 'public_activity_event', projectId: 'prj_activityDelivery01',
+    event: { schemaVersion: 1, type: 'public_activity_event', actorUserId: null, projectId: 'prj_activityDelivery01',
       taskId: targetTaskId, eventId: `evt_activityDelivery${sequence}`, sequence, kind, payload: { summary },
       occurredAt: at, revision: sequence, createdAt: at, updatedAt: at }
   }
@@ -44,5 +44,19 @@ describe('task activity from the canonical Cloud dashboard', () => {
   it('does not synthesize events or display another task’s activity', () => {
     assert.deepEqual(taskActivityItems([], taskId), [])
     assert.deepEqual(taskActivityItems([activity('delivery', '第 1 版已提交', 1, 'tsk_otherDelivery01')], taskId), [])
+  })
+
+  it('never attributes member discussions with missing authors to the system or current viewer', () => {
+    for (const kind of ['comment', 'mention'] as const) {
+      for (const actorDisplayName of [null, '', '   ']) {
+        const entry = activity('delivery', 'Keep the review text', 1)
+        const [item] = taskActivityItems([{ ...entry, actorDisplayName, event: { ...entry.event, kind } }], taskId)
+        assert.equal(item.actor, '成员（作者未记录）')
+        assert.equal(item.event, false)
+        assert.equal(item.text, 'Keep the review text')
+      }
+    }
+    const entry = activity('delivery', 'Named review', 1)
+    assert.equal(taskActivityItems([{ ...entry, actorDisplayName: 'Worker C', event: { ...entry.event, kind: 'comment' } }], taskId)[0].actor, 'Worker C')
   })
 })

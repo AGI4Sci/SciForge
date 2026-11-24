@@ -231,6 +231,13 @@ function clientFixture(overrides: Pick<
       projects: []
     }),
     createProject: unused,
+    retryLeaderProposal: unused,
+    deferLeaderProposal: unused,
+    renameProject: unused,
+    setProjectExecutionMode: unused,
+    authorizeProjectDispatch: unused,
+    updateTaskContent: unused,
+    decideTaskContent: unused,
     deleteProject: unused,
     acknowledgeProjectActivation: overrides.acknowledgeProjectActivation,
     readSessionOwnership: overrides.readSessionOwnership ?? (async () => []),
@@ -240,6 +247,7 @@ function clientFixture(overrides: Pick<
     readDeliveryObjectRange: unused,
     readDelivery: unused,
     listDrive: unused,
+    validateDelivery: unused,
     decideAdoption: unused,
     requestRevision: unused,
     publishResult: unused,
@@ -254,6 +262,7 @@ function clientFixture(overrides: Pick<
     removeMember: unused,
     createHumanNeeded: unused,
     answerHumanNeeded: unused,
+    deferHumanNeeded: unused,
     transferCoordinator: unused,
     completeProject: unused
   }
@@ -319,6 +328,8 @@ function workspaceFixture(
     projects: [{
       project: {
         type: 'project',
+        executionMode: 'manual' as const,
+        dispatchAuthorization: null,
         schemaVersion: 1,
         projectId,
         ownerUserId: 'usr_ProjectOwner1',

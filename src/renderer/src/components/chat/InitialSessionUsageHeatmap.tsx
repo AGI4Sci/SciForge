@@ -217,14 +217,14 @@ function HeatmapGrid({
     <div className="ds-usage-chart w-full min-w-0 border-t border-ds-border-muted pt-3">
       <div className="ds-usage-chart-heading mb-2 flex min-w-0 flex-wrap gap-2">
         <div className="min-w-0">
-          <p className="text-[12px] font-medium text-ds-muted">
+          <p className="text-ds-sm font-medium text-ds-muted">
             {t('usageHeatmapGridLabel', { runtime: runtimeLabel })}
           </p>
-          <p className="mt-1 truncate text-[12px] tabular-nums text-ds-muted" title={selectedSummary}>
+          <p className="mt-1 truncate text-ds-sm tabular-nums text-ds-muted" title={selectedSummary}>
             {selectedSummary}
           </p>
         </div>
-        <div className="flex shrink-0 items-end gap-1.5 text-[10px] font-medium text-ds-faint" aria-hidden>
+        <div className="flex shrink-0 items-end gap-1.5 text-ds-2xs font-medium text-ds-faint" aria-hidden>
           <span>{t('usageHeatmapLess')}</span>
           {USAGE_HEATMAP_INTENSITY_CLASSES.map((className, index) => (
             <span
@@ -279,10 +279,10 @@ function HeatmapGrid({
 function Metric({ label, value }: { label: string; value: string }): ReactElement {
   return (
     <span className="ds-usage-metric">
-      <span className="min-w-0 text-[12px] font-medium text-ds-muted" title={label}>
+      <span className="min-w-0 text-ds-sm font-medium text-ds-muted" title={label}>
         {label}
       </span>
-      <span className="min-w-0 whitespace-nowrap text-[20px] font-semibold leading-6 tabular-nums tracking-[-0.02em] text-ds-ink" title={value}>
+      <span className="min-w-0 whitespace-nowrap text-ds-3xl font-semibold leading-6 tabular-nums tracking-[-0.02em] text-ds-ink" title={value}>
         {value}
       </span>
     </span>
@@ -406,7 +406,7 @@ function ModelUsagePanel({
 
   if (state.loading && !usage) {
     return (
-      <div className="grid min-h-[180px] place-items-center text-[12px] text-ds-faint">
+      <div className="grid min-h-[180px] place-items-center text-ds-sm text-ds-faint">
         {t('usageHeatmapLoading')}
       </div>
     )
@@ -414,7 +414,7 @@ function ModelUsagePanel({
 
   if (modelBuckets.length === 0) {
     return (
-      <div className="grid min-h-[180px] place-items-center rounded-md bg-ds-subtle text-[12px] text-ds-faint">
+      <div className="grid min-h-[180px] place-items-center rounded-md bg-ds-subtle text-ds-sm text-ds-faint">
         {t('usageHeatmapModelsEmpty', { model: fallbackModel || '-' })}
       </div>
     )
@@ -423,13 +423,13 @@ function ModelUsagePanel({
   return (
     <div className="min-w-0">
       <div className="mb-3 flex items-baseline gap-3 px-1">
-        <span className="text-[13px] font-medium text-ds-muted">{t('usageHeatmapTokens')}</span>
-        <span className="text-[20px] font-semibold tabular-nums text-ds-ink">
+        <span className="text-ds-md font-medium text-ds-muted">{t('usageHeatmapTokens')}</span>
+        <span className="text-ds-3xl font-semibold tabular-nums text-ds-ink">
           {formatTokenCount(usage?.totals.totalTokens ?? 0, locale)}
         </span>
       </div>
       <div className="grid min-h-[206px] grid-cols-[44px_1fr] gap-2">
-        <div className="grid grid-rows-5 pb-5 pt-14 text-right text-[11px] leading-none text-ds-faint">
+        <div className="grid grid-rows-5 pb-5 pt-14 text-right text-ds-xs leading-none text-ds-faint">
           {[1, 0.75, 0.5, 0.25, 0].map((ratio) => (
             <span key={ratio}>
               {ratio === 0 ? '0' : formatCompactNumber(maxTokens * ratio)}
@@ -443,8 +443,8 @@ function ModelUsagePanel({
               style={{ left: `${tooltipAnchorPercent}%` }}
             >
               <div className="flex items-start justify-between gap-3">
-                <span className="text-[12.5px] font-semibold text-ds-ink">{activeDay.date}</span>
-                <span className="whitespace-nowrap text-[12.5px] font-semibold tabular-nums text-ds-ink">
+                <span className="text-ds-sm font-semibold text-ds-ink">{activeDay.date}</span>
+                <span className="whitespace-nowrap text-ds-sm font-semibold tabular-nums text-ds-ink">
                   {t('usageHeatmapModelTooltipTotalTokens', {
                     value: formatTokenCount(activeBreakdown.total, locale)
                   })}
@@ -454,7 +454,7 @@ function ModelUsagePanel({
                 {tooltipRows.map((row) => (
                   <div
                     key={row.key}
-                    className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 text-[12px] leading-5"
+                    className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 text-ds-sm leading-5"
                   >
                     <span
                       className="h-2.5 w-2.5 rounded-[3px]"
@@ -535,7 +535,7 @@ function ModelUsagePanel({
                     })}
                   </span>
                 </button>
-                <span className="truncate text-center text-[11px] text-ds-faint">
+                <span className="truncate text-center text-ds-xs text-ds-faint">
                   {dateLabel}
                 </span>
               </div>
@@ -551,7 +551,7 @@ function ModelUsagePanel({
           return (
             <div
               key={bucket.model}
-              className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_auto] items-center gap-3 text-[12px] leading-5"
+              className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_auto] items-center gap-3 text-ds-sm leading-5"
               title={summary}
               aria-label={summary}
             >
@@ -753,12 +753,12 @@ export function InitialSessionUsageHeatmapView({
                       </h1>
                     </div>
                     <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} />
-                    <p className="ds-usage-description text-[12px] leading-5 text-ds-muted">
+                    <p className="ds-usage-description text-ds-sm leading-5 text-ds-muted">
                       {heroSub}
                     </p>
                   </div>
                   <div className="ds-usage-controls flex min-w-0 flex-wrap items-center gap-3 border-t border-ds-border-muted pt-3">
-                    <div className="flex items-center gap-5 text-[12.5px] font-medium text-ds-muted">
+                    <div className="flex items-center gap-5 text-ds-sm font-medium text-ds-muted">
                       <button
                         type="button"
                         className={`relative min-h-8 transition after:absolute after:-bottom-1 after:left-0 after:right-0 after:h-0.5 after:rounded-full ${
@@ -785,7 +785,7 @@ export function InitialSessionUsageHeatmapView({
                         {t('usageHeatmapTabModels')}
                       </button>
                     </div>
-                    <div className="flex min-w-0 items-center gap-1 self-start rounded-full border border-ds-border-muted bg-ds-subtle/70 p-0.5 text-[11px] font-medium text-ds-muted">
+                    <div className="flex min-w-0 items-center gap-1 self-start rounded-full border border-ds-border-muted bg-ds-subtle/70 p-0.5 text-ds-xs font-medium text-ds-muted">
                       {USAGE_RANGE_KEYS.map((key) => (
                         <button
                           key={key}
@@ -809,7 +809,7 @@ export function InitialSessionUsageHeatmapView({
                     <div className="ds-usage-overview-grid grid min-w-0 gap-4">
                       <div className="ds-usage-summary">
                         <div className="ds-usage-total">
-                          <p className="text-[12px] font-medium text-ds-muted">
+                          <p className="text-ds-sm font-medium text-ds-muted">
                             {hasUnmeteredTokenBuckets ? t('usageHeatmapRecordedTokens') : t('usageHeatmapTotalTokens')}
                           </p>
                           <p className="ds-usage-total-value tabular-nums font-semibold text-ds-ink" title={hasUnmeteredTokenBuckets && totals.totalTokens <= 0 ? tokenMetricValue : totals.totalTokens.toLocaleString(i18n.language)}>
@@ -818,7 +818,7 @@ export function InitialSessionUsageHeatmapView({
                         </div>
                         <div className="ds-usage-streaks">
                           <div>
-                            <span className="flex items-center gap-1 text-[12px] text-ds-muted">
+                            <span className="flex items-center gap-1 text-ds-sm text-ds-muted">
                               <Flame className="h-3 w-3 shrink-0 text-violet-500" aria-hidden />
                               {t('usageHeatmapCurrentStreak')}
                             </span>
@@ -827,13 +827,13 @@ export function InitialSessionUsageHeatmapView({
                             </span>
                           </div>
                           <div>
-                            <span className="text-[12px] text-ds-muted">{t('usageHeatmapLongestStreak')}</span>
+                            <span className="text-ds-sm text-ds-muted">{t('usageHeatmapLongestStreak')}</span>
                             <span className="whitespace-nowrap tabular-nums font-semibold text-ds-ink">
                               {t('usageHeatmapStreakDays', { count: streaks.longest })}
                             </span>
                           </div>
                         </div>
-                        <p className={hasUnmeteredTokenBuckets ? 'ds-usage-recording-note text-[12px] leading-5 text-ds-muted' : 'sr-only'}>
+                        <p className={hasUnmeteredTokenBuckets ? 'ds-usage-recording-note text-ds-sm leading-5 text-ds-muted' : 'sr-only'}>
                           {overviewCaption}
                         </p>
                       </div>
@@ -858,7 +858,7 @@ export function InitialSessionUsageHeatmapView({
                       {economyMetrics.map((metric, index) => (
                         <span
                           key={metric.label}
-                          className={`flex min-w-0 items-center justify-between gap-3 px-1 py-2.5 text-[11.5px] ${index > 0 ? 'border-t border-ds-border-muted' : ''}`}
+                          className={`flex min-w-0 items-center justify-between gap-3 px-1 py-2.5 text-ds-xs ${index > 0 ? 'border-t border-ds-border-muted' : ''}`}
                         >
                           <span className="truncate text-ds-faint">{metric.label}</span>
                           <span className="mt-0.5 block truncate font-semibold tabular-nums text-ds-ink" title={metric.value}>

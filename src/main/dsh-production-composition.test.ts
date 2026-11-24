@@ -56,13 +56,21 @@ describe('production DSH composition', () => {
     const coreFactory = vi.spyOn(runtime, 'createDshRuntimeAdapter')
     try {
       const { adapters, factory } = productionAdapters(join(root, 'user-data'), join(root, 'resources'), surface)
-      expect(coreFactory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      expect(coreFactory).toHaveBeenCalledTimes(2)
+      expect(coreFactory).toHaveBeenNthCalledWith(1, expect.objectContaining({
         stateDirectory: join(root, 'user-data', 'agent-runtime', 'dsh'),
         resolveDeploymentTarget: expect.any(Function),
         toolSurface: surface,
         requestTimeoutMs: 15_000, promptTimeoutMs: 600_000, cancelTimeoutMs: 15_000,
         getAuthorizedMcpServers: expect.any(Function)
       }))
+      expect(coreFactory).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        contextProfile: 'minimal', stateDirectory: join(root, 'user-data', 'agent-runtime', 'dsh', 'minimal'),
+        resolveDeploymentTarget: coreFactory.mock.calls[0]![0].resolveDeploymentTarget,
+        getModelRouter: coreFactory.mock.calls[0]![0].getModelRouter,
+        toolSurface: surface, getAuthorizedMcpServers: expect.any(Function)
+      }))
+      expect(coreFactory.mock.calls[0]![0].contextProfile).toBeUndefined()
       const composedOptions = coreFactory.mock.calls[0]![0] as unknown as Record<string, unknown>
       expect(composedOptions).not.toHaveProperty('executable')
       expect(composedOptions).not.toHaveProperty('verifyExecutable')

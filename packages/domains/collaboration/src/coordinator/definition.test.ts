@@ -11,7 +11,7 @@ test('manifest composes independent main and renderer entrypoints', () => {
   assert.equal(domainPackageDefinition.packageName, '@sciforge/domain-collaboration')
   assert.equal(domainPackageDefinition.module.id, 'sciforge.collaboration')
   assert.deepEqual(domainPackageDefinition.module.hostApi, {
-    minimum: '1.13.0',
+    minimum: '1.19.0',
     maximumExclusive: '2.0.0'
   })
   assert.deepEqual(
@@ -97,9 +97,9 @@ test('publishable dependencies target the frozen Host and domain contract majors
   const packageJson = JSON.parse(
     await readFile(new URL('../../package.json', import.meta.url), 'utf8')
   ) as { dependencies: Record<string, string> }
-  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '8.0.0')
+  assert.equal(packageJson.dependencies['@sciforge/collaboration-contracts'], '10.0.0')
   assert.equal(packageJson.dependencies['@sciforge/domain-collaboration'], undefined)
   assert.equal(packageJson.dependencies['@sciforge/domain-content-space'], undefined)
-  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '5.1.0')
-  assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.32')
+  assert.equal(packageJson.dependencies['@sciforge/domain-identity-access'], '8.0.8')
+    assert.equal(packageJson.dependencies['@sciforge/domain-sdk'], '^0.2.47')
 })

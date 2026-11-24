@@ -2,8 +2,9 @@
 import { act, Suspense, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
-import { createEvidenceDagGlobalOverlayContribution } from '@sciforge/domain-evidence-dag/renderer'
-import type { DomainRendererHost, DomainVisibleContextSelectionInspection } from '@sciforge/domain-sdk/host'
+import { createEvidenceDagGlobalOverlayContribution, createDomainRendererEntry as createEvidenceEntry } from '@sciforge/domain-evidence-dag/renderer'
+import { createDomainRendererEntry as createDossierEntry } from '@sciforge/domain-research-dossier/renderer'
+import type { DomainRendererContribution, DomainRendererHost, DomainVisibleContextSelectionInspection } from '@sciforge/domain-sdk/host'
 import {
   inspectRegisteredVisibleContextTextSelection,
   registerVisibleContextComponent,
@@ -13,11 +14,19 @@ import {
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+function composeResearchWorkspace(host: DomainRendererHost) {
+  const contributions: DomainRendererContribution[] = []
+  Object.assign(host, { contributions: { list: (kind: string) => contributions.filter(item => item.kind === kind) } })
+  for (const entry of [createEvidenceEntry(host), createDossierEntry(host)]) {
+    contributions.push(...entry.contributions as DomainRendererContribution[])
+  }
+}
+
 it('keeps the research canvas registered during an earlier sibling annotation effect with an equivalent scope', async () => {
   vi.stubGlobal('IntersectionObserver', undefined)
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    return this.parentElement?.dataset.recordKind === 'phase' ? new DOMRect(20, 30, 300, 40) : new DOMRect(0, 0, 900, 700)
+    return this.dataset.recordKind === 'phase' || this.parentElement?.dataset.recordKind === 'phase' ? new DOMRect(20, 30, 300, 40) : new DOMRect(0, 0, 900, 700)
   })
   vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(30, 40, 100, 16))
   const registeredTargetRef = vi.fn(async () => ({ ok: true, targetRef: 'opaque-host-reference-fixture' }))
@@ -26,7 +35,9 @@ it('keeps the research canvas registered during an earlier sibling annotation ef
   } })
   const scope = { runtimeId: 'codex', threadId: 'record-parent', workspaceRoot: '/research' }
   const phase = { id: 'phase-1', parentId: 'root', kind: 'phase', title: '机制验证', summary: '检查独立对照',
-    origin: 'model', status: 'completed', createdAt: '2026-11-03', updatedAt: '2026-11-03' }
+    origin: 'model', status: 'completed', createdAt: '2026-11-03', updatedAt: '2026-11-03', synthesisStatus: 'ready',
+    synthesis: { revision: 1, updatedAt: '2026-11-03', summaryLimited: false,
+      entries: [{ id: 'progress', kind: 'progress', text: '机制验证', status: 'active', membership: 'current', sourceIds: ['source-1'] }] } }
   let registrations = 0, unregistrations = 0
   const host = {
     capabilityInvoker: { invoke: async (contract: { actionId: string }, input: { nodeId: string }) => contract.actionId === 'evidence-dag.record.review' ? { items: [], latestSequence: 0, total: 0, pending: 0, blocked: 0, worker: 'idle' } : ({
@@ -43,6 +54,7 @@ it('keeps the research canvas registered during an earlier sibling annotation ef
       registerVisualTarget: registerVisibleContextVisualTarget
     }
   } as unknown as DomainRendererHost
+  composeResearchWorkspace(host)
   const overlay = createEvidenceDagGlobalOverlayContribution(host)
   let inspection: DomainVisibleContextSelectionInspection | null | undefined
   function AnnotationProbe({ active }: { active: boolean }) {
@@ -83,12 +95,14 @@ it('keeps the research canvas registered during an earlier sibling annotation ef
 })
 
 
-it('never registers old compact rows under a new scope while its owner read is pending', async () => {
+it('never registers old research highlights under a new scope while its owner read is pending', async () => {
   vi.stubGlobal('IntersectionObserver', undefined)
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   const targets: { resourceId?: unknown; workspaceRoot?: unknown; runtimeId?: unknown; threadId?: unknown }[] = []
   const workspaceA = '/scope-a', workspaceB = '/scope-b'
-  const nodes = Array.from({ length: 25 }, (_, i) => ({ id: `A-${i}`, parentId: 'root', kind: 'phase', title: `Material A ${i}`, summary: '', origin: 'system', status: 'complete', createdAt: '2026-11-05', updatedAt: '2026-11-05' }))
+  const nodes = Array.from({ length: 25 }, (_, i) => ({ id: `A-${i}`, parentId: 'root', kind: 'phase', title: `Material A ${i}`, summary: '', origin: 'model', status: 'complete', createdAt: '2026-11-05', updatedAt: '2026-11-05', synthesisStatus: 'ready',
+    synthesis: { revision: 1, updatedAt: '2026-11-05', summaryLimited: false,
+      entries: [{ id: `progress-${i}`, kind: 'progress', text: `Recorded progress ${i}`, status: 'active', membership: 'current', sourceIds: [`source-${i}`] }] } }))
   let newScopeRequests = 0
   const host = {
     capabilityInvoker: { invoke: async (contract: { actionId: string }, _input: unknown, options: { workspaceId: string }) => {
@@ -104,6 +118,7 @@ it('never registers old compact rows under a new scope while its owner read is p
       }
     }
   } as unknown as DomainRendererHost
+  composeResearchWorkspace(host)
   const overlay = createEvidenceDagGlobalOverlayContribution(host)
   const container = document.createElement('div'); document.body.append(container)
   const root = createRoot(container)
@@ -112,8 +127,8 @@ it('never registers old compact rows under a new scope while its owner read is p
     activation: { revision: 1, payload: { recordScope: { runtimeId: 'codex', threadId: workspaceRoot, workspaceRoot } } }, onClose: () => {} })}</Suspense>
   try {
     await act(async () => root.render(render(workspaceA)))
-    await vi.waitFor(() => expect(container.querySelectorAll('.record-compact-row')).toHaveLength(20))
-    expect(targets.filter(target => String(target.resourceId).startsWith('A-'))).toHaveLength(20)
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-summary-entry="progress"]')).toHaveLength(2))
+    expect(targets.filter(target => String(target.resourceId).startsWith('A-'))).toHaveLength(2)
     targets.length = 0
     await act(async () => root.render(render(workspaceB)))
     expect(newScopeRequests).toBeGreaterThan(0)

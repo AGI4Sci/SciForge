@@ -479,7 +479,7 @@ export function TerminalPanel({
             return (
               <div
                 key={tab.id}
-                className={`group flex h-8 max-w-[220px] shrink-0 items-center rounded-t-[10px] text-[13px] font-medium transition ${
+                className={`group flex h-8 max-w-[220px] shrink-0 items-center rounded-t-[10px] text-ds-md font-medium transition ${
                   active
                     ? 'ds-surface-strong border border-b-transparent border-ds-border-muted text-ds-ink shadow-sm dark:bg-[rgba(38,49,76,0.96)]'
                     : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -502,7 +502,7 @@ export function TerminalPanel({
                         cancelRenameTab()
                       }
                     }}
-                    className="mx-2 min-w-0 flex-1 rounded-md border border-ds-border-muted bg-ds-card px-2 py-1 text-[12px] text-ds-ink outline-none focus:border-ds-accent"
+                    className="mx-2 min-w-0 flex-1 rounded-md border border-ds-border-muted bg-ds-card px-2 py-1 text-ds-sm text-ds-ink outline-none focus:border-ds-accent"
                     aria-label={t('terminalRenameTab')}
                   />
                 ) : (
@@ -594,12 +594,12 @@ export function TerminalPanel({
         {error ? (
           <div className="absolute inset-0 flex items-center justify-center p-6 text-center">
             <div>
-              <div className="text-[13px] font-semibold text-red-400">{t('terminalUnavailable')}</div>
-              <div className="mt-2 max-w-sm text-[12px] leading-5 text-zinc-400">{error}</div>
+              <div className="text-ds-md font-semibold text-red-400">{t('terminalUnavailable')}</div>
+              <div className="mt-2 max-w-sm text-ds-sm leading-5 text-zinc-400">{error}</div>
               <button
                 type="button"
                 onClick={() => void handleRestart()}
-                className="mt-4 rounded-full bg-white/10 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-white/20"
+                className="mt-4 rounded-full bg-white/10 px-3 py-1.5 text-ds-sm font-semibold text-white transition hover:bg-white/20"
               >
                 {t('terminalRestart')}
               </button>
@@ -611,7 +611,7 @@ export function TerminalPanel({
             <button
               type="button"
               onClick={() => void handleRestart()}
-              className="pointer-events-auto rounded-full bg-white/10 px-3 py-1.5 text-[12px] font-semibold text-white shadow-lg backdrop-blur transition hover:bg-white/20"
+              className="pointer-events-auto rounded-full bg-white/10 px-3 py-1.5 text-ds-sm font-semibold text-white shadow-lg backdrop-blur transition hover:bg-white/20"
             >
               {t('terminalExitMessage')}
             </button>
@@ -639,9 +639,9 @@ function TerminalTabContextMenu({
 }): ReactElement {
   return (
     <div
-      role="menu"
+      role="menu" data-native-view-occluder="true"
       aria-label={t('terminalTabMenuTitle')}
-      className="ds-no-drag fixed z-[1000] min-w-[196px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-[13px] text-ds-ink shadow-[0_18px_48px_rgba(2,6,16,0.28)] backdrop-blur-xl dark:bg-ds-card"
+      className="ds-no-drag fixed z-[1000] min-w-[196px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-ds-md text-ds-ink shadow-[0_18px_48px_rgba(2,6,16,0.28)] backdrop-blur-xl dark:bg-ds-card"
       style={{ left: state.x, top: state.y }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}

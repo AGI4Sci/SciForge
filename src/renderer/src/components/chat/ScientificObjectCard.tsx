@@ -417,7 +417,7 @@ function AnnotationList({
   if (annotations.length === 0) return null
   return (
     <section className="border-t border-ds-border-muted/70 px-3.5 py-3" aria-label={labels.annotations}>
-      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-ds-faint">
+      <div className="mb-2 flex items-center gap-1.5 text-ds-xs font-semibold uppercase tracking-[0.08em] text-ds-faint">
         <Tags className="h-3.5 w-3.5" aria-hidden="true" />
         {labels.annotations} · {annotations.length}
       </div>
@@ -428,8 +428,8 @@ function AnnotationList({
           return (
             <li key={annotationId(annotation, index)} className="group/annotation flex min-w-0 items-start gap-2 rounded-lg bg-ds-card-muted/45 px-2.5 py-2">
               <div className="min-w-0 flex-1">
-                <p className="break-words text-[12.5px] leading-5 text-ds-muted">{text}</p>
-                {meta ? <p className="mt-0.5 truncate text-[10.5px] text-ds-faint">{meta}</p> : null}
+                <p className="break-words text-ds-sm leading-5 text-ds-muted">{text}</p>
+                {meta ? <p className="mt-0.5 truncate text-ds-2xs text-ds-faint">{meta}</p> : null}
               </div>
               {onDelete ? (
                 <button
@@ -504,18 +504,18 @@ export function ScientificObjectCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="rounded-full border border-ds-border-muted bg-ds-card-muted/60 px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ds-muted">
+            <span className="rounded-full border border-ds-border-muted bg-ds-card-muted/60 px-2 py-0.5 text-ds-2xs font-semibold uppercase tracking-[0.07em] text-ds-muted">
               {model.modalityLabel}
             </span>
             {model.formatLabel ? (
-              <span className="rounded-full bg-ds-card-muted/55 px-2 py-0.5 font-mono text-[10.5px] text-ds-faint">{model.formatLabel}</span>
+              <span className="rounded-full bg-ds-card-muted/55 px-2 py-0.5 font-mono text-ds-2xs text-ds-faint">{model.formatLabel}</span>
             ) : null}
           </div>
-          <h3 id={titleId} className="mt-1.5 truncate text-[14px] font-semibold leading-5 text-ds-ink" title={model.title}>
+          <h3 id={titleId} className="mt-1.5 truncate text-ds-lg font-semibold leading-5 text-ds-ink" title={model.title}>
             {model.title || labels.unnamedObject}
           </h3>
           {model.sourceLabel ? (
-            <p className="mt-0.5 truncate font-mono text-[10.5px] text-ds-faint" title={model.sourcePath}>{model.sourceLabel}</p>
+            <p className="mt-0.5 truncate font-mono text-ds-2xs text-ds-faint" title={model.sourcePath}>{model.sourceLabel}</p>
           ) : null}
         </div>
       </div>
@@ -530,30 +530,30 @@ export function ScientificObjectCard({
       ) : null}
 
       {model.description && !compact ? (
-        <p className="mx-3.5 mt-2 line-clamp-2 break-words text-[12.5px] leading-5 text-ds-muted">{model.description}</p>
+        <p className="mx-3.5 mt-2 line-clamp-2 break-words text-ds-sm leading-5 text-ds-muted">{model.description}</p>
       ) : null}
 
       {displayedFacts.length > 0 ? (
         <dl className={mergeClassNames('grid grid-cols-2 gap-x-3 gap-y-2 px-3.5 py-3', compact && 'gap-y-1.5 px-3 py-2.5')}>
           {displayedFacts.map((fact) => (
             <div key={fact.label} className="min-w-0 rounded-lg bg-ds-card-muted/45 px-2.5 py-2">
-              <dt className="truncate text-[10.5px] font-medium uppercase tracking-[0.06em] text-ds-faint">{fact.label}</dt>
-              <dd className="mt-0.5 truncate text-[12.5px] font-semibold text-ds-ink" title={fact.value}>{fact.value}</dd>
+              <dt className="truncate text-ds-2xs font-medium uppercase tracking-[0.06em] text-ds-faint">{fact.label}</dt>
+              <dd className="mt-0.5 truncate text-ds-sm font-semibold text-ds-ink" title={fact.value}>{fact.value}</dd>
             </div>
           ))}
         </dl>
       ) : (
-        <div className="px-3.5 py-3 text-[12px] text-ds-faint">
+        <div className="px-3.5 py-3 text-ds-sm text-ds-faint">
           {model.sourceLabel ?? model.formatLabel ?? labels.unknownValue}
         </div>
       )}
 
       {model.provenanceLabel && !compact ? (
-        <p className="mx-3.5 mb-3 truncate text-[10.5px] text-ds-faint" title={model.provenanceLabel}>{model.provenanceLabel}</p>
+        <p className="mx-3.5 mb-3 truncate text-ds-2xs text-ds-faint" title={model.provenanceLabel}>{model.provenanceLabel}</p>
       ) : null}
 
       {selectionSummary ? (
-        <div className="flex items-center gap-1.5 border-t border-ds-border-muted/70 px-3.5 py-2 text-[11px] text-ds-muted">
+        <div className="flex items-center gap-1.5 border-t border-ds-border-muted/70 px-3.5 py-2 text-ds-xs text-ds-muted">
           <MessageSquareQuote className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
           <span className="truncate" title={selectionSummary}>{selectionSummary}</span>
         </div>
@@ -577,7 +577,7 @@ export function ScientificObjectCard({
             rows={2}
             maxLength={2_000}
             placeholder={labels.annotationPlaceholder}
-            className="block w-full resize-y rounded-xl border border-ds-border bg-ds-card-muted/40 px-3 py-2 text-[12.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/10"
+            className="block w-full resize-y rounded-xl border border-ds-border bg-ds-card-muted/40 px-3 py-2 text-ds-sm leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/45 focus:ring-2 focus:ring-accent/10"
           />
           <div className="mt-2 flex justify-end gap-2">
             <button
@@ -586,14 +586,14 @@ export function ScientificObjectCard({
                 setAnnotationDraft('')
                 setAnnotationEditorOpen(false)
               }}
-              className="h-8 rounded-lg px-3 text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover"
+              className="h-8 rounded-lg px-3 text-ds-sm font-medium text-ds-muted transition hover:bg-ds-hover"
             >
               {labels.cancel}
             </button>
             <button
               type="submit"
               disabled={!annotationDraft.trim()}
-              className="h-8 rounded-lg bg-accent px-3 text-[12px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-8 rounded-lg bg-accent px-3 text-ds-sm font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {labels.saveAnnotation}
             </button>
@@ -606,7 +606,7 @@ export function ScientificObjectCard({
           <button
             type="button"
             onClick={() => onOpenWorkspace(object)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-ds-xs font-semibold text-ds-ink transition hover:bg-ds-hover"
           >
             <ExternalLink className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
             {labels.openWorkspace}
@@ -620,7 +620,7 @@ export function ScientificObjectCard({
               if (canAskAboutSelection) onAskAboutSelection(object, currentSelection)
             }}
             title={canAskAboutSelection ? labels.askAboutSelection : labels.selectionRequired}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
           >
             <MessageSquareQuote className="h-3.5 w-3.5" aria-hidden="true" />
             {labels.askAboutSelection}
@@ -630,7 +630,7 @@ export function ScientificObjectCard({
           <button
             type="button"
             onClick={() => setAnnotationEditorOpen(true)}
-            className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-ds-xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />
             {labels.addAnnotation}

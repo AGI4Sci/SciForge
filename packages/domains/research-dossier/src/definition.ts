@@ -38,6 +38,9 @@ export const RESEARCH_DOSSIER_RENDERER_RESOURCE_NAVIGATION_CONTRACT =
 export const RESEARCH_DOSSIER_RENDERER_I18N_CONTRIBUTION = contributionFor(
   'renderer.i18n-resource'
 )
+export const RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRIBUTION = contributionFor('renderer.extension')
+export const RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRACT = domainPackageDefinition.contributionContracts[RESEARCH_DOSSIER_RENDERER_AUDIT_WORKSPACE_CONTRIBUTION.id]!
+
 
 function contributionFor(kind: string) {
   const contribution = domainPackageDefinition.entrypoints

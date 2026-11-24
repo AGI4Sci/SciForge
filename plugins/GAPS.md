@@ -1,5 +1,7 @@
 # 公共插件化协议缺口登记（版本化组）
 
+> **当前公开候选说明（2026-11-24）：** 下文为历史协议调查，不是当前插件安装清单或本轮验收结果。四个早期独立 Evidence/Project/Git/Research Checkpoints 后端已退役，其原许可证原路径保留；对应六个内置领域及科研审计导航继续由规范 manifest 和生成组合提供。独立插件仅保留 Anchored Comments、Change Inspector、Scientific Plotting。不得按历史建议恢复专属 Host 桥或双实现；当前插件只能使用其显式批准的通用 Host 服务。未执行市场签名发布。
+
 > 依据《SciForge 原生域模块运行时插件化改造方案（阶段一）》：发现公共缺口时先登记并共同修改公共版本，不在各自模块中添加私有旁路。
 > 登记人：版本化组（git-checkpoints / research-checkpoints / scientific-plotting / research-dossier / change-inspector）
 > 基线：`main @ e975be58`；历史参考实现 `origin/feat/plugin-scientific-compute @ a2e948c4`（方案中的 `8c2ff1a1d` 不在该分支线上）。Scientific Compute 内置包与 DSH 插件均已 **retired**，源目录与专属 README 已退出；commit/工具身份仅保留历史证据，不作为源码或安装入口。见 [退役说明](../docs/operations/scientific-compute-retirement.zh-CN.md)。

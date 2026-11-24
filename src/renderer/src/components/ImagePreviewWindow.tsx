@@ -145,7 +145,7 @@ export function ImagePreviewWindow({
       ref={panelRef}
       className="ds-no-drag fixed z-[1100] flex h-[min(560px,70vh)] w-[min(680px,calc(100vw-24px))] min-h-[min(240px,calc(100vh-24px))] min-w-[min(320px,calc(100vw-24px))] resize flex-col overflow-hidden rounded-xl border border-ds-border bg-ds-card text-ds-ink shadow-[0_12px_48px_rgba(0,0,0,0.25)]"
       style={{ left: position.x, top: position.y, maxWidth: `calc(100vw - ${position.x + 12}px)`, maxHeight: `calc(100vh - ${position.y + 12}px)` }}
-      role="dialog"
+      data-native-view-occluder="true" role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
       tabIndex={-1}
@@ -165,7 +165,7 @@ export function ImagePreviewWindow({
         onPointerCancel={finishDrag}
         onLostPointerCapture={() => { dragRef.current = null }}
       >
-        <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium" title={resolvedTitle}>
+        <h2 id={titleId} className="min-w-0 flex-1 truncate text-ds-lg font-medium" title={resolvedTitle}>
           {resolvedTitle}
         </h2>
         <div className="flex shrink-0 items-center gap-2">
@@ -209,7 +209,7 @@ export function ImagePreviewWindow({
       </header>
       {editError || statusMessage ? (
         <div
-          className={`shrink-0 px-4 py-2 text-center text-xs font-medium shadow-lg ${editError ? 'bg-red-50 text-red-800' : 'bg-white text-zinc-700'}`}
+          className={`shrink-0 px-4 py-2 text-center text-ds-sm font-medium shadow-lg ${editError ? 'bg-red-50 text-red-800' : 'bg-white text-zinc-700'}`}
           role={editError ? 'alert' : 'status'}
           aria-live="polite"
         >
@@ -245,7 +245,7 @@ export function ImagePreviewWindow({
           onClick={() => setZoom(1)}
           aria-label={t('imagePreviewResetZoom')}
           title={t('imagePreviewResetZoom')}
-          className="h-10 min-w-16 px-3 text-[13px] font-semibold transition hover:bg-zinc-100"
+          className="h-10 min-w-16 px-3 text-ds-md font-semibold transition hover:bg-zinc-100"
         >
           {zoomPercent}
         </button>

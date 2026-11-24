@@ -55,6 +55,8 @@ export const WORKBENCH_WORKSPACE_SECTION_LOCATION =
 export const WORKBENCH_WORKSPACE_SECTION_CONTRACT_VERSION = '1.0.0' as const
 export const WORKBENCH_MAIN_AREA_LOCATION = 'workbench.main-area' as const
 export const WORKBENCH_MAIN_AREA_CONTRACT_VERSION = '1.0.0' as const
+export const WORKBENCH_SETTINGS_SECTION_LOCATION = 'workbench.settings-section' as const
+export const WORKBENCH_SETTINGS_SECTION_CONTRACT_VERSION = '1.0.0' as const
 
 export const domainWorkbenchRightPanelPlacementSchema = z.enum(['focused', 'new'])
 
@@ -416,11 +418,15 @@ export type DomainRendererWorkbenchSurfaceContract = z.infer<
 /**
  * Presentation-only navigation contributed to the global Workbench sidebar.
  * Domain identity and activation remain private to the renderer value.
+ *
+ * `placement` chooses the navigation body (default) or the sidebar footer,
+ * directly above the Host-owned Settings row.
  */
 export const domainRendererWorkbenchNavigationSectionContractSchema = z.object({
   location: z.literal(WORKBENCH_NAVIGATION_SECTION_LOCATION),
   contractVersion: z.literal(WORKBENCH_NAVIGATION_SECTION_CONTRACT_VERSION),
-  label: z.string().trim().min(1).max(160)
+  label: z.string().trim().min(1).max(160),
+  placement: z.enum(['body', 'footer']).default('body')
 }).strict()
 
 export type DomainRendererWorkbenchNavigationSectionContract = z.infer<
@@ -489,6 +495,7 @@ export const domainRendererWorkbenchMainAreaContractSchema = z.object({
   contractVersion: z.literal(WORKBENCH_MAIN_AREA_CONTRACT_VERSION),
   label: z.string().trim().min(1).max(160),
   preferredHostSidebar: z.enum(['expanded', 'collapsed']).default('expanded'),
+  navigationIcon: z.enum(['book-open', 'users', 'panels-top-left']).optional(),
   docking: z.object({
     defaultPosition: z.enum(['main', 'left', 'right', 'bottom']),
     preferredWidth: z.number().int().min(280).max(1_200).optional()
@@ -515,22 +522,19 @@ export type DomainRendererWorkbenchSessionDockRequest<View = unknown> = Readonly
   onCloseSession: () => void
 }>
 
-export type DomainRendererWorkbenchMainAreaRenderContext<View = unknown> = Readonly<{
-  /** The page is in the foreground; hidden pages stay mounted to keep their state. */
-  active: boolean
-  /** Opaque, package-owned navigation state, for example returning from its Session. */
-  activation?: DomainRendererWorkbenchSurfaceActivation
-  /**
-   * Put on the page root so it fills the main area edge to edge. The main area
-   * also sets `--ds-main-area-leading-inset`: the width at the top-left corner
-   * that window controls still cover, which the page keeps free of controls.
-   */
-  className: string
-  renderSessionDock: (request: DomainRendererWorkbenchSessionDockRequest<View>) => View
-}>
+/** Package-owned settings appended to the Host's built-in categories. */
+export const domainRendererWorkbenchSettingsSectionContractSchema = z.object({
+  location: z.literal(WORKBENCH_SETTINGS_SECTION_LOCATION),
+  contractVersion: z.literal(WORKBENCH_SETTINGS_SECTION_CONTRACT_VERSION),
+  label: z.string().trim().min(1).max(160)
+}).strict()
 
-export type DomainRendererWorkbenchMainAreaValue<View = unknown> = Readonly<{
-  render: (context: DomainRendererWorkbenchMainAreaRenderContext<View>) => View
+export type DomainRendererWorkbenchSettingsSectionContract = z.infer<
+  typeof domainRendererWorkbenchSettingsSectionContractSchema
+>
+
+export type DomainRendererWorkbenchSettingsSectionValue<View = unknown> = Readonly<{
+  render: () => View
 }>
 
 export type DomainRendererWorkbenchSession = Readonly<{
@@ -829,7 +833,15 @@ export type DomainRendererComposerContextResult = z.infer<
   typeof domainRendererComposerContextResultSchema
 >
 
+export type DomainRendererComposerContextSearchRequest = DomainRendererComposerContextRequest & Readonly<{ query: string }>
+
 export type DomainRendererComposerContextProvider = Readonly<{
+  /** Resolve literal reference tokens already present in an unsent draft, without writing state. */
+  resolveDraft?: (request: DomainRendererComposerContextRequest) => DomainRendererComposerContextResult | Promise<DomainRendererComposerContextResult>
+  /** Current references. Content is the explicit removal instruction inserted into the next draft. */
+  active?: (request: DomainRendererComposerContextRequest) => DomainRendererComposerContextResult | Promise<DomainRendererComposerContextResult>
+  /** Read-only mention lookup. Selecting a result inserts its content into the draft. */
+  search?: (request: DomainRendererComposerContextSearchRequest) => DomainRendererComposerContextResult | Promise<DomainRendererComposerContextResult>
   provide: (
     request: DomainRendererComposerContextRequest
   ) => DomainRendererComposerContextResult | Promise<DomainRendererComposerContextResult>
@@ -838,7 +850,10 @@ export type DomainRendererComposerContextProvider = Readonly<{
 export function isDomainRendererComposerContextProvider(
   value: unknown
 ): value is DomainRendererComposerContextProvider {
-  return hasOnlyKeys(value, ['provide']) && typeof value.provide === 'function'
+  return hasOnlyKeys(value, ['provide', 'search', 'active', 'resolveDraft']) && typeof value.provide === 'function' &&
+    (value.search === undefined || typeof value.search === 'function') &&
+    (value.active === undefined || typeof value.active === 'function') &&
+    (value.resolveDraft === undefined || typeof value.resolveDraft === 'function')
 }
 
 export function defineDomainRendererWorkbenchToolbarActionContract(
@@ -898,8 +913,13 @@ export const domainRendererResearchWorkspaceContractSchema = z.object({
   location: z.literal(RESEARCH_WORKSPACE_LOCATION),
   order: z.number().int().default(0)
 }).strict()
+export type DomainRendererResearchContentRenderContext = Omit<DomainRendererWorkbenchRightPanelRenderContext, 'surfaceId'> & Readonly<{
+  /** Absent in a global overlay. Never synthesize a Host surface identity. */
+  surfaceId?: string
+  sourcePresentation?: 'right-panel' | 'global-overlay'
+}>
 export type DomainRendererResearchWorkspaceValue<View = unknown> = Readonly<{
-  render: (context: DomainRendererWorkbenchRightPanelRenderContext & Readonly<{
+  render: (context: DomainRendererResearchContentRenderContext & Readonly<{
     /** Owning presentation to restore after source/global navigation. */
     returnContributionId: string
   }>) => View
@@ -921,3 +941,19 @@ export const domainRendererSelectionSnapshotSchema = z.object({
   viewport: z.object({ width: z.number().positive(), height: z.number().positive(), scaleFactor: z.number().positive().max(16) }).strict()
 }).strict()
 export type DomainRendererSelectionSnapshot = z.infer<typeof domainRendererSelectionSnapshotSchema>
+
+
+/** Package-owned audit shell; distinct from the research.workspace content slot. */
+export const domainRendererAuditWorkspaceContractSchema = z.object({
+  location: z.literal('research.audit-workspace'),
+  sideContributionId: z.string().trim().min(1).max(512),
+  order: z.number().int().default(0)
+}).strict()
+export type DomainRendererAuditWorkspaceValue<View = unknown> = Readonly<{
+  render: (context: DomainRendererWorkbenchGlobalOverlayRenderContext & Readonly<{
+    onReturnToSide: () => Promise<void>
+  }>) => View
+}>
+export function isDomainRendererAuditWorkspaceValue(value: unknown): value is DomainRendererAuditWorkspaceValue {
+  return isRecord(value) && typeof value.render === 'function'
+}

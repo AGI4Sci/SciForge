@@ -38,6 +38,29 @@ import {
 } from './runtime-contributions'
 
 describe('main runtime contributions', () => {
+  it('cancels package clock registrations on lifecycle disposal and fences late callbacks', async () => {
+    const wake = vi.fn()
+    const cancel = vi.fn()
+    let callback: (() => void) | undefined
+    let context: DomainMainRuntimeLifecycleContext | undefined
+    const catalog = new DomainModuleCatalog()
+    catalog.registerBatch([fixtureEntry('fixture.clock', '@fixture/clock', 10, [{
+      id: 'fixture.clock.runtime', kind: MAIN_RUNTIME_LIFECYCLE_CONTRIBUTION_KIND,
+      value: { activate: (value: DomainMainRuntimeLifecycleContext) => { context = value } }
+    }])])
+    const activated = await activateMainRuntimeContributions(catalog, {
+      ...runtimeHost(), wakeups: { schedule: (_at: string, notify: () => void) => {
+        callback = notify
+        return cancel
+      } }
+    })
+    context!.wakeups!.schedule('2026-11-16T00:00:00Z', wake)
+    await activated.dispose()
+    expect(cancel).toHaveBeenCalledTimes(1)
+    callback!()
+    expect(wake).not.toHaveBeenCalled()
+    expect(() => context!.wakeups!.schedule('2026-11-16T00:00:00Z', wake)).toThrow(/stopped/u)
+  })
   it('activates in catalog order and disposes in reverse with owner-scoped signals', async () => {
     const events: string[] = []
     const contexts: DomainMainRuntimeLifecycleContext[] = []
@@ -213,6 +236,24 @@ describe('main runtime contributions', () => {
     expect(dispose).toHaveBeenCalledOnce()
   })
 
+  it('attributes synchronous and asynchronous artifact consumer failures to their catalog owner', async () => {
+    const cause = new Error('payload digest mismatch')
+    for (const consume of [() => { throw cause }, async () => { throw cause }]) {
+      const catalog = new DomainModuleCatalog()
+      catalog.registerModule(fixtureEntry('fixture.consumer', '@fixture/consumer', 100, [{
+        id: 'fixture.consumer.artifacts',
+        kind: MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
+        value: { consume }
+      }]))
+      const [consumer] = listMainArtifactConsumers(catalog)
+      await expect(consumer.consume({} as Parameters<DomainArtifactConsumer['consume']>[0]))
+        .rejects.toMatchObject({
+          message: 'Artifact consumer fixture.consumer.artifacts (@fixture/consumer@1.0.0) failed.',
+          cause
+        })
+    }
+  })
+
   it('projects artifact consumers without exposing catalog metadata to callers', async () => {
     const consumer: DomainArtifactConsumer = { consume: vi.fn() }
     const catalog = new DomainModuleCatalog()
@@ -222,10 +263,15 @@ describe('main runtime contributions', () => {
       value: consumer
     }]))
 
-    expect(listMainArtifactConsumers(catalog)).toEqual([consumer])
+    const projected = listMainArtifactConsumers(catalog)
+    expect(projected).toHaveLength(1)
+    expect(Object.isFrozen(projected[0])).toBe(true)
+    const event = {} as Parameters<DomainArtifactConsumer['consume']>[0]
+    await projected[0].consume(event)
+    expect(consumer.consume).toHaveBeenCalledWith(event)
     const activated = await activateMainRuntimeContributions(catalog, runtimeHost())
 
-    expect(activated.artifactConsumers).toEqual([consumer])
+    expect(activated.artifactConsumers).toHaveLength(1)
     expect(Object.isFrozen(activated.artifactConsumers)).toBe(true)
   })
 

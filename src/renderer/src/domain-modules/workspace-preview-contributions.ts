@@ -2,7 +2,8 @@ import type { InstalledDomainContribution } from '@sciforge/domain-sdk'
 import {
   RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND,
   workspacePreviewManifestsEqual,
-  workspacePreviewPluginManifestSchema
+  workspacePreviewPluginManifestSchema,
+  workspacePreviewResourceContentKindsSchema
 } from '@sciforge/domain-sdk/workspace-preview'
 import type {
   RendererWorkspacePreviewPluginContribution,
@@ -21,6 +22,9 @@ export function isRendererWorkspacePreviewPluginContribution(
   if (!manifest.success || !canonicalManifest.success ||
       !workspacePreviewManifestsEqual(manifest.data, canonicalManifest.data)) return false
   if (typeof value.render !== 'function') return false
+  if (value.resource !== undefined && (!isRecord(value.resource) ||
+      typeof value.resource.render !== 'function' ||
+      !workspacePreviewResourceContentKindsSchema.safeParse(value.resource.contentKinds).success)) return false
   if (value.actions !== undefined && (!Array.isArray(value.actions) || value.actions.some((action) =>
     !isRecord(action) || typeof action.id !== 'string' || typeof action.label !== 'string' ||
       typeof action.run !== 'function'

@@ -161,6 +161,8 @@ export const researchCheckpointManifestV1Schema = z.object({
   turn: z.object({
     turnId: turnIdSchema,
     targetWatermark: z.string().trim().min(1).max(1_024),
+    /** Missing historical values mean unknown; never infer success from narrative. */
+    terminalState: z.enum(['completed', 'failed', 'cancelled', 'unknown']).optional(),
     sequence: z.number().int().nonnegative().optional(),
     occurredAt: timestampSchema
   }).strict(),

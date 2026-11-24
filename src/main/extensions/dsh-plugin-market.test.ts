@@ -46,7 +46,7 @@ async function installDshPluginArtifact(deps: DshPluginInstallDeps, request: Omi
     packageName: manifest.packageName, version: manifest.version, sha256: sha256Hex(bytes),
     publisher: artifact.signatureBytes ? JSON.parse(Buffer.from(artifact.signatureBytes).toString()).publisherId : null,
     entry: manifest.entry, tools: Object.entries(manifest.tools).map(([name, grant]) => ({ name, ...grant })),
-    ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies
+    ports: manifest.ports ?? [], hostServices: manifest.hostServices === 'none' ? [] : manifest.hostServices ?? [], hostDependencies: manifest.hostDependencies
   } })
 }
 
@@ -124,7 +124,7 @@ async function buildArtifact(options: Readonly<{
   const version = options.version ?? '1.0.0'
   const packageName = options.packageName ?? PACKAGE_NAME
   const payload = { ...(options.payload ?? payloadFor(version, options.marker ?? `v${version}`, packageName)),
-    ...(options.ports ? { 'sciforge.dsh.json': Buffer.from(JSON.stringify({ schemaVersion: 1, ports: options.ports })) } : {}) }
+    ...(options.ports ? { 'sciforge.dsh.json': Buffer.from(JSON.stringify({ schemaVersion: 1, hostServices: ['fixture'], ports: options.ports })) } : {}) }
   const manifest = {
     schemaVersion: 1,
     packageName,
@@ -133,7 +133,7 @@ async function buildArtifact(options: Readonly<{
     dsh: { bundle: { patch: './cordis.patch.yml' } },
     engines: { dsh: '>=0.2.0-rc.2 <0.3.0' },
     hostDependencies: [],
-    ...(options.ports ? { ports: options.ports } : { hostServices: 'none' }),
+    ...(options.ports ? { ports: options.ports, hostServices: ['fixture'] } : { hostServices: 'none' }),
     tools: options.tools ?? TOOLS,
     files: Object.fromEntries(
       Object.entries(payload).map(([path, bytes]) => [path, sha256Hex(bytes)]).sort(([left], [right]) => String(left).localeCompare(String(right)))
@@ -554,6 +554,7 @@ describe('createDshMarketSurface', () => {
         form: 'dsh-runtime',
         categories: ['test'],
         ports,
+        hostServices: ports ? ['fixture'] : 'none',
         entry: 'dist/main.js',
         tools: [{ name: 'count', id: 'fixture.count', effect: 'compute' }, { name: 'explain', id: 'fixture.explain', effect: 'compute' }],
         hostDependencies: [],
@@ -699,7 +700,7 @@ describe('createDshMarketSurface', () => {
       plugins: [{
         name: PACKAGE_NAME, version: '1.0.0', form: 'dsh-runtime', categories: [], entry: 'dist/main.js',
         tools: [{ name: 'count', id: 'fixture.count', effect: 'compute' }, { name: 'explain', id: 'fixture.explain', effect: 'compute' }],
-        hostDependencies: [], publisher: 'fixture-publisher',
+        hostServices: 'none', hostDependencies: [], publisher: 'fixture-publisher',
         artifact: { file, sizeBytes: bytes.byteLength, sha256: sha256Hex(bytes) }, source: 'plugins/fixture'
       }],
       blocked: []
@@ -717,6 +718,54 @@ describe('createDshMarketSurface', () => {
     release?.()
     await first
     expect(calls.installed).toHaveLength(1)
+  })
+
+  it('lists the bundled catalog as the local fallback when the configured index is unreadable', async () => {
+    const root = await tempRoot('dsh-market-fallback-')
+    const { deps } = installDeps({ root, keyring: await keyringFrom([makeKey('catalog-test', 'fixture-publisher')]) })
+    const bundled = join(root, 'bundled', 'index.json')
+    await mkdir(join(root, 'bundled'), { recursive: true })
+    await writeFile(bundled, `${JSON.stringify({
+      format: 1,
+      generatedAt: '2026-11-07T00:00:00.000Z',
+      dshRuntimeVersion: '0.2.0-rc.2',
+      plugins: [],
+      blocked: [{
+        name: '@sciforge/plugin-blocked', plugin: 'blocked', version: '1.0.0',
+        reason: 'not ready for listing', detail: null, runtimeGap: null
+      }]
+    })}\n`)
+    const surface = createDshMarketSurface({
+      source: { kind: 'file', path: join(root, 'missing', 'index.json') },
+      fallbackSource: { kind: 'file', path: bundled },
+      installDeps: deps,
+      listInstalled: async () => [],
+      setEnabled: async () => undefined
+    })
+
+    const view = await surface.list()
+    expect(view.error).toBeNull()
+    expect(view.fallback).toBe(true)
+    expect(view.source).toEqual({ kind: 'file', location: bundled })
+    expect(view.plugins).toEqual([])
+    expect(view.notInstallable.map((entry) => entry.name)).toEqual(['@sciforge/plugin-blocked'])
+  })
+
+  it('reports the configured index error when the bundled fallback is unreadable too', async () => {
+    const root = await tempRoot('dsh-market-fallback-failed-')
+    const { deps } = installDeps({ root, keyring: await keyringFrom([makeKey('catalog-test', 'fixture-publisher')]) })
+    const surface = createDshMarketSurface({
+      source: { kind: 'file', path: join(root, 'missing', 'index.json') },
+      fallbackSource: { kind: 'file', path: join(root, 'missing-bundled', 'index.json') },
+      installDeps: deps,
+      listInstalled: async () => [],
+      setEnabled: async () => undefined
+    })
+
+    const view = await surface.list()
+    expect(view.fallback).toBe(false)
+    expect(view.error).toMatch(/ENOENT|no such file/)
+    expect(view.plugins).toEqual([])
   })
 })
 
@@ -742,6 +791,13 @@ describe('market artifact locations and downloads', () => {
     expect(resolveDshMarketSource({ bundledIndexPath: bundledPath, env: {} }))
       .toEqual({ kind: 'file', path: bundledPath })
     expect(resolveDshMarketSource({ env: {} })).toBeUndefined()
+    expect(resolveDshMarketSource({ configured: 'HTTPS://example.com/market/index.json', env: { SCIFORGE_MARKET_INDEX: configuredPath } }))
+      .toEqual({ kind: 'url', url: 'https://example.com/market/index.json' })
+    expect(resolveDshMarketSource({ configured: 'file:///tmp/market%20catalog/index.json', env: {} }))
+      .toEqual({ kind: 'file', path: '/tmp/market catalog/index.json' })
+    expect(() => resolveDshMarketSource({ configured: 'ftp://example.com/index.json', env: {} }))
+      .toThrow(/local path, file URL or HTTP/)
+
   })
 
   it('fails a stalled download instead of waiting forever', async () => {
@@ -783,7 +839,7 @@ describe('market artifact locations and downloads', () => {
       plugins: [{
         name: PACKAGE_NAME, version: '1.0.0', form: 'dsh-runtime', categories: [], entry: 'dist/main.js',
         tools: [{ name: 'count', id: 'fixture.count', effect: 'compute' }, { name: 'explain', id: 'fixture.explain', effect: 'compute' }],
-        hostDependencies: [], publisher: 'fixture-publisher',
+        hostServices: 'none', hostDependencies: [], publisher: 'fixture-publisher',
         artifact: { file, sizeBytes: bytes.byteLength + 10, sha256: sha256Hex(bytes) }, source: 'plugins/fixture'
       }],
       blocked: []
@@ -803,11 +859,17 @@ describe('market artifact locations and downloads', () => {
 })
 
 describe('readDshMarketIndex', () => {
+  it('reads the actual bundled catalog with blocked source traceability', async () => {
+    const index = await readDshMarketIndex({ kind: 'file', path: resolve('market/index.json') })
+    expect(index.format).toBe(1)
+    expect(index.blocked.length + index.plugins.length).toBeGreaterThan(0)
+  })
+
   it('rejects a duplicated plugin entry and a non-canonical shape', async () => {
     const root = await tempRoot('dsh-index-')
     const entry = {
       name: PACKAGE_NAME, version: '1.0.0', form: 'dsh-runtime', categories: [], entry: 'dist/main.js',
-      tools: [], hostDependencies: [], publisher: null,
+      tools: [], hostServices: 'none', hostDependencies: [], publisher: null,
       artifact: { file: 'a.sciforge-dsh-plugin', sizeBytes: 1, sha256: '0'.repeat(64) }, source: 'plugins/fixture'
     }
     const duplicate = join(root, 'duplicate.json')

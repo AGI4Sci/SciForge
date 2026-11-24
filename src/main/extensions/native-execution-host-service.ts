@@ -87,6 +87,8 @@ function capture(stream: NodeJS.ReadableStream, maxBytes: number): () => Output 
 function groupExists(pid: number): boolean {
   try { process.kill(-pid, 0); return true } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+    // Permission denial is not proof of absence; termination must still prove ESRCH.
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true
     throw error
   }
 }
@@ -212,8 +214,10 @@ export function createNativeExecutionHostService(options: NativeExecutionHostSer
           if (!executable) throw new Error('Executable was not found in the trusted Host PATH.')
           argv[0] = executable
         }
-        argv[0] = await realpath(argv[0])
-        if (process.versions.electron && argv[0] === await realpath(process.execPath)) {
+        // Validate the target, but preserve the invocation path: Python venvs
+        // derive sys.prefix from their symlink location, not the resolved binary.
+        const executableTarget = await realpath(argv[0])
+        if (process.versions.electron && executableTarget === await realpath(process.execPath)) {
           if (!options.nodeExecutable) throw new Error('The Host must configure an approved Node executable.')
           argv[0] = await canonical(options.nodeExecutable)
         }

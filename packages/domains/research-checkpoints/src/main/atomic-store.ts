@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import filesystem, { chmod, mkdir, open, readFile, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export async function readJsonFile(path: string): Promise<unknown | undefined> {
@@ -23,7 +23,17 @@ export async function writeJsonAtomic(path: string, value: unknown): Promise<voi
     } finally {
       await handle.close()
     }
-    await rename(temporary, path)
+    // The owner serializes checkpoint writes. Retry only replacement of the
+    // same fsynced file when a transient share lock refuses the atomic rename;
+    // never unlink the current store or reconstruct the payload from live files.
+    const delays = [25, 75, 150]
+    for (let attempt = 0; ; attempt++) {
+      try { await filesystem.rename(temporary, path); break }
+      catch (error) {
+        if (attempt >= delays.length || !isNodeError(error) || !['EPERM', 'EBUSY'].includes(error.code ?? '')) throw error
+        await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]))
+      }
+    }
     await chmod(path, 0o600)
     const directory = await open(directoryPath, 'r')
     try {

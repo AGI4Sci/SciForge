@@ -1,5 +1,5 @@
 import { SideConversationHandoffEditor } from './SideConversationHandoffEditor'
-import { useEffect, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { ArrowUpToLine, MessageCircleMore, Plus, X } from 'lucide-react'
@@ -16,6 +16,8 @@ import { visibleSideIds } from './side-conversation-selectors'
 import type { SideConversationHandoffInput } from './side-conversation-handoff'
 import { sideConversationHandoffDraft } from './side-conversation-handoff-draft'
 import { SIDE_CONVERSATION_WIDTH } from '../side-conversation-layout'
+import { discussionBasis, discussionHandoffKey, type DiscussionHandoffDraft } from '../../store/discussion-checkpoint'
+import { discussionResumeTarget, savedDiscussionsForActiveThread, unfinishedDiscussion, type DiscussionResumeTarget } from './saved-discussion-resume'
 
 export type { SideConversationHandoffInput } from './side-conversation-handoff'
 type Props = { className?: string; rightOffset?: number; dockAvailable?: boolean; onHandoff?: (input: SideConversationHandoffInput) => Promise<boolean> }
@@ -30,7 +32,7 @@ function SideModePicker({ mode, disabled, onChange }: {
   const { t } = useTranslation('common')
   return <div className="flex items-center rounded-lg border border-ds-border p-0.5" role="group" aria-label={t('sideChatMode')}>
     {(['light', 'deep'] as const).map(value => <button key={value} type="button" disabled={disabled} aria-pressed={mode === value}
-      onClick={() => onChange(value)} className={`rounded-md px-2 py-1 text-xs disabled:opacity-50 ${mode === value ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover'}`}>
+      onClick={() => onChange(value)} title={t(value === 'light' ? 'sideChatLightDescription' : 'sideChatDeepDescription')} className={`rounded-md px-2 py-1 text-ds-sm disabled:opacity-50 ${mode === value ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover'}`}>
       {t(value === 'light' ? 'sideChatLight' : 'sideChatDeep')}</button>)}
   </div>
 }
@@ -38,7 +40,11 @@ function SideModePicker({ mode, disabled, onChange }: {
 type AttachmentDraft = { attachments: AttachmentReference[]; files: ComposerFileReference[]; busy: boolean; error?: string }
 const emptyAttachments = (): AttachmentDraft => ({ attachments: [], files: [], busy: false })
 
-function SideConversationView({ sideId, onHandoff }: { sideId: string; onHandoff?: Props['onHandoff'] }): ReactElement | null {
+type ResumeNavigation = { sideId: string; target: DiscussionResumeTarget; request: number }
+
+function SideConversationView({ sideId, onHandoff, resume, onResumeConsumed }: {
+  sideId: string; onHandoff?: Props['onHandoff']; resume?: ResumeNavigation; onResumeConsumed: () => void
+}): ReactElement | null {
   const { t } = useTranslation('common')
   const side = useChatStore(s => s.sideConversations[sideId] ?? null)
   const parent = useChatStore(useShallow(s => {
@@ -53,19 +59,50 @@ function SideConversationView({ sideId, onHandoff }: { sideId: string; onHandoff
     removeSideQueuedMessage: s.removeSideQueuedMessage, probeRuntime: s.probeRuntime, setRoute: s.setRoute
   })))
   const [drafts, setDrafts] = useState<Record<string, AttachmentDraft>>({})
-  const [handoffs, setHandoffs] = useState<Record<string, { document: string; memory: string; instruction: string }>>({})
   const [handoffOpen, setHandoffOpen] = useState(false)
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [handoffError, setHandoffError] = useState('')
-  const [notice, setNotice] = useState('')
-  useEffect(() => { setHandoffOpen(false); setHandoffError(''); setNotice('') }, [sideId])
+  const sending = useRef(false)
+  const active = useRef(sideId)
+  const viewRef = useRef<HTMLDivElement>(null)
+  const focusedRequest = useRef<number | undefined>(undefined)
+  active.current = sideId
+  useEffect(() => () => { active.current = '' }, [])
+  const persistenceDegraded = useChatStore(state => state.chatSessionPersistenceDegraded)
+  const basis = side ? discussionBasis(side) : ''
+  useEffect(() => {
+    if (!resume) return
+    setHandoffOpen(resume.target === 'handoff')
+    setHandoffError('')
+  }, [sideId, resume])
+  useEffect(() => {
+    if (!resume || focusedRequest.current === resume.request || handoffOpen !== (resume.target === 'handoff')) return
+    const textarea = viewRef.current?.querySelector<HTMLTextAreaElement>(
+      resume.target === 'handoff' ? 'textarea[aria-label]' : '.ds-chat-composer textarea'
+    )
+    if (!textarea || textarea.disabled) return
+    textarea.focus()
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    focusedRequest.current = resume.request
+    onResumeConsumed()
+  }, [resume, handoffOpen, side?.busy, onResumeConsumed])
   if (!side) return null
   const mode = modeOf(side)
   const workspace = side.workspaceRoot ?? parent?.workspace ?? ''
   const runtimeId = side.runtimeId ?? parent?.runtimeId
   const matchingRuntime = Boolean(runtimeId && runtimeId === shared.activeAgentRuntime)
   const draft = drafts[sideId] ?? emptyAttachments()
-  const handoff = handoffs[sideId]
+  const handoff = side.handoffDraft
+  const stale = Boolean(handoff?.basis && handoff.basis !== basis)
+  const submissionKey = handoff ? discussionHandoffKey(handoff) : ''
+  const patchHandoff = (patch: Partial<DiscussionHandoffDraft>): void => {
+    useChatStore.setState(state => {
+      const current = state.sideConversations[sideId]
+      return current ? { sideConversations: { ...state.sideConversations, [sideId]: {
+        ...current, handoffDraft: { document: '', memory: '', instruction: '', ...current.handoffDraft, ...patch }
+      } } } : {}
+    })
+  }
   const patchDraft = (update: (value: AttachmentDraft) => AttachmentDraft): void => {
     setDrafts(current => ({ ...current, [sideId]: update(current[sideId] ?? emptyAttachments()) }))
   }
@@ -107,42 +144,52 @@ function SideConversationView({ sideId, onHandoff }: { sideId: string; onHandoff
     if (sent) patchDraft(() => emptyAttachments())
   }
   const previewHandoff = (): void => {
-    setHandoffs(current => ({ ...current, [sideId]: current[sideId] ?? {
-      document: sideConversationHandoffDraft(side), memory: '', instruction: t('sideChatHandoffDefaultInstruction')
-    } }))
-    setHandoffOpen(true); setHandoffError(''); setNotice('')
+    if (!handoff) patchHandoff({ document: sideConversationHandoffDraft(side), memory: '',
+      instruction: t('sideChatHandoffDefaultInstruction'), basis })
+    setHandoffOpen(true); setHandoffError('')
   }
   const sendHandoff = async (): Promise<void> => {
-    if (!handoff || !onHandoff) return
+    if (!handoff || !onHandoff || stale || side.busy || sending.current || side.handoffPending || side.handedOffBasis === submissionKey) return
+    sending.current = true
+    useChatStore.setState(state => ({ sideConversations: { ...state.sideConversations,
+      [sideId]: { ...state.sideConversations[sideId], handoffPending: submissionKey } } }))
     setHandoffBusy(true); setHandoffError('')
     try {
       const ok = await onHandoff({ sideId, parentThreadId: side.parentThreadId, runtimeId,
         title: side.title, document: handoff.document, instruction: handoff.instruction,
+        preserve: handoff.preserve, verification: handoff.verification, basis: handoff.basis,
         memoryRefs: handoff.memory.split('\n').map(line => line.trim()).filter(Boolean) })
       if (!ok) throw new Error(t('sideChatHandoffFailed'))
-      setHandoffOpen(false); setNotice(t('sideChatHandoffSent'))
-    } catch (error) { setHandoffError(error instanceof Error ? error.message : String(error)) }
-    finally { setHandoffBusy(false) }
+      useChatStore.setState(state => {
+        const current = state.sideConversations[sideId]
+        return current ? { sideConversations: { ...state.sideConversations, [sideId]: { ...current, handedOffBasis: submissionKey, handoffPending: undefined } } } : {}
+      })
+      if (active.current === sideId) setHandoffOpen(false)
+    } catch (error) { if (active.current === sideId) setHandoffError(error instanceof Error ? error.message : String(error)) }
+    finally { sending.current = false; if (active.current === sideId) setHandoffBusy(false) }
   }
-  const patchHandoff = (patch: Partial<NonNullable<typeof handoff>>): void => {
-    setHandoffs(current => ({ ...current, [sideId]: { ...current[sideId], ...patch } }))
-  }
-  return <>
+  return <div ref={viewRef} className="flex min-h-0 flex-1 flex-col">
     <div className="shrink-0 space-y-2 border-b border-ds-border px-3 py-2">
       <div className="flex items-center gap-2"><SideModePicker mode={mode}
         disabled={side.busy || Boolean(side.queuedMessages?.length) || draft.busy}
         onChange={value => shared.setSideChatMode(sideId, value)} />
-        {onHandoff ? <button className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ds-muted hover:bg-ds-hover"
+        {onHandoff ? <button className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-ds-sm text-ds-muted hover:bg-ds-hover"
           disabled={side.busy || !side.blocks.some(block => block.kind === 'assistant')}
           onClick={previewHandoff}><ArrowUpToLine size={13} />{t('sideChatHandoff')}</button> : null}
       </div>
-      <div className="text-[11px] text-ds-muted">{t(mode === 'light' ? 'sideChatLightDescription' : 'sideChatDeepDescription')}</div>
-      {side.context ? <details className="rounded-md border border-ds-border px-2 py-1 text-xs">
+      {persistenceDegraded && <p role="alert" className="text-ds-xs text-red-600">{t('sideChatDraftSaveFailed')}</p>}
+      <button type="button" className="text-ds-sm text-accent hover:underline" onClick={() => void useChatStore.getState().selectThread(side.parentThreadId)}>{t('sideChatReturnToWork')}</button>
+      {side.handedOffBasis && !handoffOpen && <p role="status" className="text-ds-xs text-ds-muted">{t('sideChatHandoffSent')}</p>}
+      {side.context ? <details className="rounded-md border border-ds-border px-2 py-1 text-ds-sm">
         <summary className="cursor-pointer truncate text-ds-muted">{side.context.title}</summary>
-        <p className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-xs text-ds-muted">{side.context.text}</p>
+        <p className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-ds-sm text-ds-muted">{side.context.text}</p>
       </details> : null}
     </div>
-    {handoffOpen && handoff ? <SideConversationHandoffEditor value={handoff} error={handoffError} busy={handoffBusy} onChange={patchHandoff} onCancel={() => setHandoffOpen(false)} onSend={() => void sendHandoff()} /> : <>
+    {handoffOpen && handoff ? <SideConversationHandoffEditor value={handoff} error={handoffError} busy={handoffBusy || side.busy} stale={stale} sent={side.handedOffBasis === submissionKey}
+      uncertain={Boolean(side.handoffPending) && !handoffBusy} onReconcile={() => useChatStore.setState(state => ({ sideConversations: { ...state.sideConversations,
+        [sideId]: { ...state.sideConversations[sideId], handoffPending: undefined } } }))}
+      latestAnswer={[...side.blocks].reverse().find(block => block.kind === 'assistant')?.text}
+      onRefresh={() => patchHandoff({ basis })} onChange={patchHandoff} onCancel={() => setHandoffOpen(false)} onSend={() => void sendHandoff()} /> : <>
       <MessageTimeline blocks={side.blocks} liveReasoning={side.liveReasoning} live={side.liveAssistant}
         emptyPresentation="conversation"
         activeThreadId={sideId} runtimeConnection={shared.runtimeConnection} runtimeError={side.error}
@@ -151,7 +198,7 @@ function SideConversationView({ sideId, onHandoff }: { sideId: string; onHandoff
         busyOverride={side.busy} currentTurnUserIdOverride={side.userItemId}
         turnStartedAtByUserIdOverride={{}} turnDurationByUserIdOverride={{}}
         turnReasoningFirstAtByUserIdOverride={{}} turnReasoningLastAtByUserIdOverride={{}} />
-      {side.error || notice ? <p role="status" className="mx-3 mb-2 text-xs text-ds-muted">{side.error || notice}</p> : null}
+      {side.error ? <p role="status" className="mx-3 mb-2 text-ds-sm text-ds-muted">{side.error}</p> : null}
       <div className="shrink-0 border-t border-ds-border p-2">
         <FloatingComposer variant="compact" threadIdOverride={sideId} disableThreadManagementCommands hideBtwCommand
           input={side.input} setInput={value => shared.setSideInput(sideId, value)} mode="agent" setMode={() => undefined}
@@ -170,7 +217,7 @@ function SideConversationView({ sideId, onHandoff }: { sideId: string; onHandoff
           workspaceRootOverride={workspace} preferWorkspaceRootOverride onSend={() => void send()} onInterrupt={() => void shared.interruptSide(sideId)} />
       </div>
     </>}
-  </>
+  </div>
 }
 
 export function SideConversationPanel({ className, rightOffset = 12, dockAvailable = false, onHandoff }: Props): ReactElement | null {
@@ -180,6 +227,13 @@ export function SideConversationPanel({ className, rightOffset = 12, dockAvailab
   const [draftBusy, setDraftBusy] = useState(false)
   const [draftError, setDraftError] = useState('')
   const [draftModel, setDraftModel] = useState('')
+  const [resumeNavigation, setResumeNavigation] = useState<ResumeNavigation>()
+  const clearResumeNavigation = useCallback(() => setResumeNavigation(undefined), [])
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [restoreError, setRestoreError] = useState('')
+  const restoreRequest = useRef(0)
+  const pendingRestore = useRef<string | null>(null)
+  const restoreReads = useRef(new Map<string, Promise<string | null>>())
   const panel = useChatStore(s => s.sidePanel)
   const activeSide = useChatStore(s => panel.activeSideId ? s.sideConversations[panel.activeSideId] ?? null : null)
   const ids = useChatStore(useShallow(visibleSideIds))
@@ -194,6 +248,58 @@ export function SideConversationPanel({ className, rightOffset = 12, dockAvailab
   const title = useChatStore(s => s.threads.find(thread => thread.id === (activeSide?.parentThreadId ?? s.activeThreadId))?.title)
   const sideOptions = useChatStore(useShallow(s => [...new Set([...ids, ...(activeSide ? [activeSide.threadId] : [])])]
     .map(id => `${id}\u0000${s.sideConversations[id]?.title ?? id}`)))
+  const savedOptions = useChatStore(useShallow(s => savedDiscussionsForActiveThread(s)
+    .filter(item => !s.sideConversations[item.threadId])
+    .map(item => `${item.threadId}\u0000${item.title}`)))
+  const continuation = useChatStore(unfinishedDiscussion)
+  const continuationTarget = useChatStore(s => continuation ? discussionResumeTarget(s.sideConversations[continuation.threadId] ?? continuation) : null)
+  const continuationPending = useChatStore(s => continuation ? Boolean((s.sideConversations[continuation.threadId] ?? continuation).handoffPending) : false)
+  const cancelRestore = (): void => {
+    restoreRequest.current += 1
+    pendingRestore.current = null
+    setRestoringId(null); setRestoreError(''); setResumeNavigation(undefined)
+  }
+  useEffect(() => {
+    const unsubscribe = useChatStore.subscribe((next, previous) => {
+      if (next.sidePanel.open !== previous.sidePanel.open || next.sidePanel.activeSideId !== previous.sidePanel.activeSideId || next.activeThreadId !== previous.activeThreadId ||
+        next.activeAgentRuntime !== previous.activeAgentRuntime || next.workspaceRoot !== previous.workspaceRoot ||
+        next.threads.find(thread => thread.id === next.activeThreadId)?.runtimeId !== previous.threads.find(thread => thread.id === previous.activeThreadId)?.runtimeId ||
+        next.threads.find(thread => thread.id === next.activeThreadId)?.workspace !== previous.threads.find(thread => thread.id === previous.activeThreadId)?.workspace) {
+        restoreRequest.current += 1; pendingRestore.current = null
+        setRestoringId(null); setRestoreError('')
+        setResumeNavigation(current => current?.sideId === next.sidePanel.activeSideId ? current : undefined)
+      }
+    })
+    return () => { unsubscribe(); restoreRequest.current += 1 }
+  }, [])
+  const resumeSaved = async (id: string): Promise<void> => {
+    const current = useChatStore.getState()
+    const saved = savedDiscussionsForActiveThread(current).find(item => item.threadId === id)
+    if (!saved || !current.sidePanel.open || pendingRestore.current === id) return
+    const request = ++restoreRequest.current
+    pendingRestore.current = id
+    setRestoringId(id); setRestoreError(''); setResumeNavigation(undefined)
+    try {
+      let read = restoreReads.current.get(id)
+      if (!read) {
+        read = current.attachSideConversation({ threadId: id, parentThreadId: saved.parentThreadId,
+          runtimeId: saved.runtimeId, title: saved.title, openPanel: false, reportErrors: false })
+        restoreReads.current.set(id, read)
+      }
+      const resumed = await read
+      if (request !== restoreRequest.current) return
+      const latest = useChatStore.getState()
+      if (!savedDiscussionsForActiveThread(latest).some(item => item.threadId === id)) return
+      if (!resumed) { setRestoreError(t('sideChatRestoreFailed')); return }
+      const target = discussionResumeTarget(latest.sideConversations[id] ?? saved)
+      if (target) setResumeNavigation({ sideId: id, target, request })
+      latest.selectSideConversation(id)
+    } catch { if (request === restoreRequest.current) setRestoreError(t('sideChatRestoreFailed')) }
+    finally {
+      restoreReads.current.delete(id)
+      if (request === restoreRequest.current) { pendingRestore.current = null; setRestoringId(null) }
+    }
+  }
   const edge = useEdgePanel({ storageKey: 'sciforge.layout.sideChatBehavior', open: panel.open, onOpenChange: state.setSidePanelOpen })
   const docked = dockAvailable && edge.behavior === 'pinned' && panel.open
   const setPanelOpen = state.setSidePanelOpen
@@ -208,6 +314,7 @@ export function SideConversationPanel({ className, rightOffset = 12, dockAvailab
   if (!state.activeThreadId && !activeSide) return null
   const sendDraft = async (): Promise<void> => {
     if (!draftInput.trim()) return
+    cancelRestore()
     setDraftBusy(true); setDraftError('')
     try {
       const id = await state.spawnSideConversation(undefined, { chatMode: draftMode })
@@ -229,33 +336,51 @@ export function SideConversationPanel({ className, rightOffset = 12, dockAvailab
       style={docked ? { width: SIDE_CONVERSATION_WIDTH } : { width: SIDE_CONVERSATION_WIDTH, maxWidth: 'calc(100% - 24px)', right: `min(${Math.max(12, rightOffset)}px, max(12px, calc(100% - 464px)))` }}>
       <header className="flex shrink-0 items-center gap-2 border-b border-ds-border px-3 py-2">
         <MessageCircleMore className="h-4 w-4 text-accent" />
-        <div className="min-w-0 flex-1"><div className="flex items-center gap-1 text-sm font-medium">
-          {sideOptions.length ? <select className="max-w-full truncate bg-transparent text-sm" value={activeSide?.threadId ?? ''}
-            aria-label={t('sidePanelTitle')} onChange={e => e.target.value ? state.selectSideConversation(e.target.value) : state.openSideConversationDraft()}>
+        <div className="min-w-0 flex-1"><div className="flex items-center gap-1 text-ds-lg font-medium">
+          {sideOptions.length || savedOptions.length ? <select className="max-w-full truncate bg-transparent text-ds-lg" value={activeSide?.threadId ?? ''}
+            aria-label={t('sidePanelTitle')} onChange={e => {
+              const id = e.target.value
+              if (id && !useChatStore.getState().sideConversations[id]) { void resumeSaved(id); return }
+              cancelRestore()
+              if (id) state.selectSideConversation(id)
+              else state.openSideConversationDraft()
+            }}>
             <option value="">{t('sidePanelNew')}</option>{sideOptions.map(option => { const [id, label] = option.split('\u0000'); return <option key={id} value={id}>{label}</option> })}
+            {savedOptions.length > 0 && <optgroup label={t('sideChatSavedDiscussions')}>{savedOptions.map(option => { const [id, label] = option.split('\u0000'); return <option key={id} value={id}>{label}</option> })}</optgroup>}
           </select> : t('sidePanelTitle')}
-        </div><div className="truncate text-[11px] text-ds-muted">{title ?? t('sidePanelParentMissing')}</div></div>
+        </div><div className="truncate text-ds-xs text-ds-muted">{title ?? t('sidePanelParentMissing')}</div></div>
         <select aria-label={t('sideChatLayout')} value={edge.behavior} onChange={e => edge.setBehavior(e.target.value as EdgePanelBehavior)}
-          className="max-w-24 rounded-md border border-ds-border bg-ds-card p-1 text-[10px] text-ds-muted">
+          className="max-w-24 rounded-md border border-ds-border bg-ds-card p-1 text-ds-2xs text-ds-muted">
           <option value="pinned">{t('sideChatPinned')}</option><option value="auto">{t('sideChatAuto')}</option><option value="hidden">{t('sideChatHidden')}</option>
         </select>
         {activeSide ? <details className="relative">
           <summary className="cursor-pointer list-none rounded px-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelMore')}>···</summary>
           <div className="absolute right-0 top-full z-10 mt-2 w-40 rounded-lg border border-ds-border bg-ds-card p-1 shadow-lg">
-            <button className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-ds-hover"
+            <button className="w-full rounded px-2 py-1.5 text-left text-ds-sm hover:bg-ds-hover"
               onClick={() => void state.promoteSideConversation(activeSide.threadId)}>{t('sidePanelPromote')}</button>
-            <button className="w-full rounded px-2 py-1.5 text-left text-xs text-red-600 hover:bg-ds-hover"
+            <button className="w-full rounded px-2 py-1.5 text-left text-ds-sm text-red-600 hover:bg-ds-hover"
               onClick={() => void state.discardSideConversation(activeSide.threadId)}>{t('sidePanelDiscardTitle')}</button>
           </div>
         </details> : null}
-        <button onClick={state.openSideConversationDraft} className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelNew')}><Plus size={15} /></button>
-        <button onClick={() => state.setSidePanelOpen(false)} className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelHide')}><X size={15} /></button>
+        <button onClick={() => { cancelRestore(); state.openSideConversationDraft() }} className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelNew')}><Plus size={15} /></button>
+        <button onClick={() => { cancelRestore(); state.setSidePanelOpen(false) }} className="rounded p-1 text-ds-muted hover:bg-ds-hover" aria-label={t('sidePanelHide')}><X size={15} /></button>
       </header>
-      {activeSide ? <SideConversationView sideId={activeSide.threadId} onHandoff={onHandoff} /> : <>
+      {restoreError ? <p role="alert" className="px-3 py-2 text-ds-sm text-red-600">{restoreError}</p> : null}
+      {activeSide ? <SideConversationView key={activeSide.threadId} sideId={activeSide.threadId} onHandoff={onHandoff}
+        resume={panel.open && resumeNavigation?.sideId === activeSide.threadId ? resumeNavigation : undefined}
+        onResumeConsumed={clearResumeNavigation} /> : <>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+          {continuation && continuationTarget ? <button type="button" data-discussion-resume
+            disabled={draftBusy || restoringId === continuation.threadId}
+            onClick={() => void resumeSaved(continuation.threadId)}
+            className="w-full min-w-0 rounded-lg border border-ds-border p-3 text-left hover:bg-ds-hover disabled:opacity-50">
+            <span className="block text-ds-sm text-accent">{t('sideChatResumeDiscussion')}</span>
+            <span className="mt-1 block truncate text-ds-sm">{continuation.title}</span>
+            <span className="mt-1 block text-ds-xs text-ds-muted">{t(continuationPending ? 'sideChatResumeUncertain' : continuationTarget === 'handoff' ? 'sideChatResumeHandoff' : 'sideChatResumeInput')}</span>
+          </button> : null}
           <SideModePicker mode={draftMode} onChange={setDraftMode} disabled={draftBusy} />
-          <p className="text-xs text-ds-muted">{t(draftMode === 'light' ? 'sideChatLightDescription' : 'sideChatDeepDescription')}</p>
-          {draftError ? <p role="alert" className="text-xs text-red-600">{draftError}</p> : null}
+          <p className="text-ds-sm text-ds-muted">{t(draftMode === 'light' ? 'sideChatLightDescription' : 'sideChatDeepDescription')}</p>
+          {draftError ? <p role="alert" className="text-ds-sm text-red-600">{draftError}</p> : null}
         </div>
         <div className="shrink-0 border-t border-ds-border p-2"><FloatingComposer variant="compact" threadIdOverride={null}
           disableThreadManagementCommands hideBtwCommand input={draftInput} setInput={setDraftInput} mode="agent" setMode={() => undefined}

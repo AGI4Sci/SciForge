@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
+import { DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES, DELIVERY_MAX_TOTAL_BYTES } from '@sciforge/collaboration-contracts'
 import React, { act } from 'react'
 import { Window } from 'happy-dom'
+import { DeliveryMaterialPicker } from './DeliveryMaterialPicker.js'
+import { useWorkerDeliveryDraft } from '../use-worker-delivery-draft.js'
+import type { CollaborationRendererClient } from '../../collaboration-capability-client.js'
 import { DeliveryDraft } from './DeliveryDraft.js'
+import { TaskDrawer } from './TaskDrawer.js'
+import type { TaskCardModel } from '../workspace-types.js'
+import type { WorkerDeliveryView } from '../../../worker-delivery.js'
 import type { DeliveryDraftData, DeliveryDraftFile } from './delivery-draft-types.js'
 import { deliveryLimitError } from './DeliveryContent.js'
 const browser=new Window({url:'https://sciforge.test/'})
@@ -22,6 +29,74 @@ function byTest<T extends HTMLElement=HTMLButtonElement>(container:HTMLElement,i
 async function click(element:HTMLElement){await act(async()=>{element.click();await tick()})}
 async function setValue(element:HTMLInputElement|HTMLTextAreaElement,value:string){await act(async()=>{Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element),'value')?.set?.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));await tick()})}
 
+const drawerCard: TaskCardModel = { id: 'tsk_picker', projectId: 'prj_picker', executionId: 'exe_picker', executionState: 'running', reference: '#1', moduleType: '任务', title: '交付', assignee: '执行成员', assigneeUserId: 'usr_picker', date: '', status: 'in-progress', stateLabel: '待提交交付' }
+function draftView(revision = 1, resultRevision = 2): WorkerDeliveryView {
+ return { projectId: 'prj_picker', taskId: drawerCard.id, executionId: drawerCard.executionId!, state: 'waiting_confirmation', draft: { revision, resultRevision, basedOnResultRevision: 1, summary: data.summary, aiSummary: null, summaryEdited: false, sourceTurnId: null, sourceRound: 0, sourceUpdatedAt: null, updatedAt: '2026-11-14T03:00:00.000Z', changed: false, outputs: [], selectedMaterials: [], materialError: null }, confirmationTarget: null, history: [], candidate: null, operationId: null, deliveryManifestId: null, error: null, residuals: [] }
+}
+
+test('mounted drawer preserves the required file chooser and authored summary across same-result refresh and transient busy', async () => {
+ let uploads = 0, replacements = 0
+ const render = (view: WorkerDeliveryView, busy = false) => <TaskDrawer card={drawerCard} currentUserId={drawerCard.assigneeUserId} projectName="交付" delivery={view} deliveryDetail={{ ...data, revision: view.draft!.resultRevision }} busy={busy} materialSelection={{ files: [member], onUpload: async () => { uploads++; return [{ ...member, name: 'notes.md', mediaType: 'text/markdown' }] } }} onDeclaredMaterialChange={() => { replacements++ }} onSubmitDelivery={() => undefined} />
+ const mounted = await mount(render(draftView()))
+ try {
+  const summary = byTest<HTMLTextAreaElement>(mounted.container, 'delivery-summary')
+  await setValue(summary, '尚未保存的成员说明')
+  await click(byTest(mounted.container, 'delivery-declared-replace'))
+  const picker = byTest(mounted.container, 'delivery-material-picker')
+  await mounted.rerender(render(draftView(2)))
+  assert.equal(byTest(mounted.container, 'delivery-material-picker'), picker)
+  assert.equal(byTest<HTMLTextAreaElement>(mounted.container, 'delivery-summary'), summary)
+  assert.equal(summary.value, '尚未保存的成员说明')
+  await click(byTest(mounted.container, 'delivery-material-upload-tab'))
+  const input = byTest<HTMLInputElement>(mounted.container, 'delivery-material-file-input')
+  let chooserOpened = 0
+  input.addEventListener('click', () => { chooserOpened++ })
+  await click(byTest(mounted.container, 'delivery-material-upload'))
+  assert.equal(chooserOpened, 1)
+  await mounted.rerender(render(draftView(3), true))
+  assert.equal(byTest(mounted.container, 'delivery-material-picker'), picker)
+  assert.equal(byTest<HTMLInputElement>(mounted.container, 'delivery-material-file-input'), input)
+  assert.equal(byTest(mounted.container, 'delivery-material-upload').matches(':disabled'), true)
+  assert.equal(byTest(mounted.container, 'delivery-material-confirm').matches(':disabled'), true)
+  await act(async () => { Object.defineProperty(input, 'files', { configurable: true, value: [new browser.File(['notes'], 'notes.md', { type: 'text/markdown' })] }); input.dispatchEvent(new Event('change', { bubbles: true })); await tick() })
+  assert.equal(uploads, 0)
+  assert.equal(replacements, 0)
+  await mounted.rerender(render(draftView(4)))
+  assert.equal(byTest<HTMLInputElement>(mounted.container, 'delivery-material-file-input'), input)
+  await act(async () => { Object.defineProperty(input, 'files', { configurable: true, value: [new browser.File(['notes'], 'notes.md', { type: 'text/markdown' })] }); input.dispatchEvent(new Event('change', { bubbles: true })); await tick() })
+  assert.equal(uploads, 1)
+  await click(byTest(mounted.container, 'delivery-material-confirm'))
+  assert.equal(replacements, 1)
+ } finally { await mounted.unmount() }
+})
+
+test('mounted drawer resets chooser and authored summary for a new result or execution', async () => {
+ const render = (view: WorkerDeliveryView, card = drawerCard) => <TaskDrawer card={card} currentUserId={card.assigneeUserId} projectName="交付" delivery={view} deliveryDetail={{ ...data, revision: view.draft!.resultRevision }} materialSelection={{ files: [member] }} onDeclaredMaterialChange={() => undefined} onSubmitDelivery={() => undefined} />
+ const mounted = await mount(render(draftView()))
+ try {
+  for (const next of [draftView(2, 3), { ...draftView(1, 3), executionId: 'exe_next' }]) {
+   await setValue(byTest<HTMLTextAreaElement>(mounted.container, 'delivery-summary'), '旧结果说明')
+   await click(byTest(mounted.container, 'delivery-declared-replace'))
+   await mounted.rerender(render(next, { ...drawerCard, executionId: next.executionId }))
+   assert.equal(mounted.container.querySelector('[data-testid="delivery-material-picker"]'), null)
+   assert.equal(byTest<HTMLTextAreaElement>(mounted.container, 'delivery-summary').value, data.summary)
+  }
+ } finally { await mounted.unmount() }
+})
+
+test('frozen submission clears the picker intent instead of reopening it after unlock', async () => {
+ const render = (editLocked: boolean) => <DeliveryDraft data={{ ...data, editLocked }} materialSelection={{ files: [member] }} onDeclaredMaterialChange={() => undefined} onSubmit={() => undefined} />
+ const mounted = await mount(render(false))
+ try {
+  await click(byTest(mounted.container, 'delivery-declared-replace'))
+  await mounted.rerender(render(true))
+  assert.equal(mounted.container.querySelector('[data-testid="delivery-material-picker"]'), null)
+  assert.equal(byTest<HTMLTextAreaElement>(mounted.container, 'delivery-summary').disabled, true)
+  await mounted.rerender(render(false))
+  assert.equal(mounted.container.querySelector('[data-testid="delivery-material-picker"]'), null)
+ } finally { await mounted.unmount() }
+})
+
 test('picker searches task files, prioritizes attachments and commits an explicit selection',async()=>{
  const mounted=await mount(<DeliveryDraft data={data} materialSelection={{files:[member,output,attachment]}} onContinue={()=>undefined} onSubmit={()=>undefined}/> )
  try{
@@ -31,7 +106,7 @@ test('picker searches task files, prioritizes attachments and commits an explici
   assert.equal(byTest(mounted.container,'delivery-material-options').querySelectorAll('li').length,1)
   await click(byTest(mounted.container,'delivery-material-checkbox'));await click(byTest(mounted.container,'delivery-material-confirm'))
   assert.equal(mounted.container.querySelector('[role="dialog"]'),null)
-  assert.match(byTest(mounted.container,'delivery-additional-files').textContent??'',/notes.pdf.*我添加的/su)
+  assert.match(byTest(mounted.container,'delivery-additional-files').textContent??'',/notes.pdf.*成员添加/su)
   await click(byTest(mounted.container,'delivery-file-remove'))
   assert.match(byTest(mounted.container,'delivery-materials-empty').textContent??'',/还没有附加资料/u)
  }finally{await mounted.unmount()}
@@ -46,6 +121,33 @@ test('uploaded files use the supplied import callback and are selected automatic
   await act(async()=>{Object.defineProperty(input,'files',{configurable:true,value:[new browser.File(['notes'],'notes.pdf',{type:'application/pdf'})]});input.dispatchEvent(new Event('change',{bubbles:true}));await tick()})
   assert.equal(uploads,1);assert.match(byTest(mounted.container,'delivery-material-upload-complete').textContent??'',/已上传并勾选 1 项/u)
   await click(byTest(mounted.container,'delivery-material-confirm'));assert.match(byTest(mounted.container,'delivery-additional-files').textContent??'',/notes.pdf/u)
+ }finally{await mounted.unmount()}
+})
+
+test('required ZIP picker accepts import while the additional picker does not advertise ZIP',async()=>{
+ let uploads=0
+ const zip={...output,id:'zip',name:'required.zip',relativePath:'required.zip',mediaType:'application/zip',maxBytes:20*1024*1024}
+ const mounted=await mount(<DeliveryMaterialPicker requiredOutput={zip} declaredFiles={[]} additionalFiles={[]} selection={{files:[],onUpload:async()=>{uploads++;return[zip]}}} onConfirm={()=>undefined} onClose={()=>undefined}/>)
+ try{
+  await click(byTest(mounted.container,'delivery-material-upload-tab'))
+  const input=byTest<HTMLInputElement>(mounted.container,'delivery-material-file-input')
+  assert.match(input.accept,/application\/zip/u)
+  await act(async()=>{Object.defineProperty(input,'files',{configurable:true,value:[new browser.File(['PK'],'required.zip',{type:'application/zip'})]});input.dispatchEvent(new Event('change',{bubbles:true}));await tick()})
+  assert.equal(uploads,1)
+ }finally{await mounted.unmount()}
+})
+
+test('additional ZIP is rejected before invoking the import callback',async()=>{
+ let uploads=0
+ const mounted=await mount(<DeliveryDraft data={data} materialSelection={{files:[output],onUpload:async()=>{uploads++;return[]}}} onSubmit={()=>undefined}/>)
+ try{
+  await click(byTest(mounted.container,'delivery-add-materials'));await click(byTest(mounted.container,'delivery-material-upload-tab'))
+  const file=new browser.File(['PK'],'large.zip',{type:'application/zip'})
+  Object.defineProperty(file,'size',{value:DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES+1})
+  const input=byTest<HTMLInputElement>(mounted.container,'delivery-material-file-input')
+  await act(async()=>{Object.defineProperty(input,'files',{configurable:true,value:[file]});input.dispatchEvent(new Event('change',{bubbles:true}));await tick()})
+  assert.equal(uploads,0)
+  assert.match(mounted.container.textContent??'',/附加资料不支持 ZIP/u)
  }finally{await mounted.unmount()}
 })
 
@@ -73,7 +175,7 @@ test('confirmation without material selection contains only supported files and 
  try{
   await click(byTest(mounted.container,'delivery-submit'))
   const dialog=byTest(mounted.container,'delivery-submit-confirmation')
-  assert.doesNotMatch(dialog.textContent??'',/附加资料|sample.csv|200 MB|0\.0 MB/u)
+  assert.doesNotMatch(dialog.textContent??'',/附加资料|sample.csv|200 MiB|0\.0 MB/u)
   assert.equal(dialog.querySelectorAll('[data-testid="delivery-confirm-file"]').length,1)
   assert.equal(byTest(mounted.container,'delivery-total').textContent,'共 1 项 · 152 B')
   assert.equal(dialog.querySelector('[data-testid="delivery-total"]')?.textContent,'共 1 项 · 152 B')
@@ -116,8 +218,10 @@ test('AI modification invokes the existing task-session callback without submitt
 test('limit checks identify the twenty-first file and the file crossing the byte limit',()=>{
  const files=Array.from({length:21},(_,index)=>({...member,id:`f${index}`,name:`file-${index}.pdf`}))
  assert.match(deliveryLimitError(files)??'',/file-20.pdf.*第 21 项/u)
- assert.match(deliveryLimitError([output,{...member,byteCount:201*1024*1024}])??'',/notes.pdf.*200 MB/u)
+ assert.match(deliveryLimitError([output,{...member,byteCount:DELIVERY_MAX_TOTAL_BYTES+1}])??'',/notes.pdf.*单文件上限/u)
  assert.equal(deliveryLimitError([output,member]),null)
+ assert.match(deliveryLimitError([{...output,maxBytes:1024,byteCount:1025}])??'',/有效上限 1024 字节/u)
+ assert.match(deliveryLimitError([{...output,maxBytes:1024*1024*1024,byteCount:DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES+1}])??'',new RegExp(`有效上限 ${DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES} 字节`, 'u'))
 })
 
 test('file information has two rows without repeating a root filename or exposing attachment paths',async()=>{
@@ -235,5 +339,58 @@ for (const reason of ['本轮执行已中断，可重新执行或编辑草稿后
    const submit=byTest(mounted.container,'delivery-submit');assert.equal(submit.disabled,false);await click(submit)
    await click(byTest(mounted.container,'delivery-submit-confirm'));assert.equal(submitted,1)
   }finally{await mounted.unmount()}
+ })
+}
+
+for (const [source, label] of [['member', '成员添加'], ['attachment', '会话附件']] as const) {
+ test(`required ${source} output keeps its provenance in the actual submit confirmation`, async () => {
+  const file = { ...output, name: 'data.csv', relativePath: 'data.csv', mediaType: 'text/csv', source }
+  const submissions: unknown[] = []
+  const mounted = await mount(<DeliveryDraft data={{ ...data, declaredFiles: [file] }} onSubmit={(_summary, files) => { submissions.push(files) }} />)
+  try {
+   assert.match(byTest(mounted.container, 'delivery-file-required').textContent ?? '', new RegExp(label, 'u'))
+   await click(byTest(mounted.container, 'delivery-submit'))
+   assert.equal(byTest(mounted.container, 'delivery-confirm-file').querySelector('span')?.textContent, `必交 · ${label}`)
+   await click(byTest(mounted.container, 'delivery-submit-confirm'))
+   assert.deepEqual(submissions, [[file]])
+  } finally { await mounted.unmount() }
+ })
+}
+
+test('required chooser rejects incompatible MIME and empty files before import and filters task candidates', async () => {
+ let uploads = 0
+ const required = { ...output, name: 'required.csv', mediaType: 'text/csv', maxBytes: 1024 }
+ const eligible = { ...attachment, byteCount: 10 }
+ const mounted = await mount(<DeliveryMaterialPicker requiredOutput={required} declaredFiles={[]} additionalFiles={[]} selection={{ files: [member, eligible, { ...eligible, id: 'empty', byteCount: 0 }], onUpload: async () => { uploads++; return [] } }} onConfirm={() => undefined} onClose={() => undefined} />)
+ try {
+  assert.equal(byTest(mounted.container, 'delivery-material-options').querySelectorAll('li').length, 1)
+  await click(byTest(mounted.container, 'delivery-material-upload-tab'))
+  const input = byTest<HTMLInputElement>(mounted.container, 'delivery-material-file-input')
+  for (const file of [new browser.File(['abc'], 'notes.pdf'), new browser.File([], 'empty.csv')]) {
+   await act(async () => { Object.defineProperty(input, 'files', { configurable: true, value: [file] }); input.dispatchEvent(new Event('change', { bubbles: true })); await tick() })
+   assert.equal(uploads, 0)
+   assert.match(byTest(mounted.container, 'delivery-material-upload-error').textContent ?? '', /格式|不能为空/u)
+  }
+ } finally { await mounted.unmount() }
+})
+
+for (const reason of ['必交文件需要 text/csv 格式。', '文件 bad.zip：ZIP 文件结构不完整或不符合格式要求。']) {
+ test(`canonical draft save displays its exact content failure: ${reason}`, async () => {
+  let saves = 0
+  const view = draftView()
+  const client = { saveWorkerDeliveryDraft: async () => { saves++; throw new Error(`Handler for collaboration.worker-delivery.draft.save failed: handler_failed: ${reason}`) }, readWorkerDelivery: async () => ({ delivery: { ...view, draft: { ...view.draft!, revision: view.draft!.revision + 1 } } }) } as unknown as CollaborationRendererClient
+  function Harness() {
+   const local = useWorkerDeliveryDraft(client, view, () => undefined)
+   return <><button data-testid="queue-invalid-binding" onClick={() => { local.onDeclaredMaterialChange({ relativePath: 'bad.zip' }); void local.flush(data.summary).catch(() => undefined) }}>bind</button><DeliveryDraft data={{ ...data, summary: local.summary ?? '', saveState: local.saveState, saveError: local.saveError }} onSubmit={() => undefined} /></>
+  }
+  const mounted = await mount(<Harness />)
+  try {
+   await click(byTest(mounted.container, 'queue-invalid-binding'))
+   assert.equal(saves, 1, 'a content failure must not retry merely because the draft revision changed')
+   assert.equal(byTest(mounted.container, 'delivery-save-error').textContent, reason)
+   assert.doesNotMatch(mounted.container.textContent ?? '', /Handler for|handler_failed/u)
+   assert.equal(byTest<HTMLTextAreaElement>(mounted.container, 'delivery-summary').value, data.summary)
+   assert.equal(byTest<HTMLButtonElement>(mounted.container, 'delivery-submit').disabled, true)
+  } finally { await mounted.unmount() }
  })
 }

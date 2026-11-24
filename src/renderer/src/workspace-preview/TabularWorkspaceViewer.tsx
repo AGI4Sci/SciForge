@@ -179,8 +179,15 @@ export type TabularWorkspaceViewerModel = {
   actions: TabularWorkspaceViewerAction[]
 }
 
+/** Bounded display data without a workspace path, selection or write capability. */
+export type TabularWorkspaceViewerData = {
+  title: string
+  tabular: NonNullable<WorkspaceObservation['tabular']>
+}
+
 export type TabularWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
+  data?: TabularWorkspaceViewerData
   model?: TabularWorkspaceViewerModel
   className?: string
   onApplyEdit?: TabularWorkspaceViewerApplyEditHandler
@@ -243,10 +250,10 @@ const MAX_CELL_VALUE_CHARS = 80
 const MAX_FILTER_SUMMARY_CHARS = 60
 
 export function buildTabularWorkspaceViewerModel(
-  observation: WorkspaceObservation | null | undefined,
+  source: WorkspaceObservation | TabularWorkspaceViewerData | null | undefined,
   gridState: TabularWorkspaceViewerGridState = {}
 ): TabularWorkspaceViewerModel {
-  if (!observation) {
+  if (!source) {
     return createInactiveModel({
       kind: 'empty',
       title: 'No tabular observation',
@@ -254,11 +261,12 @@ export function buildTabularWorkspaceViewerModel(
     })
   }
 
-  const hasTabularContext = observation.view.modality === 'tabular' ||
+  const observation = 'view' in source ? source : undefined
+  const hasTabularContext = !observation || observation.view.modality === 'tabular' ||
     Boolean(observation.tables?.length) ||
     observation.selection?.kind === 'tabular'
 
-  if (!hasTabularContext) {
+  if (!hasTabularContext && observation) {
     return createInactiveModel({
       kind: 'unsupported',
       title: 'Unsupported observation',
@@ -266,11 +274,11 @@ export function buildTabularWorkspaceViewerModel(
     }, observation)
   }
 
-  const selection = buildTabularSelectionModel(observation.selection)
-  const tables = buildTableRows(observation)
-  const grid = buildGridModel(observation, gridState)
-  const visibleText = buildVisibleTextModel(observation.visibleText, grid)
-  const actions = buildTabularActions(observation.actions)
+  const selection = buildTabularSelectionModel(observation?.selection)
+  const tables = observation ? buildTableRows(observation) : []
+  const grid = buildGridModel(source.tabular, gridState)
+  const visibleText = buildVisibleTextModel(observation?.visibleText, grid)
+  const actions = buildTabularActions(observation?.actions ?? [])
   const agentSummary = buildAgentSummary({
     grid,
     tables,
@@ -285,12 +293,13 @@ export function buildTabularWorkspaceViewerModel(
       title: 'Tabular baseline ready',
       message: 'A future grid/editor can mount into the placeholder viewport.'
     },
-    title: observation.view.title || basename(observation.file.path) || 'Tabular workspace',
-    subtitle: compactStrings([
+    title: 'title' in source ? source.title
+      : source.view.title || basename(source.file.path) || 'Tabular workspace',
+    subtitle: observation ? compactStrings([
       observation.view.pluginId,
       formatModality(observation.view.modality),
       titleCase(observation.view.mode)
-    ]).join(' | '),
+    ]).join(' | ') : undefined,
     viewport: {
       title: grid.kind === 'preview' ? 'Bounded preview grid' : 'Grid/editor mount point',
       message: grid.summary
@@ -677,6 +686,7 @@ export function TabularWorkspaceViewerDeleteEditor({
 
 export function TabularWorkspaceViewer({
   observation,
+  data,
   model,
   className,
   onApplyEdit
@@ -689,8 +699,8 @@ export function TabularWorkspaceViewer({
   const [deleteDraft, setDeleteDraft] = useState<TabularWorkspaceViewerDeleteDraft | null>(null)
   const gridScrollRef = useRef<HTMLDivElement | null>(null)
   const resolvedModel = useMemo(
-    () => model ?? buildTabularWorkspaceViewerModel(observation, { filterText, sort }),
-    [filterText, model, observation, sort]
+    () => model ?? buildTabularWorkspaceViewerModel(data ?? observation, { filterText, sort }),
+    [data, filterText, model, observation, sort]
   )
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
   const gridControlsEnabled = resolvedModel.status.kind === 'ready' && resolvedModel.grid.kind === 'preview'
@@ -1386,7 +1396,7 @@ function getLastInsertAfterColumn(grid: TabularWorkspaceViewerGridModel): number
 function buildTableRows(observation: WorkspaceObservation): TabularWorkspaceViewerTableRow[] {
   return (observation.tables ?? []).map((table, index) => {
     const name = table.name || table.id || `Table ${index + 1}`
-    const rowCount = formatOptionalInteger(table.rowCount)
+    const rowCount = formatOptionalInteger(table.rowCount, table.rowCountIsEstimate === true)
     const columnCount = formatOptionalInteger(table.columnCount)
 
     return {
@@ -1394,16 +1404,16 @@ function buildTableRows(observation: WorkspaceObservation): TabularWorkspaceView
       name,
       rowCount,
       columnCount,
-      summary: `${formatDimension(table.rowCount, 'row')} x ${formatDimension(table.columnCount, 'column')}`
+      summary: `${formatDimension(table.rowCount, 'row', table.rowCountIsEstimate === true)} x ${formatDimension(table.columnCount, 'column')}`
     }
   })
 }
 
 function buildGridModel(
-  observation: WorkspaceObservation,
+  tabular: WorkspaceObservation['tabular'],
   gridState: TabularWorkspaceViewerGridState
 ): TabularWorkspaceViewerGridModel {
-  const rows = observation.tabular?.rows ?? []
+  const rows = tabular?.rows ?? []
   if (!rows.length) {
     return {
       kind: 'none',
@@ -1413,20 +1423,20 @@ function buildGridModel(
       rows: [],
       filter: createGridFilterModel(gridState.filterText ?? '', 0, 0),
       sort: createGridSortModel(null, []),
-      truncatedRows: Boolean(observation.tabular?.truncatedRows),
-      truncatedColumns: Boolean(observation.tabular?.truncatedColumns)
+      truncatedRows: Boolean(tabular?.truncatedRows),
+      truncatedColumns: Boolean(tabular?.truncatedColumns)
     }
   }
 
   const maxColumnCount = Math.max(
-    observation.tabular?.header?.length ?? 0,
+    tabular?.header?.length ?? 0,
     ...rows.map((row) => row.values.length)
   )
   const header = Array.from({ length: maxColumnCount }, (_, index) =>
-    observation.tabular?.header?.[index]?.trim() || `Column ${index + 1}`
+    tabular?.header?.[index]?.trim() || `Column ${index + 1}`
   )
-  const truncatedRows = Boolean(observation.tabular?.truncatedRows)
-  const truncatedColumns = Boolean(observation.tabular?.truncatedColumns)
+  const truncatedRows = Boolean(tabular?.truncatedRows)
+  const truncatedColumns = Boolean(tabular?.truncatedColumns)
   const truncation = compactStrings([
     truncatedRows ? 'more rows available' : undefined,
     truncatedColumns ? 'more columns available' : undefined
@@ -1807,12 +1817,16 @@ function formatExportFormat(value: string): string {
   return titleCase(spaced)
 }
 
-function formatDimension(value: number | undefined, singular: string): string {
-  return typeof value === 'number' ? formatCount(value, singular) : `unknown ${singular}s`
+function formatDimension(value: number | undefined, singular: string, isEstimate = false): string {
+  if (typeof value !== 'number') return `unknown ${singular}s`
+  const count = formatCount(value, singular)
+  return isEstimate ? `approximately ${count}` : count
 }
 
-function formatOptionalInteger(value: number | undefined): string {
-  return typeof value === 'number' ? formatInteger(value) : 'Not reported'
+function formatOptionalInteger(value: number | undefined, isEstimate = false): string {
+  if (typeof value !== 'number') return 'Not reported'
+  const formatted = formatInteger(value)
+  return isEstimate ? `approximately ${formatted}` : formatted
 }
 
 function truncateText(value: string, maxChars: number): string {

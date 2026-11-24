@@ -718,6 +718,8 @@ function workspaceFixture(
     projects: [{
       project: {
         type: 'project',
+        executionMode: 'manual' as const,
+        dispatchAuthorization: null,
         schemaVersion: 1,
         projectId,
         ownerUserId: 'usr_ProjectOwner1',

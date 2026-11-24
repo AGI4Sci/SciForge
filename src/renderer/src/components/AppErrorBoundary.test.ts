@@ -9,7 +9,7 @@ import { AppErrorBoundary, recoverAppErrorBoundaryToWorkbench } from './AppError
 describe('AppErrorBoundary', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-    useChatStore.setState({ route: 'chat' })
+    useChatStore.setState({ route: 'chat', activeThreadId: null, blocks: [], threadBlocksById: {}, error: null })
   })
 
   it('renders children when no error occurs', () => {
@@ -53,10 +53,21 @@ describe('AppErrorBoundary', () => {
   })
 
   it('returns the app route to the chat workbench for recovery', () => {
-    useChatStore.setState({ route: 'settings' })
+    const blocks = [{ kind: 'assistant' as const, id: 'answer', text: 'kept history' }]
+    useChatStore.setState({ route: 'settings', activeThreadId: 'broken-session', blocks,
+      focusedAgentThreadId: 'broken-child', error: 'real failure', runtimeConnection: 'offline',
+      sidePanel: { open: true, activeSideId: 'broken-child' } })
 
     recoverAppErrorBoundaryToWorkbench()
 
-    expect(useChatStore.getState().route).toBe('chat')
+    const state = useChatStore.getState()
+    expect(state.route).toBe('chat')
+    expect(state.activeThreadId).toBeNull()
+    expect(state.focusedAgentThreadId).toBeNull()
+    expect(state.sidePanel.open).toBe(false)
+    expect(state.blocks).toEqual([])
+    expect(state.threadBlocksById['broken-session']).toEqual(blocks)
+    expect(state.error).toBe('real failure')
+    expect(state.runtimeConnection).toBe('offline')
   })
 })

@@ -24,7 +24,7 @@ describe('Workbench composer permission defaults', () => {
         approvalPolicy: 'never',
         sandboxMode: 'danger-full-access'
       }
-    }), 'codex')).toBe('full-access')
+    }), 'codex')).toBe('danger-full-access')
   })
 
   it('reads Claude settings independently when the active runtime changes', () => {
@@ -34,10 +34,16 @@ describe('Workbench composer permission defaults', () => {
         approvalPolicy: 'on-request',
         sandboxMode: 'workspace-write'
       }
-    }), 'claude')).toBe('request-approval')
+    }), 'claude')).toBe('workspace-write')
   })
 
-  it('pins DSH to the safest composer level because it keeps no permission settings', () => {
-    expect(composerPermissionLevelForRuntime(settings(), 'dsh')).toBe('request-approval')
+  it('preserves an externally managed sandbox until a permission choice is explicitly made', () => {
+    expect(composerPermissionLevelForRuntime(settings({
+      codex: { ...defaultCodexRuntimeSettings(), sandboxMode: 'external-sandbox', approvalPolicy: 'never' }
+    }), 'codex')).toBe('external-sandbox')
+  })
+
+  it('defaults DSH to its existing workspace authority without expanding it', () => {
+    expect(composerPermissionLevelForRuntime(settings(), 'dsh')).toBe('workspace-write')
   })
 })

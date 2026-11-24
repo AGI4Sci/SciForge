@@ -37,6 +37,41 @@ import {
 } from './workbench-toolbar-slot'
 
 describe('installed renderer contributions', () => {
+  it('installs ordered package-owned settings, disposes them once and validates before activation', () => {
+    const template = installedRendererDomainEntrySet.contributions[0]!
+    const dispose = vi.fn()
+    const render = vi.fn(() => null)
+    const contribution = {
+      ...template,
+      owner: { moduleId: 'fixture.preferences', moduleVersion: '1.0.0' },
+      declaration: { id: 'fixture.preferences.settings', kind: RENDERER_EXTENSION_CONTRIBUTION_KIND, priority: 40 },
+      contract: { location: 'workbench.settings-section', contractVersion: '1.0.0', label: 'Fixture settings' },
+      value: { render },
+      onDispose: dispose
+    }
+    const entrySet = { ...installedRendererDomainEntrySet, contributions: [contribution] } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+    const runtime = createInstalledRendererContributions({ entrySet, translations: new MemoryTranslationHost() })
+    expect(runtime.settingsSections.list()).toEqual([expect.objectContaining({
+      id: 'fixture.preferences.settings', ownerId: 'fixture.preferences', order: 40,
+      contribution: expect.objectContaining({ label: 'Fixture settings' })
+    })])
+    runtime.settingsSections.list()[0]!.contribution.render()
+    expect(render).toHaveBeenCalledOnce()
+    runtime.dispose()
+    runtime.dispose()
+    expect(runtime.settingsSections.list()).toEqual([])
+    expect(dispose).toHaveBeenCalledOnce()
+    for (const invalid of [
+      { ...contribution, contract: { ...contribution.contract, contractVersion: '2.0.0' } },
+      { ...contribution, value: {} }
+    ]) {
+      const translations = new MemoryTranslationHost()
+      const invalidEntries = { ...entrySet, contributions: [invalid] } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+      expect(() => createInstalledRendererContributions({ entrySet: invalidEntries, translations })).toThrow('failed host validation')
+      expect(translations.mutations).toEqual([])
+    }
+  })
+
   it('loads message bodies through manifest declarations and disposes their owner once', () => {
     const dispose = vi.fn()
     const template = installedRendererDomainEntrySet.contributions[0]!

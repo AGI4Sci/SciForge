@@ -83,7 +83,8 @@ const taskExecutionBaseSchema = z.object({
   projectId: projectIdSchema,
   taskId: taskIdSchema,
   executionId: executionIdSchema,
-  attempt: z.number().int().min(1).max(101),
+  /** Lifetime ordinal across approved contract revisions; retry budget is per contract. */
+  attempt: z.number().int().min(1).max(2_147_483_647),
   offeredByCoordinatorAgentId: agentIdSchema,
   assigneeUserId: userIdSchema,
   assigneeAgentId: agentIdSchema,

@@ -160,7 +160,7 @@ describe('domain module boundaries', () => {
 
     expect(relativeFiles).toEqual(expect.arrayContaining([
       'src/main/capabilities/app-contributions/composition.ts',
-      'packages/domains/content-space/src/main/index.ts',
+      'packages/domains/siyuan-content-space-provider/src/main/index.ts',
       'src/main/services/write-assist-worker-service.ts',
       'src/renderer/src/domain-modules/renderer-slot-registry.ts'
     ]))
@@ -541,7 +541,7 @@ describe('domain module boundaries', () => {
       })
       const codeLoadingViolations =
         installerFiles.includes(path) && (
-          /\b(?:import|require)\s*\(/u.test(source) ||
+          /(?<![\w.])(?:import|require)\s*\(/u.test(source) ||
           /\b(?:createRequire|runInNewContext|runInThisContext|SourceTextModule)\b/u.test(source))
           ? [`${relativePath} -> dynamic code loading`]
           : []

@@ -1,13 +1,16 @@
 /// <reference path="./yaml.d.ts" />
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, mkdtemp, rm } from 'node:fs/promises'
 import { isAbsolute, join, posix, relative, sep, win32 } from 'node:path'
 import { createHash } from 'node:crypto'
-import { DshRuntimeError, resolveDshLaunchInvocation } from './transport.js'
+import { pathToFileURL } from 'node:url'
+import { DshRuntimeError, resolveDshLaunchInvocation, resolveDshShimLaunch } from './transport.js'
 import yaml from 'js-yaml'
 import type { DshDeployment, DshRuntimeOptions } from './types.js'
 import { DSH_MODEL_ROUTER_PATCH, createDshDerivedModelRouterPatch, modelRouterEnvironment } from './model-router.js'
+import { DSH_PERMISSION_POLICY_PLUGIN } from './permission-policy.js'
+import { MINIMAL_CONTEXT_PLUGIN, minimalContextRows, validateMinimalContext } from './minimal-context.js'
 
 /** Audited against dsh-v0.2.0-rc.2 / 639ed015397290b3745d163aafe02ffee4aa3f84.
  * The invariants below (disabled entry set, approval: ask, ACP, telemetry,
@@ -135,7 +138,7 @@ export function validateDshComposedConfig(
 /** Version-agnostic invariant check for derived (discovered) deployments:
  * acp enabled, approval ask, telemetry entries (when present) disabled, every
  * statically listed entry still disabled, and NO enabled entry from any
- * reviewed dangerous plugin family — including ones a newer release adds. */
+ * reviewed dangerous plugin family —including ones a newer release adds. */
 export function validateDshDerivedComposedConfig(
   text: string,
   commandExecution: DshCommandExecutionMode = false
@@ -206,7 +209,7 @@ export function createDshEnvironment(options: DshRuntimeOptions, platform: NodeJ
   // process env, so platform-specific launch environments cannot weaken a pin.
   // A script interpreter CLI (e.g. a `#!/usr/bin/env node` entry point) can only
   // resolve its interpreter through PATH, so the executable's own directory is
-  // included — version managers and npm/Homebrew co-locate node with the shim.
+  // included —version managers and npm/Homebrew co-locate node with the shim.
   const pathApi = platform === 'win32' ? win32 : posix
   const executableDir = options.executable && pathApi.isAbsolute(options.executable) ? pathApi.dirname(options.executable) : undefined
   const systemPath = platform === 'win32' ? windowsSystemPath() : '/usr/bin:/bin:/usr/sbin:/sbin'
@@ -215,6 +218,7 @@ export function createDshEnvironment(options: DshRuntimeOptions, platform: NodeJ
     HOME: options.stateDirectory,
     TMPDIR: join(options.stateDirectory, 'tmp'), TEMP: join(options.stateDirectory, 'tmp'), TMP: join(options.stateDirectory, 'tmp'),
     DSH_HOME: join(options.stateDirectory, 'dsh'), DSH_TELEMETRY_MODE: 'DISABLED',
+    DSH_PERMISSION_MODE: options.sandboxMode ?? 'workspace-write',
     LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8'
   }
   if (platform === 'win32') {
@@ -236,7 +240,7 @@ export async function prepareDeployment(options: DshRuntimeOptions & { commandEx
   if (!options.executable || !isAbsolute(options.executable) || !isAbsolute(options.stateDirectory) || (options.artifactRoot !== undefined && (!isAbsolute(options.artifactRoot) || (() => { const r = relative(options.artifactRoot!, options.executable!); return r === '..' || r.startsWith(`..${sep}`) || isAbsolute(r) })())) || typeof options.verifyDeployment !== 'function') throw new DshRuntimeError('runtime_deployment_unapproved')
   // Host-owned, per-attempt decision; anything but an explicit true keeps the
   // audited closure (fail-closed default).
-  const commandExecution = options.commandExecution === true
+  const commandExecution = options.contextProfile !== 'minimal' && options.commandExecution === true
   await options.verifyExecutable?.()
   const env = createDshEnvironment(options)
   await mkdir(env.TMPDIR!, { recursive: true, mode: 0o700 })
@@ -244,10 +248,21 @@ export async function prepareDeployment(options: DshRuntimeOptions & { commandEx
   const scratch = await mkdtemp(join(options.stateDirectory, 'launch-'))
   const patch = join(scratch, 'host-safety.patch.json')
   const prefix = [...(options.executableArgs ?? [])]
-  const args = [...prefix, 'acp', '--patch', patch]
+  // A Windows npm global install is a `.cmd` shim that shells out to `node`,
+  // which the audited minimal PATH cannot resolve. Launching the wrapped entry
+  // with an absolute interpreter keeps the environment minimal and lets a
+  // user-installed DSH connect without extra setup.
+  const shim = resolveDshShimLaunch(options.executable!, prefix)
+  if (shim?.electronRunAsNode) env.ELECTRON_RUN_AS_NODE = '1'
+  const launch = (argv: readonly string[]) =>
+    shim
+      ? { command: shim.command, args: [...shim.args, ...argv], windowsVerbatimArguments: false }
+      : resolveDshLaunchInvocation(options.executable!, [...prefix, ...argv])
   try {
-    const execution = { cwd: options.stateDirectory, env, windowsHide: true, timeout: options.requestTimeoutMs ?? 15_000, maxBuffer: 4 * 1024 * 1024 }
-    const versionInvocation = resolveDshLaunchInvocation(options.executable, [...prefix, '--version'])
+    // --version / --dump-config cold-start the CLI as well, so they use the same
+    // cold-start budget instead of the tight ACP lifecycle budget.
+    const execution = { cwd: options.stateDirectory, env, windowsHide: true, timeout: Math.max(options.requestTimeoutMs ?? 15_000, 90_000), maxBuffer: 4 * 1024 * 1024 }
+    const versionInvocation = launch(['--version'])
     const rawVersion = (await exec(versionInvocation.command, [...versionInvocation.args], { ...execution, windowsVerbatimArguments: versionInvocation.windowsVerbatimArguments })).stdout.trim()
     const version = rawVersion.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0] ?? ''
     // Discovered installs are not version-pinned; an explicit expectedVersion
@@ -263,24 +278,79 @@ export async function prepareDeployment(options: DshRuntimeOptions & { commandEx
       throw new DshRuntimeError('runtime_model_image_unapproved')
     }
     let safetyPatch: string
+    let permissionConfig: Record<string, unknown> | undefined
     if (derived) {
-      const baseInvocation = resolveDshLaunchInvocation(options.executable, [...prefix, 'acp', '--dump-config'])
+      const baseInvocation = launch(['acp', '--dump-config'])
       const unpatchedDump = (await exec(baseInvocation.command, [...baseInvocation.args], { ...execution, windowsVerbatimArguments: baseInvocation.windowsVerbatimArguments })).stdout
+      permissionConfig = parseComposedConfigEntries(unpatchedDump).find(entry => entry.id === 'permission')?.config
       safetyPatch = createDshDerivedSafetyPatch(unpatchedDump, options.defaultAcpRoute, commandExecution)
     } else {
       safetyPatch = createDshSafetyPatch(options.defaultAcpRoute, commandExecution)
     }
+    const permissionPlugin = derived && options.sandboxMode ? join(scratch, 'host-permission-policy.mjs') : undefined
+    const permissionAck = permissionPlugin ? join(scratch, 'permission-ack.json') : undefined
+    if (permissionPlugin) {
+      await writeFile(permissionPlugin, DSH_PERMISSION_POLICY_PLUGIN, { mode: 0o600 })
+      const rows = JSON.parse(safetyPatch)
+      rows.push({ id: 'permission', config: { ...permissionConfig, defaultPreset: options.sandboxMode } })
+      rows.push({ insert: [{ id: 'sciforge-permission-policy', name: pathToFileURL(permissionPlugin).href, config: { preset: options.sandboxMode, ackPath: permissionAck } }] })
+      safetyPatch = JSON.stringify(rows)
+    }
+    const minimalPlugin = options.contextProfile === 'minimal' ? join(scratch, 'host-minimal-context.mjs') : undefined
+    if (minimalPlugin) {
+      if (!derived) throw new DshRuntimeError('runtime_minimal_context_unsupported')
+      const currentInvocation = launch(['acp', '--dump-config'])
+      const entries = parseComposedConfigEntries((await exec(currentInvocation.command, [...currentInvocation.args], { ...execution, windowsVerbatimArguments: currentInvocation.windowsVerbatimArguments })).stdout)
+      await writeFile(minimalPlugin, MINIMAL_CONTEXT_PLUGIN, { mode: 0o600 })
+      safetyPatch = JSON.stringify([...JSON.parse(safetyPatch), ...minimalContextRows(entries), { insert: [{ id: 'sciforge-minimal-context', name: pathToFileURL(minimalPlugin).href }] }])
+    }
     const routerPatch = options.modelRouter && derived ? createDshDerivedModelRouterPatch(options.modelRouter) : DSH_MODEL_ROUTER_PATCH
     await writeFile(patch, options.modelRouter ? yaml.dump(JSON.parse(safetyPatch)) + routerPatch : safetyPatch, { mode: 0o600 })
-    const dumpInvocation = resolveDshLaunchInvocation(options.executable, [...args, '--dump-config'])
+    const dumpInvocation = launch(['acp', '--patch', patch, '--dump-config'])
     const composedConfig = (await exec(dumpInvocation.command, [...dumpInvocation.args], { ...execution, windowsVerbatimArguments: dumpInvocation.windowsVerbatimArguments })).stdout
     if (derived) validateDshDerivedComposedConfig(composedConfig, commandExecution)
     else validateDshComposedConfig(composedConfig, commandExecution)
+    if (minimalPlugin) {
+      const entries = parseComposedConfigEntries(composedConfig)
+      validateMinimalContext(entries)
+      const row = entries.find(entry => entry.id === 'sciforge-minimal-context')
+      if (row?.name !== pathToFileURL(minimalPlugin).href || row.disabled === true) throw new DshRuntimeError('runtime_minimal_context_unsafe')
+    }
+    if (permissionPlugin) {
+      const row = parseComposedConfigEntries(composedConfig).find(entry => entry.id === 'sciforge-permission-policy')
+      if (row?.name !== pathToFileURL(permissionPlugin).href || row.disabled === true || row.config?.preset !== options.sandboxMode || row.config?.ackPath !== permissionAck) {
+        throw new DshRuntimeError('runtime_config_unsafe')
+      }
+    }
+    // Native shell confinement must come from the reviewed policy owner. A
+    // discovered composition without this binding cannot claim read-only or
+    // workspace restrictions merely because its environment contains a mode.
+    if (commandExecution && options.sandboxMode && options.sandboxMode !== 'danger-full-access') {
+      const entries = parseComposedConfigEntries(composedConfig)
+      const policy = entries.find(entry => entry.id === 'sandbox-policy')
+      const expression = policy?.config?.mode?.__jsExpr?.trim()
+      if (policy?.disabled === true || policy?.name !== '@deepseek-ai/dsh-sandbox-policy' ||
+          expression !== "process.env.DSH_PERMISSION_MODE ?? 'workspace-write'" ||
+          policy?.config?.workspaceRoot?.__jsExpr?.trim() !== 'process.cwd()') {
+        throw new DshRuntimeError('runtime_config_unsafe')
+      }
+    }
     const configDigest = createHash('sha256').update(canonicalizeDshComposedConfig(composedConfig)).digest('hex')
     // Boot-free dump precedes ACP startup. The trusted Host must pin the entire composition,
     // reject unknown executable plugins, and confirm all safety rows were actually applied.
     await options.verifyDeployment({ version, composedConfig, configDigest, executable: options.executable })
-    return { args, env, version, toolImageInputAllowed: derived && options.modelRouter?.inputModalities?.includes('image') === true, cleanup: () => rm(scratch, { recursive: true, force: true }) }
+    // A shim install runs through its resolved interpreter; the ACP child must be
+    // spawned exactly like the probe/verify invocations above.
+    // AcpTransport owns shell quoting for an unresolved .cmd; do not pre-wrap it
+    // in cmd.exe here and lose windowsVerbatimArguments on the second launch.
+    const assertSessionPolicy = async (sessionId: string): Promise<void> => {
+      if (!permissionAck) return
+      try {
+        const ack = JSON.parse(await readFile(permissionAck, 'utf8'))
+        if (ack.sessionId !== sessionId || ack.preset !== options.sandboxMode) throw new Error()
+      } catch { throw new DshRuntimeError('runtime_config_unsafe') }
+    }
+    return { assertSessionPolicy, executable: shim?.command ?? options.executable!, args: [...(shim?.args ?? prefix), 'acp', '--patch', patch], env, version, toolImageInputAllowed: derived && options.modelRouter?.inputModalities?.includes('image') === true, cleanup: () => rm(scratch, { recursive: true, force: true }) }
   } catch (error) {
     await rm(scratch, { recursive: true, force: true })
     if (error instanceof DshRuntimeError) throw error

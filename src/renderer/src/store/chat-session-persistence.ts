@@ -10,6 +10,7 @@ import {
 } from '../lib/browser-storage'
 import type { AppRoute, ConversationRuntimeSettings, QueuedUserMessage } from './chat-store-types'
 import { normalizeRuntimeFileReferences } from '../lib/runtime-file-references'
+import { normalizeDiscussionCheckpoints, type DiscussionCheckpoint } from './discussion-checkpoint'
 
 export const CHAT_SESSION_STORAGE_KEY = 'sciforge.chatSession.v1'
 export const CHAT_SESSION_RECOVERY_STORAGE_KEY = 'sciforge.chatSession.recovery.v1'
@@ -29,6 +30,7 @@ export type PersistedChatSession = {
   activeThreadId: string | null
   queuedMessages: QueuedUserMessage[]
   persistenceDegraded: boolean
+  discussionCheckpoints?: Record<string, DiscussionCheckpoint>
   conversationSettingsByThread?: Record<string, ConversationRuntimeSettings>
   draftConversationSettings?: ConversationRuntimeSettings | null
 }
@@ -308,10 +310,15 @@ function readPersistedEnvelope(
     if (!parsed || parsed.version !== 1) return null
     const perThread = conversationSettingsMap(parsed.conversationSettingsByThread)
     const draft = conversationSettings(parsed.draftConversationSettings)
+    const discussions = normalizeDiscussionCheckpoints(parsed.discussionCheckpoints)
+    const rawDiscussions = record(parsed.discussionCheckpoints)
+    const lostDiscussion = parsed.discussionCheckpoints !== undefined &&
+      (!rawDiscussions || Object.keys(rawDiscussions).length !== Object.keys(discussions).length)
     return {
       activeThreadId: text(parsed.activeThreadId) ?? null,
       queuedMessages: normalizePersistedQueuedMessages(parsed.queuedMessages, true),
-      persistenceDegraded,
+      persistenceDegraded: persistenceDegraded || lostDiscussion,
+      discussionCheckpoints: discussions,
       ...(perThread ? { conversationSettingsByThread: perThread } : {}),
       ...(parsed.draftConversationSettings === null
         ? { draftConversationSettings: null }
@@ -331,13 +338,14 @@ export function clearPersistedActiveThread(): void {
     activeThreadId: null,
     queuedMessages: session.queuedMessages,
     conversationSettingsByThread: session.conversationSettingsByThread,
-    draftConversationSettings: session.draftConversationSettings
+    draftConversationSettings: session.draftConversationSettings,
+    discussionCheckpoints: session.discussionCheckpoints
   })
 }
 
 export function persistChatSession(
   session: Pick<PersistedChatSession, 'activeThreadId' | 'queuedMessages'> &
-    Partial<Pick<PersistedChatSession, 'conversationSettingsByThread' | 'draftConversationSettings'>>
+    Partial<Pick<PersistedChatSession, 'conversationSettingsByThread' | 'draftConversationSettings' | 'discussionCheckpoints'>>
 ): ChatSessionPersistenceResult {
   // A malformed old queue must not be overwritten by a new empty UI projection.
   try { readLegacyInputRecovery() } catch {
@@ -345,8 +353,11 @@ export function persistChatSession(
   }
   const perThread = conversationSettingsMap(session.conversationSettingsByThread)
   const draft = conversationSettings(session.draftConversationSettings)
+  const discussions = normalizeDiscussionCheckpoints(session.discussionCheckpoints)
+  const discussionsDropped = Object.keys(discussions).length < Object.keys(session.discussionCheckpoints ?? {}).length
   const payload = {
     version: 1,
+    discussionCheckpoints: discussions,
     activeThreadId: text(session.activeThreadId) ?? null,
     // Admitted input is durable only in the Host ledger. The browser keeps
     // pre-upgrade private drafts solely until explicit user disposition.
@@ -364,7 +375,7 @@ export function persistChatSession(
     // The primary is authoritative. A stale recovery slot must never resurrect
     // an already delivered message.
     removeBrowserStorageItem(CHAT_SESSION_RECOVERY_STORAGE_KEY)
-    return { degraded: false, persistedMessages: payload.queuedMessages.length, droppedMessages: 0 }
+    return { degraded: discussionsDropped, persistedMessages: payload.queuedMessages.length, droppedMessages: 0 }
   }
 
   // Free the stale primary before writing a bounded recovery outbox. The

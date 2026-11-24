@@ -5,6 +5,7 @@ import type {
 } from '@sciforge/domain-sdk/host'
 import {
   IDENTITY_CAPABILITY_IDS,
+  accountDeletionInputSchema,
   accountRenameInputSchema,
   accountSelectionInputSchema,
   cloudDeviceRevokeInputSchema,
@@ -15,12 +16,16 @@ import {
   identityAvailableStateSchema,
   identityBackupAndResetInputSchema,
   identityBackupAndResetOutputSchema,
+  identityCloudConfigurationInputSchema,
+  identityCloudConfigurationSchema,
   identityListAccountsOutputSchema,
   identityUiStateSchema,
   usernameInputSchema,
   type IdentityAvailableState,
   type CloudIdentityInspectOutput,
   type CloudIdentitySnapshot,
+  type IdentityCloudConfiguration,
+  type IdentityCloudConfigurationInput,
   type IdentityListAccountsOutput,
   type IdentityUiState
 } from '../contract.js'
@@ -31,6 +36,7 @@ export type IdentityRendererClient = Readonly<{
   createAccount(username: string): Promise<IdentityAvailableState>
   selectAccount(userId: string): Promise<IdentityAvailableState>
   renameAccount(userId: string, username: string): Promise<IdentityAvailableState>
+  deleteAccount(accountId: string): Promise<IdentityAvailableState>
   exitAccount(): Promise<IdentityAvailableState>
   dismissFirstPrompt(): Promise<IdentityAvailableState>
   backupAndReset(secondConfirmation: string): Promise<{
@@ -51,6 +57,8 @@ export type IdentityRendererClient = Readonly<{
   enrollCloudDevice(): Promise<CloudIdentitySnapshot>
   refreshCloudDevices(): Promise<CloudIdentitySnapshot>
   revokeCloudDevice(deviceId: string): Promise<CloudIdentitySnapshot>
+  inspectCloudConfiguration(): Promise<IdentityCloudConfiguration>
+  configureCloud(input: IdentityCloudConfigurationInput): Promise<IdentityCloudConfiguration>
 }>
 
 export function createIdentityRendererClient(
@@ -101,6 +109,12 @@ export function createIdentityRendererClient(
       inputSchema: accountRenameInputSchema,
       outputSchema: identityAvailableStateSchema
     }, { userId, username }),
+    deleteAccount: (accountId) => invoker.invoke({
+      actionId: IDENTITY_CAPABILITY_IDS.deleteAccount,
+      effect: 'destructive',
+      inputSchema: accountDeletionInputSchema,
+      outputSchema: identityAvailableStateSchema
+    }, { accountId }),
     exitAccount: () => invoker.invoke({
       actionId: IDENTITY_CAPABILITY_IDS.exitAccount,
       effect: 'external-write',
@@ -159,6 +173,18 @@ export function createIdentityRendererClient(
       IDENTITY_CAPABILITY_IDS.cloudRevokeDevice,
       cloudDeviceRevokeInputSchema,
       { deviceId }
-    )
+    ),
+    inspectCloudConfiguration: () => invoker.invoke({
+      actionId: IDENTITY_CAPABILITY_IDS.cloudInspectConfiguration,
+      effect: 'read',
+      inputSchema: emptyIdentityInputSchema,
+      outputSchema: identityCloudConfigurationSchema
+    }, {}),
+    configureCloud: (input) => invoker.invoke({
+      actionId: IDENTITY_CAPABILITY_IDS.cloudConfigure,
+      effect: 'external-write',
+      inputSchema: identityCloudConfigurationInputSchema,
+      outputSchema: identityCloudConfigurationSchema
+    }, input)
   })
 }

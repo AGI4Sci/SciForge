@@ -24,6 +24,8 @@ export function useNativeBrowserPresentation(options: Readonly<{
   useLayoutEffect(() => {
     const element = viewportRef.current
     if (!ready || !element) return
+    const document = element.ownerDocument
+    const window = document.defaultView!
     let frame = 0
     let previous = ''
     let disposed = false
@@ -43,11 +45,11 @@ export function useNativeBrowserPresentation(options: Readonly<{
       if (disposed) return
       present(measureNativeBrowserViewport(element, active))
     }
-    const schedule = (): void => { if (!frame && !disposed) frame = requestAnimationFrame(update) }
+    const schedule = (): void => { if (!frame && !disposed) frame = window.requestAnimationFrame(update) }
     const resize = new ResizeObserver(schedule)
     resize.observe(element)
     const mutations = new MutationObserver(schedule)
-    mutations.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open', 'data-state'] })
+    mutations.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open', 'data-state', 'data-native-view-occluder'] })
     window.addEventListener('resize', schedule)
     document.addEventListener('scroll', schedule, true)
     document.addEventListener('visibilitychange', schedule)
@@ -56,7 +58,7 @@ export function useNativeBrowserPresentation(options: Readonly<{
     update()
     return () => {
       disposed = true
-      cancelAnimationFrame(frame)
+      window.cancelAnimationFrame(frame)
       resize.disconnect()
       mutations.disconnect()
       window.removeEventListener('resize', schedule)

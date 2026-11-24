@@ -300,7 +300,7 @@ export function WindowsTitleBar({ platform, actions }: Props): ReactElement | nu
                   {menu.label}
                 </button>
                 {open ? (
-                  <div className="ds-windows-menu-popover" role="menu" aria-label={menu.label}>
+                  <div className="ds-windows-menu-popover" data-native-view-occluder="true" role="menu" aria-label={menu.label}>
                     {menu.items.map((item) => {
                       if (item.kind === 'separator') {
                         return <div key={item.id} className="ds-windows-menu-separator" role="separator" />

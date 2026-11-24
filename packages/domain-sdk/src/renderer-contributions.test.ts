@@ -1,3 +1,5 @@
+import { domainRendererAuditWorkspaceContractSchema, isDomainRendererAuditWorkspaceValue } from './renderer-contributions.js'
+import type { DomainRendererWorkbenchMainAreaValue, DomainRendererWorkbenchMainAreaRenderContext } from './renderer.js'
 import { domainRendererSelectionSnapshotSchema } from './renderer-contributions.js'
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
@@ -32,6 +34,7 @@ import {
   domainRendererResearchSummaryNavigationSchema,
   domainRendererResearchSummaryResultSchema,
   domainRendererWorkbenchMainAreaContractSchema,
+  domainRendererWorkbenchSettingsSectionContractSchema,
   domainRendererWorkbenchNavigationSectionContractSchema,
   domainRendererWorkbenchNavigationSessionCatalogSchema,
   domainRendererWorkbenchWorkspaceSectionContractSchema,
@@ -52,7 +55,6 @@ import {
   resolveDomainRendererResearchSummary,
   type DomainRendererCommandHandler,
   type DomainRendererCommandInvocation,
-  type DomainRendererWorkbenchMainAreaValue,
   type DomainRendererWorkbenchSessionDockRequest,
   type DomainRendererWorkbenchNavigationSectionRenderContext,
   type DomainRendererWorkbenchRightPanelRenderContext
@@ -271,6 +273,8 @@ describe('renderer extension contribution contracts', () => {
     assert.deepEqual(domainRendererWorkbenchMainAreaContractSchema.parse({ ...contract,
       docking: { defaultPosition: 'right', preferredWidth: 520 }
     }).docking, { defaultPosition: 'right', preferredWidth: 520 })
+    assert.equal(domainRendererWorkbenchMainAreaContractSchema.parse({ ...contract, navigationIcon: 'book-open' }).navigationIcon, 'book-open')
+    assert.throws(() => domainRendererWorkbenchMainAreaContractSchema.parse({ ...contract, navigationIcon: '<svg>unsafe</svg>' }), z.ZodError)
     for (const invalid of [
       { ...contract, projectId: 'host-private-project' },
       { ...contract, contractVersion: '2.0.0' },
@@ -306,6 +310,15 @@ describe('renderer extension contribution contracts', () => {
     ])
   })
 
+  it('defines a versioned package-owned settings section without host-private fields', () => {
+    const contract = { location: 'workbench.settings-section', contractVersion: '1.0.0', label: ' Fixture ' }
+    assert.equal(domainRendererWorkbenchSettingsSectionContractSchema.parse(contract).label, 'Fixture')
+    for (const invalid of [{ ...contract, label: ' ' }, { ...contract, contractVersion: '2.0.0' },
+      { ...contract, settingsPath: 'host-private' }]) {
+      assert.throws(() => domainRendererWorkbenchSettingsSectionContractSchema.parse(invalid), z.ZodError)
+    }
+  })
+
   it('publishes a package-neutral Workbench navigation section over ordinary Sessions', () => {
     const contract = domainRendererWorkbenchNavigationSectionContractSchema.parse({
       location: WORKBENCH_NAVIGATION_SECTION_LOCATION,
@@ -316,8 +329,16 @@ describe('renderer extension contribution contracts', () => {
     assert.deepEqual(contract, {
       location: 'workbench.navigation-section',
       contractVersion: '1.0.0',
-      label: 'fixtureCloudProjects'
+      label: 'fixtureCloudProjects',
+      placement: 'body'
     })
+    assert.equal(
+      domainRendererWorkbenchNavigationSectionContractSchema.parse({
+        ...contract,
+        placement: 'footer'
+      }).placement,
+      'footer'
+    )
     assert.equal(isDomainRendererWorkbenchNavigationSectionValue({
       render: () => ({})
     }), true)
@@ -340,6 +361,10 @@ describe('renderer extension contribution contracts', () => {
     assert.throws(() => domainRendererWorkbenchNavigationSectionContractSchema.parse({
       ...contract,
       projectId: 'host-private-project'
+    }), z.ZodError)
+    assert.throws(() => domainRendererWorkbenchNavigationSectionContractSchema.parse({
+      ...contract,
+      placement: 'sidebar'
     }), z.ZodError)
 
     const sessions = domainRendererWorkbenchNavigationSessionCatalogSchema.parse([{
@@ -656,4 +681,23 @@ it('requires result panels to declare an explicit stream placement', () => {
   assert.equal(isDomainRendererChatResultPanelValue({ ...panel, placement: 'turn-end' }), true)
   assert.equal(isDomainRendererChatResultPanelValue({ ...panel, placement: 'floating' }), false)
 
+})
+
+it('keeps the browser entrypoint presentation document strongly typed', () => {
+  type OwnerDocument = NonNullable<DomainRendererWorkbenchMainAreaRenderContext['ownerDocument']>
+  const exactBrowserDocument: [OwnerDocument] extends [Document]
+    ? ([Document] extends [OwnerDocument] ? true : false)
+    : false = true
+  assert.equal(exactBrowserDocument, true)
+})
+
+
+describe('audit workspace shell contract', () => {
+  it('is distinct from research content and requires a declared side target', () => {
+    assert.equal(domainRendererAuditWorkspaceContractSchema.safeParse({location:'research.workspace',order:0}).success,false)
+    assert.equal(domainRendererAuditWorkspaceContractSchema.safeParse({location:'research.audit-workspace'}).success,false)
+    assert.deepEqual(domainRendererAuditWorkspaceContractSchema.parse({location:'research.audit-workspace',sideContributionId:'fixture.research'}),{location:'research.audit-workspace',sideContributionId:'fixture.research',order:0})
+    assert.equal(isDomainRendererAuditWorkspaceValue({render:()=>null}),true)
+    assert.equal(isDomainRendererAuditWorkspaceValue({render:17}),false)
+  })
 })

@@ -140,15 +140,15 @@ function selectionToolbarStyle(rect: DOMRect): CSSProperties {
 function paragraphClassName(style: string | undefined): string {
   const normalized = style?.toLowerCase() ?? ''
   if (normalized.includes('heading1') || normalized.includes('title')) {
-    return 'mt-6 text-[22px] font-semibold leading-8 text-slate-950 first:mt-0 dark:text-slate-50'
+    return 'mt-6 text-ds-4xl font-semibold leading-8 text-slate-950 first:mt-0 dark:text-slate-50'
   }
   if (normalized.includes('heading2')) {
-    return 'mt-5 text-[18px] font-semibold leading-7 text-slate-900 dark:text-slate-100'
+    return 'mt-5 text-ds-2xl font-semibold leading-7 text-slate-900 dark:text-slate-100'
   }
   if (normalized.includes('heading3')) {
-    return 'mt-4 text-[15px] font-semibold leading-6 text-slate-900 dark:text-slate-100'
+    return 'mt-4 text-ds-xl font-semibold leading-6 text-slate-900 dark:text-slate-100'
   }
-  return 'mt-3 text-[14px] leading-7 text-slate-800 first:mt-0 dark:text-slate-100'
+  return 'mt-3 text-ds-lg leading-7 text-slate-800 first:mt-0 dark:text-slate-100'
 }
 
 function editableParagraphText(element: HTMLElement): string {
@@ -615,12 +615,12 @@ export function WriteDocxViewer({
             <div className="flex min-w-[190px] flex-1 items-center gap-1 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1 dark:bg-white/6 sm:max-w-[360px]">
               <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.9} />
               <input
-                className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ds-ink outline-none placeholder:text-ds-faint"
+                className="min-w-0 flex-1 bg-transparent text-ds-sm text-ds-ink outline-none placeholder:text-ds-faint"
                 value={searchQuery}
                 placeholder={t('writeDocxSearchPlaceholder')}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
-              <span className="min-w-[42px] shrink-0 text-right text-[11px] text-ds-faint">
+              <span className="min-w-[42px] shrink-0 text-right text-ds-xs text-ds-faint">
                 {matchLabel}
               </span>
               <button
@@ -692,7 +692,7 @@ export function WriteDocxViewer({
                 </button>
                 <button
                   type="button"
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[12px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-ds-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
                   disabled={!draftDirty || saveState === 'saving'}
                   onClick={() => void saveDocxEdits()}
                 >
@@ -708,11 +708,11 @@ export function WriteDocxViewer({
           </div>
         </div>
         {saveState === 'error' && saveError ? (
-          <div className="mt-2 rounded-lg border border-red-500/20 bg-red-50 px-3 py-1.5 text-[12px] text-red-700 dark:bg-red-950/60 dark:text-red-200">
+          <div className="mt-2 rounded-lg border border-red-500/20 bg-red-50 px-3 py-1.5 text-ds-sm text-red-700 dark:bg-red-950/60 dark:text-red-200">
             {saveError}
           </div>
         ) : saveState === 'saved' ? (
-          <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-50 px-3 py-1.5 text-[12px] text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200">
+          <div className="mt-2 rounded-lg border border-emerald-500/20 bg-emerald-50 px-3 py-1.5 text-ds-sm text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200">
             {t('writeDocxSaved')}
           </div>
         ) : null}
@@ -757,7 +757,7 @@ export function WriteDocxViewer({
               </article>
             )
           ) : (
-            <div className="flex min-h-[240px] items-center justify-center text-center text-[13px] leading-6 text-ds-muted">
+            <div className="flex min-h-[240px] items-center justify-center text-center text-ds-md leading-6 text-ds-muted">
               {t('writeDocxPreviewEmpty')}
             </div>
           )}

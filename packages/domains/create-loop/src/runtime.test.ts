@@ -599,6 +599,67 @@ test('routes AI Agent nodes through the Host agent execution port and records th
   await deactivate()
 })
 
+test('a failed agent turn fails the node instead of succeeding with empty text', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-agent-failure-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    setInterval: () => ({ timer: true }),
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext({
+    agentExecution: {
+      run: async () => ({
+        runtimeId: 'codex',
+        threadId: 'thread-agent-failed',
+        turnId: 'turn-agent-failed',
+        state: 'failed',
+        text: '',
+        failure: {
+          code: 'upstream_request_rejected',
+          message: 'The provider rejected the request.',
+          retryable: false
+        }
+      })
+    }
+  }))
+  const workflow = fixtureWorkflow()
+  workflow.nodes[1] = {
+    id: 'agent',
+    name: 'Agent',
+    type: 'ai-agent',
+    position: { x: 200, y: 0 },
+    disabled: false,
+    config: {
+      prompt: 'Investigate',
+      workspaceRoot: '/node-workspace',
+      runtimeId: 'codex',
+      providerId: '',
+      model: 'gpt-test',
+      reasoningEffort: 'high',
+      mode: 'agent',
+      interaction: 'background'
+    }
+  }
+  workflow.connections = [
+    { id: 'edge-1', source: 'trigger', sourceHandle: '', target: 'agent', targetHandle: '' },
+    { id: 'edge-2', source: 'agent', sourceHandle: '', target: 'output', targetHandle: '' }
+  ]
+  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, defaultWorkspaceRoot: '/default-workspace', workflows: [workflow] }, 0)
+
+  await runtime.runWorkflow(workflow.id, {})
+  await waitForRun(runtime, workflow.id)
+
+  const run = (await runtime.read()).settings.workflows[0]?.runs[0]
+  assert.equal(run?.status, 'error')
+  const agentResult = run?.nodeResults.find((result) => result.nodeId === 'agent')
+  assert.equal(agentResult?.status, 'error')
+  assert.match(agentResult?.error ?? '', /upstream_request_rejected/u)
+  assert.equal(run?.nodeResults.some((result) => result.nodeId === 'output'), false,
+    'downstream nodes must not run on a failed agent turn')
+  await deactivate()
+})
+
 test('executes normal HTTP credentials in memory but redacts every persisted terminal resource', async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-'))
   context.after(() => rm(root, { recursive: true, force: true }))
@@ -1759,3 +1820,294 @@ async function waitForApproval(runtime: CreateLoopRuntime) {
   }
   throw new Error('Workflow did not request approval in time.')
 }
+
+
+test('production code receipts retain distinct causal identities across runs and restart without reply', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'create-loop-causal-runtime-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const statePath = createLoopStatePath(root)
+  const options = { statePath, setInterval: () => ({}), clearInterval: () => undefined }
+  const runtime = new CreateLoopRuntime(options)
+  const events: DomainExecutionEventV1[] = []
+  const deactivate = await runtime.activate(runtimeContext({ executionEvents: { publish: async (event) => {
+    const published = publishedEvent(event, events.length + 1); events.push(published); return published
+  } } }))
+  context.after(deactivate)
+  const workflow = fixtureWorkflow()
+  for (const value of [1, 2]) {
+    workflow.nodes[1] = { id: 'template', name: 'Producer', type: 'code', position: { x: 0, y: 0 }, disabled: false,
+      config: { language: 'python', code: `import pathlib,json,sys,os; data=json.load(sys.stdin); pathlib.Path('same-output').write_text(str(data['value'])); pathlib.Path('count').open('a').write('1'); sys.stderr.buffer.write(b'err\\r\\n'); print(json.dumps({'value':data['value'],'script':${value}}))` } }
+    await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] })
+    const started = await runtime.runWorkflow(workflow.id, { value }, root)
+    assert.equal(started.ok, true)
+    await waitForRun(runtime, workflow.id)
+    const snapshot = await runtime.read()
+    const run = snapshot.settings.workflows[0].runs.at(-1)!
+    assert.equal(run.status, 'success')
+    const node = run.nodeResults.find((result) => result.nodeId === 'template')!
+    assert.deepEqual(JSON.parse(node.outputJson), { value, script: value })
+    assert.equal(node.artifactRefs.some((ref) => ref.ref.endsWith('terminal.json')), true)
+    const receipt = snapshot.processReceipts!.find((receipt) => receipt.runId === run.id)!
+    assert.equal(receipt.nodeId, 'template')
+    assert.equal(receipt.verification, 'verified')
+    const terminalEvent = events.find((event) => event.runId === run.id && event.phase === 'run_completed')!
+    assert.match(JSON.stringify(terminalEvent.artifacts), /sciforge.create-loop.process-receipt/)
+  }
+  const original = (await runtime.read()).processReceipts!
+  assert.equal(original.length, 2)
+  assert.notEqual(original[0].executionId, original[1].executionId)
+  assert.notEqual(original[0].preparedDigest, original[1].preparedDigest)
+  for (let index = 0; index < 130; index += 1) await mkdir(path.join(`${statePath}.processes`, `old-${index}`))
+  const cappedRun = await runtime.runWorkflow(workflow.id, { value: 3 }, root)
+  assert.equal(cappedRun.ok, true)
+  await waitForRun(runtime, workflow.id)
+  const capped = await runtime.read()
+  assert.equal(capped.processReceiptCoverage?.status, 'partial')
+  const cappedId = capped.settings.workflows[0].runs.at(-1)!.id
+  assert.match(JSON.stringify(events.find((event) => event.runId === cappedId && event.phase === 'run_completed')?.artifacts), /sciforge.create-loop.process-receipt/)
+  for (let index = 0; index < 130; index += 1) await rm(path.join(`${statePath}.processes`, `old-${index}`), { recursive: true })
+  const withThird = (await runtime.read()).processReceipts!
+  await deactivate()
+  // Simulate receipt durable but the host's final state/reply unavailable.
+  const state = JSON.parse(await readFile(statePath, 'utf8'))
+  state.settings.workflows[0].runs = []
+  await writeFile(statePath, JSON.stringify(state))
+  const restarted = new CreateLoopRuntime(options)
+  const stop = await restarted.activate(runtimeContext()); context.after(stop)
+  assert.deepEqual((await restarted.read()).processReceipts, withThird)
+  assert.deepEqual((await restarted.read()).processReceipts, withThird)
+  assert.equal(await readFile(path.join(root, 'count'), 'utf8'), '111')
+  await writeFile(path.join(original[0].directory, 'stdout'), 'changed later')
+  assert.equal((await restarted.read()).processReceipts!.find((receipt) => receipt.executionId === original[0].executionId)!.verification, 'unknown')
+  assert.equal(await readFile(path.join(root, 'count'), 'utf8'), '111')
+})
+
+test('production unknown process receipt blocks retries and fallback after a real side effect', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'create-loop-unknown-runtime-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const statePath = createLoopStatePath(root)
+  const runtime = new CreateLoopRuntime({ statePath, setInterval: () => ({}), clearInterval: () => undefined })
+  const deactivate = await runtime.activate(runtimeContext()); context.after(deactivate)
+  const workflow = fixtureWorkflow()
+  workflow.nodes[1] = { id: 'template', name: 'Uncertain producer', type: 'code', position: { x: 0, y: 0 }, disabled: false,
+    retries: 3, onError: 'fallback', fallbackJson: '{"falseSuccess":true}',
+    config: { language: 'python', code: `import pathlib; p=next(pathlib.Path(${JSON.stringify(statePath + '.processes')}).glob('*/prepared.json')); (p.parent/'terminal.json').mkdir(); pathlib.Path('count').open('a').write('1'); print('done')` } }
+  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [workflow] })
+  await runtime.runWorkflow(workflow.id, {}, root)
+  await waitForRun(runtime, workflow.id)
+  const snapshot = await runtime.read()
+  const result = snapshot.settings.workflows[0].runs[0].nodeResults.find((node) => node.nodeId === 'template')!
+  assert.equal(result.status, 'error')
+  assert.equal(result.attempts.length, 1)
+  assert.equal(result.attempts[0].receipt.errorCode, 'process_outcome_unknown')
+  assert.equal(snapshot.processReceipts![0].verification, 'unknown')
+  assert.equal(await readFile(path.join(root, 'count'), 'utf8'), '1')
+})
+
+test('production nested unknown cannot retry fallback or continue an enclosing workflow', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'create-loop-nested-unknown-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  const statePath = createLoopStatePath(root)
+  const runtime = new CreateLoopRuntime({ statePath, setInterval: () => ({}), clearInterval: () => undefined })
+  const stop = await runtime.activate(runtimeContext()); context.after(stop)
+  const body = fixtureWorkflow(); body.id = 'body'
+  body.nodes[1] = { id: 'template', name: 'Unknown', type: 'code', position: { x: 0, y: 0 }, disabled: false, retries: 2, onError: 'continue',
+    config: { language: 'python', code: `import pathlib; p=next(pathlib.Path(${JSON.stringify(statePath + '.processes')}).glob('*/prepared.json')); (p.parent/'terminal.json').mkdir(); pathlib.Path('count').open('a').write('1'); print('done')` } }
+  const parent = fixtureWorkflow(); parent.id = 'parent'
+  parent.nodes[1] = { id: 'template', name: 'Nested', type: 'subworkflow', position: { x: 0, y: 0 }, disabled: false,
+    retries: 2, onError: 'fallback', fallbackJson: '{}', config: { workflowId: body.id } }
+  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [parent, body] })
+  await runtime.runWorkflow(parent.id, {}, root)
+  await waitForRun(runtime, parent.id)
+  const run = (await runtime.read()).settings.workflows.find((item) => item.id === parent.id)!.runs[0]
+  assert.equal(run.status, 'error')
+  const result = run.nodeResults.find((item) => item.nodeId === 'template')!
+  assert.equal(result.attempts.length, 1)
+  assert.equal(result.attempts[0].receipt.errorCode, 'process_outcome_unknown')
+  assert.equal(await readFile(path.join(root, 'count'), 'utf8'), '1')
+})
+
+for (const mode of ['fail', 'continue', 'fallback'] as const) {
+ for (const persistent of [false, true]) {
+  test(`nested result delivery loss cannot redispatch a completed producer (${mode}, persistent=${persistent})`, async (context) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'create-loop-nested-delivery-'))
+    context.after(() => rm(root, { recursive: true, force: true }))
+    let injected = false
+    const runtime = new CreateLoopRuntime({ statePath: createLoopStatePath(root), setInterval: () => ({}), clearInterval: () => undefined })
+    const stop = await runtime.activate(runtimeContext({ executionEvents: { publish: async (event) => {
+      if ((persistent || !injected) && event.phase === 'activity_completed' && event.activityId === 'template' &&
+          (persistent || (event.payload as { receipt?: { status?: string } })?.receipt?.status === 'success')) {
+        injected = true
+        throw new Error('Producer completed; result delivery unavailable')
+      }
+      return publishedEvent(event, 0)
+    } } }))
+    context.after(stop)
+    const body = fixtureWorkflow(); body.id = 'body'
+    body.nodes[1] = { id: 'template', name: 'Producer', type: 'code', position: { x: 0, y: 0 }, disabled: false,
+      retries: 2, onError: mode, fallbackJson: '{}',
+      config: { language: 'python', code: "import pathlib; pathlib.Path('count').open('a').write('1'); print('done')" } }
+    const parent = fixtureWorkflow(); parent.id = 'parent'
+    parent.nodes[1] = { id: 'nested', name: 'Nested', type: 'subworkflow', position: { x: 0, y: 0 }, disabled: false,
+      retries: 2, onError: mode, fallbackJson: '{}', config: { workflowId: body.id } }
+    parent.connections[0].target = 'nested'; parent.connections[1].source = 'nested'
+    await runtime.save({ ...defaultWorkflowSettings(), enabled: true, workflows: [parent, body] })
+    await runtime.runWorkflow(parent.id, {}, root)
+    await waitForRun(runtime, parent.id)
+    const snapshot = await runtime.read()
+    const run = snapshot.settings.workflows.find(item => item.id === parent.id)!.runs[0]
+    assert.equal(injected, true)
+    assert.equal(run.status, 'error')
+    assert.equal(run.nodeResults.find(item => item.nodeId === 'nested')!.attempts.length, 1)
+    assert.equal(run.nodeResults.find(item => item.nodeId === 'nested')!.attempts[0].receipt.errorCode, 'process_result_delivery_failed')
+    assert.equal(await readFile(path.join(root, 'count'), 'utf8'), '1')
+    assert.equal(snapshot.processReceipts![0].outcome, 'known')
+    assert.equal(snapshot.processReceipts![0].verification, 'verified')
+  })
+ }
+}
+
+test('cron schedules advance to the next occurrence instead of firing on every tick', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-cron-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  let scheduleTick: (() => void) | undefined
+  const now = new Date(2026, 10, 24, 10, 0, 0, 0)
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    now: () => new Date(now.getTime()),
+    setInterval: (handler) => {
+      scheduleTick = handler
+      return { timer: true }
+    },
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext())
+  context.after(deactivate)
+  const workflow = fixtureWorkflow()
+  workflow.nodes[0] = {
+    id: 'trigger',
+    name: 'Weekly',
+    type: 'schedule-trigger',
+    position: { x: 0, y: 0 },
+    disabled: false,
+    config: {
+      schedule: {
+        kind: 'cron',
+        everyMinutes: 60,
+        timeOfDay: '09:00',
+        atTime: '',
+        cron: '0 9 * * 1'
+      },
+      workspaceRoot: ''
+    }
+  }
+  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, defaultWorkspaceRoot: '/cron-workspace', workflows: [workflow] }, 0)
+
+  assert.ok(scheduleTick)
+  scheduleTick()
+  await waitForWorkflowState(runtime, workflow.id, (candidate) => Boolean(candidate.nextRunAt))
+  const scheduled = (await runtime.read()).settings.workflows[0]!
+  assert.equal(scheduled.nextRunAt, new Date(2026, 10, 30, 9, 0, 0, 0).toISOString())
+  assert.equal(scheduled.runs.length, 0)
+
+  scheduleTick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const settled = (await runtime.read()).settings.workflows[0]!
+  assert.equal(settled.nextRunAt, scheduled.nextRunAt, 'a future occurrence must not be re-scheduled on the next tick')
+  assert.equal(settled.runs.length, 0)
+  now.setTime(new Date(2026, 10, 30, 9, 0, 0, 0).getTime())
+  scheduleTick()
+  await waitForWorkflowState(runtime, workflow.id, candidate => candidate.runs.length === 1)
+  const fired = (await runtime.read()).settings.workflows[0]!
+  assert.equal(fired.runs.length, 1, 'a due occurrence runs once')
+  assert.equal(fired.nextRunAt, new Date(2026, 11, 7, 9, 0, 0, 0).toISOString())
+  scheduleTick()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal((await runtime.read()).settings.workflows[0]!.runs.length, 1, 'repeated ticks do not replay a consumed occurrence')
+})
+
+for (const expression of ['every monday', '0 0 31 2 *']) test(`invalid or impossible cron ${expression} never becomes due`, async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-cron-invalid-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  let scheduleTick: (() => void) | undefined
+  const runtime = new CreateLoopRuntime({
+    statePath: createLoopStatePath(root),
+    now: () => new Date(2026, 10, 24, 10, 0, 0, 0),
+    setInterval: (handler) => {
+      scheduleTick = handler
+      return { timer: true }
+    },
+    clearInterval: () => undefined
+  })
+  const deactivate = await runtime.activate(runtimeContext())
+  context.after(deactivate)
+  const workflow = fixtureWorkflow()
+  workflow.nodes[0] = {
+    id: 'trigger',
+    name: 'Broken',
+    type: 'schedule-trigger',
+    position: { x: 0, y: 0 },
+    disabled: false,
+    config: {
+      schedule: {
+        kind: 'cron',
+        everyMinutes: 60,
+        timeOfDay: '09:00',
+        atTime: '',
+        cron: expression
+      },
+      workspaceRoot: ''
+    }
+  }
+  await runtime.save({ ...defaultWorkflowSettings(), enabled: true, defaultWorkspaceRoot: '/cron-workspace', workflows: [workflow] }, 0)
+
+  assert.ok(scheduleTick)
+  scheduleTick()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  scheduleTick()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const settled = (await runtime.read()).settings.workflows[0]!
+  assert.equal(settled.nextRunAt, '')
+  assert.equal(settled.runs.length, 0)
+})
+
+
+for (const scenario of [
+  { name: 'interval first, cron second', first: 'interval', second: 'cron', invalidCron: false, initialNext: '', initialize: false, triggerId: 'trigger' },
+  { name: 'cron first initializes before a later interval', first: 'cron', second: 'interval', invalidCron: false, initialNext: '', initialize: true, triggerId: 'trigger' },
+  { name: 'invalid cron first does not block a later interval', first: 'cron', second: 'interval', invalidCron: true, initialNext: '', initialize: false, triggerId: 'second-trigger' },
+  { name: 'selected cron repairs a nonfinite durable timestamp without executing', first: 'cron', second: 'interval', invalidCron: false, initialNext: 'not-a-timestamp', initialize: true, triggerId: 'trigger' },
+] as const) test(`schedule source order: ${scenario.name}`, async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-create-loop-schedule-order-'))
+  context.after(() => rm(root, {recursive: true, force: true}))
+  const now = new Date(2026, 10, 24, 10, 0, 0)
+  let tick: (() => void) | undefined
+  const runtime = new CreateLoopRuntime({statePath: createLoopStatePath(root), now: () => new Date(now),
+    setInterval: handler => {tick = handler; return {timer: true}}, clearInterval: () => undefined})
+  context.after(await runtime.activate(runtimeContext()))
+  const node = (id: string, kind: 'cron' | 'interval', invalid = false): Extract<WorkflowV1['nodes'][number], {type: 'schedule-trigger'}> => ({
+    id, name: id, type: 'schedule-trigger', disabled: false, position: {x: 0, y: 0},
+    config: {workspaceRoot: '', schedule: {kind, everyMinutes: 60, timeOfDay: '09:00', atTime: '', cron: invalid ? 'invalid expression' : '0 9 * * 1'}}
+  })
+  const workflow = fixtureWorkflow()
+  workflow.nextRunAt = scenario.initialNext
+  workflow.nodes[0] = node('trigger', scenario.first, scenario.invalidCron)
+  const output = workflow.nodes.find((item): item is Extract<WorkflowV1['nodes'][number], {type: 'output'}> => item.type === 'output')!
+  workflow.nodes.push(node('second-trigger', scenario.second), {...output, id: 'second-output'})
+  workflow.connections.push({id: 'second-output-edge', source: 'second-trigger', sourceHandle: '', target: 'second-output', targetHandle: ''})
+  await runtime.save({...defaultWorkflowSettings(), enabled: true, defaultWorkspaceRoot: '/schedule-workspace', workflows: [workflow]}, 0)
+  assert.ok(tick)
+  tick()
+  await waitForWorkflowState(runtime, workflow.id, candidate => scenario.initialize
+    ? candidate.nextRunAt === new Date(2026, 10, 30, 9).toISOString()
+    : candidate.runs.length === 1)
+  const selected = (await runtime.read()).settings.workflows[0]!
+  assert.equal(selected.runs.length, scenario.initialize ? 0 : 1)
+  if (!scenario.initialize) {
+    assert.equal(selected.runs[0]!.trigger, scenario.triggerId)
+    assert.equal(selected.nextRunAt, new Date(now.getTime() + 60 * 60_000).toISOString())
+  }
+  tick()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal((await runtime.read()).settings.workflows[0]!.runs.length, scenario.initialize ? 0 : 1)
+})

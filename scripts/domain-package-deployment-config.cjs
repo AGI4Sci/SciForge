@@ -1,4 +1,5 @@
 const { createHash } = require('node:crypto')
+const { isLicenseOnlyArchiveEntries } = require('./domain-license-archive.cjs')
 const {
   lstatSync,
   readFileSync,
@@ -31,6 +32,7 @@ function createDomainPackageDeploymentConfigurationComposition(projectRoot) {
 
   for (const directory of readDomainPackageDirectories(packagesRoot)) {
     const packageRoot = join(packagesRoot, directory)
+    if (isLicenseOnlyArchiveEntries(readdirSync(packageRoot, { withFileTypes: true }))) continue
     const packageJson = readJsonObject(join(packageRoot, 'package.json'), 'domain package metadata')
     const manifest = readJsonObject(join(packageRoot, 'sciforge.domain.json'), 'domain package manifest')
     if (typeof packageJson.name !== 'string' || packageJson.name.length === 0) {

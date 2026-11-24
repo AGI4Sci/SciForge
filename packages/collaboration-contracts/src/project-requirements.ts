@@ -10,7 +10,7 @@ import {
   timestampSchema,
   userIdSchema
 } from './core.js'
-import { collaborationObjectLocatorSchema } from './task-object-io.js'
+import { collaborationObjectLocatorSchema, taskFileOutputIntentSchema } from './task-object-io.js'
 
 /**
  * One work module of the requirements document. The stable ID is the
@@ -22,6 +22,8 @@ export const requirementsWorkModuleSchema = z.object({
   title: nonEmptyTextSchema.max(500),
   objective: nonEmptyTextSchema.max(4_000),
   dependencyPlanItemIds: z.array(planItemIdSchema).max(100),
+  /** Missing only on incomplete drafts or historical documents; required before confirmation/dispatch. */
+  output: taskFileOutputIntentSchema.optional(),
   /**
    * Tags the deterministic Worker selection (design §9.22.2) must cover;
    * absent or empty qualifies every eligible Worker.
@@ -111,7 +113,7 @@ export type RequirementsDocumentParts = z.infer<typeof requirementsDocumentParts
  */
 export function requirementsCompletenessViolation(
   parts: RequirementsDocumentParts
-): 'parts_missing' | 'module_uncovered' | 'project_criterion_missing' | 'criterion_target_unknown' | null {
+): 'parts_missing' | 'module_uncovered' | 'project_criterion_missing' | 'criterion_target_unknown' | 'module_output_missing' | null {
   if (
     !parts.goalsDeliverables.trim() ||
     !parts.inputsBoundaries.trim() ||
@@ -128,6 +130,7 @@ export function requirementsCompletenessViolation(
   if (!parts.acceptanceCriteria.some(({ target }) => target === '$project')) {
     return 'project_criterion_missing'
   }
+  if (parts.workModules.some(({ output }) => output === undefined)) return 'module_output_missing'
   return null
 }
 

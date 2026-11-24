@@ -1,22 +1,16 @@
+import {
+  isTextLikePreviewMimeType,
+  type WorkspacePreviewResourceContent
+} from '@sciforge/domain-sdk/workspace-preview'
+
 export const RESOURCE_TEXT_PREVIEW_MAX_BYTES = 256 * 1024
-
-type ResourcePreviewContentMetadata = Readonly<{ size: number; mimeType: string }>
-export type ResourcePreviewContent = ResourcePreviewContentMetadata & (
-  | Readonly<{ kind: 'pdf' | 'image' | 'unsupported' }>
-  | Readonly<{ kind: 'text'; text: string; truncated: boolean }>
-)
-
-function isTextContent(mimeType: string): boolean {
-  return mimeType.startsWith('text/') ||
-    /^application\/(?:json|.+\+json|xml|.+\+xml|(?:x-)?yaml|(?:x-)?ndjson|javascript)$/u.test(mimeType)
-}
 
 /** All authorization, MIME metadata and byte reads use the canonical Broker URL transport. */
 export async function loadResourcePreviewContent(
   sourceUrl: string,
   signal: AbortSignal,
   fetchContent: typeof fetch = fetch
-): Promise<ResourcePreviewContent> {
+): Promise<WorkspacePreviewResourceContent> {
   const head = await fetchContent(sourceUrl, { method: 'HEAD', signal })
   if (!head.ok) throw new Error('Resource preview authorization failed.')
   const rawSize = head.headers.get('content-length')
@@ -25,7 +19,7 @@ export async function loadResourcePreviewContent(
   if (!Number.isSafeInteger(size) || size < 0 || !mimeType) throw new Error('Resource preview metadata is unavailable.')
   if (mimeType === 'application/pdf' || mimeType === 'application/x-pdf') return { kind: 'pdf', size, mimeType: 'application/pdf' }
   if (mimeType.startsWith('image/')) return { kind: 'image', size, mimeType }
-  if (!isTextContent(mimeType)) return { kind: 'unsupported', size, mimeType }
+  if (!isTextLikePreviewMimeType(mimeType)) return { kind: 'unsupported', size, mimeType }
   const length = Math.min(size, RESOURCE_TEXT_PREVIEW_MAX_BYTES)
   if (length === 0) return { kind: 'text', size, mimeType, text: '', truncated: false }
   const response = await fetchContent(sourceUrl, { headers: { Range: `bytes=0-${length - 1}` }, signal })

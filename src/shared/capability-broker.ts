@@ -79,8 +79,11 @@ export const capabilityDescriptorSchema = z.object({
    * confirmation grant. This policy is deliberately unavailable to global,
    * workspace, read, or compute capabilities; destructive operations remain
    * bounded by the exact authorized resource.
+   * human-decision-request instead permits only persisting a bounded question
+   * for a human. It never authorizes the proposed action, an answer, a batch
+   * or a principal change; trusted handlers enforce recipient/scope authority.
    */
-  autonomousWrite: z.literal('resource-authorized').optional(),
+  autonomousWrite: z.enum(['resource-authorized', 'human-decision-request']).optional(),
   concurrency: capabilityConcurrencySchema,
   /** Trusted declaration that this UI action may replace the Host Principal. */
   principalTransition: z.literal('host-authority').optional(),
@@ -115,6 +118,13 @@ export const capabilityDescriptorSchema = z.object({
   }
   if (descriptor.effect === 'read' && descriptor.concurrency.idempotency !== 'none') {
     context.addIssue({ code: 'custom', path: ['concurrency', 'idempotency'], message: 'Read capabilities do not use invocation idempotency.' })
+  }
+  if (descriptor.autonomousWrite === 'human-decision-request') {
+    if (descriptor.effect !== 'external-write' || descriptor.approval !== 'none' ||
+        descriptor.principalTransition !== undefined || descriptor.delegatedBatchGrant !== undefined ||
+        descriptor.audiences.includes('system')) {
+      context.addIssue({ code: 'custom', path: ['autonomousWrite'], message: 'Human decision requests only persist a request; they cannot execute actions, delegate batches, or transition authority.' })
+    }
   }
   if (descriptor.autonomousWrite === 'resource-authorized') {
     if (descriptor.scope !== 'resource') {
@@ -214,6 +224,7 @@ export const capabilityDescriptorSchema = z.object({
     && (descriptor.effect === 'external-write' || descriptor.effect === 'destructive')
     && descriptor.approval === 'none'
     && descriptor.autonomousWrite !== 'resource-authorized'
+    && descriptor.autonomousWrite !== 'human-decision-request'
   ) {
     context.addIssue({
       code: 'custom',

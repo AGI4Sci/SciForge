@@ -4,6 +4,21 @@ import { resolve } from 'node:path'
 import type { VisualCapturePort } from '../../ports/visual-capture'
 import {
   ANCHORED_COMMENT_CAPABILITY_IDS,
+  proseTranslationInputSchema,
+  proseTranslationResultSchema,
+  reconcileCodeAnchorInputSchema,
+  sharedConversationProjectInputSchema,
+  sharedConversationDiscardInputSchema,
+  sharedConversationProjectsInputSchema,
+  sharedConversationProjectsResultSchema,
+  sharedConversationSubmitInputSchema,
+  sharedConversationPublishInputSchema,
+  sharedConversationResultSchema,
+  anchoredCommentForkInputSchema,
+  anchoredCommentReplyInputSchema,
+  anchoredCommentReplyResultSchema,
+  anchoredCommentCancelInputSchema,
+  anchoredCommentCancelResultSchema,
   anchoredCommentCaptureRequestSchema,
   anchoredCommentCaptureResultSchema,
   anchoredCommentCaptureBundleSchema,
@@ -25,6 +40,10 @@ import {
 import { ANCHORED_COMMENTS_PLUGIN_VERSION } from '../definition'
 import type { AnchoredCommentService } from './comment-service'
 import type { AnchoredCommentFeedbackService } from './feedback-service'
+import type { AnchoredConversationService } from './conversation-service'
+import type { ProseTranslationService } from './prose-translation'
+import type { SharedConversationService } from './shared-conversation-service.js'
+import { sharedPublicationOf } from './shared-publication.js'
 
 type AnchoredCommentsCapabilityEffect = 'read' | 'workspace-write' | 'external-write'
 
@@ -58,6 +77,9 @@ export function createAnchoredCommentsCapabilityFactory<CapabilityDefinition>(
     ) => CapabilityDefinition
     getComments: () => AnchoredCommentService
     getFeedback: () => AnchoredCommentFeedbackService
+    getConversations?: () => AnchoredConversationService
+    getTranslation?: () => ProseTranslationService
+    getShared?: () => SharedConversationService
     visualCapture?: VisualCapturePort
   }>
 ): AnchoredCommentsCapabilityFactory<CapabilityDefinition> {
@@ -79,6 +101,86 @@ export function createAnchoredCommentsCapabilityFactory<CapabilityDefinition>(
 
   return Object.freeze({
     createDefinitions: () => [
+      define({ id: ANCHORED_COMMENT_CAPABILITY_IDS.translate, title: 'Translate discussion prose',
+        description: 'Translates bounded prose through the selected runtime while preserving protected code evidence and original text.',
+        effect: 'workspace-write', approval: 'none', concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: proseTranslationInputSchema, outputSchema: proseTranslationResultSchema,
+        handler: async input => {
+          if (!options.getTranslation) throw new Error('Translation execution is unavailable.')
+          return { output: await options.getTranslation().translate(input) }
+        } }),
+      define({ id: ANCHORED_COMMENT_CAPABILITY_IDS.reconcileAnchor, title: 'Reconcile code anchor',
+        description: 'Compares an explicit current file/side snapshot and persists stale status without replacing saved code evidence.',
+        effect: 'workspace-write', approval: 'none', concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: reconcileCodeAnchorInputSchema, outputSchema: anchoredCommentThreadSchema,
+        handler: async ({ threadId, current }) => ({ output: await options.getComments().reconcileCodeAnchor(threadId, current) }) }),
+      define({ id: ANCHORED_COMMENT_CAPABILITY_IDS.sharedProjects, title: 'List shared Projects',
+        description: 'Lists Projects visible to the authenticated user for explicit conversation publication.',
+        effect: 'read', approval: 'none', concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: sharedConversationProjectsInputSchema, outputSchema: sharedConversationProjectsResultSchema,
+        handler: async ({ cursor }) => {
+          if (!options.getShared) throw new Error('Authenticated project sharing is unavailable.')
+          return { output: await options.getShared().projects(cursor) }
+        } }),
+      ...(['sharedPull', 'sharedRetry', 'sharedDiscard', 'sharedSubmit', 'sharedPublish'] as const).map(operation => define({
+        id: ANCHORED_COMMENT_CAPABILITY_IDS[operation], title: operation === 'sharedPull' ? 'Refresh project conversations' : 'Publish project conversation changes',
+        description: 'Synchronizes explicitly published code conversations with the selected Project.',
+        effect: operation === 'sharedPull' ? 'read' : operation === 'sharedDiscard' ? 'workspace-write' : 'external-write',
+        approval: operation === 'sharedPull' || operation === 'sharedDiscard' ? 'none' : 'confirmation',
+        concurrency: { revision: 'none', idempotency: operation === 'sharedPull' ? 'none' : 'required' },
+        inputSchema: operation === 'sharedDiscard' ? sharedConversationDiscardInputSchema : operation === 'sharedPublish' ? sharedConversationPublishInputSchema : operation === 'sharedSubmit' ? sharedConversationSubmitInputSchema : sharedConversationProjectInputSchema,
+        outputSchema: sharedConversationResultSchema,
+        handler: async input => {
+          const shared = options.getShared?.()
+          if (!shared) throw new Error('Authenticated project sharing is unavailable.')
+          let state
+          if (operation === 'sharedPublish') {
+            const thread = await options.getComments().getThread(input.threadId)
+            if (!thread) throw new Error('Code conversation was not found.')
+            state = await shared.submit(input.projectId, sharedPublicationOf(thread, input))
+          } else if (operation === 'sharedDiscard') state = await shared.discard(input.projectId, input.idempotencyKey)
+          else if (operation === 'sharedSubmit') state = await shared.submit(input.projectId, input.command)
+          else state = await shared.sync(input.projectId, operation === 'sharedRetry')
+          return { output: { projectId: state.binding.projectId, conversations: state.conversations, rejectedCommands: state.rejectedCommands, outcomeReceipts: state.outcomeReceipts, pendingCount: state.outbox.length, afterSequence: state.afterSequence } }
+        }
+      })),
+      define({
+        id: ANCHORED_COMMENT_CAPABILITY_IDS.fork,
+        title: 'Fork code conversation',
+        description: 'Creates a child conversation with an immutable bounded parent-message prefix.',
+        effect: 'workspace-write', approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: anchoredCommentForkInputSchema,
+        outputSchema: anchoredCommentThreadSchema,
+        handler: async ({ threadId, messageId, childId, body }) => ({
+          output: await options.getComments().forkThread(threadId, messageId, childId, body)
+        })
+      }),
+      define({
+        id: ANCHORED_COMMENT_CAPABILITY_IDS.reply,
+        title: 'Reply to code conversation',
+        description: 'Asks the selected runtime using frozen code and bounded conversation context.',
+        effect: 'workspace-write', approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: anchoredCommentReplyInputSchema,
+        outputSchema: anchoredCommentReplyResultSchema,
+        handler: async (input) => {
+          if (!options.getConversations) throw new Error('Conversation execution is unavailable.')
+          return { output: await options.getConversations().reply(input) }
+        }
+      }),
+      define({
+        id: ANCHORED_COMMENT_CAPABILITY_IDS.cancel,
+        title: 'Cancel conversation reply',
+        description: 'Cancels the matching active request without deleting saved questions.',
+        effect: 'workspace-write', approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        inputSchema: anchoredCommentCancelInputSchema,
+        outputSchema: anchoredCommentCancelResultSchema,
+        handler: async ({ threadId, requestId }) => ({
+          output: { cancelled: options.getConversations?.().cancel(threadId, requestId) ?? false }
+        })
+      }),
       define({
         id: ANCHORED_COMMENT_CAPABILITY_IDS.list,
         title: 'List anchored comments',
@@ -187,11 +289,17 @@ export function createAnchoredCommentsCapabilityFactory<CapabilityDefinition>(
           const thread = snapshot?.thread
           if (request.threadId && !thread) throw new Error('Comment thread was not found.')
           if (thread?.capture.focusedScreenshot || thread?.capture.fullWindowScreenshot) throw new Error('Comment visual evidence is already established.')
-          const resourceId = thread?.anchor.canonical.kind === 'research' ? thread.anchor.canonical.resourceId : undefined
-          if (thread && !resourceId) throw new Error('Capture requires a canonical research document anchor.')
+          const anchor = thread?.anchor
+          // Code resource ids identify immutable selected ranges, not filesystem paths.
+          // The saved code anchor owns the source path; Host still verifies it against
+          // the registered target and its authenticated workspace before capture.
+          const resourcePath = anchor?.canonical.kind === 'research'
+            ? anchor.canonical.resourceKind === 'code' ? anchor.codeAnchor?.filePath : anchor.canonical.resourceId
+            : undefined
+          if (thread && !resourcePath) throw new Error('Capture requires a canonical research source path.')
           const captured = await capture.captureRegisteredTarget({
             targetRef: request.targetRef,
-            ...(resourceId ? { expectedResourcePath: resourceId } : {}),
+            ...(resourcePath ? { expectedResourcePath: resourcePath } : {}),
             annotation: 'callout',
             label: request.targetLabel
           })
@@ -207,9 +315,10 @@ export function createAnchoredCommentsCapabilityFactory<CapabilityDefinition>(
           if (createHash('sha256').update(captured.png).digest('hex') !== captured.sha256) {
             throw new Error('Host visual capture failed its content digest check.')
           }
-          if (captured.source && resourceId) {
+          if (captured.source && resourcePath) {
             const canonical = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path)
-            if (captured.source.targetRef !== request.targetRef || canonical(resolve(captured.source.workspaceRoot, resourceId)) !== canonical(captured.source.resourcePath)) {
+            if ((thread?.workspaceKey && canonical(thread.workspaceKey) !== canonical(captured.source.workspaceRoot)) ||
+                captured.source.targetRef !== request.targetRef || canonical(resolve(captured.source.workspaceRoot, resourcePath)) !== canonical(captured.source.resourcePath)) {
               throw new Error('Host screenshot source does not match the comment canonical resource.')
             }
           }

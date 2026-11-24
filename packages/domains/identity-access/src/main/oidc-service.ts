@@ -13,12 +13,15 @@ import type {
 } from '../contract.js'
 import {
   DesktopIdentitySessionStoreError,
+  parsePendingDesktopRefresh,
+  type PendingDesktopRefresh,
   type DesktopIdentitySessionStore,
   type StoredDesktopIdentitySession
 } from './session-store.js'
 
 const DEFAULT_REDIRECT_URI = 'http://127.0.0.1:43110/oidc/callback'
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
+const OIDC_REQUEST_TIMEOUT_MS = 15_000
 const REFRESH_LEEWAY_MS = 60 * 1000
 const REFRESH_RETRY_MS = 30 * 1000
 const MAX_TIMER_MS = 2_147_483_647
@@ -81,6 +84,8 @@ type VerifiedTokens = {
 type SessionCredentials = {
   refreshToken: string
   idToken?: string
+  identity?: StoredDesktopIdentitySession['identity']
+  pendingRefresh?: PendingDesktopRefresh
 }
 
 type SessionOperation = Readonly<{
@@ -101,6 +106,54 @@ export class DesktopIdentityError extends Error {
     super(message)
     this.name = 'DesktopIdentityError'
   }
+}
+
+/** Only fixed transport diagnostics cross the UI boundary; never expose arbitrary
+ * error messages, URLs, headers, request bodies, or provider response text. */
+function oidcNetworkFailureMessage(stage: 'discovery' | 'token exchange' | 'signing keys', error: unknown): string {
+  const causes: Readonly<Record<string, string>> = {
+    ENOTFOUND: 'DNS lookup failed',
+    EAI_AGAIN: 'DNS lookup temporarily failed',
+    ECONNREFUSED: 'connection refused',
+    ECONNRESET: 'connection reset',
+    EHOSTUNREACH: 'host unreachable',
+    ENETUNREACH: 'network unreachable',
+    ETIMEDOUT: 'network request timed out',
+    UND_ERR_CONNECT_TIMEOUT: 'connection timed out',
+    UND_ERR_HEADERS_TIMEOUT: 'response headers timed out',
+    UND_ERR_BODY_TIMEOUT: 'response body timed out',
+    UND_ERR_SOCKET: 'connection closed unexpectedly',
+    CERT_HAS_EXPIRED: 'TLS certificate expired',
+    CERT_NOT_YET_VALID: 'TLS certificate is not yet valid',
+    DEPTH_ZERO_SELF_SIGNED_CERT: 'TLS certificate is self-signed',
+    SELF_SIGNED_CERT_IN_CHAIN: 'TLS certificate chain is not trusted',
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'TLS certificate chain could not be verified',
+    UNABLE_TO_GET_ISSUER_CERT_LOCALLY: 'TLS issuer certificate is not trusted',
+    ERR_TLS_CERT_ALTNAME_INVALID: 'TLS certificate does not match the server name',
+    ERR_SSL_WRONG_VERSION_NUMBER: 'TLS negotiation failed'
+  }
+  const pending: unknown[] = [error]
+  const seen = new Set<object>()
+  const diagnostics = new Set<string>()
+  // Node fetch wraps socket/TLS failures in cause; connection attempts may be an
+  // AggregateError. Bound traversal and ignore all non-allowlisted fields.
+  for (let count = 0; pending.length > 0 && count < 12; count += 1) {
+    const next = pending.shift()
+    if (!next || typeof next !== 'object' || seen.has(next)) continue
+    seen.add(next)
+    const failure = next as { code?: unknown; name?: unknown; cause?: unknown; errors?: unknown }
+    if (typeof failure.code === 'string' && Object.hasOwn(causes, failure.code)) {
+      diagnostics.add(`${causes[failure.code]} [${failure.code}]`)
+    } else if (failure.name === 'TimeoutError') {
+      diagnostics.add('network request timed out [TimeoutError]')
+    } else if (failure.name === 'AbortError') {
+      diagnostics.add('network request cancelled [AbortError]')
+    }
+    if (failure.cause) pending.push(failure.cause)
+    if (Array.isArray(failure.errors)) pending.push(...failure.errors.slice(0, 4))
+  }
+  const detail = [...diagnostics].slice(0, 3).join('; ') || 'network request failed'
+  return `Cannot reach the SciForge login service (${stage}: ${detail}).`
 }
 
 function trimIssuer(value: string): string {
@@ -175,7 +228,8 @@ function assertCommonClaims(
   claims: Record<string, unknown>,
   issuer: string,
   expectedAudience: string,
-  now: number
+  now: number,
+  allowExpired = false
 ): void {
   if (claims.iss !== issuer) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token issuer does not match SciForge.')
@@ -190,7 +244,7 @@ function assertCommonClaims(
   if (expiresAt === null) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token exp claim is missing or invalid.')
   }
-  if (expiresAt * 1000 <= now) {
+  if (!allowExpired && expiresAt * 1000 <= now) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The token has expired.')
   }
 }
@@ -200,9 +254,10 @@ function assertAccessTokenClaims(
   issuer: string,
   audience: string,
   clientId: string,
-  now: number
+  now: number,
+  allowExpired = false
 ): void {
-  assertCommonClaims(claims, issuer, audience, now)
+  assertCommonClaims(claims, issuer, audience, now, allowExpired)
   if (claims.azp !== clientId) {
     throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The access token was issued to another client.')
   }
@@ -282,13 +337,13 @@ function statusFromClaims(
   currentUser: MeResponse
 ): DesktopIdentityStatus {
   const subject = readString(accessClaims.sub)!
-  const username = readString(idClaims.preferred_username) ?? readString(accessClaims.preferred_username)
+  const username = readString(idClaims.preferred_username)?.trim() || readString(accessClaims.preferred_username)?.trim() || undefined
   const email = readString(idClaims.email) ?? readString(accessClaims.email)
   const displayName =
-    readString(idClaims.name) ??
-    readString(accessClaims.name) ??
     currentUser.displayName ??
     username ??
+    readString(idClaims.name) ??
+    readString(accessClaims.name) ??
     email ??
     subject
   const user: DesktopIdentityUser = {
@@ -313,8 +368,8 @@ function statusFromClaims(
 }
 
 function callbackHtml(success: boolean): string {
-  const title = success ? 'SciForge login completed' : 'SciForge login failed'
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{font-family:system-ui,sans-serif;margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f9fc;color:#172033}.panel{max-width:32rem;padding:2rem;text-align:center}h1{font-size:1.5rem}p{color:#536078}</style></head><body><main class="panel"><h1>${title}</h1><p>You can close this tab and return to SciForge.</p></main></body></html>`
+  const title = success ? 'SciForge authorization received' : 'SciForge login failed'
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${title}</title><style>body{font-family:system-ui,sans-serif;margin:0;display:grid;min-height:100vh;place-items:center;background:#f7f9fc;color:#172033}.panel{max-width:32rem;padding:2rem;text-align:center}h1{font-size:1.5rem}p{color:#536078}</style></head><body><main class="panel"><h1>${title}</h1><p>You can close this tab and return to SciForge to check the login result.</p></main></body></html>`
 }
 
 async function startCallbackServer(
@@ -349,10 +404,21 @@ async function startCallbackServer(
       return
     }
 
+    const state = requestUrl.searchParams.get('state')
+    if (state !== expectedState) {
+      // A stale browser tab or unrelated local request must not settle the
+      // current login, including when it carries a provider error.
+      response.writeHead(400, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'"
+      }).end(callbackHtml(false))
+      return
+    }
+
     const error = requestUrl.searchParams.get('error')
     const authorizationCode = requestUrl.searchParams.get('code')
-    const state = requestUrl.searchParams.get('state')
-    const success = !error && Boolean(authorizationCode) && state === expectedState
+    const success = !error && Boolean(authorizationCode)
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
@@ -373,7 +439,7 @@ async function startCallbackServer(
       finish(() => rejectCode(new DesktopIdentityError('OIDC_LOGIN_FAILED', `OIDC authorization failed: ${error}${detail}`)))
       return
     }
-    if (!authorizationCode || state !== expectedState) {
+    if (!authorizationCode) {
       finish(() => rejectCode(new DesktopIdentityError('OIDC_CALLBACK_INVALID', 'The login callback was invalid.')))
       return
     }
@@ -438,6 +504,24 @@ export class DesktopIdentityService {
 
   getStatus(): DesktopIdentityStatus {
     return this.status
+  }
+
+  private profileReadSequence = 0
+
+  /** Reload display metadata without replacing credentials or changing authority. */
+  async refreshProfile(): Promise<void> {
+    const generation = this.sessionGeneration
+    const sequence = ++this.profileReadSequence
+    if (this.status.state !== 'signed-in') return
+    const currentUser = await this.useAccessToken((token) => this.readCurrentUser(token))
+    if (!this.isSessionOperationCurrent(generation) || sequence !== this.profileReadSequence || this.status.state !== 'signed-in') return
+    if (currentUser.userId !== this.status.user.userId) {
+      throw new DesktopIdentityError('OIDC_REAUTH_USER_MISMATCH', 'The cloud profile belongs to another user.')
+    }
+    const status = { ...this.status, user: { ...this.status.user, displayName: currentUser.displayName } }
+    await this.options.linkAuthenticatedUser?.(status.user)
+    if (!this.isSessionOperationCurrent(generation) || sequence !== this.profileReadSequence) return
+    this.setSession(status, this.accessToken)
   }
 
   getAccessToken(): string | null {
@@ -572,7 +656,7 @@ export class DesktopIdentityService {
             headers: { 'content-type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
               client_id: this.options.clientId,
-              token: credentials.refreshToken,
+              token: credentials.pendingRefresh?.refreshToken ?? credentials.refreshToken,
               token_type_hint: 'refresh_token'
             })
           })
@@ -630,8 +714,13 @@ export class DesktopIdentityService {
   private async restoreSession(generation: number): Promise<DesktopIdentityActionResult> {
     try {
       this.assertConfigured()
+      // Live credentials own the current refresh, including before its token
+      // response arrives. Reloading the vault could detach that refresh's escrow.
+      if (this.credentials) return await this.refreshSession(generation)
       const stored = await this.options.sessionStore.load()
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      // An interactive login may have established credentials while load awaited.
+      if (this.credentials) return await this.refreshSession(generation)
       if (!stored) return { ok: true, status: this.status }
       if (stored.issuer !== this.issuer || stored.clientId !== this.options.clientId) {
         await this.enqueueSessionPersistence(() => this.options.sessionStore.clear())
@@ -641,7 +730,9 @@ export class DesktopIdentityService {
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       this.credentials = {
         refreshToken: stored.refreshToken,
-        ...(stored.idToken ? { idToken: stored.idToken } : {})
+        ...(stored.idToken ? { idToken: stored.idToken } : {}),
+        ...(stored.identity ? { identity: stored.identity } : {}),
+        ...(stored.pendingRefresh ? { pendingRefresh: parsePendingDesktopRefresh(stored.pendingRefresh) } : {})
       }
       return await this.refreshSession(generation)
     } catch (error) {
@@ -753,15 +844,33 @@ export class DesktopIdentityService {
       this.assertConfigured()
       const discovery = await this.readDiscovery()
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
-      const tokens = await this.refreshTokens(discovery, credentials.refreshToken)
+      let tokens = credentials.pendingRefresh ?? await this.refreshTokens(discovery, credentials.refreshToken)
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
-      const verified = await this.verifyRefreshedTokens(discovery, tokens)
+      await this.escrowRefresh(credentials, tokens, generation)
+      if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+      let verified = await this.verifyRefreshedTokens(discovery, tokens, true)
+      this.assertRefreshSubject(credentials, verified)
+      // Expired escrow is only a verified rotation credential, never an access
+      // grant. Renew using R2, not the consumed R1, then verify the new response.
+      if ((verified.accessClaims.exp as number) * 1000 <= this.now() ||
+        (tokens.idToken && (verified.idClaims.exp as number) * 1000 <= this.now())) {
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+        tokens = await this.refreshTokens(discovery, tokens.refreshToken ?? credentials.refreshToken)
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+        await this.escrowRefresh(credentials, tokens, generation)
+        if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
+        verified = await this.verifyRefreshedTokens(discovery, tokens)
+        this.assertRefreshSubject(credentials, verified)
+      }
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const currentUser = await this.readCurrentUser(tokens.accessToken)
+      if (credentials.identity && currentUser.userId !== credentials.identity.userId) {
+        throw new DesktopIdentityError('OIDC_REAUTH_USER_MISMATCH', 'The refreshed cloud profile belongs to another user.')
+      }
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       const activated = await this.activateSession({
         ...tokens,
-        refreshToken: tokens.refreshToken ?? credentials.refreshToken,
+        refreshToken: tokens.refreshToken ?? credentials.pendingRefresh?.refreshToken ?? credentials.refreshToken,
         idToken: tokens.idToken ?? credentials.idToken
       }, verified, currentUser, generation)
       if (!activated) return this.currentSessionResult()
@@ -771,17 +880,53 @@ export class DesktopIdentityService {
       const normalized = this.normalizeError(error)
       if (
         normalized.code === 'OIDC_PROVIDER_UNAVAILABLE' ||
-        normalized.code === 'SCIFORGE_CLOUD_UNAVAILABLE'
+        normalized.code === 'SCIFORGE_CLOUD_UNAVAILABLE' ||
+        normalized.code === 'OIDC_SESSION_STORAGE_UNAVAILABLE'
       ) {
         this.scheduleRefreshRetry(generation)
         return this.failure(normalized)
       }
       this.credentials = null
       this.setSession({ state: 'signed-out' }, null)
-      await this.enqueueSessionPersistence(() => this.options.sessionStore.clear()).catch(() => undefined)
+      await this.enqueueSessionPersistence(async () => {
+        if (this.isSessionOperationCurrent(generation)) await this.options.sessionStore.clear()
+      }).catch(() => undefined)
       if (!this.isSessionOperationCurrent(generation)) return this.currentSessionResult()
       return this.failure(normalized)
     }
+  }
+
+  private assertRefreshSubject(credentials: SessionCredentials, verified: VerifiedTokens): void {
+    // Legacy v1 sessions contain a previously verified ID token. Its subject is
+    // a comparison constraint only; the new access token still needs a fresh
+    // signature/issuer/audience/time verification before any authority is used.
+    const subject = credentials.identity?.subject ??
+      (this.status.state === 'signed-in' ? this.status.user.subject : undefined) ??
+      (credentials.idToken ? readString(parseJwt(credentials.idToken).claims.sub) : undefined)
+    if (subject && verified.accessClaims.sub !== subject) {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The refreshed token belongs to another subject.')
+    }
+  }
+
+  private async escrowRefresh(credentials: SessionCredentials, tokens: TokenResponse, generation: number): Promise<void> {
+    let pendingRefresh: PendingDesktopRefresh
+    try {
+      pendingRefresh = parsePendingDesktopRefresh({ ...tokens,
+        refreshToken: tokens.refreshToken ?? credentials.pendingRefresh?.refreshToken ?? credentials.refreshToken })
+    } catch {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The refresh response has an unsupported format.')
+    }
+    credentials.pendingRefresh = pendingRefresh
+    const stored: StoredDesktopIdentitySession = {
+      version: 1, issuer: this.requireIssuer(), clientId: this.options.clientId,
+      refreshToken: credentials.refreshToken,
+      ...(credentials.idToken ? { idToken: credentials.idToken } : {}),
+      ...(credentials.identity ? { identity: credentials.identity } : {}),
+      pendingRefresh
+    }
+    await this.enqueueSessionPersistence(async () => {
+      if (this.isSessionOperationCurrent(generation)) await this.options.sessionStore.save(stored)
+    })
   }
 
   private async activateSession(
@@ -802,7 +947,11 @@ export class DesktopIdentityService {
       issuer: this.requireIssuer(),
       clientId: this.options.clientId,
       refreshToken: tokens.refreshToken,
-      ...(tokens.idToken ? { idToken: tokens.idToken } : {})
+      ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
+      identity: { subject: verified.accessClaims.sub as string, userId: currentUser.userId }
+    }
+    if (currentUser.issuer !== this.requireIssuer()) {
+      throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The cloud profile issuer does not match SciForge.')
     }
     const status = statusFromClaims(verified.accessClaims, verified.idClaims, currentUser)
     if (status.state === 'signed-in') {
@@ -811,11 +960,14 @@ export class DesktopIdentityService {
       if (!this.isSessionOperationCurrent(generation)) return false
     }
     if (!this.isSessionOperationCurrent(generation)) return false
-    await this.enqueueSessionPersistence(() => this.options.sessionStore.save(stored))
+    await this.enqueueSessionPersistence(async () => {
+      if (this.isSessionOperationCurrent(generation)) await this.options.sessionStore.save(stored)
+    })
     if (!this.isSessionOperationCurrent(generation)) return false
     this.credentials = {
       refreshToken: stored.refreshToken,
-      ...(stored.idToken ? { idToken: stored.idToken } : {})
+      ...(stored.idToken ? { idToken: stored.idToken } : {}),
+      identity: stored.identity
     }
     this.setSession(status, tokens.accessToken, true)
     return true
@@ -825,21 +977,47 @@ export class DesktopIdentityService {
     return this.options.identityClient.getCurrentUser({ accessToken })
   }
 
+  private async requestOidc<T>(
+    stage: 'discovery' | 'token exchange' | 'signing keys',
+    url: string,
+    init: RequestInit,
+    read: (response: Response) => Promise<T>
+  ): Promise<T> {
+    const controller = new AbortController()
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        const error = new DOMException('OIDC request deadline reached.', 'TimeoutError')
+        reject(error)
+        controller.abort(error)
+      }, OIDC_REQUEST_TIMEOUT_MS)
+    })
+    try {
+      // Race the complete response read as well as aborting the socket. A
+      // provider that sends headers but stalls its body must not hold login.
+      return await Promise.race([
+        this.fetchImpl(url, { ...init, signal: controller.signal }).then(read),
+        deadline
+      ])
+    } catch (error) {
+      if (error instanceof DesktopIdentityError) throw error
+      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', oidcNetworkFailureMessage(stage, error))
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+    }
+  }
+
   private async readDiscovery(): Promise<OidcDiscovery> {
     const issuer = this.requireIssuer()
-    let response: Response
-    try {
-      response = await this.fetchImpl(`${issuer}/.well-known/openid-configuration`)
-    } catch {
-      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'Cannot reach the SciForge login service.')
-    }
-    if (!response.ok) {
-      throw new DesktopIdentityError(
-        'OIDC_PROVIDER_UNAVAILABLE',
-        `SciForge login discovery failed with HTTP ${response.status}.`
-      )
-    }
-    const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+    const payload = await this.requestOidc('discovery', `${issuer}/.well-known/openid-configuration`, {}, async (response) => {
+      if (!response.ok) {
+        throw new DesktopIdentityError(
+          'OIDC_PROVIDER_UNAVAILABLE',
+          `SciForge login discovery failed with HTTP ${response.status}.`
+        )
+      }
+      return response.json().catch(() => null) as Promise<Record<string, unknown> | null>
+    })
     if (!payload || payload.issuer !== issuer) {
       throw new DesktopIdentityError('OIDC_CONFIGURATION_ERROR', 'OIDC discovery returned a different issuer.')
     }
@@ -892,17 +1070,14 @@ export class DesktopIdentityService {
     body: URLSearchParams,
     interactive: boolean
   ): Promise<TokenResponse> {
-    let response: Response
-    try {
-      response = await this.fetchImpl(tokenEndpoint, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body
-      })
-    } catch {
-      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'Cannot reach the SciForge login service.')
-    }
-    const payload = await response.json().catch(() => null) as Record<string, unknown> | null
+    const { response, payload } = await this.requestOidc('token exchange', tokenEndpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body
+    }, async (response) => ({
+      response,
+      payload: await response.json().catch(() => null) as Record<string, unknown> | null
+    }))
     const accessToken = readString(payload?.access_token)
     const idToken = readString(payload?.id_token)
     const refreshToken = readString(payload?.refresh_token)
@@ -956,7 +1131,8 @@ export class DesktopIdentityService {
 
   private async verifyRefreshedTokens(
     discovery: OidcDiscovery,
-    tokens: TokenResponse
+    tokens: TokenResponse,
+    allowExpired = false
   ): Promise<VerifiedTokens> {
     const jwks = await this.readJwks(discovery)
     const accessParts = parseJwt(tokens.accessToken)
@@ -966,13 +1142,14 @@ export class DesktopIdentityService {
       this.requireIssuer(),
       this.options.audience,
       this.options.clientId,
-      this.now()
+      this.now(),
+      allowExpired
     )
     if (!tokens.idToken) return { accessClaims: accessParts.claims, idClaims: {} }
 
     const idParts = parseJwt(tokens.idToken)
     await verifyJwtSignature(idParts, jwks)
-    assertCommonClaims(idParts.claims, this.requireIssuer(), this.options.clientId, this.now())
+    assertCommonClaims(idParts.claims, this.requireIssuer(), this.options.clientId, this.now(), allowExpired)
     if (idParts.claims.sub !== accessParts.claims.sub) {
       throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The refreshed token subjects do not match.')
     }
@@ -980,16 +1157,12 @@ export class DesktopIdentityService {
   }
 
   private async readJwks(discovery: OidcDiscovery): Promise<JsonWebKeySet> {
-    let response: Response
-    try {
-      response = await this.fetchImpl(discovery.jwksUri)
-    } catch {
-      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'SciForge could not load OIDC signing keys.')
-    }
-    if (!response.ok) {
-      throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'SciForge could not load OIDC signing keys.')
-    }
-    const jwks = await response.json().catch(() => null) as JsonWebKeySet | null
+    const jwks = await this.requestOidc('signing keys', discovery.jwksUri, {}, async (response) => {
+      if (!response.ok) {
+        throw new DesktopIdentityError('OIDC_PROVIDER_UNAVAILABLE', 'SciForge could not load OIDC signing keys.')
+      }
+      return response.json().catch(() => null) as Promise<JsonWebKeySet | null>
+    })
     if (!jwks || !Array.isArray(jwks.keys)) {
       throw new DesktopIdentityError('OIDC_TOKEN_INVALID', 'The OIDC signing key response is invalid.')
     }
@@ -1129,5 +1302,6 @@ function sameIdentityStatus(
   return left.user.issuer === right.user.issuer &&
     left.user.subject === right.user.subject &&
     left.user.userId === right.user.userId &&
+    left.user.displayName === right.user.displayName &&
     left.accessTokenExpiresAt === right.accessTokenExpiresAt
 }

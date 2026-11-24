@@ -121,12 +121,12 @@ const STYLE_PROFILE_REGISTRY_VERSION = 1
 
 export async function getScientificPlottingStatus(options: ScientificFigureRendererOptions = {}): Promise<ScientificPlottingStatusResult> {
   return rendererOptions.run(options, async () => {
-    const run = await runPython(['-c', 'import importlib.metadata; print(importlib.metadata.version("matplotlib"))'], '', undefined, MATPLOTLIB_PROBE_TIMEOUT_MS)
+    const run = await runPython(['-c', 'import io, matplotlib; matplotlib.use("Agg"); from matplotlib.figure import Figure; from matplotlib.backends.backend_agg import FigureCanvasAgg; figure = Figure(figsize=(1, 1)); FigureCanvasAgg(figure).print_png(io.BytesIO()); print(matplotlib.__version__)'], '', undefined, MATPLOTLIB_PROBE_TIMEOUT_MS)
     return { ok: true, serverName: 'scientific_plotting', version: RENDERER_VERSION,
       renderer: { kind: 'matplotlib', available: run.ok, ...(run.ok ? { version: run.stdout.trim() } : { message: run.message }) },
       supportedTemplates: [...SCIENTIFIC_PLOTTING_TEMPLATES], templateGuides: scientificPlottingTemplateGuides(),
       outputPolicy: { sourceRelativeDir: '.scientific-figures/documents/<documentId>/sources/<generationId>', returnsImageBytes: true, persistsImages: false },
-      degraded: !run.ok, guardrails: ['Only controlled built-in templates execute.', 'All filesystem and subprocess access requires the adapter-owned confined process.', 'FigureStore alone persists documents, sources and images.'] }
+      degraded: !run.ok, guardrails: ['Built-in templates and saved Python snapshots execute through the Host-managed process.', 'Python and its packages are supplied by the configured interpreter; the plugin does not install them.', `Current platform: ${process.platform}/${process.arch}. Python execution requires the Host to provide complete file-write confinement; renderer availability alone does not establish execution support.`, 'Python runs require workspace-write permission and a workspace outside platform temporary writable roots.', 'FigureStore alone persists documents, sources and images.'] }
   })
 }
 

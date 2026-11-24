@@ -63,6 +63,22 @@ function seedAccountsAtCapacity(databasePath: string): void {
   }
 }
 
+describe('cloud display name synchronization', () => {
+  it('updates the linked local name without changing identity or authority revision', () => {
+    const store = IdentityStore.open(temporaryRoot())
+    const profile = { cloudUserId: 'usr_CloudUser000001', oidcIdentityId: 'oid_CloudIdent0001',
+      issuer: 'https://identity.example.test', subject: 'owner', displayName: 'Original' }
+    try {
+      const first = store.linkCloudIdentity(profile)
+      const renamed = store.linkCloudIdentity({ ...profile, displayName: 'Renamed' })
+      expect(renamed.currentAccount?.username).toBe('Renamed')
+      expect(renamed.currentAccount?.userId).toBe(first.currentAccount?.userId)
+      expect(renamed.identityVersion).toBe(first.identityVersion)
+      expect(store.linkCloudIdentity({ ...profile, displayName: 'Renamed' })).toEqual(renamed)
+    } finally { store.close() }
+  })
+})
+
 describe('IdentityStore', () => {
   it('persists immutable UUID accounts, selection, rename, exit, and monotonically ordered state', () => {
     const root = temporaryRoot()
@@ -92,6 +108,42 @@ describe('IdentityStore', () => {
     const restored = IdentityStore.open(root)
     expect(restored.state().currentAccount?.userId).toBe(userId)
     restored.close()
+  })
+
+  it('deletes only the requested account and moves or clears the selection inside one transaction', () => {
+    const store = IdentityStore.open(temporaryRoot())
+    const aliceState = store.createAccount('Alice')
+    const bobState = store.createAccount('Bob')
+    const alice = aliceState.currentAccount!
+    const bob = bobState.currentAccount!
+    const renamedAlice = store.renameAccount(alice.userId, 'Alice Cooper')
+
+    const deletedOther = store.deleteAccount(alice.userId)
+    expect(deletedOther.identityVersion).toBe(renamedAlice.identityVersion + 1)
+    expect(deletedOther.currentAccount?.userId).toBe(bob.userId)
+    expect(deletedOther.accountCount).toBe(1)
+    // The untouched account keeps its own display metadata.
+    expect(store.listAccounts().map(({ userId, username }) => ({ userId, username })))
+      .toEqual([{ userId: bob.userId, username: 'Bob' }])
+
+    const carolState = store.createAccount('Carol')
+    const carol = carolState.currentAccount!
+    const deletedCurrent = store.deleteAccount(carol.userId)
+    expect(deletedCurrent.identityVersion).toBe(carolState.identityVersion + 1)
+    expect(deletedCurrent.currentAccount?.userId).toBe(bob.userId)
+    expect(deletedCurrent.accountCount).toBe(1)
+
+    const deletedLast = store.deleteAccount(bob.userId)
+    expect(deletedLast.currentAccount).toBeNull()
+    expect(deletedLast.accountCount).toBe(0)
+    expect(store.listAccounts()).toEqual([])
+
+    expectValidationCode(
+      () => store.deleteAccount('00000000-0000-4000-8000-000000000000'),
+      'account-not-found'
+    )
+    expect(store.state()).toMatchObject({ status: 'available', currentAccount: null, accountCount: 0 })
+    store.close()
   })
 
   it('rejects case-insensitive conflicts and invalid names without changing state', () => {
@@ -230,6 +282,28 @@ describe('IdentityService', () => {
     const selected = service.selectAccount(created[0]!.currentAccount!.userId)
     const repeated = service.selectAccount(created[0]!.currentAccount!.userId)
     expect(repeated.identityVersion).toBe(selected.identityVersion)
+    service.close()
+  })
+
+  it('deletes a Local Account through the service and publishes the moved selection', () => {
+    const service = new IdentityService(temporaryRoot(), 'device-installation-1')
+    const alice = service.createAccount('Alice').currentAccount!
+    const bob = service.createAccount('Bob').currentAccount!
+    const snapshots: unknown[] = []
+    service.subscribe((snapshot) => snapshots.push(snapshot))
+
+    const deleted = service.deleteAccount(bob.userId)
+    expect(deleted.currentAccount?.userId).toBe(alice.userId)
+    expect(service.listAccounts().accounts.map(({ userId }) => userId)).toEqual([alice.userId])
+    expect(snapshots.at(-1)).toMatchObject({
+      principal: {
+        authority: 'sciforge.identity-access',
+        subject: alice.userId,
+        assurance: 'local-selection'
+      }
+    })
+    expect(() => service.deleteAccount('00000000-0000-4000-8000-000000000000'))
+      .toThrowError(IdentityValidationError)
     service.close()
   })
 

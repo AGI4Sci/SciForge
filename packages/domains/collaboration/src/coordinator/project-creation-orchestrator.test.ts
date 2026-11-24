@@ -66,8 +66,10 @@ test('canonical creation atomically returns, persists, and replays one fresh Coo
 
   const created = await orchestrator.create(createInput, context)
 
+  assert.ok(created.initializationState === 'ready')
   assert.deepEqual(created, {
     ...receipt,
+    initializationState: 'ready',
     coordinatorSession: {
       projectId,
       runtimeId: 'codex-runtime',
@@ -174,7 +176,7 @@ test('pending creation joins concurrent identical and canonical-equivalent inten
       assert.equal(createCalls, 1)
       assert.equal(prepareCalls, 1)
       assert.equal(activationCalls, 1)
-      assert.equal(successfulWrites, 3)
+      assert.equal(successfulWrites, 4)
       assert.deepEqual((await state.readCoordinatorSessionBindings()).map((binding) => ({
         runtimeId: binding.runtimeId,
         threadId: binding.threadId
@@ -231,10 +233,11 @@ test('duplicate intent with differently prepared Sessions returns the single CAS
     orchestrator('b').create(createInput, requestContext)
   ])
 
+  assert.ok(first.initializationState === 'ready')
   assert.deepEqual(second, first)
   assert.equal(createCalls, 2)
   assert.equal(preparedSessions, 2)
-  assert.equal(successfulWrites, 3)
+  assert.equal(successfulWrites, 4)
   assert.equal((await state.readCoordinatorSessionBindings()).length, 1)
   assert.deepEqual(await state.readPendingProjectActivations(), [{
     activationRequestId: first.activationRequestId,
@@ -289,11 +292,12 @@ test('reuses a durably persisted Coordinator Session preparation after a retry',
   })
 
   assert.equal(prepareCalls, 0)
+  assert.ok(result.initializationState === 'ready')
   assert.equal(result.coordinatorSession.threadId, 'thread-prepared-project')
   assert.equal(result.activationRequestId, 'pca_PreparedProject01')
 })
 
-test('canonical creation fails closed when reviewable Session preparation is unavailable', async () => {
+test('missing reviewable Session preparation preserves an explicit pending Cloud draft', async () => {
   let createCalls = 0
   const receipt = projectReceipt()
   const orchestrator = new ProjectCreationOrchestrator({
@@ -309,11 +313,115 @@ test('canonical creation fails closed when reviewable Session preparation is una
     currentPrincipalUserId: () => ownerUserId
   })
 
-  await assert.rejects(
-    orchestrator.create(createInput, { assertPrincipalCurrent: () => undefined }),
-    /requires reviewable Agent Session preparation/u
-  )
+  assert.deepEqual(await orchestrator.create(createInput, { assertPrincipalCurrent: () => undefined }), {
+    ...receipt,
+    initializationState: 'session_pending',
+    reason: 'session_preparation_unavailable'
+  })
   assert.equal(createCalls, 1)
+})
+
+test('known preparation failure survives restart and resumes the same intent without another Cloud create', async () => {
+  const settings = memorySettings()
+  let createCalls = 0
+  let prepareCalls = 0
+  let hostRestored = false
+  const workspace = {
+    createProject: async () => { createCalls += 1; return projectReceipt() },
+    readWorkspace: async ({ projectId: id }: { projectId?: string }) => {
+      assert.equal(id, projectId)
+      return projectWorkspace()
+    }
+  }
+  const orchestrator = () => new ProjectCreationOrchestrator({
+    state: new ProjectCoordinatorStateStore(settings), workspace,
+    currentPrincipalUserId: () => ownerUserId,
+    getAgentExecution: () => ({
+      prepareSession: async () => {
+        prepareCalls += 1
+        if (!hostRestored) throw Object.assign(new Error('private diagnostic'), { name: 'runtime_not_found' })
+        return { runtimeId: 'restored-runtime', threadId: 'thread-restored-project' }
+      },
+      run: async () => { throw new Error('Creation never dispatches a turn.') }
+    }),
+    activationRequestId: () => 'pca_RestoredProject01'
+  })
+  const context = { assertPrincipalCurrent: () => undefined }
+  const pending = await orchestrator().create(createInput, context)
+  assert.deepEqual(pending, { ...projectReceipt(), initializationState: 'session_pending', reason: 'runtime_not_found' })
+  const persisted = new ProjectCoordinatorStateStore(settings)
+  assert.equal((await persisted.readProjectCreationPreparation(ownerUserId, createInput))?.createdProjectId, projectId)
+  assert.deepEqual(await persisted.readCoordinatorSessionBindings(), [])
+  assert.deepEqual(await persisted.readPendingProjectActivations(), [])
+  // A new orchestrator/store instance proves recovery does not depend on an in-memory receipt.
+  assert.equal((await orchestrator().create(createInput, context)).initializationState, 'session_pending')
+  hostRestored = true
+  const ready = await orchestrator().create(createInput, context)
+  assert.ok(ready.initializationState === 'ready')
+  assert.equal(ready.createdProjectId, projectId)
+  assert.equal(ready.createIntentId, createInput.createIntentId)
+  assert.equal(ready.coordinatorSession.threadId, 'thread-restored-project')
+  assert.equal(createCalls, 1)
+  assert.equal(prepareCalls, 3)
+  assert.equal((await persisted.readCoordinatorSessionBindings()).length, 1)
+  assert.equal((await persisted.readPendingProjectActivations()).length, 1)
+})
+
+test('unrelated Cloud and unknown preparation failures are never converted to pending success', async () => {
+  for (const phase of ['cloud', 'session'] as const) {
+    const failure = phase === 'cloud'
+      ? Object.assign(new Error('Cloud operation rejected'), { code: 'runtime_not_found' })
+      : new Error('Handler failed: {"code":"runtime_not_found"}')
+    const orchestrator = new ProjectCreationOrchestrator({
+      state: new ProjectCoordinatorStateStore(memorySettings()),
+      workspace: {
+        createProject: async () => { if (phase === 'cloud') throw failure; return projectReceipt() },
+        readWorkspace: async () => projectWorkspace()
+      },
+      currentPrincipalUserId: () => ownerUserId,
+      getAgentExecution: () => ({
+        prepareSession: async () => { throw failure },
+        run: async () => { throw new Error('Creation never dispatches a turn.') }
+      })
+    })
+    await assert.rejects(orchestrator.create(createInput, { assertPrincipalCurrent: () => undefined }), (error) => error === failure)
+  }
+})
+
+test('Principal changes during failed preparation fail closed and cannot replay the previous Owner intent', async () => {
+  const state = new ProjectCoordinatorStateStore(memorySettings())
+  let principal = ownerUserId
+  const orchestrator = new ProjectCreationOrchestrator({
+    state,
+    workspace: { createProject: async () => projectReceipt(), readWorkspace: async () => projectWorkspace() },
+    currentPrincipalUserId: () => principal,
+    getAgentExecution: () => ({
+      prepareSession: async () => {
+        principal = 'usr_DifferentOwner001'
+        throw Object.assign(new Error('private runtime detail'), { code: 'runtime_not_ready' })
+      },
+      run: async () => { throw new Error('Creation never dispatches a turn.') }
+    })
+  })
+  const assertPrincipalCurrent = () => { if (principal !== ownerUserId) throw new Error('Principal changed') }
+  await assert.rejects(orchestrator.create(createInput, { assertPrincipalCurrent }), /Principal changed/u)
+  await assert.rejects(orchestrator.create(createInput, { assertPrincipalCurrent: () => undefined }), /different Owner/u)
+  assert.deepEqual(await state.readCoordinatorSessionBindings(), [])
+  assert.deepEqual(await state.readPendingProjectActivations(), [])
+})
+
+test('Cloud receipt CAS rejects a different Project, principal, or business command for the same intent', async () => {
+  const state = new ProjectCoordinatorStateStore(memorySettings())
+  await state.resolveProjectCreateIntent(ownerUserId, createInput)
+  await state.persistProjectCreationReceipt(ownerUserId, createInput, projectReceipt())
+  await assert.rejects(state.persistProjectCreationReceipt('usr_DifferentOwner001', createInput, projectReceipt()), /durable Project create intent/u)
+  await assert.rejects(state.persistProjectCreationReceipt(ownerUserId, { ...createInput, goal: 'Different command.' }, projectReceipt()), /durable Project create intent/u)
+  const other = 'prj_DifferentProject01'
+  const otherWorkspace = projectWorkspace()
+  await assert.rejects(state.persistProjectCreationReceipt(ownerUserId, createInput, {
+    ...projectReceipt(), createdProjectId: other,
+    workspace: { ...otherWorkspace, focusedProjectId: other, projects: otherWorkspace.projects.map((entry) => ({ ...entry, project: { ...entry.project, projectId: other }, memberships: entry.memberships.map((membership) => ({ ...membership, projectId: other })) })) }
+  }), /different Cloud Project/u)
 })
 
 function projectReceipt(): ProjectCoordinatorProjectCreateReceipt {
@@ -338,6 +446,8 @@ function projectWorkspace(): ProjectCoordinatorWorkspace {
       project: {
         schemaVersion: 1,
         type: 'project',
+        executionMode: 'manual' as const,
+        dispatchAuthorization: null,
         projectId,
         ownerUserId,
         displayName: createInput.displayName,

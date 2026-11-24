@@ -142,6 +142,25 @@ function createRuntime(
   return { runtime, store, agentRuntime }
 }
 
+it('package wakeups share one clock, fire once, and can be cancelled without starting an Agent', async () => {
+  const { runtime, agentRuntime } = createRuntime(settingsWith([], { enabled: false }))
+  const tick = () => (runtime as unknown as { tick(): Promise<void> }).tick()
+  const called: string[] = []
+  const now = new Date(Date.now() - 1).toISOString()
+  const cancel = runtime.scheduleWakeup(now, () => { called.push('cancelled') })
+  runtime.scheduleWakeup(now, () => { called.push('due') })
+  runtime.scheduleWakeup(new Date(Date.now() + 60_000).toISOString(), () => { called.push('future') })
+  cancel()
+  try {
+    await tick(); await tick()
+    expect(called).toEqual(['due'])
+    expect(agentRuntime.startTurn).not.toHaveBeenCalled()
+    runtime.stop()
+    await tick()
+    expect(called).toEqual(['due'])
+  } finally { runtime.stop() }
+})
+
 async function findAvailablePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>((resolve, reject) => {

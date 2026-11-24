@@ -24,11 +24,15 @@ import type { TrustedDomainProcessEntryInput } from '@sciforge/domain-sdk/main'
 import type { z } from 'zod'
 import {
   IDENTITY_CAPABILITY_IDS,
+  normalizeUsername,
   cloudDeviceRevokeInputSchema,
   cloudIdentityInspectOutputSchema,
   cloudIdentityObservationContract,
   cloudIdentitySnapshotSchema,
+  identityCloudConfigurationInputSchema,
+  identityCloudConfigurationSchema,
   accountRenameInputSchema,
+  accountDeletionInputSchema,
   accountSelectionInputSchema,
   emptyIdentityInputSchema,
   identityAvailableStateSchema,
@@ -36,13 +40,17 @@ import {
   identityBackupAndResetOutputSchema,
   identityListAccountsOutputSchema,
   identityUiStateSchema,
-  usernameInputSchema
+  usernameInputSchema,
+  type IdentityCloudConfiguration,
+  type IdentityCloudConfigurationInput
 } from '../contract.js'
 import {
   IDENTITY_ACCESS_DOMAIN_MODULE_ID,
   IDENTITY_CURRENT_USER_PROFILE_CONTRIBUTION,
   IDENTITY_CURRENT_USER_PROFILE_CONTRACT,
   IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION,
+  IDENTITY_HOST_PORTS_CONTRIBUTION,
+  IDENTITY_HOST_PORTS_CONTRACT,
   IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT,
   IDENTITY_AUTHENTICATED_CLOUD_TRANSPORT_CONTRIBUTION,
   IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION,
@@ -58,11 +66,18 @@ import {
 } from '../current-user-profile.js'
 import { IdentityService } from './service.js'
 import { CloudIdentityRuntime, type IdentityAuthorityInvalidation } from './cloud-runtime.js'
+import { IdentityCloudSettingsService } from './cloud-settings.js'
+import {
+  inspectDesktopIdentityConfiguration
+} from './cloud-runtime-config.js'
 import { createIdentityAuthenticatedCloudTransport } from './authenticated-cloud-transport.js'
 import { createIdentityDeviceFactAttestationSigningService } from './device-fact-attestation-signing.js'
 import { createIdentityAgentCloudRuntime } from './agent-cloud-runtime.js'
 import { cloudInstallationId } from './device-service.js'
 import { createPlatformIdentityPrivateVault } from './private-vault.js'
+import { createCloudHostCapabilityDefinitions } from './cloud-host-capabilities.js'
+import { AUTHENTICATED_CLOUD_CAPABILITY_CONTRACTS } from '../cloud-host-contract.js'
+import type { DomainHostPortsContribution } from '@sciforge/domain-sdk/host-ports'
 
 export { LocalCloudIdentityLinkService } from './cloud-link-service.js'
 
@@ -77,6 +92,7 @@ type IdentityCloudCapabilityRuntime = Readonly<{
   enrollDevice: () => Promise<unknown>
   refreshDevices: () => Promise<unknown>
   revokeDevice: (deviceId: string) => Promise<unknown>
+  renameProfile: (cloudUserId: string, displayName: string) => Promise<void>
 }>
 type IdentityCapabilityContext = Readonly<{
   caller: Readonly<{ audience: 'ui' | 'agent' | 'system' }>
@@ -149,12 +165,13 @@ type IdentityMainContribution =
   | typeof deviceFactAttestationSigningDescriptor
   | typeof agentCloudRuntimeDescriptor
   | typeof currentUserProfileDescriptor
+  | DomainHostPortsContribution
 
 const authenticatedCloudTransportDescriptor = defineDomainMainInternalServiceDescriptor({
   location: 'main.internal-service-descriptor',
   serviceId: AUTHENTICATED_CLOUD_TRANSPORT_SERVICE_ID,
   contractVersion: AUTHENTICATED_CLOUD_TRANSPORT_CONTRACT_VERSION,
-  allowedConsumerModuleIds: ['sciforge.collaboration']
+  allowedConsumerModuleIds: ['sciforge.collaboration', 'sciforge.siyuan-content-space-provider']
 })
 
 const deviceFactAttestationSigningDescriptor = defineDomainMainInternalServiceDescriptor({
@@ -183,6 +200,12 @@ export function createDomainMainEntry(
   if (!host.internalServices) {
     throw new Error('Identity requires Host internal-service mediation.')
   }
+  if (!host.packageSettings) {
+    throw new Error('Identity requires Host package-scoped settings storage for SciForge Cloud configuration.')
+  }
+  const cloudSettings = new IdentityCloudSettingsService(host.packageSettings)
+  let cloudEnvironment: Readonly<Record<string, string | undefined>> = Object.freeze({})
+  let configuringCloud = false
   let service: IdentityService | undefined
   const getService = (): IdentityService => {
     service ??= new IdentityService(
@@ -209,6 +232,48 @@ export function createDomainMainEntry(
   const getCloudRuntime = (): CloudIdentityRuntime => {
     if (!cloudRuntime) throw new Error('Cloud identity runtime is not active.')
     return cloudRuntime
+  }
+  const cloudConfiguration = (
+    settings: Readonly<{ oidcIssuer?: string | null; cloudBaseUrl?: string | null }> | null
+  ): IdentityCloudConfiguration => {
+    const status = inspectDesktopIdentityConfiguration({
+      oidcIssuer: cloudEnvironment.SCIFORGE_OIDC_ISSUER,
+      cloudBaseUrl: cloudEnvironment.SCIFORGE_CLOUD_BASE_URL,
+      settings
+    })
+    return identityCloudConfigurationSchema.parse({
+      ...status,
+      configured: status.missing.length === 0 && status.invalid.length === 0,
+      storage: 'available'
+    })
+  }
+  const readCloudConfiguration = async (): Promise<IdentityCloudConfiguration> => {
+    const stored = await cloudSettings.read().catch(() => null)
+    return cloudConfiguration(stored?.settings ?? null)
+  }
+  const configureCloud = async (
+    input: IdentityCloudConfigurationInput
+  ): Promise<IdentityCloudConfiguration> => {
+    if (configuringCloud) throw new Error('SciForge Cloud configuration is already being updated.')
+    configuringCloud = true
+    try {
+      const written = await cloudSettings.configure(input)
+      const activation = cloudActivation
+      if (activation) {
+        try {
+          await activation
+        } catch {
+          // Activation already reports through the lifecycle owner.
+        }
+      }
+      if (cloudRuntime &&
+          !sameCloudSettings(cloudRuntime.configuredSettings(), written.settings)) {
+        await cloudRuntime.reconfigure(written.settings)
+      }
+      return cloudConfiguration(written.settings)
+    } finally {
+      configuringCloud = false
+    }
   }
   host.internalServices.register({
     serviceId: CURRENT_USER_SERVICE_ID, contractVersion: CURRENT_USER_CONTRACT_VERSION,
@@ -270,14 +335,17 @@ export function createDomainMainEntry(
       }
       const pending = (async () => {
         agentExecutionHost = context.agentExecution
+        cloudEnvironment = context.environment
         let runtime: CloudIdentityRuntime | undefined
         try {
           const appVersion = requireAppVersion(host)
+          const stored = await cloudSettings.read().catch(() => null)
           runtime = await CloudIdentityRuntime.create({
             userDataDir: context.userDataDir,
             appRoot: context.appRoot,
             appVersion,
             environment: context.environment,
+            settings: stored?.settings ?? null,
             installationId: requireDeviceId(host),
             privateVault,
             externalNavigation: host.externalNavigation,
@@ -331,7 +399,11 @@ export function createDomainMainEntry(
             options: IdentityCapabilityOptions
           ) => unknown,
           getService,
-          getCloudRuntime
+          getCloudRuntime,
+          getCloudConfiguration: readCloudConfiguration,
+          configureCloud,
+          authenticatedCloudTransport,
+          authenticatedCloudHostStatus: () => getCloudRuntime().authenticatedCloudHostStatus()
         }),
         onDispose: disposeLocal
       },
@@ -364,6 +436,16 @@ export function createDomainMainEntry(
         ...IDENTITY_CURRENT_USER_PROFILE_CONTRIBUTION,
         contract: IDENTITY_CURRENT_USER_PROFILE_CONTRACT,
         value: currentUserProfileDescriptor
+      },
+      {
+        ...IDENTITY_HOST_PORTS_CONTRIBUTION,
+        contract: IDENTITY_HOST_PORTS_CONTRACT,
+        value: {
+          createPorts: (invoker) => Object.fromEntries(Object.entries(AUTHENTICATED_CLOUD_CAPABILITY_CONTRACTS).map(([name, contract]) => [
+            `identity-access.authenticated-cloud.${name}`,
+            async (input: unknown) => invoker.invoke(contract, input)
+          ]))
+        } satisfies DomainHostPortsContribution
       }
     ]
   }
@@ -373,6 +455,10 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
   defineCapability: (options: IdentityCapabilityOptions) => CapabilityDefinition
   getService: () => IdentityService
   getCloudRuntime: () => IdentityCloudCapabilityRuntime
+  getCloudConfiguration: () => Promise<IdentityCloudConfiguration>
+  configureCloud: (input: IdentityCloudConfigurationInput) => Promise<IdentityCloudConfiguration>
+  authenticatedCloudTransport?: import('../authenticated-cloud-transport.js').AuthenticatedCloudTransport
+  authenticatedCloudHostStatus?: () => unknown
 }>): IdentityCapabilityFactory<CapabilityDefinition> {
   const define = (
     input: Omit<IdentityCapabilityOptions, 'version' | 'audiences' | 'scope' | 'tags'>
@@ -453,6 +539,11 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
       allowedDirectTransports: Object.freeze([]) as readonly []
     }),
     createDefinitions: () => [
+      ...(options.authenticatedCloudTransport ? createCloudHostCapabilityDefinitions({
+        defineCapability: options.defineCapability,
+        transport: options.authenticatedCloudTransport,
+        status: () => options.authenticatedCloudHostStatus!()
+      }) : []),
       define({
         id: IDENTITY_CAPABILITY_IDS.inspect,
         title: 'Inspect Local Identity',
@@ -507,16 +598,44 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
       }),
       define({
         id: IDENTITY_CAPABILITY_IDS.renameAccount,
-        title: 'Rename Local Account',
-        description: 'Changes a Local Account display name without changing its user ID.',
+        title: 'Rename Account',
+        description: 'Changes the account display name. Linked accounts save to SciForge Cloud before updating local display metadata; login identity and user ID stay unchanged.',
         effect: 'external-write',
         approval: 'none',
         concurrency: { revision: 'none', idempotency: 'required' },
         inputSchema: accountRenameInputSchema,
         outputSchema: identityAvailableStateSchema,
-        handler: (input, context) => mutate(
+        handler: async (input, context) => {
+          requireHumanUi(context)
+          const username = normalizeUsername(input.username)
+          const service = options.getService()
+          const accounts = service.listAccounts().accounts
+          const account = accounts.find((value) => value.userId === input.userId)
+          if (!account) throw new Error('Account not found.')
+          if (accounts.some((value) => value.userId !== input.userId &&
+              normalizeUsername(value.username).usernameKey === username.usernameKey)) {
+            throw new Error('That display name is already used by another account on this device.')
+          }
+          if (account.cloudIdentity) {
+            await options.getCloudRuntime().renameProfile(account.cloudIdentity.cloudUserId, username.username)
+            context.assertPrincipalCurrent()
+          }
+          return { output: service.renameAccount(input.userId, username.username) }
+        }
+      }),
+      define({
+        id: IDENTITY_CAPABILITY_IDS.deleteAccount,
+        title: 'Delete Local Account',
+        description: 'Deletes one display-only Local Account. Deleting the selected account moves selection to the oldest remaining account; deleting the last account leaves no selection.',
+        effect: 'destructive',
+        principalTransition: 'host-authority',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        inputSchema: accountDeletionInputSchema,
+        outputSchema: identityAvailableStateSchema,
+        handler: (input, context) => transition(
           context,
-          () => options.getService().renameAccount(input.userId, input.username)
+          () => options.getService().deleteAccount(input.accountId)
         )
       }),
       define({
@@ -592,7 +711,47 @@ export function createIdentityCapabilityFactory<CapabilityDefinition>(options: R
           }
         }
       }),
-      ...cloudMutationDefinitions(options.defineCapability, mutateCloud)
+      ...cloudMutationDefinitions(options.defineCapability, mutateCloud),
+      options.defineCapability({
+        id: IDENTITY_CAPABILITY_IDS.cloudInspectConfiguration,
+        version: '1.0.0',
+        title: 'Inspect SciForge Cloud Configuration',
+        description: 'Reads the non-secret Cloud service address and OIDC issuer used for Desktop sign-in.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'read',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'none' },
+        tags: ['identity-access', 'cloud', 'oidc', 'settings'],
+        inputSchema: emptyIdentityInputSchema,
+        outputSchema: identityCloudConfigurationSchema,
+        handler: async (_input, context) => {
+          requireHumanUi(context)
+          return {
+            output: identityCloudConfigurationSchema.parse(await options.getCloudConfiguration())
+          }
+        }
+      }),
+      options.defineCapability({
+        id: IDENTITY_CAPABILITY_IDS.cloudConfigure,
+        version: '1.0.0',
+        title: 'Configure SciForge Cloud',
+        description: 'Persists the Cloud service address and OIDC issuer used for Desktop sign-in.',
+        audiences: ['ui'],
+        scope: 'global',
+        effect: 'external-write',
+        approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' },
+        tags: ['identity-access', 'cloud', 'oidc', 'settings'],
+        inputSchema: identityCloudConfigurationInputSchema,
+        outputSchema: identityCloudConfigurationSchema,
+        handler: async (input, context) => {
+          requireHumanUi(context)
+          return {
+            output: identityCloudConfigurationSchema.parse(await options.configureCloud(input))
+          }
+        }
+      })
     ]
   })
 }
@@ -698,6 +857,14 @@ function isPrincipalChangedError(error: unknown): boolean {
     error !== null &&
     'code' in error &&
     error.code === 'principal_changed'
+}
+
+function sameCloudSettings(
+  current: Readonly<{ oidcIssuer?: string | null; cloudBaseUrl?: string | null }> | null | undefined,
+  next: Readonly<{ oidcIssuer?: string | null; cloudBaseUrl?: string | null }> | null | undefined
+): boolean {
+  return (current?.oidcIssuer ?? null) === (next?.oidcIssuer ?? null) &&
+    (current?.cloudBaseUrl ?? null) === (next?.cloudBaseUrl ?? null)
 }
 
 function requireAppVersion(host: DomainMainHost): string {

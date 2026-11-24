@@ -480,7 +480,7 @@ export function FloatingComposerModelPicker({
       <>
         <div
           ref={menuRef}
-          role="menu"
+          data-native-view-occluder="true" role="menu"
           style={menuStyle}
           className={className}
         >
@@ -510,7 +510,7 @@ export function FloatingComposerModelPicker({
                 })}
               </div>
               {runtimeSection.noteKey ? (
-                <div className="mt-2 rounded-lg bg-ds-hover/60 px-2.5 py-2 text-[11.5px] leading-4 text-ds-faint">
+                <div className="mt-2 rounded-lg bg-ds-hover/60 px-2.5 py-2 text-ds-xs leading-4 text-ds-faint">
                   {t(runtimeSection.noteKey)}
                 </div>
               ) : null}
@@ -555,7 +555,7 @@ export function FloatingComposerModelPicker({
           })}
         </div>
         {sessionFixedControls ? (
-          <div className="px-1 pt-1.5 text-[11.5px] leading-4 text-ds-faint">
+          <div className="px-1 pt-1.5 text-ds-xs leading-4 text-ds-faint">
             {t('composerDshSessionFixed')}
           </div>
         ) : null}
@@ -566,7 +566,7 @@ export function FloatingComposerModelPicker({
               setMenuOpen(false)
               onOpenModelAccess()
             }}
-            className="mt-1 flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="mt-1 flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-ds-sm font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <span>{t('composerManageModelAccess')}</span>
             <ExternalLink className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
@@ -581,7 +581,7 @@ export function FloatingComposerModelPicker({
             </MenuSectionTitle>
             <div className="rounded-xl border border-ds-border-muted bg-ds-main/30 px-3 py-3">
               <div className="mb-2 flex min-w-0 items-start justify-between gap-3">
-                <div className="min-w-0 text-[13px] font-semibold text-ds-ink">
+                <div className="min-w-0 text-ds-md font-semibold text-ds-ink">
                   {currentReasoningLabel}
                 </div>
                 {discoveryEnabled ? (
@@ -619,7 +619,7 @@ export function FloatingComposerModelPicker({
                         })
                         onComposerReasoningEffortChange?.(option.id)
                       }}
-                      className={`rounded-lg border px-2.5 py-1 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                      className={`rounded-lg border px-2.5 py-1 text-ds-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${
                         selected
                           ? 'border-accent/60 bg-accent/10 text-ds-ink'
                           : 'border-ds-border-muted bg-ds-card/60 text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -631,26 +631,26 @@ export function FloatingComposerModelPicker({
                 })}
               </div>
               {reasoningUnsupportedSelection ? (
-                <div className="mt-2 text-[11.5px] leading-4 text-amber-700 dark:text-amber-300">
+                <div className="mt-2 text-ds-xs leading-4 text-amber-700 dark:text-amber-300">
                   {t('composerReasoningUnsupported')}
                 </div>
               ) : null}
               {discovery?.status === 'loading' ? (
-                <div className="mt-2 flex items-center gap-1.5 text-[11.5px] leading-4 text-ds-faint">
+                <div className="mt-2 flex items-center gap-1.5 text-ds-xs leading-4 text-ds-faint">
                   <Loader2 className="h-3 w-3 animate-spin" strokeWidth={1.9} />
                   {t('composerReasoningLoading')}
                 </div>
               ) : null}
               {discovery?.status === 'error' ? (
-                <div className="mt-2 text-[11.5px] leading-4 text-amber-700 dark:text-amber-300">
+                <div className="mt-2 text-ds-xs leading-4 text-amber-700 dark:text-amber-300">
                   {t('composerReasoningDiscoveryError', { message: discovery.message ?? '' })}
                 </div>
               ) : null}
               {discoveryHintKey ? (
-                <div className="mt-2 text-[11.5px] leading-4 text-ds-faint">{t(discoveryHintKey)}</div>
+                <div className="mt-2 text-ds-xs leading-4 text-ds-faint">{t(discoveryHintKey)}</div>
               ) : null}
               {discoverySourceLabel ? (
-                <div className="mt-2 text-[10.5px] leading-4 text-ds-faint">
+                <div className="mt-2 text-ds-2xs leading-4 text-ds-faint">
                   {t(discoverySourceLabel)}
                   {discovery?.status === 'ready' && discovery.outcome?.checkedAt
                     ? ` · ${t('composerReasoningUpdatedAt', {
@@ -660,14 +660,14 @@ export function FloatingComposerModelPicker({
                 </div>
               ) : null}
               {discovery?.status === 'ready' && discovery.outcome?.stale ? (
-                <div className="mt-1 text-[10.5px] leading-4 text-amber-700 dark:text-amber-300">
+                <div className="mt-1 text-ds-2xs leading-4 text-amber-700 dark:text-amber-300">
                   {t('composerReasoningStaleNote', {
                     message: discovery.outcome.refreshError ?? ''
                   })}
                 </div>
               ) : null}
               {discoveryPartial ? (
-                <div className="mt-1 text-[10.5px] leading-4 text-amber-700 dark:text-amber-300">
+                <div className="mt-1 text-ds-2xs leading-4 text-amber-700 dark:text-amber-300">
                   {t('composerReasoningPartial')}
                 </div>
               ) : null}
@@ -679,7 +679,7 @@ export function FloatingComposerModelPicker({
         {serviceTierEnabled ? (
           <>
             <div className="flex items-center gap-2 px-1">
-              <div className="flex shrink-0 items-center gap-1.5 text-[11.5px] font-semibold text-ds-faint">
+              <div className="flex shrink-0 items-center gap-1.5 text-ds-xs font-semibold text-ds-faint">
                 <Gauge className="h-3.5 w-3.5" strokeWidth={1.9} />
                 <span>{t('composerServiceTier')}</span>
               </div>
@@ -730,7 +730,7 @@ export function FloatingComposerModelPicker({
           aria-expanded={menuOpen}
           aria-haspopup="menu"
           aria-label={t('composerModelControls')}
-          className={`flex h-9 min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden rounded-full py-2 pl-3 pr-1 text-[13px] font-medium outline-none transition ${
+          className={`flex h-9 min-w-0 flex-1 items-center justify-end gap-1 overflow-hidden rounded-full py-2 pl-3 pr-1 text-ds-md font-medium outline-none transition ${
             canChangeModel
               ? 'text-current focus-visible:ring-2 focus-visible:ring-accent/25'
               : 'cursor-not-allowed text-ds-faint'
@@ -738,7 +738,7 @@ export function FloatingComposerModelPicker({
         >
           <Brain className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} aria-hidden="true" />
           {runtimeChipLabel ? (
-            <span className="ds-composer-runtime flex min-w-0 shrink items-center gap-1 overflow-hidden text-[12px] font-medium text-ds-faint">
+            <span className="ds-composer-runtime flex min-w-0 shrink items-center gap-1 overflow-hidden text-ds-sm font-medium text-ds-faint">
               <span className="truncate">{runtimeChipLabel}</span>
               <span aria-hidden="true">·</span>
             </span>
@@ -747,7 +747,7 @@ export function FloatingComposerModelPicker({
             {modelLabel}
           </span>
           {reasoningChipLabel ? (
-            <span className="ds-composer-reasoning flex min-w-0 shrink items-center gap-1 overflow-hidden text-[12px] font-semibold text-ds-faint">
+            <span className="ds-composer-reasoning flex min-w-0 shrink items-center gap-1 overflow-hidden text-ds-sm font-semibold text-ds-faint">
               <span aria-hidden="true">·</span>
               <span className="truncate">{reasoningChipLabel}</span>
             </span>
@@ -756,7 +756,7 @@ export function FloatingComposerModelPicker({
             <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.8} />
           </span>
         </button>
-        {renderMenu('fixed z-[1000] overflow-x-hidden overflow-y-auto rounded-xl border border-ds-border bg-white p-1.5 text-[12.5px] shadow-[0_18px_50px_rgba(15,23,42,0.16)] dark:bg-ds-card')}
+        {renderMenu('fixed z-[1000] overflow-x-hidden overflow-y-auto rounded-xl border border-ds-border bg-white p-1.5 text-ds-sm shadow-[0_18px_50px_rgba(15,23,42,0.16)] dark:bg-ds-card')}
       </div>
     )
   }
@@ -776,7 +776,7 @@ export function FloatingComposerModelPicker({
         type="button"
         disabled={!canChangeModel}
         onClick={() => setMenuOpen((open) => !open)}
-        className={`flex h-9 max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-full px-2.5 text-[13.5px] font-semibold transition disabled:cursor-not-allowed ${
+        className={`flex h-9 max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-full px-2.5 text-ds-md font-semibold transition disabled:cursor-not-allowed ${
           canChangeModel ? 'hover:bg-ds-hover' : ''
         }`}
         aria-expanded={menuOpen}
@@ -786,7 +786,7 @@ export function FloatingComposerModelPicker({
       >
         <Brain className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} aria-hidden="true" />
         {runtimeChipLabel ? (
-          <span className="ds-composer-runtime flex min-w-0 shrink items-center gap-1 overflow-hidden text-[12px] font-medium text-ds-faint">
+          <span className="ds-composer-runtime flex min-w-0 shrink items-center gap-1 overflow-hidden text-ds-sm font-medium text-ds-faint">
             <span className="truncate">{runtimeChipLabel}</span>
             <span aria-hidden="true">·</span>
           </span>
@@ -802,7 +802,7 @@ export function FloatingComposerModelPicker({
       </button>
 
       {menuOpen && canChangeModel ? (
-        renderMenu('fixed z-[1000] overflow-x-hidden overflow-y-auto rounded-xl border border-ds-border bg-white p-1.5 text-[13px] text-ds-muted shadow-[0_22px_64px_rgba(15,23,42,0.18)] dark:bg-ds-card')
+        renderMenu('fixed z-[1000] overflow-x-hidden overflow-y-auto rounded-xl border border-ds-border bg-white p-1.5 text-ds-md text-ds-muted shadow-[0_22px_64px_rgba(15,23,42,0.18)] dark:bg-ds-card')
       ) : null}
     </div>
   )
@@ -970,7 +970,7 @@ function MenuSectionTitle({
   icon: ReactElement
 }): ReactElement {
   return (
-    <div className="flex h-8 items-center gap-2 px-2 text-[12px] font-bold uppercase tracking-[0.08em] text-ds-faint">
+    <div className="flex h-8 items-center gap-2 px-2 text-ds-sm font-bold uppercase tracking-[0.08em] text-ds-faint">
       {icon}
       <span>{children}</span>
     </div>
@@ -1009,9 +1009,9 @@ function PickerRow({
       }`}
     >
       <span className="min-w-0 flex-1">
-        <span className="block break-words text-[13px] font-semibold leading-4">{title}</span>
+        <span className="block break-words text-ds-md font-semibold leading-4">{title}</span>
         {subtitle ? (
-          <span className="mt-0.5 block break-all text-[10.5px] font-normal leading-4 text-ds-faint">
+          <span className="mt-0.5 block break-all text-ds-2xs font-normal leading-4 text-ds-faint">
             {subtitle}
           </span>
         ) : null}
@@ -1037,7 +1037,7 @@ function SpeedTierButton({
       aria-checked={selected}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
-      className={`min-h-7 min-w-[62px] rounded-md border px-2 py-1 text-center text-[11.5px] font-semibold leading-4 transition ${
+      className={`min-h-7 min-w-[62px] rounded-md border px-2 py-1 text-center text-ds-xs font-semibold leading-4 transition ${
         selected
           ? 'border-accent/40 bg-ds-card text-ds-ink shadow-sm'
           : 'border-transparent text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -1085,9 +1085,9 @@ function ProviderRow({
       }`}
     >
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-semibold">{title}</span>
+        <span className="block truncate text-ds-md font-semibold">{title}</span>
         {subtitle ? (
-          <span className="block truncate text-[11.5px] font-medium text-ds-faint">{subtitle}</span>
+          <span className="block truncate text-ds-xs font-medium text-ds-faint">{subtitle}</span>
         ) : null}
       </span>
       <ChevronRight className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />

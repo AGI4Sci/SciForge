@@ -8,6 +8,7 @@ import {
 
 const projectId = 'prj_TestPreview0001'
 const sealedAt = '2026-10-19T12:30:00.000Z'
+const adoptedAt = '2026-10-19T13:30:00.000Z'
 
 function objectReference(overrides: Record<string, unknown> = {}) {
   return {
@@ -32,6 +33,7 @@ function manifest(overrides: Partial<Record<string, unknown>> = {}): DeliveryMan
     taskId: 'tsk_TestTask0001',
     executionId: 'exe_TestExecution0001',
     sealedAt,
+    manifestDigest: 'b'.repeat(64),
     bundleObjectId: 'obj_TestBundle0001',
     outputObjectIds: ['obj_TestReadme0001'],
     outputs: [{ objectId: 'obj_TestReadme0001', fileName: 'README.md', relativePath: 'README.md', role: 'declared', source: 'ai', mediaType: 'text/markdown', byteCount: 42, sha256: 'a'.repeat(64) }],
@@ -44,6 +46,26 @@ function manifest(overrides: Partial<Record<string, unknown>> = {}): DeliveryMan
 }
 
 const members = [{ userId: 'usr_TestWorker0001', displayName: '林默' }]
+
+function adoptedView(sealed = manifest()) {
+  return {
+    task: { projectId, taskId: sealed.taskId, status: 'completed', currentExecutionId: sealed.executionId, currentExecutionState: 'completed' },
+    executions: [{ projectId, taskId: sealed.taskId, executionId: sealed.executionId, assigneeUserId: 'usr_TestWorker0001', state: 'completed' }],
+    delivery: {
+      taskId: sealed.taskId, manifest: sealed, candidate: null, revisionRequest: null, result: null,
+      receipt: { integrationReceiptId: `irc_${sealed.deliveryManifestId}`, projectId, taskId: sealed.taskId,
+        deliveryManifestId: sealed.deliveryManifestId, disposition: 'adopted', createdAt: adoptedAt }
+    }
+  }
+}
+
+function resultFiles(sealed: readonly DeliveryManifest[], views = sealed.map((entry) => adoptedView(entry)), projectResults: readonly unknown[] = []) {
+  return deliveryFileGroups({
+    drive: { projectId, sharedMaterials: [], taskDeliveries: sealed, projectResults } as never,
+    project: { project: { projectId, status: 'completed' }, memberUsers: members, tasks: views } as never,
+    dashboards: []
+  }).find((group) => group.id === 'result')!.files
+}
 
 test('lists only the delivered file with the task name and submitter, never object storage paths', () => {
   const entries = deliveryManifestEntries(manifest(), {
@@ -78,6 +100,7 @@ test('groups shared materials and sealed deliveries without exposing storage key
       projectResults: []
     } as never,
     project: {
+      project: { projectId },
       memberUsers: [{ userId: 'usr_TestOwner0001', displayName: '周岚' }, ...members],
       tasks: [{
         task: { taskId: 'tsk_TestTask0001', fileIntent: { output: { fileName: 'README.md' } } },
@@ -96,6 +119,97 @@ test('groups shared materials and sealed deliveries without exposing storage key
   assert.equal(delivered.descriptor?.deliveryManifestId, 'dmf_TestSealed0001')
   const rendered = groups.flatMap((group) => group.files.map(({ name, mediaType, byteCount, submitter, revision }) => ({ name, mediaType, byteCount, submitter, revision })))
   assert.doesNotMatch(JSON.stringify(rendered), /objects\/|objectKey|obj_TestShared0001|obj_TestReadme0001/u)
+})
+
+test('completed projects show every formally adopted delivery before any project version is published', () => {
+  const sealed = [1, 2, 3, 4].map((index) => manifest({
+    deliveryManifestId: `dmf_Adopted000${index}`, taskId: `tsk_Adopted000${index}`, executionId: `exe_Adopted000${index}`
+  }))
+  const results = resultFiles(sealed)
+  assert.equal(results.length, 4)
+  assert.deepEqual(results.map((file) => file.descriptor?.deliveryManifestId), sealed.map((entry) => entry.deliveryManifestId))
+  assert.ok(results.every((file) => file.name === 'README.md' && file.submitter === '林默'))
+  assert.ok(results.every((file) => file.projectVersion === undefined && file.adoptedAt === adoptedAt))
+  assert.ok(results.every((file) => file.descriptor?.sha256 === 'a'.repeat(64)))
+})
+
+test('published versions enrich the exact adopted receipt without duplicating files or inventing versions', () => {
+  const adopted = manifest()
+  const superseded = manifest({ deliveryManifestId: 'dmf_Previous0001' })
+  const view = adoptedView(adopted)
+  const published = { projectId, projectResultId: 'res_Adopted0001', deliveryManifestId: adopted.deliveryManifestId,
+    integrationReceiptId: view.delivery.receipt.integrationReceiptId, projectVersion: 4, adoptedAt, disposition: 'adopted' }
+  const pending = resultFiles([adopted], [view])[0]!
+  const results = resultFiles([adopted, superseded, adopted], [view, view], [published, published,
+    { ...published, projectResultId: 'res_Previous001', deliveryManifestId: superseded.deliveryManifestId, projectVersion: 3, disposition: 'superseded' },
+    { ...published, projectResultId: 'res_Missing0001', deliveryManifestId: 'dmf_NotReadable01', projectVersion: 5 }
+  ])
+  assert.equal(results.length, 1)
+  assert.equal(results[0]!.projectVersion, 4)
+  assert.equal(results[0]!.key, pending.key, 'publishing a version preserves the identity of the adopted file')
+  assert.equal(results[0]!.descriptor!.deliveryManifestId, adopted.deliveryManifestId)
+  assert.equal(results[0]!.adoptedAt, adoptedAt)
+  const canonicalPublication = { ...view, delivery: { ...view.delivery, result: published } } as never
+  assert.equal(resultFiles([adopted], [canonicalPublication])[0]!.projectVersion, 4, 'canonical published facts also carry the real version')
+})
+
+test('sealed, non-adopted and inactive Task deliveries never become project results', () => {
+  for (const disposition of ['unadopted', 'superseded', 'rejected', 'unknown']) {
+    const view = adoptedView()
+    view.delivery.receipt.disposition = disposition
+    assert.deepEqual(resultFiles([manifest()], [view]), [], disposition)
+  }
+  for (const status of ['planned', 'awaiting_review', 'in_progress', 'cancelled', 'failed']) {
+    const view = adoptedView()
+    view.task.status = status
+    assert.deepEqual(resultFiles([manifest()], [view]), [], status)
+  }
+  assert.deepEqual(resultFiles([manifest()], []), [], 'a sealed delivery alone proves no adoption')
+  assert.deepEqual(resultFiles([manifest()], [{ ...adoptedView(), delivery: null } as never]), [], 'a completed Task without a receipt proves no adoption')
+  for (const state of ['result_submitted', 'running', 'cancelled', 'superseded']) {
+    const view = adoptedView()
+    view.executions[0]!.state = state
+    assert.deepEqual(resultFiles([manifest()], [view]), [], state)
+  }
+})
+
+test('adoption must bind the exact current manifest, project, Task and execution', () => {
+  const changes: readonly Readonly<{ name: string; change: (view: ReturnType<typeof adoptedView>) => void }>[] = [
+    { name: 'receipt manifest', change: (view) => { view.delivery.receipt.deliveryManifestId = 'dmf_Other0001' } },
+    { name: 'receipt Task', change: (view) => { view.delivery.receipt.taskId = 'tsk_Other0001' } },
+    { name: 'receipt project', change: (view) => { view.delivery.receipt.projectId = 'prj_Other0001' } },
+    { name: 'delivery Task', change: (view) => { view.delivery.taskId = 'tsk_Other0001' } },
+    { name: 'current execution', change: (view) => { view.task.currentExecutionId = 'exe_Other0001' } },
+    { name: 'execution Task', change: (view) => { view.executions[0]!.taskId = 'tsk_Other0001' } },
+    { name: 'execution project', change: (view) => { view.executions[0]!.projectId = 'prj_Other0001' } },
+    { name: 'execution state', change: (view) => { view.task.currentExecutionState = 'result_submitted' } },
+    { name: 'canonical manifest', change: (view) => { view.delivery.manifest = manifest({ deliveryManifestId: 'dmf_Other0001' }) } },
+    { name: 'canonical manifest execution', change: (view) => { view.delivery.manifest = manifest({ executionId: 'exe_Other0001' }) } },
+    { name: 'canonical manifest digest', change: (view) => { view.delivery.manifest = manifest({ manifestDigest: 'c'.repeat(64) }) } }
+  ]
+  for (const { name, change } of changes) {
+    const sealed = manifest()
+    const view = adoptedView(sealed)
+    change(view)
+    assert.deepEqual(resultFiles([sealed], [view]), [], name)
+  }
+})
+
+test('publication metadata cannot grant adoption or decorate another receipt or manifest', () => {
+  const sealed = manifest()
+  const view = adoptedView(sealed)
+  const published = { projectId, projectResultId: 'res_Adopted0001', deliveryManifestId: sealed.deliveryManifestId,
+    integrationReceiptId: view.delivery.receipt.integrationReceiptId, projectVersion: 4, adoptedAt, disposition: 'adopted' }
+  for (const overrides of [
+    { integrationReceiptId: 'irc_Other0001' }, { deliveryManifestId: 'dmf_Other0001' },
+    { projectId: 'prj_Other0001' }, { disposition: 'superseded' }, { disposition: 'unadopted' }
+  ]) {
+    const results = resultFiles([sealed], [view], [{ ...published, ...overrides }])
+    assert.equal(results.length, 1)
+    assert.equal(results[0]!.projectVersion, undefined)
+  }
+  view.delivery.receipt.disposition = 'superseded'
+  assert.deepEqual(resultFiles([sealed], [view], [published]), [])
 })
 
 test('multi-file manifest owns names paths sources and order independently of current task and object order', () => {

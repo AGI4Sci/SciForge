@@ -5,13 +5,15 @@
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron workbench for selectable local agent runtimes",
-  "main": "./out/main/index.js",
+  "main": "./scripts/electron-entry.mjs",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "workspaces": [
     "packages/collaboration-contracts",
+    "packages/cloud-spaces-contracts",
+    "packages/document-sharing-contracts",
     "packages/domain-sdk",
     "packages/plugin-sdk",
     "packages/domains/*",
@@ -37,13 +39,16 @@
     "packages/workers/workspace-spectra",
     "packages/workers/workspace-tabular",
     "packages/workers/write-assist",
+    "packages/workers/zotero-connector",
     "packages/workers/sci-modality-router",
     "packages/workers/runtime-inspector",
     "packages/workers/bgc-discovery",
     "packages/workers/image-generation",
     "packages/workers/multi-agent",
     "packages/workers/ppt-master",
-    "plugins/*"
+    "plugins/anchored-comments",
+    "plugins/change-inspector",
+    "plugins/scientific-plotting"
   ],
   "scripts": {
     "prebuild": "node ./scripts/public-release-prebuild.cjs && npm run capability:check",
@@ -238,11 +243,11 @@
     "@codemirror/view": "^6.43.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/canvas": "^0.1.100",
-    "@sciforge/collaboration-contracts": "8.0.0",
-    "@sciforge/codex-runtime": "0.1.25",
+    "@sciforge/collaboration-contracts": "10.0.0",
+    "@sciforge/codex-runtime": "0.1.42",
     "@sciforge/dsh-runtime": "0.1.0",
     "@sciforge/full-trace": "0.1.0",
-    "@sciforge/workspace-egress": "0.1.25",
+    "@sciforge/workspace-egress": "0.1.42",
     "@shikijs/rehype": "^3.23.0",
     "@tiptap/core": "3.26.0",
     "@tiptap/extension-image": "3.26.0",

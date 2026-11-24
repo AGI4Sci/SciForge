@@ -64,7 +64,7 @@ export function ResearchRecordSource({ view, onOpen, busy, presentation: provide
   const alert = facts.exitCode !== undefined && facts.exitCode !== 0 || ['failed', 'error', 'cancelled', 'canceled', 'aborted', 'interrupted'].includes(status ?? '')
   return <div className="min-w-0 space-y-3" data-record-source={view.node?.id}>
     <div className="flex flex-wrap items-center gap-2">
-      <p className="record-caption text-ds-muted">{view.sourceStatus === 'current' ? '来源一致' : view.sourceStatus === 'changed' ? '来源已变化；需要重新审阅，不代表科学反驳' : '来源不可用；此前记录与引用仍保留'}</p>
+      {view.sourceStatus !== 'current' && <p className="record-caption text-ds-muted">{view.sourceStatus === 'changed' ? '来源已更新，请查看新内容。' : '暂时无法读取来源，已有记录仍保留。'}</p>}
       {view.node?.source && <button className={button} disabled={busy} onClick={() => onOpen(view)}>查看原始过程</button>}
     </div>
     {view.retainedSource && <p className="record-caption text-ds-muted">{view.retainedSource === 'retained' ? '下方为当时保全原文 · 摘要校验通过；当前来源状态单独显示。' : view.retainedSource === 'corrupt' ? '保全原文损坏；未替换为最新内容。' : view.retainedSource === 'denied' ? '原会话无法授权；保全原文不可读。' : '未保全历史原文；不能恢复未观察到的内容。'}</p>}
@@ -80,6 +80,5 @@ export function ResearchRecordSource({ view, onOpen, busy, presentation: provide
     {content.some(entry => entry.label === '执行说明') && <SourceDisclosure label="执行说明（非命令原文）" sourceKey={sourceKey + ':description'} presentation={presentation}>{() => <>{content.filter(entry => entry.label === '执行说明').map(entry => <SourceText key={entry.label} label={entry.label} value={entry.text} sourceKey={sourceKey + entry.label} presentation={presentation} />)}</>}</SourceDisclosure>}
     {!content.length && view.sourceStatus !== 'unavailable' && <p className="record-text text-ds-muted">此来源没有可读正文，可展开原始数据核对。</p>}
     <SourceDisclosure label="技术字段与原始 JSON" sourceKey={sourceKey + ':json'} presentation={presentation}>{() => <SourceText label="原始 JSON" value={JSON.stringify({ source: view.node?.source, raw: view.raw }, null, 2)} sourceKey={sourceKey + ':json-page'} presentation={presentation} />}</SourceDisclosure>
-    <p className="record-caption text-ds-muted">原文保全、执行状态与科研判断分别核对；浏览不代表科研结论已验证。</p>
   </div>
 }

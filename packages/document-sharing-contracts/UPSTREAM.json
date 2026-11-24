@@ -1,0 +1,13 @@
+{
+  "sourceRepository": "https://github.com/AGI4Sci/SciForge-cloud",
+  "sourceCommit": "bd6ba5db25c5e46a85ea375e106f22f7ac84a235",
+  "sourcePath": "packages/document-sharing-contracts",
+  "packageVersion": "2.0.0",
+  "policy": "Canonical source is maintained in SciForge-cloud. Update the exact package from a committed upstream revision and verify every hash; do not edit the vendored contract independently.",
+  "sha256": {
+    "package.json": "1f88def756ce8b999517b2acaa49de1388b5ccae91a78dff6a3b4f5d878b7288",
+    "src/index.test.ts": "e36df955b7c632ed1c4b82987a230004252c0aa61a8eda414ef6f93799e2fbd3",
+    "src/index.ts": "ee8799d6b87eeb06bed0880987db2605c3a3405e4800222f48244a2bff107db4",
+    "tsconfig.json": "cf304b59cbb8632e33fa0b8bff775a8f680671c85d53658e1e07c4184b16b715"
+  }
+}

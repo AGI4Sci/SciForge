@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ReactElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
@@ -78,9 +79,8 @@ test('contributes the package-owned Evidence panel and translations', () => {
   const scope = { runtimeId: 'codex', threadId: 'thread-1', workspaceRoot: '/workspace' }
   const overlayElement = overlay.render({ active: true, className: 'absolute inset-0', session: { id: 'other-active-thread' },
     activation: { revision: 1, payload: { recordScope: scope } }, onClose: () => undefined })
-  const recordPanel = (overlayElement.props as { children: ReactElement<Record<string, unknown>> }).children
-  assert.deepEqual(recordPanel.props.scope, scope)
-  assert.equal(recordPanel.props.presentation, (props.getPresentation as (scope: unknown) => unknown)(scope))
+  assert.match(renderToStaticMarkup(overlayElement), /审计工作区当前不可用/)
+  assert.doesNotMatch(renderToStaticMarkup(overlayElement), /data-research-record-surface/)
 
   const summaryRuntime = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION.kind

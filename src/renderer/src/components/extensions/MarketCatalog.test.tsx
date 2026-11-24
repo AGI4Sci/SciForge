@@ -24,7 +24,7 @@ describe('market installation Host operation approval', () => {
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     install.mockClear()
     Object.defineProperty(window, 'sciforge', { configurable: true, value: { market: {
-      list: async () => ({ source: null, generatedAt: null, dshRuntimeVersion: null, plugins: [plugin], notInstallable: [], error: null }),
+      list: async () => ({ source: null, generatedAt: null, dshRuntimeVersion: null, plugins: [plugin], notInstallable: [], error: null, fallback: false }),
       install, progress: async () => null
     } } })
     container = document.createElement('div'); document.body.append(container); root = createRoot(container)
@@ -112,7 +112,8 @@ function marketView(entry: DshMarketPlugin): DshMarketView {
     source: null,
     generatedAt: null,
     dshRuntimeVersion: null,
-    error: null
+    error: null,
+    fallback: false
   }
 }
 
@@ -238,5 +239,97 @@ describe('market catalog version installation', () => {
     await render()
     expect(container.textContent).toContain('已安装：v1')
     expect(button(`安装 ${versionPlugin.version}`)?.disabled).toBe(false)
+  })
+})
+
+describe('market states never leave an unexplained empty panel', () => {
+  let container: HTMLDivElement
+  let root: Root
+  let i18n: ReturnType<typeof i18next.createInstance>
+
+  function stubMarket(list: () => Promise<DshMarketView>): { list: ReturnType<typeof vi.fn> } {
+    const market = { list: vi.fn(list) }
+    vi.stubGlobal('sciforge', { market })
+    return market
+  }
+
+  async function render(): Promise<void> {
+    await act(async () => root.render(createElement(I18nextProvider, { i18n },
+      createElement(MarketCatalog))))
+  }
+
+  function button(label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button')).find((item) => item.textContent === label)
+  }
+
+  beforeEach(async () => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    i18n = i18next.createInstance()
+    await i18n.init({ lng: 'en', defaultNS: 'common', resources: { en: { common: enCommon } } })
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+  })
+
+  afterEach(async () => {
+    await act(async () => root.unmount())
+    container.remove()
+    vi.unstubAllGlobals()
+  })
+
+  it('explains that this build has no market and retries the same call', async () => {
+    const market = stubMarket(async () => { throw new Error('The plugin market is unavailable in this Host.') })
+    await render()
+    expect(container.textContent).toContain('Plugin market is not available in this build')
+    expect(container.textContent).toContain('The plugin market is unavailable in this Host.')
+    expect(button('Refresh')).toBeDefined()
+    await act(async () => button('Refresh')!.click())
+    expect(market.list).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows the bundled catalog as local-only with a retry instead of an empty panel', async () => {
+    stubMarket(async () => ({
+      source: { kind: 'file', location: 'C:\\app\\market\\index.json' },
+      generatedAt: null,
+      dshRuntimeVersion: null,
+      plugins: [],
+      notInstallable: [],
+      error: null,
+      fallback: true
+    }))
+    await render()
+    expect(container.textContent).toContain('Local catalog only')
+    expect(button('Refresh')).toBeDefined()
+    expect(container.textContent).toContain('No plugins are installable yet')
+    expect(container.textContent).not.toContain('No plugins match this search')
+  })
+
+  it('explains an unreadable index with the host error and a retry', async () => {
+    stubMarket(async () => ({
+      source: { kind: 'file', location: 'C:\\app\\market\\index.json' },
+      generatedAt: null,
+      dshRuntimeVersion: null,
+      plugins: [],
+      notInstallable: [],
+      error: 'ENOENT: no such file or directory',
+      fallback: false
+    }))
+    await render()
+    expect(container.textContent).toContain('The market index could not be read')
+    expect(container.textContent).toContain('ENOENT: no such file or directory')
+    expect(container.textContent).toContain('The catalog file is missing or unreadable')
+    expect(button('Refresh')).toBeDefined()
+  })
+
+  it('keeps the search miss message when the catalog has entries', async () => {
+    stubMarket(async () => marketView(versionPlugin))
+    await render()
+    await act(async () => {
+      const search = container.querySelector<HTMLInputElement>('input[type=search]')!
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(search, 'nothing-matches')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.textContent).toContain('No plugins match this search')
   })
 })

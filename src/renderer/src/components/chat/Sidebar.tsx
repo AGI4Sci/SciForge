@@ -2,11 +2,13 @@ import type { ReactElement, ReactNode } from 'react'
 import { memo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  BookOpen,
   Clock3,
   LayoutGrid,
   PanelsTopLeft,
   Plus,
-  Settings
+  Settings,
+  Users
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
 import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
@@ -30,7 +32,16 @@ type Props = {
     id: string
     content: ReactElement | null
   }>[]
-  mainAreaPages?: readonly Readonly<{ id: string; label: string; active: boolean }>[]
+  /**
+   * Sections contributed with `placement: 'footer'` are pinned to the bottom of
+   * the sidebar, directly above the Settings row, so account/cloud entry points
+   * stay visible regardless of how long the navigation list grows.
+   */
+  footerNavigationSections?: readonly Readonly<{
+    id: string
+    content: ReactElement | null
+  }>[]
+  mainAreaPages?: readonly Readonly<{ id: string; label: string; active: boolean; navigationIcon?: 'book-open' | 'users' | 'panels-top-left' }>[]
   onSelectMainAreaPage?: (id: string) => void
   threads: NormalizedThread[]
   activeThreadId: string | null
@@ -141,6 +152,7 @@ export const Sidebar = memo(function Sidebar({
   collapsed = false,
   displayControl,
   navigationSections = [],
+  footerNavigationSections = [],
   mainAreaPages = [],
   onSelectMainAreaPage,
   excludedWorkspaceKeys,
@@ -221,9 +233,11 @@ export const Sidebar = memo(function Sidebar({
       onClick: onScheduleOpen,
       active: activeView === 'schedule'
     },
-    ...mainAreaPages.map(({ id, label, active }) => ({
+    ...mainAreaPages.map(({ id, label, active, navigationIcon }) => ({
       id: `main-area:${id}`,
-      icon: <PanelsTopLeft className="h-4 w-4" strokeWidth={1.75} />,
+      icon: navigationIcon === 'book-open' ? <BookOpen className="h-4 w-4" strokeWidth={1.75} />
+        : navigationIcon === 'users' ? <Users className="h-4 w-4" strokeWidth={1.75} />
+          : <PanelsTopLeft className="h-4 w-4" strokeWidth={1.75} />,
       label,
       onClick: () => onSelectMainAreaPage?.(id),
       active
@@ -252,6 +266,11 @@ export const Sidebar = memo(function Sidebar({
       onCollapse={onToggleSidebar}
       footer={
         <div className="space-y-1">
+          {footerNavigationSections.map(({ id, content }) => (
+            <div key={id} className="ds-no-drag min-w-0">
+              {content}
+            </div>
+          ))}
           {displayControl}
           <SidebarCommandRow {...settingsCommand} variant="footer" />
         </div>

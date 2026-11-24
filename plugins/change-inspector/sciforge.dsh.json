@@ -9,6 +9,7 @@
   },
   "categories": ["workspace", "inspection"],
   "hostDependencies": ["@deepseek-ai/dsh-tools"],
+  "hostServices": ["agentThreads"],
   "tools": {
     "open_session": { "id": "change-inspector.open-session", "effect": "read" },
     "list_changes": { "id": "change-inspector.list-changes", "effect": "read" }

@@ -50,14 +50,14 @@ export class ResearchRecordQueryIndex {
         for (const [field, ids] of Object.entries(memberships)) if (ids.has(sourceId)) flags.add(field)
         sourceFlags.set(sourceId, flags)
         if (state.nodes[sourceId]?.source) for (const ancestor of jobScopes(sourceId)) sourceAncestors.add(ancestor)
-        if (remaining && job.attempts >= 3) blockedJob = true
+        if (remaining && (job.retryBlocked || job.attempts >= 3)) blockedJob = true
       }
-      blockedRound.set(id, job.attempts >= 3 || !remainingJob && (!state.nodes[id]?.synthesis?.entries.length || job.sourceIds.some(source => !memberships.assigned.has(source) || semantic.has(source))))
+      blockedRound.set(id, (job.retryBlocked || job.attempts >= 3) || !remainingJob && (!state.nodes[id]?.synthesis?.entries.length || job.sourceIds.some(source => !memberships.assigned.has(source) || semantic.has(source))))
       if (blockedJob) for (const scope of sourceAncestors) this.getCoverage(scope).blocked++
       if (state.nodes[id]) for (const scope of jobScopes(id)) {
         if (remainingJob) this.pendingOrganization.set(scope, (this.pendingOrganization.get(scope) ?? 0) + 1)
         if (pendingJob) this.pending.set(scope, (this.pending.get(scope) ?? 0) + 1)
-        if (job.attempts >= 3 || job.unavailableIds.length || job.changedIds.length) this.blocked.set(scope, (this.blocked.get(scope) ?? 0) + 1)
+        if ((job.retryBlocked || job.attempts >= 3) || job.unavailableIds.length || job.changedIds.length) this.blocked.set(scope, (this.blocked.get(scope) ?? 0) + 1)
       }
     }
     for (const row of state.history) if (row.kind === 'context-boundary') {
@@ -103,8 +103,8 @@ export class ResearchRecordQueryIndex {
     this.sourceRefs.push(...sourceRefs.values())
     for (const node of this.index.orderedNodes()) if (node.kind === 'phase') {
       const coverage = this.getCoverage(node.id), job = state.phaseJobs[node.id]
-      const status = coverage.unavailable || coverage.changed ? 'unavailable'
-        : job?.dirtyRoundIds.length ? job.attempts >= 3 || job.dirtyRoundIds.every(id => blockedRound.get(id)) ? 'unavailable' : node.synthesis ? 'stale' : 'pending'
+      const status = coverage.unavailable || coverage.changed || coverage.blocked ? 'unavailable'
+        : job?.dirtyRoundIds.length ? (job.retryBlocked || job.attempts >= 3) || job.dirtyRoundIds.every(id => blockedRound.get(id)) ? 'unavailable' : node.synthesis ? 'stale' : 'pending'
           : (this.pendingOrganization.get(node.id) ?? 0) > 0 ? node.synthesis ? 'stale' : 'pending' : node.synthesis ? 'ready' : 'missing'
       this.phaseStatuses.set(node.id, status)
     }

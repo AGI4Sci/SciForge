@@ -65,6 +65,17 @@ describe('renderer workspace preview contribution registry', () => {
     expect(registry.resolve({ path: 'mesh.vtk' })).toBeNull()
   })
 
+  it('uses canonical precedence among contributions supporting the authorized resource content', () => {
+    const registry = createBuiltInRegistry()
+    expect(registry.resolve({ path: 'data.csv', mimeType: 'text/csv', resourceContentKind: 'text' })?.manifest.id).toBe('tabular')
+    expect(registry.resolve({ path: 'data.tsv', mimeType: 'text/tab-separated-values', resourceContentKind: 'text' })?.manifest.id).toBe('tabular')
+    expect(registry.resolve({ path: 'data.jsonl', mimeType: 'application/x-ndjson', resourceContentKind: 'text' })?.manifest.id).toBe('tabular')
+    expect(registry.resolve({ path: 'notes.md', mimeType: 'text/markdown', resourceContentKind: 'text' })?.manifest.id).toBe('text')
+    expect(registry.resolve({ path: 'data.unknown', mimeType: 'application/vnd.fixture+json', resourceContentKind: 'text' })?.manifest.id).toBe('text')
+    expect(registry.resolve({ path: 'misleading.csv', mimeType: 'image/png', resourceContentKind: 'image' })?.manifest.id).toBe('image')
+    expect(registry.resolve({ path: 'workbook.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', resourceContentKind: 'unsupported' })).toBeNull()
+  })
+
   it('atomically registers and disposes a package-owned renderer and action', () => {
     const manifest: WorkspacePreviewPluginManifest = {
       contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,

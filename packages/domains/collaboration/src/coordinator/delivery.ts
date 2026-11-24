@@ -1,3 +1,6 @@
+import { deliveryValidationSpecSchema, type DeliveryValidationSpec, type DeliveryValidationRecord } from './delivery-validation-contract.js'
+import { checkDeliveryJson, validationDigest, VALIDATION_MAX_BYTES } from './delivery-validation.js'
+import type { ProjectCoordinatorStateStore } from './state.js'
 import { randomUUID } from 'node:crypto'
 import {
   CURRENT_PROTOCOL_VERSION,
@@ -43,8 +46,9 @@ import type { DeliveryObjectInput } from './delivery-content-contract.js'
 import type { ProjectCoordinatorWorkspacePort } from './ports.js'
 
 export type ProjectCoordinatorDeliveryPort = Readonly<{
-  readObject(input: DeliveryObjectInput): Promise<{ object: ObjectReference; body: Uint8Array }>
-  read(input: ProjectCoordinatorDeliveryReadInput): Promise<DeliveryReadView>
+  validate(input: DeliveryValidationSpec): Promise<DeliveryValidationRecord>
+  readObject(input: DeliveryObjectInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<{ object: ObjectReference; body: Uint8Array }>
+  read(input: ProjectCoordinatorDeliveryReadInput, options?: Readonly<{ signal?: AbortSignal }>): Promise<DeliveryReadView>
   listDrive(input: ProjectCoordinatorDriveListInput): Promise<DeliveryDriveView>
   decideAdoption(input: ProjectCoordinatorAdoptionInput, idempotencyKey: string): Promise<IntegrationReceipt>
   requestRevision(input: ProjectCoordinatorRevisionRequestInput, idempotencyKey: string): Promise<DeliveryRevisionRecord>
@@ -55,6 +59,7 @@ export type ProjectCoordinatorDeliveryPort = Readonly<{
 /** All operations use current User credentials. Agent commands never enter this port. */
 export function createProjectCoordinatorDeliveryPort(options: Readonly<{
   transport: AuthenticatedCloudTransport
+  validationState?: Pick<ProjectCoordinatorStateStore, 'persistDeliveryValidation' | 'readDeliveryValidation'>
   commands: Pick<CoordinatorCloudCommandService, 'executeUser' | 'resumeUser'>
   workspace: ProjectCoordinatorWorkspacePort
   humanActions: DomainMainHumanActionsHost
@@ -63,27 +68,68 @@ export function createProjectCoordinatorDeliveryPort(options: Readonly<{
 }>): ProjectCoordinatorDeliveryPort {
   const requestId = options.requestId ?? (() => `req_${randomUUID().replaceAll('-', '')}`)
   const execute = async (
-    payload: Parameters<AuthenticatedCloudTransport['execute']>[0]['payload']
+    payload: Parameters<AuthenticatedCloudTransport['execute']>[0]['payload'],
+    requestOptions?: Readonly<{ signal?: AbortSignal }>
   ): Promise<RestResponse> => {
+    requestOptions?.signal?.throwIfAborted()
     if (options.transport.status().state !== 'ready') throw new Error('Delivery requires an authenticated User and Device.')
     const response = await options.transport.execute({ contractVersion: 1,
-      operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID, payload })
+      operationId: AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID, payload }, requestOptions)
+    requestOptions?.signal?.throwIfAborted()
     if (response.body.type === 'rest.error') throw new Error(`Delivery request failed: ${response.body.error.code}: ${response.body.error.message}`)
     if (response.status >= 400) throw new Error(`Delivery request failed: HTTP ${response.status}`)
     return response.body
   }
   const envelope = () => ({ protocolVersion: CURRENT_PROTOCOL_VERSION, requestId: requestId() })
-  return Object.freeze({
-    read: async (raw) => {
+  const validate = async (raw: DeliveryValidationSpec): Promise<DeliveryValidationRecord> => {
+    const spec = deliveryValidationSpecSchema.parse(raw)
+    const identity = options.transport.status()
+    if (identity.state !== 'ready' || !options.validationState) throw new Error('Deterministic Delivery validation requires authenticated durable state.')
+    const principalUserId = identity.userId
+    const assertCurrent = () => {
+      const current = options.transport.status()
+      if (current.state !== 'ready' || current.userId !== principalUserId || current.deviceId !== identity.deviceId) {
+        throw new Error('Validation Principal changed.')
+      }
+    }
+    const record: DeliveryValidationRecord = { checkId: randomUUID(), spec, specDigest: validationDigest(spec), targetDigest: validationDigest(spec.target),
+      principalUserId, status: 'unknown', checkedAt: new Date().toISOString(), detail: 'Frozen; exact bytes have not been checked.' }
+    await options.validationState.persistDeliveryValidation(record)
+    assertCurrent()
+    try {
+      const view = await port.read({ deliveryManifestId: spec.target.deliveryManifestId })
+      assertCurrent()
+      const object = view.manifest.objects.find(item => item.objectId === spec.target.object.objectId)
+      if (view.manifest.projectId !== spec.target.projectId || view.manifest.taskId !== spec.target.taskId ||
+        view.manifest.manifestDigest !== spec.target.manifestDigest || validationDigest(object ?? null) !== validationDigest(spec.target.object)) {
+        throw new Error('Validation target does not match the exact sealed manifest and object.')
+      }
+      if (object!.byteCount > VALIDATION_MAX_BYTES) throw new Error('Object exceeds the JSON validation limit.')
+      const bytes = await port.readObject({ deliveryManifestId: spec.target.deliveryManifestId, objectId: spec.target.object.objectId })
+      assertCurrent()
+      if (validationDigest(bytes.object) !== validationDigest(spec.target.object)) throw new Error('Sealed object identity changed.')
+      Object.assign(record, checkDeliveryJson(spec, bytes.body))
+    } catch (error) {
+      record.status = 'unknown'
+      record.detail = (error instanceof Error ? error.message : 'Validation interrupted.').slice(0, 1000)
+    }
+    record.checkedAt = new Date().toISOString()
+    assertCurrent()
+    await options.validationState.persistDeliveryValidation(record)
+    return record
+  }
+  const port: ProjectCoordinatorDeliveryPort = Object.freeze({
+    validate,
+    read: async (raw, requestOptions) => {
       const input = projectCoordinatorDeliveryReadInputSchema.parse(raw)
-      const response = await execute({ ...envelope(), type: 'delivery.get', ...input })
+      const response = await execute({ ...envelope(), type: 'delivery.get', ...input }, requestOptions)
       if (response.type !== 'rest.delivery' || response.delivery.manifest.deliveryManifestId !== input.deliveryManifestId) {
         throw new Error('Cloud did not return the exact requested Delivery.')
       }
       return deliveryReadViewSchema.parse(response.delivery)
     },
-    readObject: async (input) => {
-      const response = await execute({ ...envelope(), type: 'delivery.get', deliveryManifestId: input.deliveryManifestId })
+    readObject: async (input, requestOptions) => {
+      const response = await execute({ ...envelope(), type: 'delivery.get', deliveryManifestId: input.deliveryManifestId }, requestOptions)
       if (response.type !== 'rest.delivery' || response.delivery.manifest.deliveryManifestId !== input.deliveryManifestId) {
         throw new Error('Cloud did not return the exact sealed Delivery.')
       }
@@ -91,7 +137,8 @@ export function createProjectCoordinatorDeliveryPort(options: Readonly<{
       const object = manifest.objects.find((item) => item.objectId === input.objectId)
       if (!object) throw new Error('The selected object is not part of this exact sealed Delivery.')
       const bytes = await options.transport.readObject({ request: { projectId: manifest.projectId,
-        deliveryManifestId: input.deliveryManifestId, objectId: object.objectId }, expected: object })
+        deliveryManifestId: input.deliveryManifestId, objectId: object.objectId }, expected: object }, requestOptions)
+      requestOptions?.signal?.throwIfAborted()
       return { object: bytes.object, body: bytes.body }
     },
     listDrive: async (raw) => {
@@ -103,7 +150,23 @@ export function createProjectCoordinatorDeliveryPort(options: Readonly<{
       return deliveryDriveViewSchema.parse(response.drive)
     },
     decideAdoption: async (raw, idempotencyKey) => {
-      const input = projectCoordinatorAdoptionInputSchema.parse(raw)
+      const { deliveryValidation, ...input } = projectCoordinatorAdoptionInputSchema.parse(raw)
+      if (deliveryValidation) {
+        const principal = options.transport.status()
+        if (principal.state !== 'ready' || !options.validationState) throw new Error('Deterministic Delivery validation is unavailable.')
+        const saved = await options.validationState.readDeliveryValidation(deliveryValidation.specDigest, deliveryValidation.targetDigest, principal.userId)
+        if (!saved || saved.specDigest !== validationDigest(saved.spec) || saved.targetDigest !== validationDigest(saved.spec.target) ||
+          saved.spec.target.projectId !== input.projectId || saved.spec.target.taskId !== input.taskId ||
+          saved.spec.target.deliveryManifestId !== input.deliveryManifestId || saved.status !== 'passed') {
+          throw new Error('Deterministic Delivery validation must reference a matching passed frozen check.')
+        }
+        const current = await validate(saved.spec)
+        if (current.status !== 'passed') throw new Error(`Deterministic Delivery validation did not pass: ${current.detail}`)
+        const now = options.transport.status()
+        if (now.state !== 'ready' || now.userId !== principal.userId || now.deviceId !== principal.deviceId) {
+          throw new Error('Adoption Principal changed during independent verification.')
+        }
+      }
       const response = await options.commands.executeUser({ ...envelope(), type: 'delivery.adoption.record', idempotencyKey, ...input })
       if (response.type !== 'rest.entity') throw new Error('Cloud did not return an Integration Receipt.')
       const receipt = integrationReceiptSchema.parse(response.entity)
@@ -205,6 +268,7 @@ export function createProjectCoordinatorDeliveryPort(options: Readonly<{
       return after
     }
   })
+  return port
 }
 
 function completionTargetFromCommand(command: Record<string, unknown>): ProjectCompletionTarget {

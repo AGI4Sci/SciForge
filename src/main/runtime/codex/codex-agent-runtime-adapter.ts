@@ -317,6 +317,15 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         case 'updateMemory':
         case 'deleteMemory':
           throw new Error('Codex runtime does not support memory operations.')
+        case 'updateThreadWorkspace': {
+          const payload = recordValue(input.payload)
+          const threadId = stringValue(payload.threadId)
+          const workspace = stringValue(payload.workspace)
+          if (!threadId || !workspace) throw new Error('updateThreadWorkspace requires payload.threadId and payload.workspace.')
+          const result = await service.updateThreadWorkspace(threadId, workspace)
+          if (!result.ok) throw codexFailure(result)
+          return undefined
+        }
         case 'archiveThread': {
           const payload = recordValue(input.payload)
           const threadId = stringValue(payload.threadId)

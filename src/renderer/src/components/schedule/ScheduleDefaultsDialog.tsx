@@ -61,7 +61,7 @@ export function ScheduleDefaultsDialog({
         className="max-h-[calc(100vh-4rem)] w-full max-w-[620px] overflow-y-auto rounded-[24px] bg-ds-card p-6 shadow-[0_28px_90px_rgba(0,0,0,0.28)]"
       >
         <div className="flex items-start justify-between gap-4">
-          <h2 className="text-[16px] font-semibold text-ds-ink">
+          <h2 className="text-ds-xl font-semibold text-ds-ink">
             {t('scheduleDefaultsTitle')}
           </h2>
           <button
@@ -76,7 +76,7 @@ export function ScheduleDefaultsDialog({
         </div>
 
         <div className="mt-5 flex items-center justify-between gap-3 rounded-xl bg-ds-subtle px-3 py-2">
-          <span className="text-[13px] text-ds-muted">{t('scheduleGlobalEnabled')}</span>
+          <span className="text-ds-md text-ds-muted">{t('scheduleGlobalEnabled')}</span>
           <label className="inline-flex items-center">
             <input
               type="checkbox"
@@ -91,59 +91,59 @@ export function ScheduleDefaultsDialog({
         </div>
 
         <div className="mt-4 grid gap-4">
-          <div className="flex flex-col gap-2 text-[13px] font-medium text-ds-ink">
+          <div className="flex flex-col gap-2 text-ds-md font-medium text-ds-ink">
             {t('scheduleModel')}
-            <div className="flex min-h-10 items-center rounded-xl border border-ds-border-muted bg-ds-main/35 px-3 text-[13px] font-normal text-ds-muted">
+            <div className="flex min-h-10 items-center rounded-xl border border-ds-border-muted bg-ds-main/35 px-3 text-ds-md font-normal text-ds-muted">
               {t('scheduleModelFollowsAccess')}
             </div>
-            <span className="text-[11.5px] font-normal leading-4 text-ds-faint">
+            <span className="text-ds-xs font-normal leading-4 text-ds-faint">
               {t('scheduleModelFollowsAccessHint')}
             </span>
             {draft.model && draft.model !== 'auto' ? (
-              <span className="text-[11.5px] font-normal leading-4 text-ds-faint">
+              <span className="text-ds-xs font-normal leading-4 text-ds-faint">
                 {t('scheduleModelLegacyNote', { model: draft.model })}
               </span>
             ) : null}
           </div>
         </div>
 
-        <label className="mt-4 flex flex-col gap-2 text-[13px] font-medium text-ds-ink">
+        <label className="mt-4 flex flex-col gap-2 text-ds-md font-medium text-ds-ink">
           {t('scheduleDefaultWorkspace')}
           <input
             value={draft.defaultWorkspaceRoot}
             onChange={(event) => update({ defaultWorkspaceRoot: event.target.value })}
             placeholder={t('scheduleWorkspacePlaceholder')}
-            className="w-full rounded-xl border border-ds-border bg-ds-main/60 px-3 py-2 text-[14px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+            className="w-full rounded-xl border border-ds-border bg-ds-main/60 px-3 py-2 text-ds-lg text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
           />
         </label>
 
-        <label className="mt-4 flex flex-col gap-2 text-[13px] font-medium text-ds-ink">
+        <label className="mt-4 flex flex-col gap-2 text-ds-md font-medium text-ds-ink">
           {t('schedulePromptPrefix')}
           <textarea
             value={draft.promptPrefix}
             onChange={(event) => update({ promptPrefix: event.target.value })}
             placeholder={t('schedulePromptPrefixPlaceholder')}
-            className="min-h-[110px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+            className="min-h-[110px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-ds-lg leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
           />
         </label>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <label className="flex flex-col gap-2 text-[13px] font-medium text-ds-ink">
+          <label className="flex flex-col gap-2 text-ds-md font-medium text-ds-ink">
             {t('scheduleDefaultSkills')}
             <textarea
               value={draft.defaultNames}
               onChange={(event) => update({ defaultNames: event.target.value })}
               placeholder={t('scheduleDefaultSkillsPlaceholder')}
-              className="min-h-[92px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+              className="min-h-[92px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-ds-lg leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
             />
           </label>
-          <label className="flex flex-col gap-2 text-[13px] font-medium text-ds-ink">
+          <label className="flex flex-col gap-2 text-ds-md font-medium text-ds-ink">
             {t('scheduleExtraSkillDirs')}
             <textarea
               value={draft.extraDirs}
               onChange={(event) => update({ extraDirs: event.target.value })}
               placeholder={t('scheduleExtraSkillDirsPlaceholder')}
-              className="min-h-[92px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-[14px] leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
+              className="min-h-[92px] w-full resize-y rounded-xl border border-ds-border bg-ds-main/60 px-3 py-3 text-ds-lg leading-6 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25"
             />
           </label>
         </div>
@@ -152,14 +152,14 @@ export function ScheduleDefaultsDialog({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             {t('cancel')}
           </button>
           <button
             type="button"
             onClick={() => void save()}
-            className="rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg transition hover:opacity-90"
+            className="rounded-xl bg-ds-userbubble px-4 py-2 text-ds-md font-semibold text-ds-userbubbleFg transition hover:opacity-90"
           >
             {t('confirm')}
           </button>

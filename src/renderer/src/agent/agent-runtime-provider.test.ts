@@ -1467,6 +1467,7 @@ describe('AgentRuntimeProvider', () => {
         return {
           id: 'mem-2',
           text: input.payload?.text,
+          ...(input.payload?.research !== undefined ? { research: input.payload.research } : {}),
           scope: 'workspace',
           tags: [],
           createdAt: '2026-06-20T00:00:00.000Z',
@@ -1474,10 +1475,11 @@ describe('AgentRuntimeProvider', () => {
         }
       }
       if (input.operation === 'updateMemory') {
-        const patch = input.payload?.patch as { text?: string } | undefined
+        const patch = input.payload?.patch as { text?: string; research?: unknown } | undefined
         return {
           id: input.payload?.memoryId,
           text: patch?.text,
+          ...(patch?.research !== undefined ? { research: patch.research } : {}),
           scope: 'workspace',
           tags: ['updated'],
           disabled: false,
@@ -1584,6 +1586,21 @@ describe('AgentRuntimeProvider', () => {
         text: 'New memory'
       }
     })
+    const research = {
+      status: 'unverified' as const,
+      sources: [{ owner: 'artifact-versions', locator: 'artifact-1', version: 'v1', access: 'unknown' as const }],
+      conditions: ['Simulation only'], counterexamples: ['Device acceptance failed'], corrections: [], history: []
+    }
+    await expect(provider.createMemory({ content: 'Conditional result', workspace: '/tmp/workspace', research })).resolves.toMatchObject({
+      content: 'Conditional result', research
+    })
+    expect(auxiliary).toHaveBeenLastCalledWith({ runtimeId: 'codex', operation: 'createMemory', payload: {
+      content: 'Conditional result', text: 'Conditional result', workspace: '/tmp/workspace', research
+    } })
+    await expect(provider.updateMemory('mem-2', { research })).resolves.toMatchObject({ research })
+    expect(auxiliary).toHaveBeenLastCalledWith({ runtimeId: 'codex', operation: 'updateMemory', payload: {
+      memoryId: 'mem-2', patch: { research }
+    } })
     await expect(provider.updateMemory?.('mem-2', { content: 'Updated memory', tags: ['updated'] })).resolves.toMatchObject({
       id: 'mem-2',
       content: 'Updated memory',

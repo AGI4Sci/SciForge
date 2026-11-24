@@ -14,11 +14,35 @@
   "hostDependencies": [
     "@deepseek-ai/dsh-tools"
   ],
+  "hostServices": ["identity-access.authenticated-cloud", "agentDiscussion", "visualCapture"],
   "ports": [
+    "agent-discussion.run",
     "visual-capture.read",
     "visual-capture.capture"
   ],
   "tools": {
+    "anchored_comments_shared_discard": { "id": "anchored-comments.shared.discard", "scope": "workspace", "effect": "workspace-write", "tags": ["anchored-comments", "shared"] },
+    "anchored_comments_prose_translate": { "id": "anchored-comments.prose.translate", "scope": "workspace", "effect": "workspace-write", "tags": ["anchored-comments", "translation"] },
+    "anchored_comments_anchor_reconcile": { "id": "anchored-comments.anchor.reconcile", "scope": "workspace", "effect": "workspace-write", "tags": ["anchored-comments", "anchor"] },
+    "anchored_comments_shared_projects": { "id": "anchored-comments.shared.projects", "scope": "workspace", "effect": "read", "tags": ["anchored-comments", "shared"] },
+    "anchored_comments_shared_pull": { "id": "anchored-comments.shared.pull", "scope": "workspace", "effect": "read", "tags": ["anchored-comments", "shared"] },
+    "anchored_comments_shared_retry": { "id": "anchored-comments.shared.retry", "scope": "workspace", "effect": "external-write", "approval": "confirmation", "tags": ["anchored-comments", "shared"] },
+    "anchored_comments_shared_publish": { "id": "anchored-comments.shared.publish", "scope": "workspace", "effect": "external-write", "approval": "confirmation", "tags": ["anchored-comments", "shared"] },
+    "anchored_comments_shared_submit": { "id": "anchored-comments.shared.submit", "scope": "workspace", "effect": "external-write", "approval": "confirmation", "tags": ["anchored-comments", "shared"] },
+    "anchored_comments_reply": {
+      "id": "anchored-comments.conversation.reply", "scope": "workspace", "effect": "workspace-write",
+      "tags": ["anchored-comments", "conversation", "reply"]
+    },
+    "anchored_comments_cancel": {
+      "id": "anchored-comments.conversation.cancel", "scope": "workspace", "effect": "workspace-write",
+      "tags": ["anchored-comments", "conversation", "cancel"]
+    },
+    "anchored_comments_fork": {
+      "id": "anchored-comments.conversation.fork",
+      "scope": "workspace",
+      "effect": "workspace-write",
+      "tags": ["anchored-comments", "conversation", "fork"]
+    },
     "anchored_comments_list": {
       "id": "anchored-comments.list",
       "scope": "workspace",

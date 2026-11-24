@@ -60,7 +60,7 @@ export function TodoPanel({
           </button>
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <ListTodo className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.85} />
-            <span className="truncate text-[13px] font-semibold text-ds-ink">
+            <span className="truncate text-ds-md font-semibold text-ds-ink">
               {t('todoPanelTitle')}
             </span>
           </div>
@@ -90,8 +90,8 @@ export function TodoPanel({
               <ListTodo className="h-6 w-6" strokeWidth={1.65} />
             </div>
             <div>
-              <div className="text-[13px] font-semibold text-ds-ink">{t('todoEmptyTitle')}</div>
-              <div className="mt-1 max-w-64 text-[12px] leading-5 text-ds-muted">
+              <div className="text-ds-md font-semibold text-ds-ink">{t('todoEmptyTitle')}</div>
+              <div className="mt-1 max-w-64 text-ds-sm leading-5 text-ds-muted">
                 {t('todoEmptyDescription')}
               </div>
             </div>
@@ -116,8 +116,8 @@ export function TodoPanel({
 function TodoStat({ label, value }: { label: string; value: number }): ReactElement {
   return (
     <div className="rounded-lg bg-ds-surface-subtle px-2.5 py-2 dark:bg-white/6">
-      <div className="text-[15px] font-semibold leading-none text-ds-ink">{value}</div>
-      <div className="mt-1 truncate text-[10px] font-medium uppercase tracking-[0.04em] text-ds-faint">
+      <div className="text-ds-xl font-semibold leading-none text-ds-ink">{value}</div>
+      <div className="mt-1 truncate text-ds-2xs font-medium uppercase tracking-[0.04em] text-ds-faint">
         {label}
       </div>
     </div>
@@ -154,7 +154,7 @@ function TodoRow({
         </button>
         <div className="min-w-0 flex-1">
           <div
-            className={`break-words text-[13px] leading-5 ${
+            className={`break-words text-ds-md leading-5 ${
               item.status === 'completed'
                 ? 'text-ds-faint line-through decoration-ds-faint/60'
                 : 'text-ds-ink'
@@ -166,7 +166,7 @@ function TodoRow({
             <button
               type="button"
               onClick={onOpenPlan}
-              className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-ds-faint transition hover:bg-ds-hover hover:text-accent"
+              className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 text-ds-xs text-ds-faint transition hover:bg-ds-hover hover:text-accent"
               title={item.source.relativePath}
             >
               <ExternalLink className="h-3 w-3 shrink-0" strokeWidth={1.8} />
@@ -181,7 +181,7 @@ function TodoRow({
             key={status}
             type="button"
             onClick={() => onStatus(status)}
-            className={`rounded-full px-2 py-1 text-[11px] font-medium transition ${
+            className={`rounded-full px-2 py-1 text-ds-xs font-medium transition ${
               item.status === status
                 ? 'bg-accent/12 text-accent'
                 : 'text-ds-faint hover:bg-ds-hover hover:text-ds-ink'

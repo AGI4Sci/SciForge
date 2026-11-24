@@ -921,7 +921,7 @@ describe('root package workspace contracts', () => {
     // Workspace installation includes independently built plugin packages;
     // release inclusion remains the narrower runtime-manifest decision above.
     expect(rootPackage.workspaces.filter((workspace) => workspace.startsWith('plugins/')))
-      .toEqual(['plugins/*'])
+      .toEqual(['plugins/anchored-comments', 'plugins/change-inspector', 'plugins/scientific-plotting'])
     expect(rootPackage.workspaces.some(
       (workspace) => workspace === 'internal' || workspace.startsWith('internal/')
     )).toBe(false)

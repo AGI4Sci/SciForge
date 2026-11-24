@@ -1,12 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { stageDomainMainNativeAddons } from '../../../../../scripts/domain-main-native-addons.mjs'
 
@@ -16,8 +18,10 @@ const nativeRoot = join(testRoot, 'private-vault', 'native')
 const buildScript = join(nativeRoot, 'build-addon.mjs')
 const binaryName = 'identity_private_vault.node'
 const sourceBinary = join(nativeRoot, 'build', 'Release', binaryName)
+const stagingRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-stage-'))
+afterAll(() => rmSync(stagingRoot, { recursive: true, force: true }))
 const stagedBinary = join(
-  workspaceRoot,
+  stagingRoot,
   'out',
   'main',
   'native',
@@ -47,7 +51,7 @@ describe('Identity native private-vault fresh build', () => {
     expect(runNodeScript(buildScript).status).not.toBe(0)
   })
 
-  it('compiles, stages, loads, and completes an exact Keychain round-trip on macOS', async () => {
+  it('compiles, stages, and loads the native binding on macOS', async () => {
     if (process.platform !== 'darwin') return
 
     const sourceMetadata = await stat(sourceBinary)
@@ -66,7 +70,7 @@ describe('Identity native private-vault fresh build', () => {
 
     await expect(stageDomainMainNativeAddons({
       repositoryRoot: workspaceRoot,
-      mainOutputDirectory: join(workspaceRoot, 'out', 'main'),
+      mainOutputDirectory: join(stagingRoot, 'out', 'main'),
       platform: process.platform
     })).resolves.toEqual([{
       packageName: '@sciforge/domain-identity-access',
@@ -86,21 +90,47 @@ describe('Identity native private-vault fresh build', () => {
       readSecret(vaultKey: string): Promise<string | null>
       deleteSecret(vaultKey: string): void
     }>
-    const key = randomBytes(32).toString('hex')
-    const value = `identity-native-round-trip-${randomBytes(16).toString('hex')}`
     expect(binding.isAvailable()).toBe(true)
-    expect(binding.hasSecret(key)).toBe(false)
-    try {
-      binding.storeSecret(key, value)
-      expect(binding.hasSecret(key)).toBe(true)
-      const pendingRead = binding.readSecret(key)
-      expect(pendingRead).toBeInstanceOf(Promise)
-      expect(await pendingRead).toBe(value)
-    } finally {
-      binding.deleteSecret(key)
-    }
-    expect(binding.hasSecret(key)).toBe(false)
   }, 20_000)
+
+  // OS authorization is interactive. Ordinary regression runs must not mutate
+  // the developer's Keychain or wait indefinitely inside a synchronous addon.
+  it.runIf(process.platform === 'darwin' && process.env.SCIFORGE_TEST_KEYCHAIN === '1')(
+    'completes an explicitly authorized native Keychain round-trip in a bounded process',
+    () => {
+      const key = randomBytes(32).toString('hex')
+      const value = `identity-native-round-trip-${randomBytes(16).toString('hex')}`
+      const result = spawnSync(process.execPath, ['-e', `
+        const assert = require('node:assert/strict')
+        const binding = require(process.argv[1])
+        const key = process.argv[2]
+        const value = process.argv[3]
+        ;(async () => {
+          assert.equal(binding.hasSecret(key), false)
+          try {
+            binding.storeSecret(key, value)
+            assert.equal(binding.hasSecret(key), true)
+            const pendingRead = binding.readSecret(key)
+            assert.ok(pendingRead instanceof Promise)
+            assert.equal(await pendingRead, value)
+          } finally {
+            binding.deleteSecret(key)
+          }
+          assert.equal(binding.hasSecret(key), false)
+        })().catch(error => { console.error(error.message); process.exitCode = 1 })
+      `, stagedBinary, key, value], {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        timeout: 20_000,
+        killSignal: 'SIGKILL',
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+      // Report only the random test-item identifier if interrupted. Never scan
+      // real credentials to guess whether an unknown item belongs to this test.
+      expect(result.error, `Native Keychain smoke did not finish; test item ${key}`).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+    }, 25_000
+  )
 
   it('keeps the staged main binary inside Electron Builder include and unpack rules', () => {
     const require = createRequire(import.meta.url)

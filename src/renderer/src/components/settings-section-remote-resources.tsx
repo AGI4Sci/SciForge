@@ -15,10 +15,10 @@ export function RemoteResourcesSettingsSection({
   return (
     <SettingsCard title={t('remoteResourcesTitle')}>
       <div className="px-3 py-4">
-        <div className="text-[14px] font-semibold text-ds-ink">
+        <div className="text-ds-lg font-semibold text-ds-ink">
           {t('remoteWorkspaceSettingsTitle')}
         </div>
-        <p className="mt-0.5 text-[13px] leading-relaxed text-ds-muted">
+        <p className="mt-0.5 text-ds-md leading-relaxed text-ds-muted">
           {t('remoteWorkspaceSettingsDesc')}
         </p>
       </div>

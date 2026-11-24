@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitPageDockSizes, restorePageDockState } from './workbench-page-layout'
+import { fitPageDockSizes, fitPageFloatingBounds, pageDockDropTarget, restorePageDockState } from './workbench-page-layout'
 import { WorkbenchMainAreaContributionRegistry } from '../domain-modules/workbench-main-area'
 
 const registry = new WorkbenchMainAreaContributionRegistry()
@@ -11,6 +11,33 @@ for (const [id, defaultPosition] of [['fixture.notes', 'right'], ['fixture.team'
 }
 
 describe('page docking preferences', () => {
+  it('restores floating and external placement with bounded geometry and return locations', () => {
+    const state = restorePageDockState(registry.list(), JSON.stringify({
+      pages: { 'fixture.notes': { position: 'window', open: true }, 'fixture.team': { position: 'floating', open: true } },
+      floating: { 'fixture.team': { x: -5000, y: 99999, width: 5000, height: 700 } },
+      windows: { 'fixture.notes': { x: -1200, y: 20, width: 720, height: 600 } },
+      docked: { 'fixture.notes': 'bottom', 'fixture.team': 'corrupt' }
+    }))
+    expect(state.pages['fixture.notes'].position).toBe('window')
+    expect(state.pages['fixture.team'].position).toBe('floating')
+    expect(state.docked).toEqual({ 'fixture.notes': 'bottom', 'fixture.team': 'main' })
+    expect(state.windows['fixture.notes'].x).toBe(-1200)
+    expect(fitPageFloatingBounds(state.floating['fixture.team'], 900, 600)).toEqual({ x: 0, y: 0, width: 900, height: 600 })
+    expect(fitPageFloatingBounds({ x: 800, y: 800, width: 600, height: 400 }, 300, 150)).toEqual({ x: 0, y: 0, width: 300, height: 150 })
+  })
+
+  it('recognizes edge and central docking targets while leaving free space for floating', () => {
+    expect(pageDockDropTarget(10, 200, 1000, 800)).toBe('left')
+    expect(pageDockDropTarget(990, 200, 1000, 800)).toBe('right')
+    expect(pageDockDropTarget(500, 790, 1000, 800)).toBe('bottom')
+    expect(pageDockDropTarget(500, 10, 1000, 800)).toBe('main')
+    expect(pageDockDropTarget(500, 400, 1000, 800)).toBe('main')
+    expect(pageDockDropTarget(448, 400, 1000, 800)).toBe('left')
+    expect(pageDockDropTarget(552, 400, 1000, 800)).toBe('right')
+    expect(pageDockDropTarget(500, 452, 1000, 800)).toBe('bottom')
+    expect(pageDockDropTarget(250, 200, 1000, 800)).toBeNull()
+    expect(pageDockDropTarget(-20, 200, 1000, 800)).toBeNull()
+  })
   it('uses package defaults and only opens a page on request', () => {
     const state = restorePageDockState(registry.list(), null)
     expect(state.pages).toEqual({ 'fixture.notes': { position: 'right', open: false }, 'fixture.team': { position: 'main', open: false } })

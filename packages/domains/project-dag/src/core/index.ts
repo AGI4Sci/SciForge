@@ -98,10 +98,6 @@ export class ProjectDagCore {
         workspaceRoot: session.workspaceRoot
       }).then((value) => {
         const committed = evidenceDagCommittedSnapshotSchema.parse(value)
-        if (committed.threadId !== sessionId) {
-          throw projectError('evidence_snapshot_unavailable',
-            `Evidence Snapshot identity does not match ${sessionId}.`, false)
-        }
         return committed
       }).catch((error) => {
         if (error instanceof ProjectDagRuntimeError) throw error
@@ -117,7 +113,7 @@ export class ProjectDagCore {
       ({ threadId, digest }) => ({ threadId, digest })
     )
     const capturedScope = projectDagCapturedScopeSchema.parse({
-      includedSessions,
+      includedSessions: evidenceSnapshots.map(snapshot => snapshot.threadId),
       excludedSessions,
       isolatedSessions
     })

@@ -28,7 +28,7 @@ try {
   // The first-run overlay belongs to the Host and may legitimately be absent.
   await page.getByRole('button', { name: 'Close', exact: true }).first()
     .click({ timeout: 5_000 }).catch(() => undefined)
-  await page.getByText('思源笔记', { exact: true }).first().click({ timeout: 30_000 })
+  await page.getByText('云笔记', { exact: true }).first().click({ timeout: 30_000 })
 
   // The embedded editor is a native child view owned by the package main
   // process, not a DOM tag, so it is discovered from the main process by the
@@ -99,16 +99,23 @@ try {
 
   await page.screenshot({ path: join(profile, 'editor.png') })
 
-  // The page owns its own configuration; saving closes the panel and persists
-  // only the service address.
-  await page.getByRole('button', { name: '设置', exact: true }).click({ timeout: 30_000 })
-  const panel = page.getByRole('dialog', { name: '思源笔记设置' })
+  // The package contributes its form to the Host's File → Settings surface.
+  if (process.platform === 'win32') {
+    await page.getByRole('button', { name: /^(File|文件)$/ }).click()
+    await page.getByRole('menuitem', { name: /Settings|设置/ }).click()
+  } else {
+    await page.getByRole('button', { name: /^(Settings|设置)$/ }).click()
+  }
+  await page.locator('aside nav').getByRole('button', { name: '云笔记', exact: true }).click()
+  const panel = page.getByRole('region', { name: '云笔记设置', exact: true })
   await panel.waitFor({ state: 'visible', timeout: 30_000 })
-  await panel.getByRole('textbox').fill(serviceUrl)
+  await panel.getByRole('textbox', { name: '服务地址', exact: true }).fill(serviceUrl)
   await panel.getByRole('button', { name: '保存设置', exact: true }).click()
-  await panel.waitFor({ state: 'hidden', timeout: 30_000 })
+  await panel.getByText('设置已保存，主对话与云笔记已同步生效。', { exact: true }).waitFor()
   const persisted = await page.evaluate(() => localStorage.getItem('sciforge.siyuan.editor'))
-  assert.match(persisted ?? '', new RegExp(serviceUrl.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'))
+  assert.equal(persisted, null)
+  await panel.getByRole('button', { name: '测试已保存的连接', exact: true }).click()
+  await panel.getByText(/连接正常（可读取）/u).waitFor()
 
   let write = 'skipped'
   if (token) {
@@ -124,6 +131,8 @@ try {
       return { first: first.output, second: second.output }
     })
     assert.equal(saved.first.id, saved.second.id)
+    assert.equal(saved.first.verified, true)
+    assert.equal(saved.second.verified, true)
     const summary = await fetch(`${origin}/api/export/exportMdContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Token ${token}` },

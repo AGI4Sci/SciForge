@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
+import { evidenceDagStorageRoot } from '../storage.js'
 import { ownedPythonLaunch } from '@sciforge/domain-sdk/host'
 import type {
   DomainMainRuntimeLifecycleContext,
@@ -29,7 +30,8 @@ export type EvidenceDagSidecarPort = Readonly<{
 export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
   private context: DomainMainRuntimeLifecycleContext | undefined
   private child: ChildProcess | undefined
-  private activeReasoner: DomainMainTextReasoner | undefined
+  private activeReasoner: DomainMainTextReasoner | null | undefined
+  private generation = 0
   private managedBaseUrl: string | undefined
   private ensureInFlight: Promise<void> | undefined
   private transition: Promise<void> = Promise.resolve()
@@ -48,6 +50,7 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
 
   configure(context: DomainMainRuntimeLifecycleContext): void {
     this.context = context
+    this.generation++
   }
 
   endpoint(): EvidenceDagServiceEndpoint {
@@ -63,7 +66,11 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
 
   ensureReady(): Promise<void> {
     if (this.ensureInFlight) return this.ensureInFlight
-    const transition = this.transition.then(() => this.ensureCurrent())
+    const generation = this.generation
+    const transition = this.transition.then(async () => {
+      try { await this.ensureCurrent(generation) }
+      catch (error) { await this.stopChild(); throw error }
+    })
     this.transition = transition.catch(() => undefined)
     const inFlight = transition.finally(() => {
       if (this.ensureInFlight === inFlight) this.ensureInFlight = undefined
@@ -73,6 +80,7 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
   }
 
   stop(): Promise<void> {
+    this.generation++
     const transition = this.transition.then(() => this.stopChild())
     this.transition = transition.catch(() => undefined)
     return transition
@@ -96,27 +104,37 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
     })
   }
 
-  private async ensureCurrent(): Promise<void> {
+  private async ensureCurrent(generation: number): Promise<void> {
     const context = this.context
     if (!context) throw new Error('Evidence DAG runtime lifecycle is not active.')
+    const assertCurrent = () => {
+      if (generation !== this.generation || context.signal.aborted) {
+        throw new Error('Evidence DAG lifecycle changed during startup.')
+      }
+    }
+    assertCurrent()
     if (!await context.enablement.isEnabled()) {
       throw new Error('Evidence DAG is disabled.')
     }
     const reasoner = await resolveTextReasoner(context)
-    if (this.activeReasoner && !sameTextReasoner(this.activeReasoner, reasoner)) {
+    assertCurrent()
+    if (this.child && !sameTextReasoner(this.activeReasoner ?? null, reasoner)) {
       await this.stopChild()
     }
-    if (await this.healthy()) return
+    const healthy = await this.healthy()
+    assertCurrent()
+    if (healthy) return
     if (context.environment.SCIFORGE_EVIDENCE_DAG_AUTO_START === '0') {
       throw new Error('Evidence DAG auto-start is disabled and no service is reachable.')
     }
     const activeChild = this.child
     if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
-      await this.waitUntilReady(activeChild)
+      await this.waitUntilReady(activeChild, assertCurrent)
       return
     }
 
     const endpoint = await this.prepareSpawnEndpoint(context)
+    assertCurrent()
     const url = new URL(endpoint.baseUrl)
     const python = context.environment.SCIFORGE_PYTHON_COMMAND?.trim() ||
       (process.platform === 'win32' ? 'python' : 'python3')
@@ -127,13 +145,15 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
       PYTHONUTF8: '1',
       EDAG_HOST: '127.0.0.1',
       EDAG_PORT: url.port || '3897',
-      EDAG_STORAGE_DIR: context.environment.EDAG_STORAGE_DIR ||
-        join(context.userDataDir, 'evidence-dag', 'threads'),
+      EDAG_STORAGE_DIR: evidenceDagStorageRoot(context.userDataDir, context.environment),
       [EVIDENCE_DAG_SERVICE_URL_ENV]: endpoint.baseUrl,
       [EVIDENCE_DAG_API_KEY_ENV]: endpoint.apiKey,
-      EDAG_MODEL_ROUTER_BASE_URL: reasoner.baseUrl,
-      EDAG_MODEL_ROUTER_API_KEY: reasoner.apiKey,
-      EDAG_MODEL_ROUTER_MODEL: reasoner.model,
+      // Never inherit a revoked host/router credential from the launch environment.
+      EDAG_MODEL_ROUTER_BASE_URL: reasoner?.baseUrl,
+      EDAG_MODEL_ROUTER_API_KEY: reasoner?.apiKey,
+      EDAG_MODEL_ROUTER_MODEL: reasoner?.model,
+      SCIFORGE_MODEL_ROUTER_BASE_URL: undefined,
+      SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: undefined,
       EDAG_MODEL_ROUTER_TIMEOUT_S:
         context.environment.EDAG_MODEL_ROUTER_TIMEOUT_S || '180',
       EDAG_MODEL_ROUTER_MAX_ATTEMPTS:
@@ -177,12 +197,7 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
         })
       }
     })
-    try {
-      await this.waitUntilReady(child)
-    } catch (error) {
-      if (this.child === child) await this.stopChild()
-      throw error
-    }
+    await this.waitUntilReady(child, assertCurrent)
   }
 
   private async healthy(): Promise<boolean> {
@@ -202,12 +217,14 @@ export class EvidenceDagSidecar implements EvidenceDagSidecarPort {
     }
   }
 
-  private async waitUntilReady(child?: ChildProcess): Promise<void> {
+  private async waitUntilReady(child: ChildProcess, assertCurrent: () => void): Promise<void> {
     const startedAt = Date.now()
     const timeoutMs = this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
     while (Date.now() - startedAt < timeoutMs) {
-      if (await this.healthy()) return
-      if (child && (child.exitCode !== null || child.signalCode !== null || this.child !== child)) {
+      const healthy = await this.healthy()
+      assertCurrent()
+      if (healthy) return
+      if (child.exitCode !== null || child.signalCode !== null || this.child !== child) {
         const outcome = child.signalCode
           ? `signal ${child.signalCode}`
           : `exit code ${child.exitCode ?? 'unknown'}`
@@ -255,11 +272,9 @@ export async function allocateLoopbackPort(): Promise<number> {
 
 async function resolveTextReasoner(
   context: DomainMainRuntimeLifecycleContext
-): Promise<DomainMainTextReasoner> {
+): Promise<DomainMainTextReasoner | null> {
   const configured = await context.modelAccess.textReasoner()
-  if (!configured) {
-    throw new Error('Evidence DAG requires configured text reasoning model access.')
-  }
+  if (!configured) return null
   const baseUrl = configured.baseUrl.trim().replace(/\/+$/u, '')
   const apiKey = configured.apiKey.trim()
   const model = configured.model.trim()
@@ -279,9 +294,10 @@ async function resolveTextReasoner(
 }
 
 function sameTextReasoner(
-  left: DomainMainTextReasoner,
-  right: DomainMainTextReasoner
+  left: DomainMainTextReasoner | null,
+  right: DomainMainTextReasoner | null
 ): boolean {
+  if (!left || !right) return left === right
   return left.baseUrl === right.baseUrl &&
     left.apiKey === right.apiKey &&
     left.model === right.model

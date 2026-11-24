@@ -1,12 +1,13 @@
 {
   "name": "@sciforge/domain-siyuan-content-space-provider",
-  "version": "0.3.1",
+  "version": "0.10.1",
   "license": "Apache-2.0",
   "type": "module",
-  "description": "SiYuan server-mode Content Space provider with an embedded native editor.",
+  "description": "SciForge cloud notes with an embedded SiYuan editor and governed document capabilities.",
   "exports": {
     "./definition": "./src/definition.ts",
     "./main": "./src/main/index.ts",
+    "./contract": "./src/editor-contract.ts",
     "./client": "./src/main/client.ts",
     "./smoke": "./src/main/smoke.ts",
     "./renderer": "./src/renderer/index.tsx"
@@ -23,24 +24,31 @@
     "test": "vitest run --config vitest.config.ts",
     "smoke": "node --env-file-if-exists=../../../.env.siyuan --import tsx scripts/smoke.ts",
     "editor:smoke": "node --env-file-if-exists=../../../.env.siyuan scripts/editor-smoke.mjs",
-    "comment-identity:smoke": "node scripts/comment-identity-smoke.mjs"
+    "comment-identity:smoke": "node scripts/comment-identity-smoke.mjs",
+    "native-ai:smoke": "node scripts/native-ai-smoke.mjs"
   },
   "dependencies": {
-    "@sciforge/domain-content-space": "5.0.4",
-    "@sciforge/domain-sdk": "^0.2.32",
-    "zod": "^4.4.3",
+    "@sciforge/domain-identity-access": "8.0.8",
+    "@sciforge/domain-sdk": "^0.2.43",
     "react": "^19.0.0",
-    "@sciforge/domain-identity-access": "5.1.1"
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5",
+    "zod": "^4.4.3",
+    "react-i18next": "^15.7.4",
+    "@sciforge/domain-collaboration": "15.4.3",
+    "@sciforge/cloud-spaces-contracts": "1.0.0",
+    "@sciforge/document-sharing-contracts": "2.0.0"
   },
   "devDependencies": {
-    "happy-dom": "^20.11.2",
-    "react-dom": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.11.2",
+    "playwright-core": "^1.61.1",
+    "react-dom": "^19.0.0",
     "tsx": "^4.20.5",
     "typescript": "^5.8.2",
-    "vitest": "^4.1.7",
-    "@types/react": "^19.0.0",
-    "playwright-core": "^1.61.1"
+    "vitest": "^4.1.7"
   }
 }

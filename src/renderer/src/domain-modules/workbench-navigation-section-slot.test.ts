@@ -8,10 +8,26 @@ import {
 const contract = {
   location: WORKBENCH_NAVIGATION_SECTION_SLOT,
   contractVersion: '1.0.0' as const,
-  label: 'fixtureCloudProjects'
+  label: 'fixtureCloudProjects',
+  placement: 'body' as const
 }
 
 describe('WorkbenchNavigationSectionContributionRegistry', () => {
+  it('carries the contract placement into registered contribution metadata', () => {
+    const registry = new WorkbenchNavigationSectionContributionRegistry()
+    registry.register({
+      id: 'fixture.navigation',
+      ownerId: 'fixture.owner',
+      contract: { ...contract, placement: 'footer' },
+      value: { render: () => null }
+    })
+
+    expect(registry.list()).toContainEqual(expect.objectContaining({
+      id: 'fixture.navigation',
+      contribution: expect.objectContaining({ placement: 'footer' })
+    }))
+  })
+
   it('orders package-owned sections deterministically', () => {
     const registry = new WorkbenchNavigationSectionContributionRegistry()
     registry.register({

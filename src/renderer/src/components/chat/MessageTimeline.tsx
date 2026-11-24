@@ -13,14 +13,14 @@ import { deriveTurnSections } from './derive-turn-sections'
 import { MessageTimelineEmptyHero, ThreadForkBanner, ThreadForkPoint } from './message-timeline-empty'
 import { MessageBubble } from './message-timeline-bubbles'
 import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } from './message-timeline-cards'
+import { CodeSelectionScope } from '../code-selection-scope'
 import {
   TimelineImageResultsPanel,
   MarkdownImageArtifactProvider,
   timelineImagesFromToolBlocks,
   type TimelineVisualReviewArtifact
 } from './message-timeline-media'
-import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
-import { AnimatedWorkLogo } from './AnimatedWorkLogo'
+import { ProcessSectionRow, groupProcessSections, processBlockHasError } from './message-timeline-process'
 import {
   createGroupTurnsMemo,
   sameTurnContent,
@@ -56,6 +56,7 @@ type Props = {
   activeThreadId: string | null
   runtimeConnection: RuntimeConnectionStatus
   runtimeError?: string | null
+  onDismissRuntimeError?: () => void
   onRetryConnection: () => void
   onOpenSettings: () => void
   autoScrollEnabled?: boolean
@@ -235,6 +236,7 @@ function MessageTimelineComponent({
   activeThreadId,
   runtimeConnection,
   runtimeError,
+  onDismissRuntimeError,
   onRetryConnection,
   onOpenSettings,
   autoScrollEnabled = true,
@@ -392,14 +394,16 @@ function MessageTimelineComponent({
 
   return (
     <MarkdownImageArtifactProvider key={`${activeThreadId ?? ''}:${timelineWorkspaceRoot}`} images={[]} workspaceRoot={timelineWorkspaceRoot} threadId={activeThreadId}>
+    <CodeSelectionScope.Provider value={{ sessionId: activeThreadId ?? undefined, workspaceRoot: timelineWorkspaceRoot }}>
     <div ref={containerRef} className="ds-no-drag flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-      {sourceNavigation && <p role="status" className="sticky top-0 z-10 border-b border-ds-border bg-ds-main px-4 py-2 text-xs text-ds-muted">{t(sourceNavigation.status === 'located' && sourceNavigation.itemId && !sourceNavigation.match?.itemFound ? 'conversationSourceItemMissing' : sourceNavigationLabels[sourceNavigation.status])}</p>}
+      {sourceNavigation && <p role="status" className="sticky top-0 z-10 border-b border-ds-border bg-ds-main px-4 py-2 text-ds-sm text-ds-muted">{t(sourceNavigation.status === 'located' && sourceNavigation.itemId && !sourceNavigation.match?.itemFound ? 'conversationSourceItemMissing' : sourceNavigationLabels[sourceNavigation.status])}</p>}
       <div className="ds-message-timeline-content ds-chat-column-inset mx-auto flex w-full min-w-0 max-w-4xl flex-col gap-8 pb-10 pt-8">
         {(!hasContent || !activeThreadId) && emptyPresentation === 'dashboard' ? (
           <MessageTimelineEmptyHero
             ready={runtimeConnection === 'ready'}
             hasWorkspace={!!workspaceRoot}
             runtimeError={runtimeError}
+            onDismissRuntimeError={onDismissRuntimeError}
             runtimeId={activeAgentRuntime}
             onPickWorkspace={() => void chooseWorkspace()}
             onRetry={onRetryConnection}
@@ -417,7 +421,7 @@ function MessageTimelineComponent({
             <button
               type="button"
               onClick={() => loadEarlierTurns({ userInitiated: true })}
-              className="ds-chip rounded-full px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink"
+              className="ds-chip rounded-full px-4 py-2 text-ds-md font-medium text-ds-muted transition hover:text-ds-ink"
             >
               {t('timelineShowEarlierTurns', { count: Math.min(hiddenTurnCount, TURN_PAGE_SIZE) })}
             </button>
@@ -430,7 +434,7 @@ function MessageTimelineComponent({
               type="button"
               disabled={serverHistoryLoading}
               onClick={() => void loadEarlierHistory(loadEarlierThreadHistory)}
-              className="ds-chip rounded-full px-4 py-2 text-[13px] font-medium text-ds-muted transition hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+              className="ds-chip rounded-full px-4 py-2 text-ds-md font-medium text-ds-muted transition hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
             >
               {serverHistoryLoading
                 ? t('loading')
@@ -517,7 +521,7 @@ function MessageTimelineComponent({
               <div className="ds-selectable-text whitespace-pre-wrap break-words text-left">
                 {message.displayText ?? message.text}
               </div>
-              <div className="mt-2 flex justify-end gap-2 text-[11px] text-ds-faint">
+              <div className="mt-2 flex justify-end gap-2 text-ds-xs text-ds-faint">
                 {message.createdAt ? <span>{new Date(message.createdAt).toLocaleString()}</span> : null}
                 {message.modelLabel ?? message.model ? <span>{message.modelLabel ?? message.model}</span> : null}
               </div>
@@ -538,7 +542,7 @@ function MessageTimelineComponent({
               onClick={() => {
                 collapseEarlierTurns()
               }}
-              className="rounded-full px-3 py-1.5 text-[12.5px] font-medium text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              className="rounded-full px-3 py-1.5 text-ds-sm font-medium text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
             >
               {t('timelineCollapseEarlierTurns')}
             </button>
@@ -575,7 +579,7 @@ function MessageTimelineComponent({
         ) : null}
       </div>
     </div>
-    </MarkdownImageArtifactProvider>
+    </CodeSelectionScope.Provider></MarkdownImageArtifactProvider>
   )
 }
 
@@ -646,7 +650,7 @@ function MessageTurn({
   const liveProcessText = [liveReasoning, liveThink].filter(Boolean).join('\n\n')
   const liveProcessMeta = liveReasoning.trim() ? liveReasoningMeta : null
   const [workExpandedOverride, setWorkExpandedOverride] = useState<boolean | null>(null)
-  const workExpanded = workExpandedOverride ?? (isProcessing || Boolean(sourceFocused))
+  const workExpanded = workExpandedOverride ?? Boolean(sourceFocused)
 
   const { timeline, turnFileChanges } = useMemo(
     () =>
@@ -698,8 +702,8 @@ function MessageTurn({
     [processSections]
   )
   const showLiveAssistant = !!liveContent.trim()
-  // Keep completed reasoning/tool work tucked away, but make the active turn's
-  // work visible unless the user explicitly collapses it.
+  // Keep technical work behind one disclosure. Conversation, failures and
+  // requests for human input remain visible in their original order.
 
   const hasProcess = isProcessing || processBlocks.length > 0
   const messagePresentationScope = useMemo<ChatMessagePresentationScope>(() => ({
@@ -733,20 +737,21 @@ function MessageTurn({
         <div className="flex flex-col gap-1 pb-2">
           <WorkMetaRow
             processing={isProcessing}
+            waitingForInput={turn.blocks.some((block) => block.kind === 'user_input' && (block.status === 'pending' || block.status === 'error'))}
             terminalStatus={terminalStatus}
             stepCount={processBlocks.length}
             durationMs={durationMs}
             liveStartedAtMs={liveStartedAtMs}
             reasoningDurationMs={reasoningDurationMs}
             expanded={workExpanded}
-            onToggle={() => setWorkExpandedOverride((value) => !(value ?? isProcessing))}
+            onToggle={() => setWorkExpandedOverride(!workExpanded)}
           />
           {workExpanded && hiddenProcessSectionCount > 0 ? (
             <button
               type="button"
               onClick={() => setVisibleProcessSectionCount((count) =>
                 Math.min(processSections.length, count + PROCESS_SECTION_PAGE_SIZE))}
-              className="mb-1 w-fit rounded-full px-3 py-1.5 text-[12px] font-medium text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+              className="mb-1 w-fit rounded-full px-3 py-1.5 text-ds-sm font-medium text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
             >
               {t('timelineShowEarlierWork', { count: Math.min(hiddenProcessSectionCount, PROCESS_SECTION_PAGE_SIZE) })}
             </button>
@@ -756,11 +761,23 @@ function MessageTurn({
 
       {timelineSections.map((entry) => {
         const block = entry.kind === 'process' ? entry.blocks[0] : entry.block
+        const visibleSections = entry.kind !== 'process' ? [] : workExpanded
+          ? entry.sections.filter((section) => visibleProcessSectionIds.has(section.id))
+          : groupProcessSections(entry.blocks.filter((item) =>
+            (isProcessing && item.kind === 'assistant') || processBlockHasError(item) || (item.kind === 'system' && item.severity !== 'info')
+          ))
         return <Fragment key={block.id}>
           {entry.kind === 'process' ? (
-            workExpanded ? <div className="flex flex-col gap-1">
-              {entry.sections.filter((section) => visibleProcessSectionIds.has(section.id)).map((section) => (
-                <ProcessSectionRow
+            visibleSections.length > 0 ? <div className="flex flex-col gap-1">
+              {visibleSections.map((section) => (
+                !workExpanded && section.blocks.length === 1 && section.blocks[0].kind === 'assistant' ? <MessageBubble
+                  key={section.id}
+                  block={section.blocks[0]}
+                  threadId={threadId}
+                  presentationScope={messagePresentationScope}
+                  markdownImages={processArtifactImages}
+                  onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
+                /> : <ProcessSectionRow
                   key={section.id}
                   section={section}
                   processing={isProcessing}
@@ -824,9 +841,6 @@ function MessageTurn({
           </Fragment>
         ))}
 
-      {isProcessing ? <LiveTurnProgressRow waitingForInput={turn.blocks.some((block) =>
-        block.kind === 'user_input' && (block.status === 'pending' || block.status === 'error'))} /> : null}
-
       {planResult ? (
         <ReviewPlanCard
           title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
@@ -838,21 +852,8 @@ function MessageTurn({
       ) : null}
 
       {!isProcessing && turnFileChanges.length > 0 ? (
-        <TurnChangeSummary changes={turnFileChanges} viewportRef={viewportRef} />
+        <TurnChangeSummary changes={turnFileChanges} viewportRef={viewportRef} threadId={threadId} />
       ) : null}
-    </div>
-  )
-}
-
-function LiveTurnProgressRow({ waitingForInput }: { waitingForInput: boolean }): ReactElement {
-  const { t } = useTranslation('common')
-
-  return (
-    <div className="flex w-fit max-w-full items-center gap-2 py-0.5 text-[14px] font-medium text-ds-muted">
-      <span className="ds-work-logo-slot ds-work-logo-slot-sm mr-0.5">
-        <AnimatedWorkLogo active={!waitingForInput} phase="trail" size="sm" />
-      </span>
-      <span className={waitingForInput ? undefined : "ds-shiny-text"}>{t(waitingForInput ? 'userInputPending' : 'working')}</span>
     </div>
   )
 }

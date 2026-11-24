@@ -1,3 +1,5 @@
+import { createDomainRendererEntry as createEvidenceRendererEntry, createResearchAuditCommand } from '@sciforge/domain-evidence-dag/renderer'
+import type { DomainRendererWorkbenchGlobalOverlayValue } from '@sciforge/domain-sdk/renderer'
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import React, { act } from 'react'
@@ -27,7 +29,9 @@ import type { ResearchDossierCapabilityClient } from './research-dossier-capabil
 import { createResearchDossierCapabilityClient } from './research-dossier-capability-client.js'
 import { ResearchDossierEvidenceReview } from './ResearchDossierEvidenceReview.js'
 import { createResearchDossierActivation } from '../contract.js'
+import { ResearchWorkspacePanel } from './ResearchWorkspacePanel.js'
 import type { ArtifactVersionListV2 } from '@sciforge/domain-artifact-versions/contract'
+import { localMaterialPath } from './LocalMaterialRegistration.js'
 
 test('normal Dossier impact entry shares Evidence rerun UI and reads a pinned closure only after an explicit click', async () => {
   const reference = historyItem(1).ref, digest = `sha256:${'a'.repeat(64)}`
@@ -89,6 +93,7 @@ before(() => {
     hasLoadedNamespace: () => true
   } as never)
   const browserGlobals: Readonly<Record<string, unknown>> = {
+    React,
     window: browserWindow,
     self: browserWindow,
     document: browserWindow.document,
@@ -101,6 +106,7 @@ before(() => {
     Event: browserWindow.Event,
     MouseEvent: browserWindow.MouseEvent,
     MutationObserver: browserWindow.MutationObserver,
+    ResizeObserver: browserWindow.ResizeObserver,
     getComputedStyle: browserWindow.getComputedStyle.bind(browserWindow),
     requestAnimationFrame: browserWindow.requestAnimationFrame.bind(browserWindow),
     cancelAnimationFrame: browserWindow.cancelAnimationFrame.bind(browserWindow),
@@ -603,7 +609,7 @@ async function mountPanel(
     'codex',
     '/workspace/lab'
   ),
-  overrides: Pick<ResearchDossierPanelProps, 'workbench' | 'researchSummaries'> = {}
+  overrides: Pick<ResearchDossierPanelProps, 'workbench' | 'researchSummaries' | 'workspacePreview'> = {}
 ): Promise<Readonly<{
   container: HTMLElement
   root: Root
@@ -709,7 +715,9 @@ async function tick(): Promise<void> {
 
 test('keeps same-workspace browse content during refresh and clears it when workspace changes', async () => {
   const loads: Array<Deferred<{ ok: true; value: { items: unknown[] } }>> = []
-  const listArtifactVersions = async (): Promise<{ ok: true; value: { items: unknown[] } }> => {
+  const kinds: string[] = []
+  const listArtifactVersions = async (_workspace: string, input: { kind: string }): Promise<{ ok: true; value: { items: unknown[] } }> => {
+    kinds.push(input.kind)
     const pending = deferred<{ ok: true; value: { items: unknown[] } }>()
     loads.push(pending)
     return pending.promise
@@ -734,7 +742,8 @@ test('keeps same-workspace browse content during refresh and clears it when work
   const mounted = await mountPanel(client, session('thread-r1', 'codex', '/workspace/a'))
   try {
     // First load is pending: full-screen loader, no content yet.
-    assert.equal(loads.length, 2)
+    assert.equal(loads.length, 3)
+    assert.deepEqual(kinds.slice(-3), ['research-checkpoint', 'research-output', 'research-material'])
     assert.match(mounted.container.innerHTML, /researchDossierLoading/u)
     assert.doesNotMatch(mounted.container.innerHTML, /Checkpoint A/u)
 
@@ -755,7 +764,8 @@ test('keeps same-workspace browse content during refresh and clears it when work
     const staleRefresh = loads.splice(0)
     // A different workspace must never retain actionable records from A.
     await mounted.rerender(session('thread-r2', 'codex', '/workspace/b'))
-    assert.equal(loads.length, 2)
+    assert.equal(loads.length, 3)
+    assert.deepEqual(kinds.slice(-3), ['research-checkpoint', 'research-output', 'research-material'])
     assert.doesNotMatch(mounted.container.innerHTML, /Checkpoint A/u)
     assert.match(mounted.container.innerHTML, /researchDossierLoading/u)
 
@@ -774,13 +784,14 @@ test('keeps same-workspace browse content during refresh and clears it when work
       await tick()
     })
     assert.doesNotMatch(mounted.container.innerHTML, /Stale A/u)
+    assert.equal(kinds.length, 9, 'initial load, explicit refresh and workspace switch each read every kind once')
   } finally {
     await mounted.unmount()
   }
 })
 
 
-test('real construct-then-publish order renders stages first and loads summary providers once on demand', async () => {
+test('construct-then-publish resolves the workspace contribution and reads materials only on demand', async () => {
   let published: readonly DomainRendererContribution[] = []
   let provides = 0, reads = 0
   const host = {
@@ -804,13 +815,17 @@ test('real construct-then-publish order renders stages first and loads summary p
   const context = { session: session('thread-policy', 'codex', '/workspace/lab'), active: true, focused: true, className: '', surfaceId: 'workspace-test', onCollapse: () => undefined }
   try {
     await act(async () => { root.render(<React.Suspense fallback={<p>loading</p>}>{panel.render(context)}</React.Suspense>) })
-    for (let i = 0; i < 40 && !container.querySelector('[data-stage-owner]'); i++) await settleReact()
+    const stageDeadline = Date.now() + 2_000
+    while (!container.querySelector('[data-stage-owner]') && Date.now() < stageDeadline) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+    }
     assert.equal(container.querySelector('[data-stage-owner]')?.getAttribute('data-stage-owner'), 'research-dossier.workbench-right-panel')
     assert.equal(reads, 0)
     assert.equal(provides, 0)
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent === '档案与版本')!.click(); await tick() })
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent === '版本')!.click(); await tick() })
     await settleReact()
     assert.equal(container.querySelectorAll('[data-research-summary]').length, 1)
+    assert.ok(reads > 0)
     assert.equal(provides, 1)
     await act(async () => { root.render(<React.Suspense>{panel.render({ ...context, focused: false })}</React.Suspense>); await tick() })
     await settleReact()
@@ -832,15 +847,15 @@ test('a repeated exact navigation reopens the dossier after a manual stage switc
     await act(async () => { root.render(<React.Suspense>{panel.render({ ...context, activation: next })}</React.Suspense>) })
     await settleReact()
   }
-  const selected = () => container.querySelector('nav[aria-label="科研"] button[aria-selected="true"]')?.textContent
+  const selected = () => container.querySelector('nav[aria-label="审计工作区"] button[aria-selected="true"]')?.textContent
   try {
     await render()
-    assert.equal(selected(), '档案与版本')
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent === '阶段主线')!.click() })
+    assert.equal(selected(), '概览')
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent === '版本')!.click() })
     await render()
-    assert.equal(selected(), '阶段主线', 'ordinary rerenders preserve the manual page')
+    assert.equal(selected(), '版本', 'ordinary rerenders preserve the manual page')
     await render({ ...activation, payload: structuredClone(activation.payload) })
-    assert.equal(selected(), '档案与版本', 'a new navigation to the same exact target must be honored')
+    assert.equal(selected(), '概览', 'a new navigation to the same exact target must be honored')
   } finally { await act(async () => root.unmount()); container.remove() }
 })
 
@@ -867,7 +882,7 @@ test('production dossier paginates loaded rows, reads owner continuation and ret
     readResearchRecordingStatus: async () => ({ ok: true, value: automaticStatus(1, false) }),
     listArtifactVersions: async (_workspace: string, input: { kind?: string; beforeSequence?: number }) => {
       calls.push(input)
-      if (input.kind === 'research-checkpoint') return { ok: true, value: { items: [] } }
+      if (input.kind && input.kind !== 'research-output') return { ok: true, value: { items: [] } }
       if (!input.kind) return { ok: true, value: { items: rows.slice(0, 25), nextBeforeSequence: 176 } }
       const candidates = rows.filter(item => !input.beforeSequence || item.version.sequence < input.beforeSequence)
       return { ok: true, value: { items: candidates.slice(0, 25), ...(candidates.length > 25 ? { nextBeforeSequence: candidates[24]!.version.sequence } : {}) } }
@@ -891,7 +906,7 @@ test('production dossier paginates loaded rows, reads owner continuation and ret
   }
   try {
     assert.equal(mounted.container.querySelectorAll('ol > li').length, 25)
-    assert.equal(calls.length, 2)
+    assert.equal(calls.length, 3)
     await click('researchDossierContinueHistory')
     assert.equal(calls.at(-1)!.beforeSequence, 176)
     assert.equal(mounted.container.querySelectorAll('ol > li').length, 25)
@@ -940,7 +955,8 @@ test('exact Evidence reads use the public owner contract and closure navigation,
     assert.equal(calls.length, 0, 'mounting is not an audit or approval')
     await click('researchDossierReadEvidence')
     assert.deepEqual(calls[0], { actionId: 'evidence-dag.audit-query', input: { subject: { artifactVersionRef: reference } }, options: { workspaceId: '/workspace/lab' } })
-    assert.match(mounted.container.textContent!, /unknown.*researchDossierHistoryPartial/u)
+    assert.match(mounted.container.textContent!, /researchDossierEvidenceUnknown.*researchDossierHistoryPartial/u)
+    assert.ok(Array.from(mounted.container.querySelectorAll('details')).some(detail => !detail.open && detail.textContent?.includes('unknown')))
     assert.match(mounted.container.textContent!, /source-not-covered/u)
     await click('researchDossierOpenEvidenceClosure')
     assert.deepEqual(opened, [{ sessionId: 'thread-policy', resource: { resourceKind: 'evidence-closure', resourceId: closureDigest, integrity: { algorithm: 'sha256', expectedDigest: closureDigest } } }])
@@ -1060,5 +1076,419 @@ test('Dossier Evidence validates the complete ref and discards pending results o
     await act(async () => { pending.resolve(value(reference, 'LATE_OLD_SESSION')); await tick() })
     assert.doesNotMatch(mounted.container.textContent!, /LATE_OLD_SESSION|WRONG_FULL_REF/)
     assert.match(mounted.container.textContent!, /researchDossierEvidenceIdentityMismatch/)
+  } finally { await mounted.unmount() }
+})
+
+
+function comparisonFixture() {
+  const selected = { ...historyItem(1), isCurrent: false }
+  const current = historyItem(2)
+  current.artifact.artifactId = selected.artifact.artifactId
+  current.version.artifactId = selected.artifact.artifactId
+  current.ref.artifactId = selected.artifact.artifactId
+  // Reproduce the missing pointer shape at the renderer boundary; current is explicit in history.
+  delete (selected.artifact as Partial<typeof selected.artifact>).currentVersionId
+  return { selected, current }
+}
+
+for (const outcome of ['different', 'same', 'error', 'missing', 'wrong-from', 'wrong-to', 'wrong-to-digest'] as const) {
+  test(`version comparison gives visible ${outcome} feedback and preserves exact targets`, async () => {
+    const { selected, current } = comparisonFixture()
+    if (outcome === 'missing') { selected.ref.accessPolicy.allowExport = false; selected.ref.availability = 'missing' }
+    const calls: unknown[] = []
+    const pending = deferred<Awaited<ReturnType<ResearchDossierCapabilityClient['compareArtifactVersions']>>>()
+    const client = {
+      listArtifactVersions: async () => ({ ok: true, value: { items: outcome === 'missing' ? [selected] : [selected, current] } }),
+      describeArtifactVersion: async () => ({ ok: true, value: selected }),
+      compareArtifactVersions: async (_workspace: string, input: unknown) => { calls.push(input); return pending.promise }
+    } as unknown as ResearchDossierCapabilityClient
+    const mounted = await mountPanel(client)
+    const activation = createResearchDossierActivation({ kind: 'artifact-version', versionId: selected.ref.versionId }, { page: 'versions' })
+    try {
+      await act(async () => { mounted.root.render(<ResearchDossierPanel client={client} session={session('thread-policy', 'codex', '/workspace/lab')} active activation={activation} surfaceId="compare-test" onCollapse={() => undefined} />); await tick() })
+      await settleReact()
+      const button = Array.from(mounted.container.querySelectorAll('button')).find(button => button.textContent === 'researchDossierCompare')!
+      assert.ok(button)
+      assert.doesNotMatch(mounted.container.querySelector('[data-dossier-selected-version]')!.textContent!, /artifact-version:/)
+      assert.equal(mounted.container.querySelector('details[data-technical-details][open]'), null)
+      const more = mounted.container.querySelector<HTMLDetailsElement>('[data-dossier-more-actions]')!
+      assert.equal(more.open, false)
+      await act(async () => { more.querySelector('summary')!.click(); await tick() })
+      assert.equal(more.open, true)
+      assert.ok(Array.from(more.querySelectorAll('button')).some(button => button.textContent === 'researchDossierRestore'))
+      if (outcome === 'missing') {
+        for (const key of ['researchDossierRestore', 'researchDossierBundle']) {
+          const disabled = Array.from(more.querySelectorAll('button')).find(button => button.textContent === key)!
+          assert.equal(disabled.disabled, true)
+          assert.ok(disabled.title)
+          assert.ok(more.textContent?.includes(disabled.title))
+        }
+        assert.equal(button.disabled, true)
+        assert.equal(button.title, 'researchDossierCompareTargetMissing')
+        assert.match(mounted.container.textContent!, /researchDossierCompareTargetMissing/)
+        button.click()
+        assert.equal(calls.length, 0)
+        return
+      }
+      await act(async () => { button.click(); await tick() })
+      assert.deepEqual(calls, [{ fromVersionId: selected.ref.versionId, toVersionId: current.ref.versionId, textPreviewMaxBytes: 8192 }])
+      assert.match(mounted.container.textContent!, /researchDossierComparing/)
+      await act(async () => {
+        pending.resolve(outcome === 'error' ? { ok: false, issue: { code: 'owner-unavailable', message: 'comparison owner failed', retryable: false } } as never : { ok: true, value: { from: outcome === 'wrong-from' ? { ...selected.ref, byteLength: selected.ref.byteLength + 1 } : selected.ref, to: outcome === 'wrong-to' ? selected.ref : outcome === 'wrong-to-digest' ? { ...current.ref, contentDigest: 'e'.repeat(64) } : current.ref, sameContent: outcome === 'same', metadataChanged: false, mediaTypeChanged: false, byteLengthDelta: 0, addedDependencies: [], removedDependencies: [] } } as never)
+        await tick()
+      })
+      assert.match(mounted.container.textContent!, outcome === 'error' ? /comparison owner failed/ : outcome.startsWith('wrong-') ? /researchDossierCompareIdentityMismatch/ : outcome === 'same' ? /researchDossierSameContent/ : /researchDossierDifferentContent/)
+      if (outcome.startsWith('wrong-')) assert.equal(mounted.container.querySelector('[data-artifact-version-comparison]'), null)
+    } finally { await mounted.unmount() }
+  })
+}
+
+for (const response of ['success', 'error'] as const) for (const change of ['target', 'workspace', 'session', 'runtime', 'client', 'activation', 'inactive', 'unmount'] as const) {
+  test(`late comparison ${response} is discarded after ${change} changes`, async () => {
+    const { selected, current } = comparisonFixture()
+    const pending = deferred<Awaited<ReturnType<ResearchDossierCapabilityClient['compareArtifactVersions']>>>()
+    const client = { listArtifactVersions: async () => ({ ok: true, value: { items: [selected, current] } }), describeArtifactVersion: async (_workspace: string, versionId: string) => ({ ok: true, value: versionId === current.ref.versionId ? current : selected }), compareArtifactVersions: () => pending.promise } as unknown as ResearchDossierCapabilityClient
+    const mounted = await mountPanel(client)
+    const activation = createResearchDossierActivation({ kind: 'artifact-version', versionId: selected.ref.versionId }, { page: 'versions' })
+    const props: ResearchDossierPanelProps = { client, session: session('thread-policy', 'codex', '/workspace/lab'), active: true, activation, surfaceId: 'compare-fence', onCollapse: () => undefined }
+    try {
+      await act(async () => { mounted.root.render(<ResearchDossierPanel {...props} />); await tick() })
+      await settleReact()
+      await act(async () => { Array.from(mounted.container.querySelectorAll('button')).find(button => button.textContent === 'researchDossierCompare')!.click(); await tick() })
+      const next = { ...props }
+      if (change === 'target') next.activation = createResearchDossierActivation({ kind: 'artifact-version', versionId: current.ref.versionId }, { page: 'versions' })
+      if (change === 'activation') next.activation = { ...activation }
+      if (change === 'workspace') next.session = { ...props.session, workspaceRoot: '/other' }
+      if (change === 'session') next.session = { ...props.session, id: 'other' }
+      if (change === 'runtime') next.session = { ...props.session, runtimeId: 'other' }
+      if (change === 'client') next.client = { ...client }
+      if (change === 'inactive') next.active = false
+      await act(async () => { mounted.root.render(change === 'unmount' ? null : <ResearchDossierPanel {...next} />); await tick() })
+      await act(async () => { pending.resolve(response === 'error' ? { ok: false, issue: { code: 'owner-unavailable', message: 'late comparison failure', retryable: false } } as never : { ok: true, value: { from: selected.ref, to: current.ref, sameContent: true, addedDependencies: [], removedDependencies: [] } } as never); await tick() })
+      assert.doesNotMatch(mounted.container.textContent!, /late comparison failure|researchDossierComparing/)
+      assert.equal(mounted.container.querySelector('[data-artifact-version-comparison]'), null)
+    } finally { await mounted.unmount() }
+  })
+}
+
+
+// These tests mount the production workspace and dossier. The contribution is a
+// public-contract probe: it records navigation without emulating a graph owner.
+async function mountAuditWorkspace(client: ResearchDossierCapabilityClient, activation?: ResearchDossierPanelProps['activation']) {
+  const container = document.createElement('div'); document.body.append(container)
+  const { createRoot } = await import('react-dom/client'); const root = createRoot(container)
+  const evidence: Array<{ active: boolean; activation: { payload: Record<string, unknown> } }> = []
+  const researchViews = [{ id: 'fixture.workspace', kind: 'renderer.extension', packageName: '@fixture/workspace', owner: { moduleId: 'fixture.workspace' }, contract: { location: 'research.workspace' }, value: {
+    render: (context: { active: boolean; activation: { payload: Record<string, unknown> } }) => { evidence.push(context); return <p data-evidence-probe>{context.activation.payload.view === 'graph' ? '图读取入口' : '实际研究摘要'}</p> }
+  } }] as unknown as readonly DomainRendererContribution[]
+  let current = activation
+  const render = async (next = current) => {
+    current = next
+    await act(async () => { root.render(<ResearchWorkspacePanel client={client} session={session('thread-policy', 'codex', '/workspace/lab')} activation={next} active focused surfaceId="audit-test" onCollapse={() => undefined} researchViews={researchViews} />); await tick() })
+    await settleReact()
+  }
+  const click = async (label: string) => {
+    const target = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === label)
+    assert.ok(target, label); await act(async () => { target.click(); await tick() }); await settleReact()
+  }
+  await render()
+  return { container, root, evidence, render, click, close: async () => { await act(async () => root.unmount()); container.remove() } }
+}
+function auditClient(items = [historyItem(1)], overrides: Partial<ResearchDossierCapabilityClient> = {}): ResearchDossierCapabilityClient {
+  return { listArtifactVersions: async (_workspace: string, input: { kind?: string }) => ({ ok: true, value: { items: input.kind === 'research-checkpoint' ? [] : items } }),
+    describeArtifactVersion: async (_workspace: string, versionId: string) => ({ ok: true, value: items.find(item => item.ref.versionId === versionId)! }),
+    readResearchRecordingStatus: async () => ({ ok: true, value: automaticStatus(1, false) }), ...overrides } as ResearchDossierCapabilityClient
+}
+
+test('audit tabs form one keyboard tablist and pass the full selected material reference without writes', async () => {
+  const item = historyItem(1), client = auditClient([item])
+  const m = await mountAuditWorkspace(client, createResearchDossierActivation({ kind: 'artifact-version', versionId: item.ref.versionId }, { expectedDigest: `sha256:${item.ref.contentDigest}` }))
+  try {
+    assert.equal(m.container.querySelectorAll('[role=tablist]').length, 1)
+    const tabs = [...m.container.querySelectorAll<HTMLButtonElement>('[role=tab]')]
+    assert.deepEqual(tabs.map(tab => tab.textContent), ['概览', '证据图', '版本'])
+    assert.equal(tabs.filter(tab => tab.tabIndex === 0).length, 1)
+    await act(async () => { tabs[0].focus(); tabs[0].dispatchEvent(new browserWindow.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }) as unknown as Event); await tick() })
+    assert.equal(document.activeElement, tabs[1]); assert.equal(tabs[1].getAttribute('aria-selected'), 'true')
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, item.ref)
+    assert.equal(m.evidence.at(-1)?.activation.payload.runtimeId, 'codex')
+    await act(async () => { tabs[1].dispatchEvent(new browserWindow.KeyboardEvent('keydown', { key: 'End', bubbles: true }) as unknown as Event); await tick() })
+    assert.equal(document.activeElement, tabs[2]); assert.equal(tabs[2].getAttribute('aria-selected'), 'true')
+    assert.equal(m.container.querySelector('[data-dossier-selected-version]')?.getAttribute('data-dossier-selected-version'), item.ref.versionId)
+    const readingPane = m.container.querySelector<HTMLElement>('[data-dossier-reading-pane]')!
+    await act(async () => { readingPane.scrollTop = 133; readingPane.dispatchEvent(new Event('scroll', { bubbles: true })) })
+    await m.click('概览'); assert.match(m.container.querySelector('header')!.textContent!, /History 1/)
+    await m.click('版本'); assert.equal(readingPane.scrollTop, 133, 'each tab restores its reading position')
+    assert.equal(m.container.querySelectorAll('[aria-label="researchTitle"]').length, 0, 'the dossier has no inner navigation')
+  } finally { await m.close() }
+})
+
+test('audit version changes and back preserve exact historical context across tabs and ordinary rerenders', async () => {
+  const old = { ...historyItem(1), isCurrent: false }, current = historyItem(2)
+  current.artifact = { ...old.artifact, currentVersionId: current.ref.versionId }; current.version.artifactId = old.ref.artifactId; current.ref.artifactId = old.ref.artifactId
+  const activation = createResearchDossierActivation({ kind: 'artifact-version', versionId: old.ref.versionId }, { page: 'versions' })
+  const items = [old, current]
+  const m = await mountAuditWorkspace(auditClient(items), activation)
+  try {
+    await m.click('证据图'); assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, old.ref)
+    await m.render({ ...activation }); assert.equal(m.container.querySelector('[role=tab][aria-selected=true]')?.textContent, '证据图')
+    await m.click('版本')
+    const currentButton = [...m.container.querySelectorAll<HTMLButtonElement>('ol button')].find(button => button.textContent?.includes('researchDossierCurrent'))!
+    assert.ok(currentButton)
+    await act(async () => { currentButton.click(); await tick() }); await settleReact()
+    await m.click('证据图'); assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, current.ref)
+    await m.click('返回')
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+    assert.equal(document.activeElement, m.container.querySelector('[role=tab][aria-selected=true]'))
+    const newer = historyItem(3); newer.ref.artifactId = old.ref.artifactId; newer.version.artifactId = old.ref.artifactId; newer.artifact = { ...old.artifact, currentVersionId: newer.ref.versionId }; items.push(newer)
+    await m.click('刷新材料')
+    assert.equal(m.container.querySelector('[data-dossier-selected-version]')?.getAttribute('data-dossier-selected-version'), old.ref.versionId, 'a newly discovered version does not replace the historical selection')
+    await m.click('证据图')
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, old.ref)
+    assert.match(m.container.querySelector('header')!.textContent!, /历史材料/)
+  } finally { await m.close() }
+})
+
+test('audit partial material history stays readable and cannot silently turn an unavailable target into a current graph', async () => {
+  const item = historyItem(1)
+  const partial = auditClient([item], { listArtifactVersions: async () => ({ ok: false, issue: { code: 'access-restricted', message: 'history temporarily denied', retryable: false } }) })
+  const m = await mountAuditWorkspace(partial, createResearchDossierActivation({ kind: 'artifact-version', versionId: item.ref.versionId }, { page: 'versions' }))
+  try {
+    assert.match(m.container.textContent!, /history temporarily denied/)
+    await m.click('证据图'); assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, item.ref)
+    await m.render(createResearchDossierActivation({ kind: 'artifact-version', versionId: item.ref.versionId }, { expectedDigest: `sha256:${'f'.repeat(64)}` }))
+    await m.click('证据图'); assert.match(m.container.textContent!, /尚未取得此材料的精确引用/)
+    assert.equal(m.container.querySelectorAll('[data-evidence-probe]').length, 0)
+  } finally { await m.close() }
+})
+
+test('audit discards late exact loads, keeps empty materials honest, and does not infer a project version', async () => {
+  const delayed = deferred<Awaited<ReturnType<ResearchDossierCapabilityClient['describeArtifactVersion']>>>()
+  const first = historyItem(1), second = historyItem(2)
+  const client = auditClient([first, second], { describeArtifactVersion: async (_workspace, id) => id === first.ref.versionId ? delayed.promise : { ok: true, value: second } })
+  const m = await mountAuditWorkspace(client, createResearchDossierActivation({ kind: 'artifact-version', versionId: first.ref.versionId }))
+  try {
+    await m.render(createResearchDossierActivation({ kind: 'artifact-version', versionId: second.ref.versionId }))
+    await act(async () => { delayed.resolve({ ok: true, value: first }); await tick() }); await settleReact()
+    await m.click('证据图'); assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, second.ref)
+    assert.match(m.container.querySelector('header')!.textContent!, /History 2/)
+  } finally { await m.close() }
+  const empty = await mountAuditWorkspace(auditClient([]))
+  try { await empty.click('版本'); assert.match(empty.container.textContent!, /材料变化/); assert.equal(empty.container.querySelectorAll('ol > li').length, 0); assert.doesNotMatch(empty.container.textContent!, /项目版本|已通过/) }
+  finally { await empty.close() }
+})
+
+
+test('an exact graph deep link keeps its snapshot and material when switching to overview and versions', async () => {
+  const item = { ...historyItem(1), isCurrent: false }, snapshotDigest = `sha256:${'b'.repeat(64)}`
+  const activation = { contributionId: 'research-dossier.workbench-right-panel', revision: 7, payload: { view: 'graph', runtimeId: 'codex', threadId: 'thread-policy', artifactVersionRef: item.ref, snapshotDigest } }
+  const m = await mountAuditWorkspace(auditClient([item]), activation)
+  try {
+    assert.equal(m.container.querySelector('[role=tab][aria-selected=true]')?.textContent, '证据图')
+    assert.equal(m.evidence.at(-1)?.activation.payload.snapshotDigest, snapshotDigest)
+    await m.click('概览'); assert.match(m.container.querySelector('header')!.textContent!, /History 1.*历史材料/)
+    await m.click('版本'); assert.equal(m.container.querySelector('[data-dossier-selected-version]')?.getAttribute('data-dossier-selected-version'), item.ref.versionId)
+    await m.click('证据图'); assert.equal(m.evidence.at(-1)?.activation.payload.snapshotDigest, snapshotDigest)
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, item.ref)
+  } finally { await m.close() }
+})
+
+test('ready previous material cannot be relabelled as a newly selected version while its read is pending', async () => {
+  const first = historyItem(1), second = historyItem(2)
+  const delayed = deferred<Awaited<ReturnType<ResearchDossierCapabilityClient['describeArtifactVersion']>>>()
+  const client = auditClient([first, second], { describeArtifactVersion: async (_workspace, id) => id === second.ref.versionId ? delayed.promise : { ok: true, value: first } })
+  const m = await mountAuditWorkspace(client, createResearchDossierActivation({ kind: 'artifact-version', versionId: first.ref.versionId }))
+  try {
+    await m.click('证据图'); assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, first.ref)
+    await m.render(createResearchDossierActivation({ kind: 'artifact-version', versionId: second.ref.versionId }))
+    await m.click('证据图')
+    assert.match(m.container.textContent!, /尚未取得此材料的精确引用/)
+    assert.equal(m.container.querySelectorAll('[data-evidence-probe]').length, 0)
+    await act(async () => { delayed.resolve({ ok: true, value: second }); await tick() }); await settleReact()
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, second.ref)
+  } finally { await m.close() }
+})
+
+test('changing material version from a pinned graph deep link clears the old snapshot and back restores it', async () => {
+  const old = { ...historyItem(1), isCurrent: false }, current = historyItem(2)
+  current.artifact = { ...old.artifact, currentVersionId: current.ref.versionId }
+  current.version.artifactId = old.ref.artifactId; current.ref.artifactId = old.ref.artifactId
+  const snapshotDigest = `sha256:${'b'.repeat(64)}`
+  const activation = { contributionId: 'research-dossier.workbench-right-panel', revision: 9, payload: {
+    view: 'graph', runtimeId: 'codex', threadId: 'historical-origin', artifactVersionRef: old.ref, snapshotDigest
+  } }
+  const m = await mountAuditWorkspace(auditClient([old, current]), activation)
+  try {
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, old.ref)
+    assert.equal(m.evidence.at(-1)?.activation.payload.snapshotDigest, snapshotDigest)
+    assert.equal(m.evidence.at(-1)?.activation.payload.threadId, 'historical-origin')
+    await m.click('版本')
+    const next = [...m.container.querySelectorAll<HTMLButtonElement>('ol button')].find(button => button.textContent?.includes('researchDossierCurrent'))
+    assert.ok(next)
+    await act(async () => { next.click(); await tick() }); await settleReact()
+    await m.click('证据图')
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, current.ref)
+    assert.equal(m.evidence.at(-1)?.activation.payload.snapshotDigest, undefined, 'new material cannot inherit the old pinned graph')
+    assert.notEqual(m.evidence.at(-1)?.activation.payload.threadId, 'historical-origin', 'old graph session must not overwrite the newly resolved target')
+    await m.click('返回'); await m.click('证据图')
+    assert.deepEqual(m.evidence.at(-1)?.activation.payload.artifactVersionRef, old.ref)
+    assert.equal(m.evidence.at(-1)?.activation.payload.snapshotDigest, snapshotDigest)
+    assert.equal(m.evidence.at(-1)?.activation.payload.threadId, 'historical-origin')
+  } finally { await m.close() }
+})
+
+
+test('actual audit command opens the contributed global shell with three tabs and original scope', async () => {
+  let published: readonly DomainRendererContribution[] = []
+  const opens: Array<{activation: {revision:number;payload:unknown}}> = [], side: unknown[] = [], sessions: unknown[] = [], reads: Array<{action:string;input:unknown}> = []
+  let closed = 0
+  const host = { contributions:{list:(kind:string)=>published.filter(item=>item.kind===kind)},
+    capabilityInvoker:{invoke:async(contract:{actionId:string;effect:string},input:unknown)=>{
+      assert.equal(contract.effect,'read','opening and browsing global audit must not dispatch a write')
+      reads.push({action:contract.actionId,input})
+      if(contract.actionId==='evidence-dag.record.view') return {revision:1,node:null,ancestors:[],children:[],latestRecordPath:[],totalChildren:0,messages:[],paused:false,model:'',pending:0,failures:[],coverage:'visible-session-snapshots',lastScanAt:null}
+      if(contract.actionId==='artifact-versions.list-v2') return {ok:true,value:{items:[]}}
+      if(contract.actionId==='research-checkpoints.status') return {ok:true,value:automaticStatus(1,false)}
+      if(contract.actionId==='evidence-dag.view') return {url:null,status:{committed:null,pending:null,updatedAt:'2026-11-10T00:00:00Z'},binding:{status:'missing',reason:'snapshot-unavailable'}}
+      throw new Error('Unexpected test owner read: '+contract.actionId)
+    }},workbench:{toggleGlobalOverlay:(input:unknown)=>opens.push(input as typeof opens[number]),openSession:async(input:unknown)=>{sessions.push(input);return true},openRightPanel:(input:unknown)=>side.push(input)}
+  } as unknown as DomainRendererHost
+  const evidence=createEvidenceRendererEntry(host),dossier=createDomainRendererEntry(host)
+  published=[...evidence.contributions,...dossier.contributions] as unknown as readonly DomainRendererContribution[]
+  const command=createResearchAuditCommand(host)
+  await command.execute({sessionId:'audit-origin',runtimeId:'codex',workspaceRoot:'/science'})
+  assert.equal(opens.length,1)
+  const overlay=evidence.contributions.find(item=>item.kind==='renderer.workbench-global-overlay')!.value as DomainRendererWorkbenchGlobalOverlayValue<React.ReactElement>
+  const container=document.createElement('div');document.body.append(container);const {createRoot}=await import('react-dom/client');const root=createRoot(container)
+  const context={active:true,className:'h-full',session:{id:'other-active',runtimeId:'codex',workspaceRoot:'/other'},activation:opens[0].activation as never,onClose:()=>{closed++}}
+  try {
+    await act(async()=>root.render(<React.Suspense>{overlay.render(context)}</React.Suspense>));await settleReact()
+    assert.deepEqual([...container.querySelectorAll('[role=tab]')].map(tab=>tab.textContent),['概览','证据图','版本'])
+    assert.equal(container.querySelectorAll('[role=tablist]').length,1)
+    // The production contribution lazy-loads EvidenceWorkspacePanel. Two event-loop
+    // turns do not prove that the dynamic module and its effects have settled.
+    const deadline = Date.now() + 2_000
+    while (!reads.some(item => item.action === 'evidence-dag.record.view') && Date.now() < deadline) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+    }
+    assert.ok(reads.some(item => item.action === 'evidence-dag.record.view'), 'production audit owner read must settle within its test budget')
+    const recordRead=reads.find(item=>item.action==='evidence-dag.record.view')!.input as {threadId:string;workspaceRoot:string}
+    assert.equal(recordRead.threadId,'audit-origin');assert.equal(recordRead.workspaceRoot,'/science')
+    await act(async()=>{[...container.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='版本')!.click();await tick()});await settleReact()
+    assert.match(container.textContent!,/材料变化/)
+    await act(async()=>{[...container.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='证据图')!.click();await tick()});await settleReact()
+    assert.ok(reads.some(item=>item.action==='evidence-dag.view'));assert.equal(reads.some(item=>item.action==='evidence-dag.priority'),false,'global overlay cannot invent a pane id for priority')
+    await act(async()=>{[...container.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='返回侧面')!.click();await tick()})
+    assert.equal(closed,1);assert.deepEqual(sessions,[{runtimeId:'codex',threadId:'audit-origin',focusComposer:false,readOnly:true}])
+    const target=side[0] as {contributionId:string;sessionId:string;surfaceId?:string;activation:{payload:unknown}}
+    assert.equal(target.contributionId,'research-dossier.workbench-right-panel');assert.equal(target.sessionId,'audit-origin');assert.equal(target.surfaceId,undefined)
+    assert.deepEqual(target.activation.payload,{recordScope:{runtimeId:'codex',threadId:'audit-origin',workspaceRoot:'/science'}})
+    await act(async()=>{[...container.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='关闭')!.click()})
+    assert.equal(closed,2)
+  } finally {await act(async()=>root.unmount());container.remove()}
+})
+
+async function fillMaterialPath(container: HTMLElement, value: string): Promise<void> {
+  const input = container.querySelector('input[name="material-path"]') as HTMLInputElement
+  assert.ok(input)
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(browserWindow.HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new browserWindow.Event('input', { bubbles: true }) as unknown as Event)
+    input.dispatchEvent(new browserWindow.Event('change', { bubbles: true }) as unknown as Event)
+    await tick()
+  })
+}
+
+async function submitMaterial(container: HTMLElement): Promise<void> {
+  await act(async () => {
+    container.querySelector('[data-local-material-registration] form')!.dispatchEvent(new browserWindow.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event)
+    await tick()
+  })
+  await settleReact()
+}
+
+test('normal Dossier registers actual workspace material through observe and opens its exact saved CSV preview', async () => {
+  const calls: Array<{ action: string; input: any; options: any }> = []
+  const row = historyItem(1)
+  row.artifact.kind = 'research-material'
+  row.artifact.label = 'results.csv'
+  row.version.metadata = { observedWorkspacePath: 'data/results.csv', materialRole: 'source', registrationSessionId: 'thread-policy', registrationRuntimeId: 'codex', provenanceStatus: 'observed-untracked' } as never
+  let saved = false
+  let navigation: ResearchDossierPanelProps['activation']
+  let preview: unknown
+  const workbench = { openRightPanel: (input: { activation?: ResearchDossierPanelProps['activation'] }) => { navigation = input.activation } } as never
+  const workspacePreview = { open: (target: unknown) => { preview = target } }
+  const client = createResearchDossierCapabilityClient({ invoke: async (contract: { actionId: string; inputSchema: { parse: (input: unknown) => unknown } }, input: any, options: any) => {
+    contract.inputSchema.parse(input)
+    calls.push({ action: contract.actionId, input, options })
+    if (contract.actionId === 'research-checkpoints.status') return { ok: true, value: automaticStatus(1, false) }
+    if (contract.actionId === 'artifact-versions.list-v2') return { ok: true, value: { items: saved && (!input.kind || input.kind === 'research-material') ? [row] : [] } }
+    if (contract.actionId === 'artifact-versions.observe') { saved = true; return { ok: true, value: { transactionId: 'artifact-commit:material', committedAt: '2026-11-14T00:00:00Z', idempotentReplay: false, versions: [{ candidateId: 'local-material', ...row }], events: [] } } }
+    if (contract.actionId === 'artifact-versions.describe-v2') return { ok: true, value: row }
+    if (contract.actionId === 'artifact-versions.materialize') return { ok: true, value: { destinationPath: input.destinationPath, ref: row.ref } }
+    throw new Error(`Unexpected capability: ${contract.actionId}`)
+  } } as never)
+  const mounted = await mountPanel(client, undefined, { workbench, workspacePreview })
+  try {
+    assert.ok(mounted.container.querySelector('[data-local-material-registration]'))
+    await fillMaterialPath(mounted.container, 'data\\results.csv')
+    await submitMaterial(mounted.container)
+    const observed = calls.filter(call => call.action === 'artifact-versions.observe')
+    assert.equal(observed.length, 1)
+    assert.equal(observed[0]!.options.workspaceId, '/workspace/lab')
+    assert.equal(observed[0]!.options.approval, undefined)
+    assert.equal(observed[0]!.input.path, 'data/results.csv')
+    assert.equal(observed[0]!.input.retention, 'snapshot')
+    assert.equal(observed[0]!.input.expectedCurrentVersionId, null)
+    assert.equal(observed[0]!.input.metadata.registrationSessionId, 'thread-policy')
+    assert.equal(observed[0]!.input.metadata.provenanceStatus, 'observed-untracked')
+    assert.equal(observed[0]!.input.metadata.runtimeId, undefined, 'registration is not an executed run')
+    assert.equal(observed[0]!.input.dependencies, undefined, 'registration must not invent scientific edges')
+    assert.equal(observed[0]!.input.contentDigest, undefined, 'the owner hashes actual file bytes')
+    assert.match(mounted.container.textContent!, new RegExp(row.ref.contentDigest))
+    assert.match(mounted.container.textContent!, /researchDossierMaterialBoundary/)
+    assert.equal(mounted.container.querySelectorAll('ol > li').length, 1, 'new material appears in ordinary history')
+    await act(async () => { [...mounted.container.querySelectorAll('button')].find(button => button.textContent === 'researchDossierMaterialOpen')!.click(); await tick() })
+    assert.equal((navigation!.payload as any).target.versionId, row.ref.versionId)
+    assert.equal((navigation!.payload as any).expectedDigest, `sha256:${row.ref.contentDigest}`)
+    await act(async () => { mounted.root.render(<ResearchDossierPanel client={client} session={session('thread-policy', 'codex', '/workspace/lab')} active surfaceId="surface-dossier-a" onCollapse={() => undefined} workbench={workbench} workspacePreview={workspacePreview} activation={navigation} />); await tick() })
+    await settleReact()
+    assert.ok(mounted.container.querySelector('[data-local-material-details]'))
+    await act(async () => { [...mounted.container.querySelectorAll('button')].find(button => button.textContent?.trim() === 'researchDossierPreview')!.click(); await tick() })
+    const materialized = calls.find(call => call.action === 'artifact-versions.materialize')!
+    assert.equal(materialized.input.versionId, row.ref.versionId)
+    assert.match(materialized.input.destinationPath, /\.csv$/)
+    assert.equal((preview as any).integrity.expectedDigest, `sha256:${row.ref.contentDigest}`)
+    assert.equal((preview as any).returnTo.activation.payload.target.versionId, row.ref.versionId)
+  } finally { await mounted.unmount() }
+})
+
+test('material registration rejects path escapes, displays owner failures and discards late results after a workspace switch', async () => {
+  for (const path of ['../secret', '/tmp/file', 'C:\\file', '\\\\server\\file', 'https://example.test/file', 'a/./file', 'a//file', '']) assert.equal(localMaterialPath(path), null, path)
+  assert.equal(localMaterialPath('data\\review.csv'), 'data/review.csv')
+  const pending = deferred<any>()
+  let attempts = 0
+  const client = {
+    listArtifactVersions: async () => ({ ok: true, value: { items: [] } }),
+    readResearchRecordingStatus: async () => ({ ok: true, value: automaticStatus(1, false) }),
+    observeArtifactVersion: async () => { attempts++; return attempts === 1 ? { ok: false, issue: { code: 'artifact-not-found', message: 'actual file missing' } } : pending.promise }
+  } as never
+  const mounted = await mountPanel(client)
+  try {
+    await fillMaterialPath(mounted.container, '../escape.csv'); await submitMaterial(mounted.container)
+    assert.equal(attempts, 0)
+    assert.match(mounted.container.textContent!, /researchDossierMaterialPathInvalid/)
+    await fillMaterialPath(mounted.container, 'data/results.csv'); await submitMaterial(mounted.container)
+    assert.match(mounted.container.textContent!, /actual file missing/)
+    assert.equal(mounted.container.querySelector('[data-registered-material-version]'), null)
+    await submitMaterial(mounted.container)
+    assert.equal(attempts, 2)
+    await submitMaterial(mounted.container)
+    assert.equal(attempts, 2, 'pending request cannot be duplicated')
+    await mounted.rerender(session('thread-next', 'codex', '/workspace/other'))
+    const row = historyItem(2)
+    await act(async () => { pending.resolve({ ok: true, value: { versions: [{ candidateId: 'local-material', ...row }] } }); await tick() })
+    assert.equal(mounted.container.querySelector('[data-registered-material-version]'), null)
+    assert.equal((mounted.container.querySelector('input[name="material-path"]') as HTMLInputElement).value, '')
   } finally { await mounted.unmount() }
 })

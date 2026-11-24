@@ -37,14 +37,14 @@ export function ReviewPlanCard({
         <ListTodo className="h-5 w-5" strokeWidth={1.9} />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[14.5px] font-semibold text-ds-ink">{title}</div>
-        <div className="mt-0.5 truncate text-[12.5px] text-ds-muted">{t('reviewPlanCardHint')}</div>
+        <div className="truncate text-ds-lg font-semibold text-ds-ink">{title}</div>
+        <div className="mt-0.5 truncate text-ds-sm text-ds-muted">{t('reviewPlanCardHint')}</div>
       </div>
       {onOpen ? (
         <button
           type="button"
           onClick={onOpen}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink transition hover:bg-ds-hover"
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-ds-border bg-ds-card px-3 text-ds-md font-medium text-ds-ink transition hover:bg-ds-hover"
         >
           <FileEdit className="h-3.5 w-3.5" strokeWidth={1.9} />
           {t('reviewPlanOpen')}
@@ -55,7 +55,7 @@ export function ReviewPlanCard({
           type="button"
           onClick={onBuild}
           disabled={busy}
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(0,136,255,0.22)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-accent px-4 text-ds-md font-semibold text-white shadow-[0_10px_24px_rgba(0,136,255,0.22)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Hammer className="h-3.5 w-3.5" strokeWidth={1.9} />
           {t('planBuild')}
@@ -105,10 +105,10 @@ export function ReviewSummaryCard({ review }: { review: ReviewBlock }): ReactEle
           {icon}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-semibold text-ds-ink">
+          <span className="block truncate text-ds-xl font-semibold text-ds-ink">
             {review.title}
           </span>
-          <span className="mt-0.5 block truncate text-[12.5px] text-ds-muted">
+          <span className="mt-0.5 block truncate text-ds-sm text-ds-muted">
             {statusText}
           </span>
         </span>
@@ -122,15 +122,15 @@ export function ReviewSummaryCard({ review }: { review: ReviewBlock }): ReactEle
       {expanded ? (
         <div className="border-t border-ds-border-muted/70 px-5 py-4">
           {review.output?.overallExplanation?.trim() ? (
-            <p className="whitespace-pre-wrap text-[14px] leading-6 text-ds-muted">
+            <p className="whitespace-pre-wrap text-ds-lg leading-6 text-ds-muted">
               {review.output.overallExplanation}
             </p>
           ) : review.reviewText?.trim() ? (
-            <p className="whitespace-pre-wrap text-[14px] leading-6 text-ds-muted">
+            <p className="whitespace-pre-wrap text-ds-lg leading-6 text-ds-muted">
               {review.reviewText}
             </p>
           ) : (
-            <p className="text-[14px] leading-6 text-ds-muted">{statusText}</p>
+            <p className="text-ds-lg leading-6 text-ds-muted">{statusText}</p>
           )}
 
           {findings.length > 0 ? (
@@ -141,21 +141,21 @@ export function ReviewSummaryCard({ review }: { review: ReviewBlock }): ReactEle
                   className="rounded-[12px] border border-ds-border-muted bg-ds-card-muted/45 px-3.5 py-3"
                 >
                   <div className="flex min-w-0 items-start gap-2">
-                    <span className="mt-0.5 shrink-0 rounded-md bg-ds-card px-1.5 py-0.5 font-mono text-[11px] text-ds-muted">
+                    <span className="mt-0.5 shrink-0 rounded-md bg-ds-card px-1.5 py-0.5 font-mono text-ds-xs text-ds-muted">
                       P{finding.priority}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="break-words text-[14px] font-semibold text-ds-ink">
+                      <div className="break-words text-ds-lg font-semibold text-ds-ink">
                         {finding.title.replace(/^\[P[0-3]\]\s*/i, '')}
                       </div>
-                      <div className="mt-1 break-all font-mono text-[11.5px] text-ds-faint">
+                      <div className="mt-1 break-all font-mono text-ds-xs text-ds-faint">
                         {finding.codeLocation.absoluteFilePath}:{finding.codeLocation.lineRange.start}
                         -{finding.codeLocation.lineRange.end}
                       </div>
                     </div>
                   </div>
                   {finding.body.trim() ? (
-                    <p className="mt-2 whitespace-pre-wrap text-[13.5px] leading-6 text-ds-muted">
+                    <p className="mt-2 whitespace-pre-wrap text-ds-md leading-6 text-ds-muted">
                       {finding.body}
                     </p>
                   ) : null}
@@ -171,9 +171,11 @@ export function ReviewSummaryCard({ review }: { review: ReviewBlock }): ReactEle
 
 export function TurnChangeSummary({
   changes,
+  threadId,
   viewportRef
 }: {
   changes: ToolBlock[]
+  threadId?: string
   viewportRef: RefObject<HTMLDivElement | null>
 }): ReactElement {
   const { t } = useTranslation('common')
@@ -218,11 +220,11 @@ export function TurnChangeSummary({
           <FileEdit className="h-5 w-5" strokeWidth={1.85} />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-[18px] font-semibold tracking-[-0.02em] text-ds-ink">
+          <span className="block text-ds-2xl font-semibold tracking-[-0.02em] text-ds-ink">
             {title}
           </span>
           {totals ? (
-            <span className="mt-1 block font-mono text-[12px]">
+            <span className="mt-1 block font-mono text-ds-sm">
               <span className="text-ds-diff-added">+{totals.added}</span>
               <span className="mx-1.5 text-ds-faint">·</span>
               <span className="text-ds-diff-removed">-{totals.removed}</span>
@@ -259,12 +261,12 @@ export function TurnChangeSummary({
                   }`}
                 >
                   <span className="min-w-0 flex-1">
-                    <span className="block break-all text-[14px] font-medium text-ds-ink">
+                    <span className="block break-all text-ds-lg font-medium text-ds-ink">
                       {primary}
                     </span>
                   </span>
                   {stats ? (
-                    <span className="shrink-0 font-mono text-[12px] tabular-nums">
+                    <span className="shrink-0 font-mono text-ds-sm tabular-nums">
                       <span className="text-ds-diff-added">+{stats.added}</span>
                       <span className="ml-1.5 text-ds-diff-removed">-{stats.removed}</span>
                     </span>
@@ -281,6 +283,7 @@ export function TurnChangeSummary({
                     <DiffView
                       patch={change.detail}
                       filePath={change.filePath}
+                      sessionId={threadId}
                       maxHeight={440}
                       className="border border-ds-border-muted/70"
                     />
@@ -299,6 +302,7 @@ export function TurnChangeSummary({
 /** Turn-level work-process summary. Details stay collapsed until the user opens them. */
 export function WorkMetaRow({
   processing,
+  waitingForInput = false,
   terminalStatus,
   stepCount,
   durationMs,
@@ -308,6 +312,7 @@ export function WorkMetaRow({
   onToggle
 }: {
   processing: boolean
+  waitingForInput?: boolean
   terminalStatus?: string
   stepCount: number
   durationMs?: number
@@ -340,16 +345,16 @@ export function WorkMetaRow({
         ? t('turnCancelled')
         : t('turnEnded')
 
-  const mainLabel = processing
+  const mainLabel = processing && waitingForInput ? t('userInputPending') : processing
     ? typeof effectiveDurationMs === 'number'
-      ? `${t('processing')} ${formatDuration(effectiveDurationMs)}`
-      : t('processing')
+      ? `${t('working')} ${formatDuration(effectiveDurationMs)}`
+      : t('working')
     : typeof effectiveDurationMs === 'number'
       ? `${terminalLabel} ${formatDuration(effectiveDurationMs)}`
-      : `${terminalLabel} · ${t('processStepCount', { count: stepCount })}`
+      : terminalLabel
 
   const showThoughtSuffix =
-    typeof reasoningDurationMs === 'number' &&
+    expanded && !waitingForInput && typeof reasoningDurationMs === 'number' &&
     reasoningDurationMs >= 1000
 
   const thoughtSuffixLabel = processing
@@ -363,12 +368,12 @@ export function WorkMetaRow({
       type="button"
       onClick={onToggle}
       aria-expanded={expanded}
-      className="group flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 text-left text-[15px] font-medium text-ds-muted transition hover:opacity-85"
+      className="ds-button-plain group flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 text-left text-ds-md font-medium text-ds-muted transition hover:opacity-85"
     >
-      <span className={`tabular-nums ${processing ? 'ds-shiny-text' : ''}`}>{mainLabel}</span>
-      {showThoughtSuffix && thoughtSuffixLabel ? (
+      <span className={`tabular-nums ${processing && !waitingForInput ? 'ds-shiny-text' : ''}`}>{mainLabel}</span>
+      {expanded ? (
         <span className="text-ds-faint">
-          · {thoughtSuffixLabel}
+          · {t('processStepCount', { count: stepCount })}{showThoughtSuffix && thoughtSuffixLabel ? ` · ${thoughtSuffixLabel}` : ''}
         </span>
       ) : null}
       {expanded ? (
@@ -402,7 +407,7 @@ export function ModelMetaTag({
       className={`flex min-w-0 text-right ${className}`.trim()}
       title={t('turnModelBadgeTitle', { model: label })}
     >
-      <span className="truncate font-mono text-[12px] tracking-tight text-ds-faint/85">
+      <span className="truncate font-mono text-ds-sm tracking-tight text-ds-faint/85">
         {label}
       </span>
     </div>

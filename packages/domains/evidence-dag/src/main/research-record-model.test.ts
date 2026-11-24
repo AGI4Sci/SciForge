@@ -4,7 +4,7 @@ import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/hos
 import type { DomainMainAgentExecutionRequest } from '@sciforge/domain-sdk/agent-execution'
 import { z } from 'zod'
 import { researchRecordClassificationSchema, researchRecordPhaseSynthesisSchema } from '../research-record-contract.js'
-import { reasonAboutResearchRecord, researchRecordGenerationSchema, researchRecordCompactClassificationSchema } from './research-record-model.js'
+import { ResearchRecordExecutionError, reasonAboutResearchRecord, researchRecordGenerationSchema, researchRecordCompactClassificationSchema } from './research-record-model.js'
 
 const input = () => ({ instruction: '仅分析来源', data: { evidence: [] }, model: 'gpt-6.1-terra',
   runtimeId: 'codex', sourceThreadId: 'main', workspaceRoot: '/project', signal: new AbortController().signal })
@@ -149,4 +149,30 @@ test('new receipt validation rejects excessive splitting while historical record
   assert.equal(researchRecordCompactClassificationSchema.safeParse({ ...receipt, steps: receipt.steps.slice(0, 4) }).success, true)
   assert.equal(researchRecordCompactClassificationSchema.safeParse({ ...receipt, steps: [], phasePath: ['a','b','c','d'] }).success, false)
   assert.equal(researchRecordCompactClassificationSchema.safeParse({ ...receipt, steps: [], title: 'x'.repeat(81) }).success, false)
+})
+
+
+test('late successful replies after cancellation and wrong execution identity are rejected', async () => {
+  const controller = new AbortController()
+  await assert.rejects(reasonAboutResearchRecord(context(async () => {
+    controller.abort()
+    return { runtimeId: 'codex', threadId: 'side', turnId: 'turn', state: 'completed', text: '{}' }
+  }), { ...input(), signal: controller.signal }), /abort/i)
+  for (const identity of [{ runtimeId: 'other', threadId: 'side' }, { runtimeId: 'codex', threadId: 'main' }]) {
+    await assert.rejects(reasonAboutResearchRecord(context(async () => ({
+      ...identity, turnId: 'turn', state: 'completed', text: '{}'
+    })), input()), /不匹配/)
+  }
+})
+
+test('execution retry permission is preserved, while unsupported minimal remains blocked', async () => {
+  for (const retryable of [false, true]) {
+    await assert.rejects(reasonAboutResearchRecord(context(async () => ({
+      runtimeId: 'codex', threadId: 'side', turnId: 'turn', state: 'failed', text: '',
+      failure: { code: 'unavailable', message: 'synthetic failure', retryable }
+    })), input()), error => error instanceof ResearchRecordExecutionError && error.retryable === retryable)
+  }
+  await assert.rejects(reasonAboutResearchRecord(context(async () => {
+    throw new Error('Runtime fixture does not support context profile minimal.')
+  }), input()), error => error instanceof ResearchRecordExecutionError && !error.retryable && /minimal/.test(error.message))
 })

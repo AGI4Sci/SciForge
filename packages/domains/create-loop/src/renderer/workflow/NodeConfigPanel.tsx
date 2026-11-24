@@ -35,7 +35,7 @@ import { latestNodeResult } from './node-result.js'
 const WEBHOOK_METHODS: WorkflowWebhookMethod[] = ['ANY', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 
 const INPUT_CLASS =
-  'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'
+  'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-ds-md text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25'
 
 /** A reachable upstream node, carrying the full node so the picker can derive its typed outputs. */
 type UpstreamNode = { id: string; name: string; type: WorkflowNodeV1['type']; node: WorkflowNodeV1 }
@@ -128,9 +128,9 @@ function Field({
 }): ReactElement {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-[12px] font-medium text-ds-muted">{label}</span>
+      <span className="text-ds-sm font-medium text-ds-muted">{label}</span>
       {children}
-      {hint ? <span className="text-[11px] leading-4 text-ds-faint">{hint}</span> : null}
+      {hint ? <span className="text-ds-xs leading-4 text-ds-faint">{hint}</span> : null}
     </label>
   )
 }
@@ -150,23 +150,23 @@ function CustomNodeForm({
   const { t } = useTranslation('common')
   const module = settings.workflow.modules.find((item) => item.id === node.config.moduleId)
   if (!module) {
-    return <p className="text-[12px] leading-5 text-red-600">{t('workflowModuleMissing')}</p>
+    return <p className="text-ds-sm leading-5 text-red-600">{t('workflowModuleMissing')}</p>
   }
   const setValue = (key: string, value: string): void =>
     onChange({ ...node, config: { ...node.config, values: { ...node.config.values, [key]: value } } })
   return (
     <>
       {module.description ? (
-        <p className="text-[11.5px] leading-5 text-ds-faint">{module.description}</p>
+        <p className="text-ds-xs leading-5 text-ds-faint">{module.description}</p>
       ) : null}
       {module.fields.length === 0 ? (
-        <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowModuleNoFields')}</p>
+        <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowModuleNoFields')}</p>
       ) : null}
       {module.fields.map((field) => {
         const value = node.config.values[field.key] ?? field.defaultValue
         if (field.type === 'boolean') {
           return (
-            <label key={field.key} className="flex items-center gap-2 text-[13px] text-ds-ink">
+            <label key={field.key} className="flex items-center gap-2 text-ds-md text-ds-ink">
               <input
                 type="checkbox"
                 checked={value === 'true'}
@@ -356,7 +356,7 @@ function InputBindingsEditor({
         <button
           type="button"
           onClick={() => setExpanded((open) => !open)}
-          className="-ml-1 inline-flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-left text-[12px] font-medium text-ds-muted transition hover:text-ds-ink"
+          className="-ml-1 inline-flex min-w-0 items-center gap-1 rounded-md px-1 py-0.5 text-left text-ds-sm font-medium text-ds-muted transition hover:text-ds-ink"
         >
           {expanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={2} />
@@ -364,14 +364,14 @@ function InputBindingsEditor({
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={2} />
           )}
           <span className="truncate">{t('workflowNodeInputs')}</span>
-          <span className="shrink-0 rounded-full bg-ds-subtle px-1.5 py-0.5 text-[10px] font-normal text-ds-faint">
+          <span className="shrink-0 rounded-full bg-ds-subtle px-1.5 py-0.5 text-ds-2xs font-normal text-ds-faint">
             {inputs.length > 0 ? inputs.length : t('workflowOptional')}
           </span>
         </button>
         <button
           type="button"
           onClick={addInput}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-accent transition hover:bg-accent/10"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-ds-xs font-medium text-accent transition hover:bg-accent/10"
         >
           <Plus className="h-3 w-3" strokeWidth={2} />
           {t('workflowNodeInputAdd')}
@@ -379,7 +379,7 @@ function InputBindingsEditor({
       </div>
       {expanded ? (
         <>
-          <p className="text-[11px] leading-4 text-ds-faint">{t('workflowNodeInputsHint')}</p>
+          <p className="text-ds-xs leading-4 text-ds-faint">{t('workflowNodeInputsHint')}</p>
           {inputs.map((input, index) => {
             const update = (patch: Partial<WorkflowNodeInputV1>): void =>
               setInputs(inputs.map((item, i) => (i === index ? { ...item, ...patch } : item)))
@@ -391,7 +391,7 @@ function InputBindingsEditor({
               <div key={index} className="flex flex-col gap-2 rounded-lg border border-ds-border p-2.5">
                 <div className="flex items-start justify-between gap-2">
                   <label className="flex min-w-0 flex-1 flex-col gap-1">
-                    <span className="text-[11px] font-medium text-ds-faint">{t('workflowInputSourceLabel')}</span>
+                    <span className="text-ds-xs font-medium text-ds-faint">{t('workflowInputSourceLabel')}</span>
                     <select
                       className={INPUT_CLASS}
                       value={selectValue}
@@ -431,7 +431,7 @@ function InputBindingsEditor({
                 </div>
                 {selectValue === 'custom' ? (
                   <input
-                    className={`${INPUT_CLASS} font-mono text-[12px]`}
+                    className={`${INPUT_CLASS} font-mono text-ds-sm`}
                     value={input.source}
                     placeholder={t('workflowInputSourceCustomPlaceholder')}
                     onChange={(event) => update({ source: event.target.value })}
@@ -439,7 +439,7 @@ function InputBindingsEditor({
                 ) : null}
                 <div className="flex items-end gap-2">
                   <label className="flex min-w-0 flex-1 flex-col gap-1">
-                    <span className="text-[11px] font-medium text-ds-faint">{t('workflowInputNameLabel')}</span>
+                    <span className="text-ds-xs font-medium text-ds-faint">{t('workflowInputNameLabel')}</span>
                     <input
                       className={INPUT_CLASS}
                       value={input.key}
@@ -448,7 +448,7 @@ function InputBindingsEditor({
                     />
                   </label>
                   <label className="flex w-24 shrink-0 flex-col gap-1">
-                    <span className="text-[11px] font-medium text-ds-faint">{t('workflowInputTypeLabel')}</span>
+                    <span className="text-ds-xs font-medium text-ds-faint">{t('workflowInputTypeLabel')}</span>
                     <select
                       className={INPUT_CLASS}
                       value={input.type}
@@ -462,7 +462,7 @@ function InputBindingsEditor({
                     </select>
                   </label>
                 </div>
-                <p className="text-[11px] leading-4 text-ds-faint">
+                <p className="text-ds-xs leading-4 text-ds-faint">
                   {t('workflowInputRefPreview')}{' '}
                   <code className="select-all font-mono text-accent">{`{{$input.${key || 'key'}}}`}</code>
                 </p>
@@ -492,18 +492,18 @@ function InputFieldsEditor({
   return (
     <>
       <div className="flex items-center justify-between">
-        <span className="text-[12px] font-medium text-ds-muted">{t('workflowInputSchema')}</span>
+        <span className="text-ds-sm font-medium text-ds-muted">{t('workflowInputSchema')}</span>
         <button
           type="button"
           onClick={addField}
-          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-accent transition hover:bg-accent/10"
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-ds-xs font-medium text-accent transition hover:bg-accent/10"
         >
           <Plus className="h-3 w-3" strokeWidth={2} />
           {t('workflowInputAddField')}
         </button>
       </div>
       {fields.length === 0 ? (
-        <p className="text-[11px] leading-4 text-ds-faint">{t('workflowInputSchemaHint')}</p>
+        <p className="text-ds-xs leading-4 text-ds-faint">{t('workflowInputSchemaHint')}</p>
       ) : (
         fields.map((field, index) => {
           const update = (patch: Partial<WorkflowInputFieldV1>): void =>
@@ -554,7 +554,7 @@ function InputFieldsEditor({
               {field.type === 'select' ? (
                 <OptionsInput options={field.options} onCommit={(next) => update({ options: next })} />
               ) : null}
-              <label className="flex items-center gap-2 text-[12px] text-ds-muted">
+              <label className="flex items-center gap-2 text-ds-sm text-ds-muted">
                 <input
                   type="checkbox"
                   checked={field.required}
@@ -573,7 +573,7 @@ function InputFieldsEditor({
 /** Small capitalized type pill for a picker row (e.g. String / Number / JSON). */
 function TypeBadge({ type }: { type: WorkflowVarType }): ReactElement {
   return (
-    <span className="shrink-0 rounded bg-ds-subtle px-1.5 py-0.5 text-[9.5px] font-medium uppercase tracking-wide text-ds-faint">
+    <span className="shrink-0 rounded bg-ds-subtle px-1.5 py-0.5 text-ds-2xs font-medium uppercase tracking-wide text-ds-faint">
       {varTypeLabel(type)}
     </span>
   )
@@ -586,7 +586,7 @@ function varMatchesQuery(output: WorkflowOutputVar, query: string): boolean {
 }
 
 const PICKER_ROW =
-  'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-ds-ink transition hover:bg-ds-hover'
+  'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-ds-sm text-ds-ink transition hover:bg-ds-hover'
 
 /** One described output field; recurses for object children (indented). Leaves insert a complete token. */
 function VarRow({
@@ -607,7 +607,7 @@ function VarRow({
   if (output.children?.length) {
     return (
       <>
-        <div className="flex items-center justify-between gap-2 px-2 py-1 text-[12px] text-ds-muted" style={pad}>
+        <div className="flex items-center justify-between gap-2 px-2 py-1 text-ds-sm text-ds-muted" style={pad}>
           <span className="min-w-0 truncate">{output.label || output.key}</span>
           <TypeBadge type={output.type} />
         </div>
@@ -667,14 +667,14 @@ function VariablePicker({
     }))
     .filter((group) => !q || group.name.toLowerCase().includes(q) || group.vars.some((v) => varMatchesQuery(v, q)))
 
-  const header = 'px-2 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint'
+  const header = 'px-2 pb-1 pt-2 text-ds-2xs font-semibold uppercase tracking-wide text-ds-faint'
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div className="absolute right-0 top-9 z-50 flex max-h-[60vh] w-[280px] flex-col overflow-y-auto rounded-xl border border-ds-border bg-ds-elevated p-1.5 shadow-[0_24px_70px_rgba(44,55,78,0.22)] backdrop-blur-xl dark:shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
         <input
           autoFocus
-          className={`${INPUT_CLASS} mb-1 py-1.5 text-[12px]`}
+          className={`${INPUT_CLASS} mb-1 py-1.5 text-ds-sm`}
           placeholder={t('workflowVarSearch')}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -694,7 +694,7 @@ function VariablePicker({
             <p className={header}>{t('workflowVarUpstream')}</p>
             {groups.map((group) => (
               <div key={group.upstream.id} className="mb-0.5">
-                <p className="truncate px-2 pb-0.5 pt-1 text-[11px] font-medium text-ds-muted">{group.name}</p>
+                <p className="truncate px-2 pb-0.5 pt-1 text-ds-xs font-medium text-ds-muted">{group.name}</p>
                 {group.vars.map((output) => (
                   <VarRow
                     key={output.key}
@@ -708,7 +708,7 @@ function VariablePicker({
                 <div className="flex items-stretch gap-1 pl-2">
                   <button
                     type="button"
-                    className="flex-1 rounded-md px-2 py-1 text-left text-[10.5px] font-mono text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                    className="flex-1 rounded-md px-2 py-1 text-left text-ds-2xs font-mono text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
                     onClick={() => onInsert(`{{$nodes.${group.upstream.id}.json.}}`)}
                     title={`{{$nodes.${group.upstream.id}.json.…}}`}
                   >
@@ -716,7 +716,7 @@ function VariablePicker({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md px-2 py-1 text-[10.5px] font-mono text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                    className="rounded-md px-2 py-1 text-ds-2xs font-mono text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
                     onClick={() => onInsert(`{{$nodes.${group.upstream.id}.text}}`)}
                     title={`{{$nodes.${group.upstream.id}.text}}`}
                   >
@@ -728,7 +728,7 @@ function VariablePicker({
           </>
         ) : null}
         {common.length === 0 && groups.length === 0 ? (
-          <p className="px-2 py-3 text-center text-[11.5px] text-ds-faint">{t('workflowVarNoMatch')}</p>
+          <p className="px-2 py-3 text-center text-ds-xs text-ds-faint">{t('workflowVarNoMatch')}</p>
         ) : null}
       </div>
     </>
@@ -818,7 +818,7 @@ export function NodeConfigPanel({
 
   if (!node) {
     return (
-      <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-ds-faint">
+      <div className="flex h-full items-center justify-center px-6 text-center text-ds-md text-ds-faint">
         {t('workflowNoSelection')}
       </div>
     )
@@ -838,7 +838,7 @@ export function NodeConfigPanel({
   return (
     <div ref={panelRef} className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-ds-border px-4 py-3">
-        <h2 className="text-[13px] font-semibold text-ds-ink">
+        <h2 className="text-ds-md font-semibold text-ds-ink">
           {t(`workflowNode_${node.type}`)}
         </h2>
         <div className="flex items-center gap-1.5">
@@ -905,12 +905,12 @@ export function NodeConfigPanel({
 
         {danglingRefs.length > 0 ? (
           <div className="flex flex-col gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2">
-            <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-amber-600">
+            <div className="flex items-center gap-1.5 text-ds-xs font-semibold text-amber-600">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
               {t('workflowDanglingTitle')}
             </div>
             {danglingRefs.map((ref, index) => (
-              <div key={index} className="flex items-center justify-between gap-2 text-[11px]">
+              <div key={index} className="flex items-center justify-between gap-2 text-ds-xs">
                 <code className="min-w-0 truncate font-mono text-amber-700/90 dark:text-amber-300/90">{ref.token}</code>
                 <span className="shrink-0 text-ds-faint">
                   {t(ref.reason === 'node' ? 'workflowDanglingNode' : 'workflowDanglingField')}
@@ -937,7 +937,7 @@ export function NodeConfigPanel({
                 } as WorkflowNodeV1)
               }
             />
-            <span className="mt-1 text-[11px] leading-4 text-ds-faint">{t('workflowTriggerWorkspaceHint')}</span>
+            <span className="mt-1 text-ds-xs leading-4 text-ds-faint">{t('workflowTriggerWorkspaceHint')}</span>
           </Field>
         ) : null}
 
@@ -952,18 +952,18 @@ export function NodeConfigPanel({
 
         {node.type === 'manual-trigger' && workflowName ? (
           <div className="flex flex-col gap-1.5 border-t border-ds-border pt-3">
-            <span className="text-[12px] font-medium text-ds-muted">{t('workflowLocalApi')}</span>
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 font-mono text-[11px] leading-5 text-ds-muted">
+            <span className="text-ds-sm font-medium text-ds-muted">{t('workflowLocalApi')}</span>
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 font-mono text-ds-xs leading-5 text-ds-muted">
               {buildWorkflowRunCurl(settings, workflowName)}
             </pre>
             <button
               type="button"
               onClick={() => void navigator.clipboard?.writeText(buildWorkflowRunCurl(settings, workflowName))}
-              className="self-start rounded-md border border-ds-border px-2 py-1 text-[11.5px] font-medium text-ds-ink transition hover:bg-ds-hover"
+              className="self-start rounded-md border border-ds-border px-2 py-1 text-ds-xs font-medium text-ds-ink transition hover:bg-ds-hover"
             >
               {t('workflowLocalApiCopy')}
             </button>
-            <span className="text-[11px] leading-4 text-ds-faint">{t('workflowLocalApiHint')}</span>
+            <span className="text-ds-xs leading-4 text-ds-faint">{t('workflowLocalApiHint')}</span>
           </div>
         ) : null}
 
@@ -1089,8 +1089,8 @@ export function NodeConfigPanel({
               />
             </Field>
             <div className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-ds-muted">{t('workflowWebhookUrl')}</span>
-              <code className="select-all break-all rounded-lg bg-ds-subtle px-3 py-2 text-[11.5px] text-ds-muted">
+              <span className="text-ds-sm font-medium text-ds-muted">{t('workflowWebhookUrl')}</span>
+              <code className="select-all break-all rounded-lg bg-ds-subtle px-3 py-2 text-ds-xs text-ds-muted">
                 {`http://127.0.0.1:${settings.workflow.webhookPort}${node.config.path}`}
               </code>
             </div>
@@ -1108,7 +1108,7 @@ export function NodeConfigPanel({
                   onChange({ ...node, config: { ...node.config, prompt: event.target.value } })
                 }
               />
-              <span className="mt-1 text-[11px] leading-4 text-ds-faint">{t('workflowPromptUpstreamHint')}</span>
+              <span className="mt-1 text-ds-xs leading-4 text-ds-faint">{t('workflowPromptUpstreamHint')}</span>
             </Field>
             <Field label={t('workflowLlmModel')}>
               <input
@@ -1148,7 +1148,7 @@ export function NodeConfigPanel({
                   onChange({ ...node, config: { ...node.config, prompt: event.target.value } })
                 }
               />
-              <span className="mt-1 text-[11px] leading-4 text-ds-faint">{t('workflowPromptUpstreamHint')}</span>
+              <span className="mt-1 text-ds-xs leading-4 text-ds-faint">{t('workflowPromptUpstreamHint')}</span>
             </Field>
             <ModelPicker
               providers={providers}
@@ -1213,7 +1213,7 @@ export function NodeConfigPanel({
                 onChange={(event) => onChange({ ...node, config: { ...node.config, outputDir: event.target.value } })}
               />
             </Field>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowImageHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowImageHint')}</p>
           </>
         ) : null}
 
@@ -1256,7 +1256,7 @@ export function NodeConfigPanel({
                 }
               />
             </Field>
-            <label className="flex items-center gap-2 text-[13px] text-ds-ink">
+            <label className="flex items-center gap-2 text-ds-md text-ds-ink">
               <input
                 type="checkbox"
                 checked={node.config.caseSensitive}
@@ -1273,10 +1273,10 @@ export function NodeConfigPanel({
           <>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-[12px] font-medium text-ds-muted">{t('workflowFields')}</span>
+                <span className="text-ds-sm font-medium text-ds-muted">{t('workflowFields')}</span>
                 <button
                   type="button"
-                  className="text-[12px] font-medium text-accent hover:underline"
+                  className="text-ds-sm font-medium text-accent hover:underline"
                   onClick={() =>
                     onChange({ ...node, config: { ...node.config, fields: [...node.config.fields, { key: '', value: '' }] } })
                   }
@@ -1322,7 +1322,7 @@ export function NodeConfigPanel({
                 </div>
               ))}
             </div>
-            <label className="flex items-center gap-2 text-[13px] text-ds-ink">
+            <label className="flex items-center gap-2 text-ds-md text-ds-ink">
               <input
                 type="checkbox"
                 checked={node.config.keepIncoming}
@@ -1364,10 +1364,10 @@ export function NodeConfigPanel({
             </Field>
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="text-[12px] font-medium text-ds-muted">{t('workflowHttpHeaders')}</span>
+                <span className="text-ds-sm font-medium text-ds-muted">{t('workflowHttpHeaders')}</span>
                 <button
                   type="button"
-                  className="text-[12px] font-medium text-accent hover:underline"
+                  className="text-ds-sm font-medium text-accent hover:underline"
                   onClick={() =>
                     onChange({
                       ...node,
@@ -1425,7 +1425,7 @@ export function NodeConfigPanel({
                 }
               />
             </Field>
-            <label className="flex items-center gap-2 text-[13px] text-ds-ink">
+            <label className="flex items-center gap-2 text-ds-md text-ds-ink">
               <input
                 type="checkbox"
                 checked={node.config.parseJson}
@@ -1446,17 +1446,17 @@ export function NodeConfigPanel({
                 lastResult: effectiveLastResult,
                 onChange
               })
-            : <p className="text-[12px] leading-5 text-red-600">{t('workflowResourceProviderMissing')}</p>
+            : <p className="text-ds-sm leading-5 text-red-600">{t('workflowResourceProviderMissing')}</p>
         ) : null}
 
         {node.type === 'switch' ? (
           <>
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
-                <span className="text-[12px] font-medium text-ds-muted">{t('workflowSwitchRules')}</span>
+                <span className="text-ds-sm font-medium text-ds-muted">{t('workflowSwitchRules')}</span>
                 <button
                   type="button"
-                  className="text-[12px] font-medium text-accent hover:underline"
+                  className="text-ds-sm font-medium text-accent hover:underline"
                   onClick={() =>
                     onChange({
                       ...node,
@@ -1476,7 +1476,7 @@ export function NodeConfigPanel({
               {node.config.rules.map((rule, index) => (
                 <div key={index} className="flex flex-col gap-1.5 rounded-lg border border-ds-border p-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-medium text-ds-faint">
+                    <span className="text-ds-xs font-medium text-ds-faint">
                       {t('workflowSwitchCase', { index: index + 1 })}
                     </span>
                     <button
@@ -1549,7 +1549,7 @@ export function NodeConfigPanel({
                 </div>
               ))}
             </div>
-            <label className="flex items-center gap-2 text-[13px] text-ds-ink">
+            <label className="flex items-center gap-2 text-ds-md text-ds-ink">
               <input
                 type="checkbox"
                 checked={node.config.fallback}
@@ -1592,20 +1592,20 @@ export function NodeConfigPanel({
                 onChange={(event) => onChange({ ...node, config: { ...node.config, code: event.target.value } })}
               />
             </Field>
-            <p className="text-[11.5px] leading-5 text-ds-faint">
+            <p className="text-ds-xs leading-5 text-ds-faint">
               {t(node.config.language === 'javascript' ? 'workflowCodeHintJs' : 'workflowCodeHintCmd')}
             </p>
             {codeCheck?.status === 'error' ? (
               <div className="rounded-lg border border-red-500/40 bg-red-500/5 px-3 py-2">
-                <div className="text-[11.5px] font-semibold text-red-600">{t('workflowCodeSyntaxError')}</div>
-                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-red-600/90">
+                <div className="text-ds-xs font-semibold text-red-600">{t('workflowCodeSyntaxError')}</div>
+                <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-ds-xs leading-4 text-red-600/90">
                   {codeCheck.message}
                 </pre>
               </div>
             ) : codeCheck?.status === 'ok' ? (
-              <div className="text-[11.5px] font-medium text-emerald-600">✓ {t('workflowCodeSyntaxOk')}</div>
+              <div className="text-ds-xs font-medium text-emerald-600">✓ {t('workflowCodeSyntaxOk')}</div>
             ) : codeCheck?.status === 'unavailable' ? (
-              <div className="text-[11.5px] text-ds-faint">{codeCheck.message}</div>
+              <div className="text-ds-xs text-ds-faint">{codeCheck.message}</div>
             ) : null}
           </>
         ) : null}
@@ -1712,7 +1712,7 @@ export function NodeConfigPanel({
                     />
                   </Field>
                 ) : null}
-                <label className="flex items-center gap-2 text-[12px] text-ds-muted">
+                <label className="flex items-center gap-2 text-ds-sm text-ds-muted">
                   <input
                     type="checkbox"
                     checked={node.config.continueOnError ?? false}
@@ -1723,7 +1723,7 @@ export function NodeConfigPanel({
               </>
             ) : (
               <>
-                <span className="text-[12px] font-medium text-ds-muted">{t('workflowLoopStopWhen')}</span>
+                <span className="text-ds-sm font-medium text-ds-muted">{t('workflowLoopStopWhen')}</span>
                 <input
                   className={INPUT_CLASS}
                   placeholder={t('workflowConditionLeftPlaceholder')}
@@ -1771,7 +1771,7 @@ export function NodeConfigPanel({
 
         {node.type === 'filter' ? (
           <>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowFilterHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowFilterHint')}</p>
             <Field label={t('workflowConditionLeft')}>
               <input
                 className={INPUT_CLASS}
@@ -1807,7 +1807,7 @@ export function NodeConfigPanel({
 
         {node.type === 'sort' ? (
           <>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowArrayHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowArrayHint')}</p>
             <Field label={t('workflowSortField')}>
               <input
                 className={INPUT_CLASS}
@@ -1828,7 +1828,7 @@ export function NodeConfigPanel({
                 <option value="desc">{t('workflowSortDesc')}</option>
               </select>
             </Field>
-            <label className="flex items-center gap-2 text-[13px] text-ds-ink">
+            <label className="flex items-center gap-2 text-ds-md text-ds-ink">
               <input
                 type="checkbox"
                 checked={node.config.numeric}
@@ -1841,7 +1841,7 @@ export function NodeConfigPanel({
 
         {node.type === 'limit' ? (
           <>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowArrayHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowArrayHint')}</p>
             <Field label={t('workflowLimitCount')}>
               <input
                 type="number"
@@ -1870,7 +1870,7 @@ export function NodeConfigPanel({
 
         {node.type === 'aggregate' ? (
           <>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowArrayHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowArrayHint')}</p>
             <Field label={t('workflowAggregateMode')}>
               <select
                 className={INPUT_CLASS}
@@ -1989,12 +1989,12 @@ export function NodeConfigPanel({
               </Field>
             </div>
             <div className="flex flex-col gap-2">
-              <span className="text-[12px] font-medium text-ds-muted">{t('workflowResearchSources')}</span>
+              <span className="text-ds-sm font-medium text-ds-muted">{t('workflowResearchSources')}</span>
               <div className="grid grid-cols-2 gap-2">
                 {RESEARCH_SOURCES.map((source) => {
                   const checked = node.config.sources.includes(source)
                   return (
-                    <label key={source} className="flex items-center gap-2 rounded-lg border border-ds-border px-2.5 py-2 text-[12px] text-ds-ink">
+                    <label key={source} className="flex items-center gap-2 rounded-lg border border-ds-border px-2.5 py-2 text-ds-sm text-ds-ink">
                       <input
                         type="checkbox"
                         checked={checked}
@@ -2010,7 +2010,7 @@ export function NodeConfigPanel({
                   )
                 })}
               </div>
-              <p className="text-[11px] leading-4 text-ds-faint">{t('workflowResearchSourcesHint')}</p>
+              <p className="text-ds-xs leading-4 text-ds-faint">{t('workflowResearchSourcesHint')}</p>
             </div>
           </>
         ) : null}
@@ -2085,7 +2085,7 @@ export function NodeConfigPanel({
                 <option value="json">{t('workflowTemplateOutputJson')}</option>
               </select>
             </Field>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowTemplateHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowTemplateHint')}</p>
           </>
         ) : null}
 
@@ -2107,7 +2107,7 @@ export function NodeConfigPanel({
               </select>
             </Field>
             {node.config.mode === 'parse' ? (
-              <label className="flex items-center gap-2 text-[13px] text-ds-ink">
+              <label className="flex items-center gap-2 text-ds-md text-ds-ink">
                 <input
                   type="checkbox"
                   checked={node.config.strict}
@@ -2116,13 +2116,13 @@ export function NodeConfigPanel({
                 {t('workflowJsonStrict')}
               </label>
             ) : null}
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowJsonHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowJsonHint')}</p>
           </>
         ) : null}
 
         {node.type === 'output' ? (
           <>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowOutputHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowOutputHint')}</p>
             <Field label={t('workflowOutputMode')}>
               <select
                 className={INPUT_CLASS}
@@ -2241,7 +2241,7 @@ export function NodeConfigPanel({
             </Field>
             <div className="flex flex-col gap-2 border-t border-ds-border pt-3">
               <div className="flex items-center justify-between">
-                <span className="text-[12px] font-medium text-ds-muted">{t('workflowClassifyCategories')}</span>
+                <span className="text-ds-sm font-medium text-ds-muted">{t('workflowClassifyCategories')}</span>
                 <button
                   type="button"
                   onClick={() =>
@@ -2256,7 +2256,7 @@ export function NodeConfigPanel({
                       }
                     })
                   }
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-accent transition hover:bg-accent/10"
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-ds-xs font-medium text-accent transition hover:bg-accent/10"
                 >
                   <Plus className="h-3 w-3" strokeWidth={2} />
                   {t('workflowClassifyAddCategory')}
@@ -2264,7 +2264,7 @@ export function NodeConfigPanel({
               </div>
               {node.config.categories.map((category, index) => (
                 <div key={category.id} className="flex items-center gap-2">
-                  <span className="w-5 shrink-0 text-center text-[11px] text-ds-faint">{index + 1}</span>
+                  <span className="w-5 shrink-0 text-center text-ds-xs text-ds-faint">{index + 1}</span>
                   <input
                     className={INPUT_CLASS}
                     value={category.label}
@@ -2313,7 +2313,7 @@ export function NodeConfigPanel({
 
         {node.type === 'human-approval' ? (
           <>
-            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowApprovalHint')}</p>
+            <p className="text-ds-xs leading-5 text-ds-faint">{t('workflowApprovalHint')}</p>
             <Field label={t('workflowApprovalTitle')}>
               <input
                 className={INPUT_CLASS}
@@ -2365,7 +2365,7 @@ export function NodeConfigPanel({
 
         {!node.type.endsWith('-trigger') ? (
           <div className="flex flex-col gap-2.5 border-t border-ds-border pt-3">
-            <span className="text-[12px] font-medium text-ds-muted">{t('workflowErrorHandling')}</span>
+            <span className="text-ds-sm font-medium text-ds-muted">{t('workflowErrorHandling')}</span>
             <Field label={t('workflowOnError')}>
               <select
                 className={INPUT_CLASS}
@@ -2409,7 +2409,7 @@ export function NodeConfigPanel({
             {node.onError === 'fallback' ? (
               <Field label={t('workflowFallbackJson')} hint={t('workflowFallbackJsonHint')}>
                 <textarea
-                  className={`${INPUT_CLASS} min-h-[60px] resize-y font-mono text-[12px]`}
+                  className={`${INPUT_CLASS} min-h-[60px] resize-y font-mono text-ds-sm`}
                   value={node.fallbackJson ?? ''}
                   placeholder='{ "ok": false }'
                   onChange={(event) => onChange({ ...node, fallbackJson: event.target.value })}
@@ -2419,7 +2419,7 @@ export function NodeConfigPanel({
           </div>
         ) : null}
 
-        <label className="mt-2 flex items-center gap-2 text-[13px] text-ds-muted">
+        <label className="mt-2 flex items-center gap-2 text-ds-md text-ds-muted">
           <input
             type="checkbox"
             checked={node.disabled}
@@ -2430,7 +2430,7 @@ export function NodeConfigPanel({
 
         {onSavePreset ? (
           <div className="flex flex-col gap-1.5 border-t border-ds-border pt-3">
-            <span className="text-[12px] font-medium text-ds-muted">{t('workflowSaveAsPreset')}</span>
+            <span className="text-ds-sm font-medium text-ds-muted">{t('workflowSaveAsPreset')}</span>
             <div className="flex items-center gap-2">
               <input
                 className={INPUT_CLASS}
@@ -2446,16 +2446,16 @@ export function NodeConfigPanel({
                   setPresetSaved(true)
                   window.setTimeout(() => setPresetSaved(false), 1500)
                 }}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border px-3 text-[12.5px] font-medium text-ds-ink transition hover:bg-ds-hover"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border px-3 text-ds-sm font-medium text-ds-ink transition hover:bg-ds-hover"
               >
                 <Star className="h-3.5 w-3.5" strokeWidth={1.8} />
                 {t('workflowSaveAsPresetButton')}
               </button>
             </div>
             {presetSaved ? (
-              <span className="text-[11.5px] text-emerald-600">{t('workflowPresetSaved')}</span>
+              <span className="text-ds-xs text-emerald-600">{t('workflowPresetSaved')}</span>
             ) : (
-              <span className="text-[11px] leading-4 text-ds-faint">{t('workflowSaveAsPresetHint')}</span>
+              <span className="text-ds-xs leading-4 text-ds-faint">{t('workflowSaveAsPresetHint')}</span>
             )}
           </div>
         ) : null}
@@ -2464,8 +2464,8 @@ export function NodeConfigPanel({
           effectiveLastResult.message || effectiveLastResult.error || effectiveLastResult.outputJson
         ) ? (
           <div className="flex flex-col gap-1.5 border-t border-ds-border pt-3">
-            <span className="text-[12px] font-medium text-ds-muted">{t('workflowLastOutput')}</span>
-            <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 text-[11.5px] leading-5 text-ds-muted">
+            <span className="text-ds-sm font-medium text-ds-muted">{t('workflowLastOutput')}</span>
+            <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 text-ds-xs leading-5 text-ds-muted">
               {effectiveLastResult.error || effectiveLastResult.message || effectiveLastResult.outputJson}
             </pre>
           </div>
@@ -2537,7 +2537,7 @@ function TestNodeDialog({
         <header className="flex items-center justify-between border-b border-ds-border px-5 py-3.5">
           <div className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 text-ds-muted" strokeWidth={1.8} />
-            <span className="text-[14px] font-semibold text-ds-ink">{t('workflowTestNode')}</span>
+            <span className="text-ds-lg font-semibold text-ds-ink">{t('workflowTestNode')}</span>
           </div>
           <button
             type="button"
@@ -2549,10 +2549,10 @@ function TestNodeDialog({
         </header>
         <div className="flex flex-col gap-3 overflow-y-auto px-5 py-4">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] font-medium text-ds-muted">{t('workflowTestMock')}</span>
-            <span className="text-[11px] text-ds-faint">{t('workflowTestMockHint')}</span>
+            <span className="text-ds-sm font-medium text-ds-muted">{t('workflowTestMock')}</span>
+            <span className="text-ds-xs text-ds-faint">{t('workflowTestMockHint')}</span>
             <textarea
-              className={`${INPUT_CLASS} min-h-[120px] resize-y font-mono text-[12px]`}
+              className={`${INPUT_CLASS} min-h-[120px] resize-y font-mono text-ds-sm`}
               value={mock}
               onChange={(event) => setMock(event.target.value)}
               spellCheck={false}
@@ -2562,19 +2562,19 @@ function TestNodeDialog({
             type="button"
             onClick={() => void run()}
             disabled={running}
-            className="inline-flex items-center justify-center gap-2 self-start rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 self-start rounded-xl bg-ds-userbubble px-4 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-60"
           >
             {running ? <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} /> : <FlaskConical className="h-4 w-4" strokeWidth={1.9} />}
             {t('workflowTestRun')}
           </button>
           {error ? (
-            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-red-500/10 px-3 py-2 text-[11.5px] leading-5 text-red-600">
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-red-500/10 px-3 py-2 text-ds-xs leading-5 text-red-600">
               {error}
             </pre>
           ) : null}
           {result ? (
             <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2 text-[12px]">
+              <div className="flex items-center gap-2 text-ds-sm">
                 <span
                   className={`h-2 w-2 rounded-full ${result.status === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`}
                 />
@@ -2583,7 +2583,7 @@ function TestNodeDialog({
                 </span>
                 {result.message ? <span className="truncate text-ds-faint">{result.message}</span> : null}
               </div>
-              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 font-mono text-[11.5px] leading-5 text-ds-muted">
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ds-subtle px-3 py-2 font-mono text-ds-xs leading-5 text-ds-muted">
                 {result.error || result.outputJson || result.message || '—'}
               </pre>
             </div>

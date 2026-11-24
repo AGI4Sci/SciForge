@@ -22,7 +22,12 @@ test('exact scientific review rejects mismatched subjects and isolates revision,
   try{assert.equal((await fn(mounted,container)).pass,true,name)}finally{await act(async()=>mounted.unmount());container.remove()}
  }
  function render(mounted:Root,props:Record<string,unknown>){return act(async()=>mounted.render(React.createElement(ResearchRecordScientificReview,{view:makeView(),scope,invoker:{invoke:async()=>response(ref,'')} as unknown as DomainRendererCapabilityInvoker,...props})))}
- try {
+  try {
+await probe('one-result-two-presentations-both-require-review',async(mounted,container)=>{
+ const view={...makeView(),auditReferences:{refs:[],limited:false},resultImpact:[{id:'mean',nodeId:'root',title:'Mean',result:ref,inputs:[ref],status:'requires-review',reasons:['input changed'],presentations:[{id:'table',artifact:ref,location:'Table 1',label:'Table mean',status:'requires-review'},{id:'prose',artifact:ref,location:'Paragraph 1',label:'Prose mean',status:'requires-review'}]}]};
+ await render(mounted,{view});
+ return {pass:container.querySelectorAll('[data-presentation-impact="requires-review"]').length===2&&container.querySelectorAll('[data-result-impact]').length===1&&container.textContent.includes('不构成独立证据')};
+});
 await probe('reject-schema-valid-wrong-exact-subject',async(mounted,container)=>{
  const invoker={invoke:async()=>response({...ref,artifactId:'artifact:other',versionId:'artifact-version:other',contentDigest:'e'.repeat(64)},'WRONG_SUBJECT_MUST_NEVER_DISPLAY')};
  await render(mounted,{invoker});

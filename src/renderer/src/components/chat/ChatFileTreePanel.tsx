@@ -1046,7 +1046,7 @@ export function ChatFileTreePanel({
       return [
         <div
           key={`${path || 'root'}-loading`}
-          className="flex min-h-9 items-center gap-2 px-2.5 text-[12px] text-ds-muted"
+          className="flex min-h-9 items-center gap-2 px-2.5 text-ds-sm text-ds-muted"
           style={{ paddingLeft: depth * 14 + 10 }}
         >
           <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
@@ -1058,7 +1058,7 @@ export function ChatFileTreePanel({
       return [
         <div
           key={`${path || 'root'}-error`}
-          className="px-2.5 py-2 text-[12px] leading-5 text-red-700 dark:text-red-300"
+          className="px-2.5 py-2 text-ds-sm leading-5 text-red-700 dark:text-red-300"
           style={{ paddingLeft: depth * 14 + 10 }}
           title={state.error}
         >
@@ -1069,7 +1069,7 @@ export function ChatFileTreePanel({
     if (!state?.references.length) {
       return depth === 0
         ? [
-            <div key="empty" className="px-3 py-3 text-[12px] text-ds-muted">
+            <div key="empty" className="px-3 py-3 text-ds-sm text-ds-muted">
               {t('fileTreeEmpty')}
             </div>
           ]
@@ -1104,7 +1104,7 @@ export function ChatFileTreePanel({
             data-workspace-reference-draggable="true"
             data-workspace-reference-drop-target={dragTarget ? 'true' : undefined}
             draggable
-            className={`group flex min-h-8 items-center gap-1 px-1.5 pr-2 text-[12.5px] ${
+            className={`group flex min-h-8 items-center gap-1 px-1.5 pr-2 text-ds-sm ${
               active || directoryFocused || contextActive || dragTarget ? 'bg-ds-hover text-ds-ink' : 'text-ds-muted hover:bg-ds-hover/70 hover:text-ds-ink'
             }`}
             style={{ paddingLeft: depth * 14 + 6 }}
@@ -1182,10 +1182,10 @@ export function ChatFileTreePanel({
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ds-border-muted px-3">
         <FolderOpen className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.8} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold text-ds-ink">
+          <div className="truncate text-ds-md font-semibold text-ds-ink">
             {t('workspaceFilesTitle')}
           </div>
-          <div className="truncate text-[11px] text-ds-faint" title={root}>
+          <div className="truncate text-ds-xs text-ds-faint" title={root}>
             {root ? selectedGroup?.label ?? workspaceName(root) : t('workspaceRequiredToCreateThread')}
           </div>
         </div>
@@ -1216,7 +1216,7 @@ export function ChatFileTreePanel({
               key={group.id}
               type="button"
               onClick={() => setSelectedGroupId(group.id)}
-              className={`shrink-0 rounded-md border px-2 py-1 text-[11px] font-medium transition ${
+              className={`shrink-0 rounded-md border px-2 py-1 text-ds-xs font-medium transition ${
                 group.id === selectedGroup?.id
                   ? 'border-accent/40 bg-accent/10 text-accent'
                   : 'border-ds-border-muted bg-ds-card text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -1238,7 +1238,7 @@ export function ChatFileTreePanel({
         onDragLeave={clearWorkspaceReferenceDragTarget}
       >
         {root ? renderDirectory(ROOT_PATH, 0) : (
-          <div className="px-3 py-3 text-[12px] leading-5 text-ds-muted">
+          <div className="px-3 py-3 text-ds-sm leading-5 text-ds-muted">
             {t('workspaceRequiredToCreateThread')}
           </div>
         )}
@@ -1396,9 +1396,9 @@ function FileTreeContextMenu({
 
   return (
     <div
-      role="menu"
+      data-native-view-occluder="true" role="menu"
       aria-label={state.reference?.relativePath || state.reference?.name || t('workspaceFilesTitle')}
-      className="ds-no-drag fixed z-50 min-w-[206px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-[13px] text-ds-ink shadow-[0_16px_42px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card"
+      className="ds-no-drag fixed z-50 min-w-[206px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-ds-md text-ds-ink shadow-[0_16px_42px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card"
       style={{ left: state.x, top: state.y }}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.preventDefault()}
@@ -1572,7 +1572,7 @@ function FileTreeCreateDialog({
 
   return (
     <div
-      role="dialog"
+      data-native-view-occluder="true" role="dialog"
       aria-modal="true"
       aria-labelledby="file-tree-create-dialog-title"
       className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
@@ -1585,11 +1585,11 @@ function FileTreeCreateDialog({
       >
         <h2
           id="file-tree-create-dialog-title"
-          className="text-[18px] font-semibold text-ds-ink"
+          className="text-ds-2xl font-semibold text-ds-ink"
         >
           {title}
         </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+        <p className="mt-2 text-ds-md leading-6 text-ds-muted">
           {prompt}
         </p>
         <input
@@ -1598,10 +1598,10 @@ function FileTreeCreateDialog({
           disabled={state.submitting}
           value={state.value}
           onChange={(event) => onValueChange(event.target.value)}
-          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
+          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-ds-lg text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
         />
         {state.error ? (
-          <p className="mt-3 text-[12px] leading-5 text-red-600 dark:text-red-300">
+          <p className="mt-3 text-ds-sm leading-5 text-red-600 dark:text-red-300">
             {state.error}
           </p>
         ) : null}
@@ -1610,14 +1610,14 @@ function FileTreeCreateDialog({
             type="button"
             disabled={state.submitting}
             onClick={onClose}
-            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
           >
             {t('cancel')}
           </button>
           <button
             type="submit"
             disabled={!canSubmit}
-            className="rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+            className="rounded-xl bg-accent px-3 py-2 text-ds-md font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
           >
             {state.submitting ? t('loading') : t('writeEntryDialogCreate')}
           </button>
@@ -1655,7 +1655,7 @@ function FileTreeRenameDialog({
 
   return (
     <div
-      role="dialog"
+      data-native-view-occluder="true" role="dialog"
       aria-modal="true"
       aria-labelledby="file-tree-rename-dialog-title"
       className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
@@ -1668,11 +1668,11 @@ function FileTreeRenameDialog({
       >
         <h2
           id="file-tree-rename-dialog-title"
-          className="text-[18px] font-semibold text-ds-ink"
+          className="text-ds-2xl font-semibold text-ds-ink"
         >
           {t('writeRenameEntry')}
         </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+        <p className="mt-2 text-ds-md leading-6 text-ds-muted">
           {t('writeRenameEntryPrompt')}
         </p>
         <input
@@ -1682,15 +1682,15 @@ function FileTreeRenameDialog({
           value={state.value}
           onChange={(event) => onValueChange(event.target.value)}
           onFocus={(event) => event.currentTarget.select()}
-          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
+          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-ds-lg text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
         />
         {state.autoSuggested ? (
-          <p className="mt-2 text-[12px] leading-5 text-ds-muted">
+          <p className="mt-2 text-ds-sm leading-5 text-ds-muted">
             {t('fileTreeAutoRenameReview')}
           </p>
         ) : null}
         {state.error ? (
-          <p className="mt-3 text-[12px] leading-5 text-red-600 dark:text-red-300">
+          <p className="mt-3 text-ds-sm leading-5 text-red-600 dark:text-red-300">
             {state.error}
           </p>
         ) : null}
@@ -1699,14 +1699,14 @@ function FileTreeRenameDialog({
             type="button"
             disabled={state.submitting}
             onClick={onClose}
-            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
           >
             {t('cancel')}
           </button>
           <button
             type="submit"
             disabled={!canSubmit}
-            className="rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+            className="rounded-xl bg-accent px-3 py-2 text-ds-md font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
           >
             {state.submitting ? t('loading') : t('writeEntryDialogRename')}
           </button>

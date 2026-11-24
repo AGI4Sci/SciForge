@@ -199,32 +199,32 @@ export function ExtensionCard({
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <button type="button" onClick={() => onOpenDetails?.(extension)} aria-label={`Show details for ${extension.displayName}`} className="min-w-0 truncate text-left text-[15px] font-semibold text-ds-ink hover:text-accent">
+            <button type="button" onClick={() => onOpenDetails?.(extension)} aria-label={`Show details for ${extension.displayName}`} className="min-w-0 truncate text-left text-ds-xl font-semibold text-ds-ink hover:text-accent">
               {extension.displayName}
             </button>
             {extension.official ? (
-              <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-950/30 dark:text-blue-200">
+              <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-0.5 text-ds-2xs font-semibold text-blue-700 dark:bg-blue-950/30 dark:text-blue-200">
                 <ShieldCheck className="h-3 w-3" aria-hidden="true" />
                 {t('extensionOfficial')}
               </span>
             ) : (
-              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+              <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-ds-2xs font-semibold text-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
                 Development
               </span>
             )}
-            <span className="rounded-md bg-ds-subtle px-1.5 py-0.5 text-[10px] font-semibold text-ds-muted">
+            <span className="rounded-md bg-ds-subtle px-1.5 py-0.5 text-ds-2xs font-semibold text-ds-muted">
               {extension.source === 'development'
                 ? t('extensionDevelopmentPlugin', { defaultValue: 'Development plugin' })
                 : t(extension.source === 'bundled' ? 'extensionBundled' : 'extensionLocal')}
             </span>
             <span
-              className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${runtimeStatusTone(status.tone)}`}
+              className={`rounded-md px-1.5 py-0.5 text-ds-2xs font-semibold ${runtimeStatusTone(status.tone)}`}
               title={status.detail}
             >
               {status.label}
             </span>
           </div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-ds-faint">
+          <div className="mt-0.5 truncate font-mono text-ds-2xs text-ds-faint">
             {extension.packageName}
           </div>
         </div>
@@ -256,39 +256,39 @@ function ExtensionDetails({
   const enabled = extension.enabled ?? (extension.status !== 'disabled' && extension.status !== 'invalid')
   return (
     <article className="mt-4 rounded-2xl border border-ds-border bg-ds-card p-5 shadow-sm">
-      <button type="button" onClick={onBack} className="mb-5 inline-flex items-center gap-1.5 text-[13px] font-semibold text-ds-muted hover:text-ds-ink">
+      <button type="button" onClick={onBack} className="mb-5 inline-flex items-center gap-1.5 text-ds-md font-semibold text-ds-muted hover:text-ds-ink">
         <ChevronLeft className="h-4 w-4" aria-hidden="true" />
         {t('extensionBackToList', { defaultValue: 'Back to extensions' })}
       </button>
       <div className="flex items-start gap-3">
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-ds-subtle text-ds-muted"><Box className="h-5 w-5" aria-hidden="true" /></div>
-        <div className="min-w-0 flex-1"><h3 className="text-xl font-semibold text-ds-ink">{extension.displayName}</h3><div className="mt-1 font-mono text-xs text-ds-faint">{extension.packageName}</div></div>
+        <div className="min-w-0 flex-1"><h3 className="text-ds-3xl font-semibold text-ds-ink">{extension.displayName}</h3><div className="mt-1 font-mono text-ds-sm text-ds-faint">{extension.packageName}</div></div>
       </div>
-      <div className="mt-5 flex flex-wrap gap-2"><span className={`rounded-md px-2 py-1 text-xs font-semibold ${runtimeStatusTone(status.tone)}`}>{status.label}</span><span className="rounded-md bg-ds-subtle px-2 py-1 text-xs text-ds-muted">{extension.version}</span></div>
+      <div className="mt-5 flex flex-wrap gap-2"><span className={`rounded-md px-2 py-1 text-ds-sm font-semibold ${runtimeStatusTone(status.tone)}`}>{status.label}</span><span className="rounded-md bg-ds-subtle px-2 py-1 text-ds-sm text-ds-muted">{extension.version}</span></div>
       {extension.source !== 'bundled' && onSetEnabled ? (
         <div className="mt-4 flex justify-end">
           <button
             type="button"
             disabled={busy || (!enabled && extension.status === 'invalid')}
             onClick={() => onSetEnabled(extension, !enabled)}
-            className="inline-flex items-center gap-2 rounded-lg border border-ds-border px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-ds-border px-3 py-1.5 text-ds-sm font-semibold disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
             {t(enabled ? 'extensionDisable' : 'extensionEnable')}
           </button>
         </div>
       ) : null}
-      <dl className="mt-5 grid grid-cols-1 gap-4 border-t border-ds-border-muted pt-5 text-sm sm:grid-cols-2">
+      <dl className="mt-5 grid grid-cols-1 gap-4 border-t border-ds-border-muted pt-5 text-ds-lg sm:grid-cols-2">
         <div><dt className="text-ds-faint">{t('extensionPublisher')}</dt><dd className="mt-1 text-ds-ink">{extension.publisher}</dd></div>
         <div><dt className="text-ds-faint">{t('extensionSource')}</dt><dd className="mt-1 text-ds-ink">{extension.source === 'development' ? 'PR-2 external plugin directory' : extension.source}</dd></div>
         <div><dt className="text-ds-faint">Host API</dt><dd className="mt-1 font-mono text-ds-ink">{extension.hostApi ? `>=${extension.hostApi.minimum} & <${extension.hostApi.maximumExclusive}` : 'unknown / adapter-required'}</dd></div>
         <div><dt className="text-ds-faint">Runtime</dt><dd className="mt-1 font-mono text-ds-ink">{extension.activationState ?? 'not-loaded'}</dd></div>
       </dl>
-      {extension.diagnostic ? <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm leading-5 text-red-700">{extension.diagnostic}</p> : null}
-      <div className="mt-5 border-t border-ds-border-muted pt-4"><div className="text-xs font-semibold uppercase tracking-wide text-ds-faint">{t('extensionContributes', { count: extension.contributionCount })}</div><div className="mt-2 flex flex-wrap gap-1.5">{labels.length ? labels.map((label) => <span key={label} className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-xs text-ds-muted">{label}</span>) : <span className="text-sm text-ds-faint">{t('extensionNoContributions')}</span>}</div></div>
-      {extension.source !== 'bundled' && (onRollback || onUninstall) ? <div className="mt-4 flex justify-end gap-2 border-t border-ds-border-muted pt-4">{onRollback && extension.canRollback ? <button type="button" disabled={busy} onClick={() => onRollback(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-xs font-semibold">{t('extensionRollback')}</button> : null}{onUninstall && extension.source === 'user' ? <button type="button" disabled={busy} onClick={() => onUninstall(extension)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600">{t('extensionUninstall')}</button> : null}</div> : null}
-      {onCheckCandidate && extension.source !== 'bundled' ? <div className="mt-4 flex justify-end gap-2 border-t border-ds-border-muted pt-4"><button type="button" disabled={busy} onClick={() => onCheckCandidate(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-xs font-semibold">{t('extensionCheckCandidate', { defaultValue: 'Check candidate version' })}</button></div> : null}
-      {(extension.candidateVersion || extension.restartRequired) && (onApplyCandidate || onCancelCandidate) ? <div className="mt-4 flex justify-end gap-2 border-t border-ds-border-muted pt-4">{extension.candidateVersion ? <span className="self-center text-xs text-ds-muted">candidate {extension.candidateVersion}</span> : null}{onApplyCandidate ? <button type="button" disabled={busy} onClick={() => onApplyCandidate(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-xs font-semibold">{t('extensionApplyUpdate', { defaultValue: 'Apply update' })}</button> : null}{onCancelCandidate ? <button type="button" disabled={busy} onClick={() => onCancelCandidate(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-xs font-semibold">{t('extensionCancelCandidate', { defaultValue: 'Cancel update' })}</button> : null}</div> : null}
+      {extension.diagnostic ? <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-ds-lg leading-5 text-red-700">{extension.diagnostic}</p> : null}
+      <div className="mt-5 border-t border-ds-border-muted pt-4"><div className="text-ds-sm font-semibold uppercase tracking-wide text-ds-faint">{t('extensionContributes', { count: extension.contributionCount })}</div><div className="mt-2 flex flex-wrap gap-1.5">{labels.length ? labels.map((label) => <span key={label} className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-ds-sm text-ds-muted">{label}</span>) : <span className="text-ds-lg text-ds-faint">{t('extensionNoContributions')}</span>}</div></div>
+      {extension.source !== 'bundled' && (onRollback || onUninstall) ? <div className="mt-4 flex justify-end gap-2 border-t border-ds-border-muted pt-4">{onRollback && extension.canRollback ? <button type="button" disabled={busy} onClick={() => onRollback(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-ds-sm font-semibold">{t('extensionRollback')}</button> : null}{onUninstall && extension.source === 'user' ? <button type="button" disabled={busy} onClick={() => onUninstall(extension)} className="rounded-lg border border-red-200 px-3 py-1.5 text-ds-sm font-semibold text-red-600">{t('extensionUninstall')}</button> : null}</div> : null}
+      {onCheckCandidate && extension.source !== 'bundled' ? <div className="mt-4 flex justify-end gap-2 border-t border-ds-border-muted pt-4"><button type="button" disabled={busy} onClick={() => onCheckCandidate(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-ds-sm font-semibold">{t('extensionCheckCandidate', { defaultValue: 'Check candidate version' })}</button></div> : null}
+      {(extension.candidateVersion || extension.restartRequired) && (onApplyCandidate || onCancelCandidate) ? <div className="mt-4 flex justify-end gap-2 border-t border-ds-border-muted pt-4">{extension.candidateVersion ? <span className="self-center text-ds-sm text-ds-muted">candidate {extension.candidateVersion}</span> : null}{onApplyCandidate ? <button type="button" disabled={busy} onClick={() => onApplyCandidate(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-ds-sm font-semibold">{t('extensionApplyUpdate', { defaultValue: 'Apply update' })}</button> : null}{onCancelCandidate ? <button type="button" disabled={busy} onClick={() => onCancelCandidate(extension)} className="rounded-lg border border-ds-border px-3 py-1.5 text-ds-sm font-semibold">{t('extensionCancelCandidate', { defaultValue: 'Cancel update' })}</button> : null}</div> : null}
     </article>
   )
 }
@@ -352,7 +352,7 @@ export function ExtensionCatalog({
       aria-labelledby="extension-center-extensions-tab"
       className="mt-7"
     >
-      <div className="flex flex-col gap-3 rounded-2xl border border-ds-border bg-ds-card/75 p-4 text-[13px] leading-5 text-ds-muted sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 rounded-2xl border border-ds-border bg-ds-card/75 p-4 text-ds-md leading-5 text-ds-muted sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="font-semibold text-ds-ink">{t('extensionTrustTitle')}</div>
           <p className="mt-1">{t('extensionTrustBody')}</p>
@@ -365,7 +365,7 @@ export function ExtensionCatalog({
             type="button"
             disabled={busyPackageName === '__install__'}
             onClick={onInstall}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-50"
           >
             {busyPackageName === '__install__'
               ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -378,7 +378,7 @@ export function ExtensionCatalog({
       {error ? (
         <div
           role="alert"
-          className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+          className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-ds-md text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
         >
           {error}
         </div>
@@ -393,20 +393,20 @@ export function ExtensionCatalog({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-[15px] text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+          className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-ds-xl text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
           placeholder={t('extensionSearch')}
         />
       </label>
 
       <div className="mt-4 flex items-center justify-between border-b border-ds-border-muted pb-3">
-        <h2 className="text-[20px] font-semibold text-ds-ink">{t('extensionInstalledTitle')}</h2>
-        <span className="text-[12px] text-ds-faint">
+        <h2 className="text-ds-3xl font-semibold text-ds-ink">{t('extensionInstalledTitle')}</h2>
+        <span className="text-ds-sm text-ds-faint">
           {loading ? t('extensionLoading') : t('extensionCount', { count: visibleExtensions.length })}
         </span>
       </div>
 
       {visibleExtensions.length === 0 ? (
-        <div className="py-10 text-[14px] text-ds-faint">
+        <div className="py-10 text-ds-lg text-ds-faint">
           {loading ? t('extensionLoading') : t('extensionNoResults')}
         </div>
       ) : selectedExtension ? (

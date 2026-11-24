@@ -176,15 +176,40 @@ export type MainWorkspacePreviewPluginSlotContribution<Provider> = Readonly<{
   provider: Provider
 }>
 
+export const workspacePreviewResourceContentKindsSchema = z.array(
+  z.enum(['pdf', 'image', 'text', 'unsupported'])
+).min(1).max(4)
+
+/** Authorized Broker content; presentation metadata never grants byte or write access. */
+export type WorkspacePreviewResourceContent = Readonly<{ size: number; mimeType: string }> & (
+  | Readonly<{ kind: 'pdf' | 'image' | 'unsupported' }>
+  | Readonly<{ kind: 'text'; text: string; truncated: boolean }>
+)
+
+/** Resource previews have no workspace session, local path or edit operation. */
+export type WorkspacePreviewResourceRendererInput = Readonly<{
+  content: WorkspacePreviewResourceContent
+  title: string
+  sourceUrl: string
+  contentKey: string
+  fileSummary: string
+  onLoadError: () => void
+}>
+
 export type RendererWorkspacePreviewPluginSlotContribution<
   Render,
   Action = never,
   InspectObservation = never,
   SelectionKind extends string = never,
-  InspectSelection = never
+  InspectSelection = never,
+  ResourceRender = never
 > = Readonly<{
   manifest: WorkspacePreviewPluginManifest
   render: Render
+  resource?: Readonly<{
+    contentKinds: readonly WorkspacePreviewResourceContent['kind'][]
+    render: ResourceRender
+  }>
   actions?: readonly Action[]
   inspectObservation?: InspectObservation
   selectionKind?: SelectionKind
@@ -582,7 +607,7 @@ export type WorkspaceObservation = {
     paragraphs?: Array<{ id: string; index: number; text: string; style?: string }>
     truncatedParagraphs?: boolean
   }
-  tables?: Array<{ id: string; name?: string; rowCount?: number; columnCount?: number }>
+  tables?: Array<{ id: string; name?: string; rowCount?: number; rowCountIsEstimate?: boolean; columnCount?: number }>
   tabular?: {
     header?: string[]
     rows?: Array<{ index: number; values: string[] }>
@@ -1022,6 +1047,8 @@ export const workspaceObservationSchema = z.object({
     id: idSchema,
     name: optionalShortStringSchema,
     rowCount: z.number().int().nonnegative().optional(),
+    /** True when rowCount is inferred from a truncated preview prefix, not an exact full-file count. */
+    rowCountIsEstimate: z.boolean().optional(),
     columnCount: z.number().int().nonnegative().optional()
   }).strict()).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS).optional(),
   tabular: z.object({
@@ -1949,10 +1976,7 @@ export function normalizePreviewMimeType(value: string | undefined): string {
 export function isTextLikePreviewMimeType(value: string | undefined): boolean {
   const mimeType = normalizePreviewMimeType(value)
   return mimeType.startsWith('text/') ||
-    mimeType === 'application/json' ||
-    mimeType === 'application/xml' ||
-    mimeType === 'application/yaml' ||
-    mimeType === 'application/x-yaml'
+    /^application\/(?:json|.+\+json|xml|.+\+xml|(?:x-)?yaml|(?:x-)?ndjson|javascript)$/u.test(mimeType)
 }
 
 export function normalizePreviewManifest(

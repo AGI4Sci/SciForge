@@ -1,19 +1,31 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES, DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES } from '@sciforge/collaboration-contracts'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TaskDrawer } from './TaskDrawer.js'
 import { DeliveryDraft } from './DeliveryDraft.js'
+import { deliveryLimitError, DeliveryContent } from './DeliveryContent.js'
 import type { DeliveryDraftData, DeliveryDraftFile } from './delivery-draft-types.js'
 import type { TaskCardModel } from '../workspace-types.js'
 import type { WorkerDeliveryView } from '../../../worker-delivery.js'
 
-const card: TaskCardModel = { id: 'tsk_delivery000001', projectId: 'prj_delivery000001', executionId: 'exe_delivery000001', reference: '#1', moduleType: '任务', title: '公开单细胞数据集简介', assignee: '执行成员', assigneeUserId: 'usr_worker000001', date: '10-21', status: 'in-progress', stateLabel: '待提交交付', canReturnExecution: true }
+const card: TaskCardModel = { executionState: 'running', id: 'tsk_delivery000001', cloudTaskId: 'tsk_delivery000001', projectId: 'prj_delivery000001', executionId: 'exe_delivery000001', reference: '#1', moduleType: '任务', title: '公开单细胞数据集简介', assignee: '执行成员', assigneeUserId: 'usr_worker000001', date: '10-21', status: 'in-progress', stateLabel: '待提交交付', canReturnExecution: true }
 const output: DeliveryDraftFile = { id: 'output', name: 'README.md', relativePath: 'README.md', mediaType: 'text/markdown', byteCount: 1738, source: 'ai' }
 const addition: DeliveryDraftFile = { id: 'input', name: 'cells.csv', relativePath: 'data/cells.csv', mediaType: 'text/csv', byteCount: 4200, source: 'attachment' }
 const data: DeliveryDraftData = { revision: 1, summary: 'README 已生成并检查。', state: 'ready', declaredFiles: [output], additionalFiles: [addition], source: { round: 3, finishedAt: '2026-10-21T02:20:00.000Z' } }
 const delivery: WorkerDeliveryView = { projectId: card.projectId!, taskId: card.id, executionId: card.executionId!, state: 'waiting_confirmation', draft: null, history: [], confirmationTarget: null, operationId: null, deliveryManifestId: null, error: null, residuals: [], candidate: { target: { projectId: card.projectId!, taskId: card.id, executionId: card.executionId!, contractRevision: 1, resultRevision: 1, bundleDigest: 'a'.repeat(64), decision: 'approved' }, bundle: { schemaVersion: 2, projectId: card.projectId!, taskId: card.id, executionId: card.executionId!, contractRevision: 1, resultRevision: 1, summary: data.summary, outputs: [{ fileName: output.name, relativePath: output.name, role: 'declared', source: 'ai', mediaType: output.mediaType, byteCount: output.byteCount, sha256: 'b'.repeat(64) }] }, sourceTurnId: 'turn_delivery000001', frozenAt: '2026-10-21T02:00:00.000Z', dirty: false } }
 const noOp = () => undefined
+
+test('a waiting followup explains the stopped model turn and never offers submission as completed work', () => {
+ const html = renderToStaticMarkup(<TaskDrawer card={card} projectName="复查" currentUserId={card.assigneeUserId} delivery={{ ...delivery, state: 'executing', candidate: null, followup: {
+  key: 'job-result', at: '2026-11-16T09:00:00Z', about: '核实已有作业结果，保留阴性结果。', state: 'waiting', reason: null
+ } }} onSubmitDelivery={noOp} onContinueSession={noOp} />)
+ assert.match(html, /等待到期复查/u)
+ assert.match(html, /等待期间不启动模型轮次/u)
+ assert.match(html, /核实已有作业结果，保留阴性结果/u)
+ assert.doesNotMatch(html, /AI 正在生成|提交第.*版/u)
+})
 function render(next = data): string { return renderToStaticMarkup(<DeliveryDraft data={next} materialSelection={{ files: [output, addition] }} onContinue={noOp} onReexecute={noOp} onPreview={noOp} onSubmit={noOp} />) }
 function drawer(user = 'usr_worker000001', detail: DeliveryDraftData | undefined = data): string { return renderToStaticMarkup(<TaskDrawer card={card} projectName="数据质控说明" currentUserId={user} members={[{ userId: 'usr_owner000001', name: '负责人', role: '所有者' }]} delivery={user === card.assigneeUserId ? delivery : null} deliveryDetail={detail} onSubmitDelivery={noOp} onAdopt={noOp} onRequestRevision={noOp} onContinueSession={noOp} onPreviewDraftFile={noOp} onReturnTask={async () => true} />) }
 
@@ -21,11 +33,19 @@ test('draft groups required AI output and additional materials and keeps AI revi
  const html = render()
  assert.match(html, /交付草稿.*第 1 版草稿/su)
  assert.match(html, /来自 AI 第 3 轮/u)
- assert.match(html, /让 AI 修改/u)
+ assert.match(html, /与 AI 一起完成/u)
  assert.match(html, /提交内容.*任务产出.*README.md.*必交.*AI 产出.*附加资料.*cells.csv.*会话附件/su)
  assert.doesNotMatch(html, /data\/cells.csv/u)
  assert.match(html, /共 2 项/u)
  assert.doesNotMatch(html, /提交前请检查结果说明和文件/u)
+})
+
+test('safe rollout limits are explicit while historical read-only large content is not rejected', () => {
+ const current = render()
+ assert.match(current, /200 MiB/u)
+ assert.match(current, /服务端大容量尚未确认启用/u)
+ const historical = renderToStaticMarkup(<DeliveryContent declaredFiles={[{ ...output, byteCount: 256 * 1024 * 1024 }]} showAdditional readOnly />)
+ assert.doesNotMatch(historical, /data-testid="delivery-limit-error"/u)
 })
 
 test('AI modifying keeps summary editable but disables submission', () => {
@@ -51,15 +71,26 @@ test('slice A exposes no unavailable material selector', () => {
 
 test('a draft without material selection shows only available content and adaptive bytes', () => {
  const html = renderToStaticMarkup(<DeliveryDraft data={{ ...data, declaredFiles: [{ ...output, byteCount: 152 }] }} onSubmit={noOp} />)
- assert.doesNotMatch(html, /附加资料|cells.csv|200 MB|0\.0 MB/u)
+ assert.doesNotMatch(html, /附加资料|cells.csv|200 MiB|0\.0 MB/u)
  assert.match(html, /data-testid="delivery-total">共 1 项 · 152 B<\/p>/u)
+})
+
+test('declared output limits use readable sizes and retain the effective byte cap', () => {
+ for (const [maxBytes, label] of [[999, '999 B'], [20 * 1024 * 1024, '20.0 MB'], [300 * 1024 * 1024, `${(DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES / 1024 / 1024).toFixed(1)} MB`]] as const) {
+  const html = renderToStaticMarkup(<DeliveryDraft data={{ ...data, declaredFiles: [{ ...output, byteCount: 42, maxBytes }] }} onSubmit={noOp} />)
+  assert.ok(html.includes(`本地有效上限 ${label}`), `${maxBytes}: ${label}`)
+  assert.doesNotMatch(html, /0\.0009527206420898438|本地有效上限 .* MiB/u)
+  const effectiveMaxBytes = Math.min(maxBytes, DEFAULT_DELIVERY_ADMISSION_MAX_FILE_BYTES)
+  assert.equal(deliveryLimitError([{ ...output, byteCount: effectiveMaxBytes, maxBytes }]), null)
+  assert.match(deliveryLimitError([{ ...output, byteCount: effectiveMaxBytes + 1, maxBytes }]) ?? '', new RegExp(`有效上限 ${effectiveMaxBytes} 字节`, 'u'))
+ }
 })
 
 test('snapshots and history without material selection omit the unavailable group and limit', () => {
  const snapshot = { revision: 1, summary: '上一版不可变说明', declaredFiles: [{ ...output, byteCount: 152 }], additionalFiles: [addition], submitter: '执行成员', submittedAt: '2026-10-21T02:30:00.000Z' }
  for (const state of ['ready', 'submitted', 'adopted'] as const) {
   const html = renderToStaticMarkup(<DeliveryDraft data={{ ...data, state, revision: 2, declaredFiles: snapshot.declaredFiles, history: [snapshot] }} onSubmit={noOp} />)
-  assert.doesNotMatch(html, /附加资料|cells.csv|200 MB|0\.0 MB/u, state)
+  assert.doesNotMatch(html, /附加资料|cells.csv|200 MiB|0\.0 MB/u, state)
   assert.equal((html.match(/data-testid="delivery-total">共 1 项 · 152 B<\/p>/gu) ?? []).length, 2, state)
  }
 })
@@ -71,14 +102,14 @@ test('empty additional materials explain what the member can include', () => {
 test('available material selection retains grouped snapshots, history and the size limit', () => {
  const html = render({ ...data, state: 'submitted', history: [{ revision: 1, summary: '上一版', declaredFiles: [output], additionalFiles: [addition], submitter: '执行成员', submittedAt: '2026-10-21T02:30:00.000Z' }] })
  assert.equal((html.match(/data-testid="delivery-additional-files"/gu) ?? []).length, 2)
- assert.equal((html.match(/共 2 项 · 5\.8 KB \/ 200 MB/gu) ?? []).length, 2)
+ assert.equal((html.match(/共 2 项 · 5\.8 KB \/ 200 MiB/gu) ?? []).length, 2)
  assert.match(html, /cells.csv/u)
 })
 
 test('oversized material is named and submission is blocked', () => {
- const html = render({ ...data, additionalFiles: [{ ...addition, byteCount: 210 * 1024 * 1024 }] })
+ const html = render({ ...data, additionalFiles: [{ ...addition, byteCount: DEFAULT_DELIVERY_ADMISSION_MAX_TOTAL_BYTES + 1 }] })
  assert.match(html, /cells.csv/u)
- assert.match(html, /200 MB/u)
+ assert.match(html, /200 MiB/u)
  assert.match(html.match(/<button[^>]*data-testid="delivery-submit"[^>]*>/u)?.[0] ?? '', /disabled/u)
 })
 
@@ -94,7 +125,7 @@ test('revision includes attributed instructions and readonly prior history', () 
 test('owner preparing projection excludes all draft contents and file names', () => {
  const html = drawer('usr_owner000001')
  assert.match(html, /成员正在准备交付（第 1 版）/u)
- assert.doesNotMatch(html, /README|cells.csv|结果说明|让 AI 修改|添加资料|<textarea/u)
+ assert.doesNotMatch(html, /README|cells.csv|结果说明|与 AI 一起完成|添加资料|<textarea/u)
 })
 
 test('submitted snapshot names the submitter and keeps owner review actions without duplicate pending labels', () => {
@@ -102,7 +133,7 @@ test('submitted snapshot names the submitter and keeps owner review actions with
  const html = renderToStaticMarkup(<TaskDrawer card={{ ...card, status: 'review', stateLabel: '待你采纳' }} projectName="数据质控说明" currentUserId="usr_owner000001" members={[{ userId: 'usr_owner000001', name: '负责人', role: '所有者' }]} deliveryDetail={detail} onAdopt={noOp} onRequestRevision={noOp} onPreviewDraftFile={noOp} activity={[{ actor: '执行成员', text: '第 1 版已提交', time: '10:30', event: true }]} />)
  assert.match(html, /交付快照/u)
  assert.match(html, /任务产出/u)
- assert.doesNotMatch(html, /附加资料|200 MB/u)
+ assert.doesNotMatch(html, /附加资料|200 MiB/u)
  assert.match(html, /执行成员/u)
  assert.match(html, /采纳交付/u)
  assert.match(html, /要求返修/u)

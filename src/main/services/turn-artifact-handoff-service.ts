@@ -214,29 +214,24 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
   async #preflightTerminalMaterializations(runtimeId: string, threadId: string): Promise<void> {
     if (!this.#inspectTerminalState) return
     for (const record of this.#outbox.recordsForThread(runtimeId, threadId)) {
-      if (record.stage !== 'pending_materialization') continue
+      if (record.stage !== 'pending_materialization' ||
+        (record.intent.terminalState !== undefined && record.intent.terminalState !== 'completed')) continue
+      let terminalState: TurnArtifactTerminalState | undefined
       try {
-        const terminalState = await this.#inspectTerminalState(record.intent)
-        if (!terminalState) continue
-        const error = new TurnArtifactTerminalStateError(
-          record.intent.runtimeId,
-          record.intent.threadId,
-          record.intent.turnId,
-          terminalState
-        )
-        await this.#outboxOperation(() => this.#outbox.quarantineTerminalMaterialization(
-          record.key,
-          error,
-          terminalState
-        ))
-        this.#log?.(
-          'warn',
-          'Completed turn artifact was quarantined before lifecycle settlement because the runtime durably failed the turn.',
-          { key: record.key, terminalState, error }
-        )
+        terminalState = await this.#inspectTerminalState(record.intent)
       } catch (error) {
-        if (error instanceof TurnArtifactTerminalStateError) throw error
+        this.#log?.('warn', 'Turn artifact terminal preflight could not read runtime state.', error)
+        continue
       }
+      if (!terminalState) continue
+      const error = new TurnArtifactTerminalStateError(
+        record.intent.runtimeId, record.intent.threadId, record.intent.turnId, terminalState
+      )
+      await this.#outboxOperation(() => this.#outbox.quarantineTerminalMaterialization(
+        record.key, error, terminalState
+      ))
+      this.#log?.('warn', 'Completed turn artifact was quarantined before lifecycle settlement because the runtime durably failed the turn.',
+        { key: record.key, terminalState, error })
     }
   }
 
@@ -247,6 +242,12 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
     await this.#serializeDelivery(async () => {
       const failures: unknown[] = []
       const blockedThreads = new Set<string>()
+      const threads = new Map(this.#outbox.all().map(({ intent }) => [
+        `${intent.runtimeId}\u0000${intent.threadId}`, intent
+      ]))
+      for (const intent of threads.values()) {
+        await this.#preflightTerminalMaterializations(intent.runtimeId, intent.threadId)
+      }
       for (const record of this.#outbox.readyLifecycleSettlements()) {
         if (this.#closed) break
         try {
@@ -300,7 +301,7 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
         event = record.event
       }
       const results = await Promise.allSettled(
-        this.#consumers.map((consumer) => consumer.consume(event))
+        this.#consumers.map((consumer) => Promise.resolve().then(() => consumer.consume(event)))
       )
       const failures = results.flatMap((result) => (
         result.status === 'rejected' ? [result.reason] : []
@@ -308,7 +309,10 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
       if (failures.length > 0) {
         this.#log?.('error', 'A completed Agent turn could not reach every artifact consumer.', {
           key: record.key,
-          failures
+          failures: results.flatMap((result, consumerIndex) => result.status === 'rejected' ? [{
+            consumerIndex,
+            error: result.reason instanceof Error ? { name: result.reason.name, message: result.reason.message, stack: result.reason.stack } : String(result.reason)
+          }] : [])
         })
         throw new AggregateError(failures, 'Completed turn artifact fan-out failed.')
       }
@@ -320,7 +324,8 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
       }
       if (
         record.stage === 'pending_materialization' &&
-        error instanceof TurnArtifactTerminalStateError
+        error instanceof TurnArtifactTerminalStateError &&
+        (record.intent.terminalState === undefined || record.intent.terminalState === 'completed')
       ) {
         await this.#outboxOperation(() => this.#outbox.quarantineTerminalMaterialization(
           record.key,
@@ -337,6 +342,7 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
       const nextAttempts = record.attempts + 1
       if (
         record.stage === 'pending_materialization' &&
+        (record.intent.terminalState === undefined || record.intent.terminalState === 'completed') &&
         nextAttempts >= (
           record.legacyArtifactOnly
             ? LEGACY_ARTIFACT_MATERIALIZATION_MAX_ATTEMPTS
@@ -376,6 +382,13 @@ export class TurnArtifactHandoffService implements TurnArtifactIntentPublisher {
     try {
       if (!this.#deliverLifecycleSettlement) {
         throw new Error('Turn lifecycle settlement consumer is unavailable.')
+      }
+      // Failure consumers still need the original before-turn lease. A failure
+      // anywhere in materialization/fan-out leaves both durable records pending.
+      if (this.#outbox.hasPendingTerminatedArtifact(record.event.boundaryLeaseId)) {
+        const artifact = this.#outbox.recordsForThread(record.event.runtimeId, record.event.threadId)
+          .find(({ intent }) => intent.boundaryLeaseId === record.event.boundaryLeaseId)
+        if (artifact) await this.#process(artifact)
       }
       await this.#deliverLifecycleSettlement(record.event)
       await this.#outboxOperation(() => this.#outbox.markLifecycleSettlementDelivered(record.key))

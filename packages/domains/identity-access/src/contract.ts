@@ -7,6 +7,7 @@ export const IDENTITY_CAPABILITY_IDS = Object.freeze({
   createAccount: 'identity.local.create-account',
   selectAccount: 'identity.local.select-account',
   renameAccount: 'identity.local.rename-account',
+  deleteAccount: 'identity.local.delete-account',
   exitAccount: 'identity.local.exit-account',
   dismissFirstPrompt: 'identity.local.dismiss-first-prompt',
   backupAndReset: 'identity.local.backup-and-reset',
@@ -16,7 +17,9 @@ export const IDENTITY_CAPABILITY_IDS = Object.freeze({
   cloudLogout: 'identity.cloud.logout',
   cloudEnrollDevice: 'identity.cloud.enroll-device',
   cloudRefreshDevices: 'identity.cloud.refresh-devices',
-  cloudRevokeDevice: 'identity.cloud.revoke-device'
+  cloudRevokeDevice: 'identity.cloud.revoke-device',
+  cloudInspectConfiguration: 'identity.cloud.inspect-configuration',
+  cloudConfigure: 'identity.cloud.configure'
 } as const)
 
 export const IDENTITY_RESET_CONFIRMATION = 'RESET LOCAL IDENTITY' as const
@@ -87,6 +90,10 @@ export const accountSelectionInputSchema = z.object({
 export const accountRenameInputSchema = z.object({
   userId: z.string().uuid(),
   username: z.string().max(512)
+}).strict()
+
+export const accountDeletionInputSchema = z.object({
+  accountId: z.string().uuid()
 }).strict()
 
 export const emptyIdentityInputSchema = z.object({}).strict()
@@ -226,6 +233,29 @@ export const cloudDeviceRevokeInputSchema = z.object({
   deviceId: cloudOpaqueId('dev')
 }).strict().readonly()
 
+export const identityCloudConfigurationFieldSchema = z.enum(['oidcIssuer', 'cloudBaseUrl'])
+
+export const identityCloudConfigurationSourceSchema = z.enum(['settings', 'environment'])
+
+export const identityCloudConfigurationSchema = z.object({
+  configured: z.boolean(),
+  oidcIssuer: z.string().max(2_048).nullable(),
+  cloudBaseUrl: z.string().max(2_048).nullable(),
+  source: z.object({
+    oidcIssuer: identityCloudConfigurationSourceSchema.nullable(),
+    cloudBaseUrl: identityCloudConfigurationSourceSchema.nullable()
+  }).strict().readonly(),
+  missing: z.array(identityCloudConfigurationFieldSchema).max(2).readonly(),
+  invalid: z.array(identityCloudConfigurationFieldSchema).max(2).readonly(),
+  error: z.string().max(4_096).nullable().optional(),
+  storage: z.enum(['available', 'unavailable'])
+}).strict().readonly()
+
+export const identityCloudConfigurationInputSchema = z.object({
+  oidcIssuer: z.string().max(2_048).nullable(),
+  cloudBaseUrl: z.string().max(2_048).nullable()
+}).strict().readonly()
+
 export const cloudIdentityObservationContract = Object.freeze({
   resourceKind: 'identity.cloud-session',
   stateSchema: cloudIdentitySnapshotSchema
@@ -246,6 +276,10 @@ export type DesktopDeviceStatus = z.infer<typeof desktopDeviceStatusSchema>
 export type DesktopDeviceActionResult = z.infer<typeof desktopDeviceActionResultSchema>
 export type CloudIdentitySnapshot = z.infer<typeof cloudIdentitySnapshotSchema>
 export type CloudIdentityInspectOutput = z.infer<typeof cloudIdentityInspectOutputSchema>
+export type IdentityCloudConfiguration = z.infer<typeof identityCloudConfigurationSchema>
+export type IdentityCloudConfigurationInput = z.infer<typeof identityCloudConfigurationInputSchema>
+export type IdentityCloudConfigurationField = z.infer<typeof identityCloudConfigurationFieldSchema>
+export type IdentityCloudConfigurationSource = z.infer<typeof identityCloudConfigurationSourceSchema>
 
 export type NormalizedUsername = Readonly<{
   username: string

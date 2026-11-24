@@ -451,7 +451,7 @@ export function SidebarProjectsSection({
         <button
           type="button"
           onClick={toggleAllGroups}
-          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] font-medium text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
+          className="ds-button-plain flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-ds-md font-medium text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-muted"
           title={t('sidebarLocalWorkspaces')}
           aria-label={t('sidebarLocalWorkspaces')}
         >
@@ -534,7 +534,7 @@ export function SidebarProjectsSection({
                 onClick={() =>
                   setCollapsed((current) => ({ ...current, [workspacePath]: !current[workspacePath] }))
                 }
-                className="min-h-[38px] text-[14px] font-medium"
+                className="min-h-[38px] text-ds-lg font-medium"
                 buttonClassName="items-center gap-2 px-2.5 py-2"
                 actionsVisibility="hidden"
                 actionsLayout="overlay"
@@ -569,7 +569,7 @@ export function SidebarProjectsSection({
                 )}
                 <span className="min-w-0 flex-1 truncate">{folderName}</span>
                 {workspaceContext ? (
-                  <span className="min-w-0 max-w-[34%] shrink truncate text-[12px] text-ds-muted transition group-hover:opacity-0 group-focus-within:opacity-0">
+                  <span className="min-w-0 max-w-[34%] shrink truncate text-ds-sm text-ds-muted transition group-hover:opacity-0 group-focus-within:opacity-0">
                     {workspaceContext}
                   </span>
                 ) : null}
@@ -579,7 +579,7 @@ export function SidebarProjectsSection({
                 <div className="mt-1 space-y-[3px] pl-4">
                   {sortedThreads.length === 0 ? (
                     <div className="flex items-center justify-between gap-2 px-2.5 py-1.5">
-                      <div className="text-[12.5px] leading-5 text-ds-faint">
+                      <div className="text-ds-sm leading-5 text-ds-faint">
                         {searchQuery.trim()
                           ? t('sidebarSearchEmpty')
                           : showArchived
@@ -590,7 +590,7 @@ export function SidebarProjectsSection({
                         <button
                           type="button"
                           onClick={() => onCreateThreadInWorkspace(workspacePath)}
-                          className="shrink-0 rounded-md px-2 py-1 text-[12px] font-medium text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
+                          className="ds-button-plain shrink-0 rounded-md px-2 py-1 text-ds-sm font-medium text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                         >
                           {t('sidebarWorkspaceNewThread')}
                         </button>
@@ -644,7 +644,7 @@ export function SidebarProjectsSection({
                           <span
                             draggable={!deletingThreadIds[thread.id]}
                             title={t('sidebarThreadDrag')}
-                            className="absolute left-0 inset-y-0 z-10 flex w-2 cursor-grab items-center text-ds-faint opacity-0 group-hover/thread:opacity-100 active:cursor-grabbing"
+                            className="ds-button-plain absolute left-0 inset-y-0 z-10 flex w-2 cursor-grab items-center text-ds-faint opacity-0 group-hover/thread:opacity-100 active:cursor-grabbing"
                           >
                             <GripVertical className="pointer-events-none h-3 w-3" />
                           </span>
@@ -675,7 +675,7 @@ export function SidebarProjectsSection({
                           [workspacePath]: !workspaceExpanded
                         }))
                       }
-                      className="ml-1 mt-1 rounded-md px-2.5 py-1.5 text-[12.5px] text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
+                      className="ds-button-plain ml-1 mt-1 rounded-md px-2.5 py-1.5 text-ds-sm text-ds-faint transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
                     >
                       {workspaceExpanded
                         ? t('sidebarWorkspaceShowLess')
@@ -817,14 +817,14 @@ function ThreadRow({
       ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span
-          className={`ds-sidebar-thread-title min-w-0 flex-1 text-[14px] leading-5 ${
+          className={`ds-sidebar-thread-title min-w-0 flex-1 text-ds-lg leading-5 ${
             showUnreadDot && !active ? 'font-semibold text-ds-ink' : 'text-ds-ink'
           }`}
         >
           {thread.title}
         </span>
         {forked ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/15 bg-accent/8 px-1.5 py-0.5 text-[10.5px] font-semibold leading-none text-accent">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-accent/15 bg-accent/8 px-1.5 py-0.5 text-ds-2xs font-semibold leading-none text-accent">
             <GitFork className="h-2.5 w-2.5" strokeWidth={1.8} />
             {t('sidebarThreadForkBadge')}
           </span>
@@ -834,7 +834,7 @@ function ThreadRow({
             deleting ? 'opacity-0' : 'group-hover:opacity-0 group-focus-within:opacity-0'
           }`}
         >
-          <span className="shrink-0 text-right text-[12px] leading-4 text-ds-muted tabular-nums">
+          <span className="shrink-0 text-right text-ds-sm leading-4 text-ds-muted tabular-nums">
             {updatedLabel}
           </span>
           <ThreadActivityDot
@@ -876,7 +876,7 @@ export function ThreadRenameDialog({
 
   return (
     <div
-      role="dialog"
+      data-native-view-occluder="true" role="dialog"
       aria-modal="true"
       aria-labelledby="thread-rename-dialog-title"
       className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
@@ -889,11 +889,11 @@ export function ThreadRenameDialog({
       >
         <h2
           id="thread-rename-dialog-title"
-          className="text-[18px] font-semibold tracking-[-0.035em] text-ds-ink"
+          className="text-ds-2xl font-semibold tracking-[-0.035em] text-ds-ink"
         >
           {t('sidebarThreadRename')}
         </h2>
-        <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+        <p className="mt-2 text-ds-md leading-6 text-ds-muted">
           {t('sidebarThreadRenamePrompt')}
         </p>
         <input
@@ -903,21 +903,21 @@ export function ThreadRenameDialog({
           value={state.value}
           onChange={(event) => onValueChange(event.target.value)}
           onFocus={(event) => event.currentTarget.select()}
-          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
+          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-ds-lg text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
         />
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
             disabled={state.submitting}
             onClick={onClose}
-            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
           >
             {t('cancel')}
           </button>
           <button
             type="submit"
             disabled={!canSubmit}
-            className="rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+            className="rounded-xl bg-accent px-3 py-2 text-ds-md font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
           >
             {state.submitting ? t('loading') : t('confirm')}
           </button>
@@ -954,9 +954,9 @@ function ThreadContextMenu({
 
   return (
     <div
-      role="menu"
+      data-native-view-occluder="true" role="menu"
       aria-label={state.thread.title}
-      className="ds-thread-context-menu ds-no-drag fixed z-50 min-w-[168px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-[13px] text-ds-ink shadow-[0_16px_42px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card"
+      className="ds-thread-context-menu ds-no-drag fixed z-50 min-w-[168px] rounded-lg border border-ds-border bg-ds-card/98 p-1 text-ds-md text-ds-ink shadow-[0_16px_42px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:bg-ds-card"
       style={{ left: state.x, top: state.y }}
       onPointerDown={(event) => event.stopPropagation()}
     >
@@ -1077,7 +1077,7 @@ function SidebarEmpty({
         className="mx-1 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-ds-muted transition hover:bg-[var(--ds-sidebar-row-hover)] hover:text-ds-ink"
       >
         <FolderPlus className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.75} />
-        <span className="min-w-0 flex-1 truncate text-[14px] font-medium">
+        <span className="min-w-0 flex-1 truncate text-ds-lg font-medium">
           {t('selectWorkspace')}
         </span>
       </button>
@@ -1086,8 +1086,8 @@ function SidebarEmpty({
 
   return (
     <div className="mx-2 mt-2 rounded-lg px-2 py-2">
-      <p className="text-[15px] font-medium text-ds-muted">{t('sidebarEmptyTitle')}</p>
-      <p className="mt-1 text-[13px] leading-5 text-ds-faint">
+      <p className="text-ds-xl font-medium text-ds-muted">{t('sidebarEmptyTitle')}</p>
+      <p className="mt-1 text-ds-md leading-5 text-ds-faint">
         {runtimeReady ? t('sidebarEmptySub') : t('sidebarEmptySubOffline')}
       </p>
     </div>

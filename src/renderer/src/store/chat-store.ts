@@ -80,6 +80,7 @@ import { createMaintenanceActions } from './chat-store-maintenance-actions'
 import { createFocusActions, clearedAgentFocusState } from './chat-store-focus-actions'
 import { trackZustandSet } from '../lib/performance-monitor'
 import { persistChatSession, readPersistedChatSession } from './chat-session-persistence'
+import { checkpointDiscussions } from './discussion-checkpoint'
 import {
   forgetThreadBlocks,
   moveThreadBlocks,
@@ -172,6 +173,7 @@ export const useChatStore = create<ChatState>((set, get) => {
   watchTurnCompletion: {},
   unreadThreadIds: {},
   sideConversations: {},
+  discussionCheckpoints: restoredChatSession.discussionCheckpoints ?? {},
   sidePanel: { open: false, activeSideId: null },
   workspaceLocator: null,
   setWorkspaceLocator: (locator) => trackedSet({ workspaceLocator: locator }),
@@ -212,17 +214,26 @@ export const useChatStore = create<ChatState>((set, get) => {
 })
 
 const unsubscribeChatSessionPersistence = useChatStore.subscribe((state, previousState) => {
+  if (state.sideConversations !== previousState.sideConversations) {
+    const checkpoints = checkpointDiscussions(state.sideConversations, state.discussionCheckpoints)
+    if (checkpoints !== state.discussionCheckpoints) {
+      useChatStore.setState({ discussionCheckpoints: checkpoints })
+      return
+    }
+  }
   if (
     state.activeThreadId === previousState.activeThreadId &&
     state.queuedMessages === previousState.queuedMessages &&
     state.conversationSettingsByThread === previousState.conversationSettingsByThread &&
-    state.draftConversationSettings === previousState.draftConversationSettings
+    state.draftConversationSettings === previousState.draftConversationSettings &&
+    state.discussionCheckpoints === previousState.discussionCheckpoints
   ) return
   const result = persistChatSession({
     activeThreadId: state.activeThreadId,
     queuedMessages: state.queuedMessages,
     conversationSettingsByThread: state.conversationSettingsByThread,
-    draftConversationSettings: state.draftConversationSettings
+    draftConversationSettings: state.draftConversationSettings,
+    discussionCheckpoints: state.discussionCheckpoints
   })
   if (state.chatSessionPersistenceDegraded !== result.degraded) {
     useChatStore.setState({ chatSessionPersistenceDegraded: result.degraded })

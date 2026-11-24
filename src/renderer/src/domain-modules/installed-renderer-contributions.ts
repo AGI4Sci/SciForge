@@ -12,6 +12,7 @@ import {
   RENDERER_WORKBENCH_GLOBAL_OVERLAY_CONTRIBUTION_KIND,
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   WORKBENCH_MAIN_AREA_LOCATION,
+  WORKBENCH_SETTINGS_SECTION_LOCATION,
   WORKBENCH_NAVIGATION_SECTION_LOCATION,
   domainRendererComposerContextProviderContractSchema,
   domainRendererChatMessageContractSchema,
@@ -21,6 +22,7 @@ import {
   domainRendererWorkbenchBottomPanelContractSchema,
   domainRendererWorkbenchGlobalOverlayContractSchema,
   domainRendererWorkbenchMainAreaContractSchema,
+  domainRendererWorkbenchSettingsSectionContractSchema,
   domainRendererWorkbenchNavigationSectionContractSchema,
   domainRendererWorkbenchRightPanelContractSchema,
   domainRendererWorkbenchToolbarActionContractSchema,
@@ -48,6 +50,8 @@ import {
   type DomainRendererWorkbenchGlobalOverlayValue,
   type DomainRendererWorkbenchMainAreaContract,
   type DomainRendererWorkbenchMainAreaValue,
+  type DomainRendererWorkbenchSettingsSectionContract,
+  type DomainRendererWorkbenchSettingsSectionValue,
   type DomainRendererWorkbenchNavigationSectionContract,
   type DomainRendererWorkbenchNavigationSectionValue,
   type DomainRendererWorkbenchRightPanelContract,
@@ -75,6 +79,7 @@ import {
   WorkbenchCommandRegistry
 } from './workbench-command-registry'
 import { WorkbenchMainAreaContributionRegistry } from './workbench-main-area'
+import { WorkbenchSettingsSectionContributionRegistry } from './workbench-settings-section-slot'
 import {
   RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
   WorkbenchToolbarActionContributionRegistry,
@@ -143,6 +148,7 @@ export type InstalledRendererContributions = Readonly<{
   composerContexts: ComposerContextProviderRegistry
   navigationSections: WorkbenchNavigationSectionContributionRegistry
   mainAreas: WorkbenchMainAreaContributionRegistry
+  settingsSections: WorkbenchSettingsSectionContributionRegistry
   toolbarActions: WorkbenchToolbarActionContributionRegistry
   workspacePreviews: RendererWorkspacePreviewRegistry
   readonly disposed: boolean
@@ -244,6 +250,14 @@ export function createInstalledRendererContributions(
     order: number
     contract: DomainRendererWorkbenchMainAreaContract
     value: DomainRendererWorkbenchMainAreaValue<ReactElement | null>
+    onDispose?: () => void
+  }> = []
+  const settingsSections: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: DomainRendererWorkbenchSettingsSectionContract
+    value: DomainRendererWorkbenchSettingsSectionValue<ReactElement | null>
     onDispose?: () => void
   }> = []
   const commands: Array<{
@@ -538,12 +552,29 @@ export function createInstalledRendererContributions(
         })
         continue
       }
+      const settingsContract =
+        domainRendererWorkbenchSettingsSectionContractSchema.safeParse(installed.contract)
+      if (settingsContract.success) {
+        if (!isDomainRendererWorkbenchSurfaceValue(installed.value)) {
+          throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+        }
+        settingsSections.push({
+          id: installed.declaration.id,
+          ownerId: installed.owner.moduleId,
+          order: installed.declaration.priority,
+          contract: settingsContract.data,
+          value: installed.value as DomainRendererWorkbenchSettingsSectionValue<ReactElement | null>,
+          ...(installed.onDispose ? { onDispose: installed.onDispose } : {})
+        })
+        continue
+      }
       if (
         installed.contract &&
         typeof installed.contract === 'object' &&
         'location' in installed.contract &&
         (installed.contract.location === WORKBENCH_NAVIGATION_SECTION_LOCATION ||
-          installed.contract.location === WORKBENCH_MAIN_AREA_LOCATION)
+          installed.contract.location === WORKBENCH_MAIN_AREA_LOCATION ||
+          installed.contract.location === WORKBENCH_SETTINGS_SECTION_LOCATION)
       ) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
@@ -581,6 +612,7 @@ export function createInstalledRendererContributions(
   const workbenchNavigationSections =
     new WorkbenchNavigationSectionContributionRegistry()
   const workbenchMainAreas = new WorkbenchMainAreaContributionRegistry()
+  const workbenchSettingsSections = new WorkbenchSettingsSectionContributionRegistry()
   const workbenchToolbarActions = new WorkbenchToolbarActionContributionRegistry(
     workbenchCommands
   )
@@ -602,6 +634,7 @@ export function createInstalledRendererContributions(
     () => workbenchComposerContexts.dispose(),
     () => workbenchNavigationSections.dispose(),
     () => workbenchMainAreas.dispose(),
+    () => workbenchSettingsSections.dispose(),
     () => workbenchToolbarActions.dispose(),
     () => workspacePreviews.dispose()
   ]
@@ -646,6 +679,13 @@ export function createInstalledRendererContributions(
         registrationDisposers,
         page.onDispose,
         workbenchMainAreas.register(page).dispose
+      )
+    }
+    for (const section of settingsSections) {
+      pushOwnedRegistration(
+        registrationDisposers,
+        section.onDispose,
+        workbenchSettingsSections.register(section).dispose
       )
     }
     for (const context of composerContexts) {
@@ -739,6 +779,7 @@ export function createInstalledRendererContributions(
     composerContexts: workbenchComposerContexts,
     navigationSections: workbenchNavigationSections,
     mainAreas: workbenchMainAreas,
+    settingsSections: workbenchSettingsSections,
     toolbarActions: workbenchToolbarActions,
     workspacePreviews,
     get disposed() {

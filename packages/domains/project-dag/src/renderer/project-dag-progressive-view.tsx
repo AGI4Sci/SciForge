@@ -32,7 +32,7 @@ export function ProjectDagProgressiveView({
       aria-label={t('projectDagCommittedLayer')}
       data-dag-progressive-view="true"
     >
-      <div className="flex flex-wrap items-center gap-1.5 text-[10.5px]">
+      <div className="flex flex-wrap items-center gap-1.5 text-ds-2xs">
         <span
           className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700"
           data-dag-layer="committed"
@@ -60,7 +60,7 @@ export function ProjectDagProgressiveView({
         ) : null}
       </div>
       {pending ? (
-        <div className="mt-1.5 text-[10.5px] leading-4 text-amber-800">
+        <div className="mt-1.5 text-ds-2xs leading-4 text-amber-800">
           {t('projectDagAuditWarning')}
         </div>
       ) : null}

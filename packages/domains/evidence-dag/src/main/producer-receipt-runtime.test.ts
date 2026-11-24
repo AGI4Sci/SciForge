@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import type { DomainMainRuntimeLifecycleContext } from '@sciforge/domain-sdk/host'
 import type { ArtifactVersionRefV1 } from '@sciforge/domain-artifact-versions/contract'
 import {
@@ -17,23 +17,28 @@ import {
 } from '../contract.js'
 import {
   evidenceProducerDeliveryRelativePath,
-  evidenceProducerInboxRelativePath
+  evidenceProducerInboxRelativePath,
+  evidenceProducerReceiptFileName
 } from '../producer-inbox.js'
 import { EvidenceDagRuntime } from './runtime.js'
+import { EvidenceDagDeltaStore } from './evidence-delta.js'
 import type { EvidenceDagSidecarPort } from './sidecar.js'
 
 const OPERATION = 'producer-operation-runtime-0001'
 
 type ReadCall = Readonly<{ runtimeId: string; threadId: string }>
 
-async function harness(options: Readonly<{
+async function harness(t: TestContext, options: Readonly<{
   readThread: (call: ReadCall, workspaceRoot: string) => Promise<Record<string, unknown>>
   pollIntervalMs?: number
   readableVersions?: boolean
+  enabled?: boolean
+  startupGate?: Promise<void>
 }>) {
   const userDataDir = await realpath(await mkdtemp(join(tmpdir(), 'producer-runtime-user-')))
   const workspaceRoot = await realpath(await mkdtemp(join(tmpdir(), 'producer-runtime-ws-')))
   const reads: ReadCall[] = []
+  const versionReads: string[] = []
   const logs: string[] = []
   const sidecar: EvidenceDagSidecarPort = {
     configure: () => undefined,
@@ -45,7 +50,28 @@ async function harness(options: Readonly<{
   for (const ref of Object.values(producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1').commitRefs)) {
     known.set(ref.versionId, ref)
   }
+  const deltaStore = new EvidenceDagDeltaStore(join(userDataDir, 'evidence-dag', 'deltas.json'))
+  const loading = deferred()
+  const loaded = deferred()
+  let reconcileCalls = 0
+  const load = deltaStore.load.bind(deltaStore)
+  t.mock.method(deltaStore, 'load', async () => {
+    loading.resolve()
+    await options.startupGate
+    await load()
+    loaded.resolve()
+  })
+  const reconcile = deltaStore.reconcileProvisional.bind(deltaStore)
+  t.mock.method(deltaStore, 'reconcileProvisional', async (...args: Parameters<typeof reconcile>) => {
+    reconcileCalls++
+    const result = await reconcile(...args)
+    return result
+  })
   const runtime = new EvidenceDagRuntime({
+    deltaStore,
+    artifactVersionEventListPort: {
+      listEvents: async () => ({ ok: true, value: { events: [], lastSequence: 0 } })
+    },
     userDataDir,
     sidecar,
     // Readable exact versions: with this port the only thing standing between a
@@ -53,6 +79,7 @@ async function harness(options: Readonly<{
     ...(options.readableVersions === false ? {} : {
       artifactVersionReadPort: {
         read: async ({ versionId }: { versionId: string }) => {
+          versionReads.push(versionId)
           const ref = known.get(versionId)
           if (!ref) return { ok: false, issue: { code: 'not-found', message: `No version ${versionId}.` } } as never
           return {
@@ -65,6 +92,9 @@ async function harness(options: Readonly<{
     producerProvenancePollIntervalMs: options.pollIntervalMs ?? 20,
     fetchImpl: async () => new Response('{}', { status: 200 })
   })
+  t.after(() => runtime.close())
+  let enabled = options.enabled ?? true
+  let onEnablement: ((value: boolean) => void) | undefined
   const context = {
     owner: { moduleId: 'sciforge.evidence-dag', moduleVersion: '1.0.0' },
     signal: new AbortController().signal,
@@ -87,32 +117,37 @@ async function harness(options: Readonly<{
     modelAccess: { textReasoner: async () => ({ baseUrl: 'http://127.0.0.1:3892/v1', apiKey: 'k', model: 'm' }) },
     executionEvents: { publish: async () => { throw new Error('Unexpected execution event.') } },
     workflowExecutionReceipts: [],
-    enablement: { isEnabled: async () => true, subscribe: () => () => undefined },
+    enablement: {
+      isEnabled: async () => enabled,
+      subscribe: (listener: (value: boolean) => void) => {
+        onEnablement = listener
+        return () => { onEnablement = undefined }
+      }
+    },
     log: (entry: { message: string }) => { logs.push(entry.message) }
   } as unknown as DomainMainRuntimeLifecycleContext
   await runtime.activate(context)
-  return { runtime, userDataDir, workspaceRoot, reads, logs }
+  return {
+    runtime, userDataDir, workspaceRoot, reads, versionReads, logs,
+    loading: loading.promise,
+    loaded: loaded.promise,
+    reconciliationCalls: () => reconcileCalls,
+    setEnabled: (value: boolean) => { enabled = value; onEnablement?.(value) }
+  }
 }
 
-test('control: a routable receipt with readable versions is delivered', async () => {
-  const h = await harness({
+test('control: a routable receipt with readable versions is delivered', async (t) => {
+  const h = await harness(t, {
     readThread: async (_call, workspaceRoot) => threadDetail('codex', 'thread-1', workspaceRoot)
   })
   await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1'))
-  const deadline = Date.now() + 3_000
-  let delivered: unknown
-  while (!delivered && Date.now() < deadline) {
-    delivered = await delivery(h.workspaceRoot, 'paper-radar', OPERATION)
-    if (!delivered) await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-  assert.ok(delivered, `the control receipt was not delivered; log: ${h.logs.join(' | ')}`)
-  assert.equal((delivered as { state: string }).state, 'committed')
+  await waitForDelivery(h)
   assert.ok(await deltaCount(h.userDataDir) >= 1)
   await h.runtime.close()
 })
 
-test('a missing target thread keeps the receipt pending after the thread check ran', async () => {
-  const h = await harness({ readThread: async () => { throw new Error('Thread is not available.') } })
+test('a missing target thread keeps the receipt pending after the thread check ran', async (t) => {
+  const h = await harness(t, { readThread: async () => { throw new Error('Thread is not available.') } })
   const receipt = producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1')
   await writeReceipt(h.workspaceRoot, receipt)
   const parsed = evidenceProducerReceiptV1Schema.safeParse(receipt)
@@ -127,8 +162,8 @@ test('a missing target thread keeps the receipt pending after the thread check r
   await h.runtime.close()
 })
 
-test('a receipt routed to another thread than the one returned is refused', async () => {
-  const h = await harness({
+test('a receipt routed to another thread than the one returned is refused', async (t) => {
+  const h = await harness(t, {
     readThread: async (_call, workspaceRoot) => threadDetail('codex', 'someone-else', workspaceRoot)
   })
   await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1'))
@@ -141,9 +176,9 @@ test('a receipt routed to another thread than the one returned is refused', asyn
   await h.runtime.close()
 })
 
-test('a thread bound to a different workspace is refused', async () => {
+test('a thread bound to a different workspace is refused', async (t) => {
   const other = await realpath(await mkdtemp(join(tmpdir(), 'producer-runtime-other-')))
-  const h = await harness({ readThread: async () => threadDetail('codex', 'thread-1', other) })
+  const h = await harness(t, { readThread: async () => threadDetail('codex', 'thread-1', other) })
   await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1'))
 
   await settle(h)
@@ -153,8 +188,8 @@ test('a thread bound to a different workspace is refused', async () => {
   await h.runtime.close()
 })
 
-test('a receipt that references an unavailable Artifact Version never reaches an append', async () => {
-  const h = await harness({
+test('a receipt that references an unavailable Artifact Version never reaches an append', async (t) => {
+  const h = await harness(t, {
     readableVersions: false,
     readThread: async (_call, workspaceRoot) => threadDetail('codex', 'thread-1', workspaceRoot)
   })
@@ -167,6 +202,91 @@ test('a receipt that references an unavailable Artifact Version never reaches an
   assert.equal(await deltaCount(h.userDataDir), 0)
   await h.runtime.close()
 })
+
+test('disabled startup stays pending, enabling delivers once, and disabling stops new delivery', async (t) => {
+  const h = await harness(t, {
+    enabled: false,
+    readThread: async (_call, workspaceRoot) => threadDetail('codex', 'thread-1', workspaceRoot)
+  })
+  await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1'))
+  // The public read waits for maintenance even while the domain is disabled.
+  await assert.rejects(h.runtime.snapshotStatus({ runtimeId: 'codex', threadId: 'thread-1' }), /disabled/u)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(await delivery(h.workspaceRoot, 'paper-radar', OPERATION), undefined)
+  assert.equal(await deltaCount(h.userDataDir), 0)
+  assert.equal(h.reads.length, 0)
+
+  h.setEnabled(true)
+  h.setEnabled(true)
+  await waitForDelivery(h)
+  const count = await deltaCount(h.userDataDir)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(await deltaCount(h.userDataDir), count, 'repeated enablement and polls must not append again')
+
+  h.setEnabled(false)
+  const next = `${OPERATION}-next`
+  await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', next, 'codex', 'thread-1'))
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(await delivery(h.workspaceRoot, 'paper-radar', next), undefined)
+  assert.equal(await deltaCount(h.userDataDir), count)
+  h.setEnabled(true)
+  await waitForDelivery(h, next)
+})
+
+test('activation returns while maintenance is blocked and then starts receipt delivery', async (t) => {
+  const gate = deferred()
+  t.after(() => gate.resolve())
+  const h = await harness(t, {
+    startupGate: gate.promise,
+    readThread: async (_call, workspaceRoot) => threadDetail('codex', 'thread-1', workspaceRoot)
+  })
+  await h.loading
+  await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1'))
+  assert.equal(await delivery(h.workspaceRoot, 'paper-radar', OPERATION), undefined)
+  assert.equal(h.versionReads.length, 0)
+  gate.resolve()
+  await waitForDelivery(h)
+})
+
+test('closing before maintenance finishes prevents startup delivery and later enablement', { timeout: 5000 }, async (t) => {
+  const gate = deferred()
+  t.after(() => gate.resolve())
+  const h = await harness(t, {
+    startupGate: gate.promise,
+    readThread: async (_call, workspaceRoot) => threadDetail('codex', 'thread-1', workspaceRoot)
+  })
+  await h.loading
+  await writeReceipt(h.workspaceRoot, producerReceipt('paper-radar', OPERATION, 'codex', 'thread-1'))
+  await h.runtime.close()
+  gate.resolve()
+  await h.loaded
+  h.setEnabled(true)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(h.reconciliationCalls(), 0, 'closed runtime must not start derived reconciliation')
+  assert.equal(h.versionReads.length, 0)
+  assert.equal(await delivery(h.workspaceRoot, 'paper-radar', OPERATION), undefined)
+  assert.equal(await deltaCount(h.userDataDir), 0)
+})
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+async function waitForDelivery(
+  h: { workspaceRoot: string; logs: string[] },
+  operationId = OPERATION
+): Promise<void> {
+  const deadline = Date.now() + 3_000
+  let delivered: unknown
+  while (!delivered && Date.now() < deadline) {
+    delivered = await delivery(h.workspaceRoot, 'paper-radar', operationId)
+    if (!delivered) await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  assert.ok(delivered, `receipt was not delivered; log: ${h.logs.join(' | ')}`)
+  assert.equal((delivered as { state: string }).state, 'committed')
+}
 
 function producerReceipt(
   producer: string,
@@ -258,12 +378,13 @@ async function deltaCount(userDataDir: string): Promise<number> {
   }
 }
 
-/** Let the runtime's own poller run: wait for the thread lookup, then for the attempt to finish. */
-async function settle(h: { reads: ReadCall[] }): Promise<void> {
+/** Require the producer consumer's own failed attempt, not another consumer's thread read. */
+async function settle(h: { reads: ReadCall[]; logs: string[] }): Promise<void> {
+  const pending = `Evidence DAG kept paper-radar provenance ${evidenceProducerReceiptFileName(OPERATION)} pending.`
   const deadline = Date.now() + 3_000
-  while (h.reads.length === 0 && Date.now() < deadline) {
+  while (!h.logs.includes(pending) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
+  assert.ok(h.logs.includes(pending), `the producer poller never refused the receipt; log: ${h.logs.join(' | ')}`)
   assert.ok(h.reads.length > 0, 'the poller never looked up the target thread')
-  await new Promise((resolve) => setTimeout(resolve, 150))
 }

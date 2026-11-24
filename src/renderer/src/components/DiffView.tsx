@@ -1,4 +1,6 @@
-import { useMemo, useState, type ReactElement } from 'react'
+import { useMemo, useRef, useState, type ReactElement } from 'react'
+import { CodeSelectionAction } from './CodeSelectionAction'
+import { diffCodeRows } from '../lib/code-selection'
 import { Check, Copy } from 'lucide-react'
 
 type Props = {
@@ -8,6 +10,7 @@ type Props = {
   maxHeight?: number
   /** Optional file path; falls back to parsing from patch headers */
   filePath?: string
+  sessionId?: string
 }
 
 type ParsedDiff = {
@@ -73,12 +76,44 @@ export function DiffView({
   patch,
   className = '',
   maxHeight = 320,
-  filePath
+  filePath,
+  sessionId
 }: Props): ReactElement {
   const lines = patch.split('\n')
   const looksLikePatch = lines.some((l) => /^[+-]/.test(l) || l.startsWith('@@'))
   const parsed = useMemo(() => parseDiff(patch, filePath), [patch, filePath])
   const [copied, setCopied] = useState(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const sourceRef = useRef<HTMLPreElement>(null)
+  const codeRows = diffCodeRows(patch)
+  let codeRowIndex = 0
+  const rowIndices = new Map<number, number>()
+  let inHunk = false
+  lines.forEach((line, index) => {
+    if (line.startsWith('diff --git ') || line.startsWith('--- ') || line.startsWith('+++ ')) { inHunk = false; return }
+    if (line.startsWith('@@')) { inHunk = true; return }
+    if (inHunk && /^[ +-]/.test(line)) rowIndices.set(index, codeRowIndex++)
+  })
+  const selectionAction = (filePath || parsed.filePath) && lines.filter(line => line.startsWith('+++ ')).length <= 1 ? <CodeSelectionAction filePath={filePath ?? parsed.filePath!} sessionId={sessionId} read={() => {
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return null
+    const range = selection.getRangeAt(0)
+    const element = (node: Node) => node.nodeType === 1 ? node as Element : node.parentElement
+    const start = element(range.startContainer)?.closest<HTMLElement>('[data-code-row]')
+    const end = element(range.endContainer)?.closest<HTMLElement>('[data-code-row]')
+    if (start && start === end && bodyRef.current?.contains(start)) {
+      const row = codeRows[Number(start.dataset.codeRow)]
+      if (!row) return null
+      const prefix = range.cloneRange(); prefix.selectNodeContents(start); prefix.setEnd(range.startContainer, range.startOffset)
+      const offset = prefix.toString().length
+      return { text: row.code, start: offset, end: offset + selection.toString().length, bounds: range.getBoundingClientRect(), row }
+    }
+    if (sourceRef.current?.contains(range.startContainer) && sourceRef.current.contains(range.endContainer)) {
+      const prefix = range.cloneRange(); prefix.selectNodeContents(sourceRef.current); prefix.setEnd(range.startContainer, range.startOffset)
+      return { text: patch, start: prefix.toString().length, end: prefix.toString().length + selection.toString().length, bounds: range.getBoundingClientRect() }
+    }
+    return null
+  }} /> : null
 
   const fileLabel = parsed.filePath ?? filePath ?? null
   const displayName = fileLabel ? fileLabel.split(/[/\\]/).pop() ?? fileLabel : null
@@ -110,13 +145,15 @@ export function DiffView({
           copied={copied}
         />
         <pre
-          className={`min-w-0 overflow-auto whitespace-pre p-3 font-mono text-[11.5px] leading-6 text-ds-ink ${
+          ref={sourceRef}
+          className={`min-w-0 overflow-auto whitespace-pre p-3 font-mono text-ds-xs leading-6 text-ds-ink ${
             fillParent ? 'min-h-0 flex-1' : ''
           }`}
           style={fillParent ? undefined : { maxHeight }}
         >
           {patch}
         </pre>
+        {selectionAction}
       </div>
     )
   }
@@ -167,7 +204,8 @@ export function DiffView({
         copied={copied}
       />
       <div
-        className={`min-w-0 font-mono text-[11.5px] leading-6 ${
+        ref={bodyRef}
+        className={`min-w-0 font-mono text-ds-xs leading-6 ${
           fillParent
             ? 'min-h-0 flex-1 overflow-x-auto overflow-y-auto'
             : 'overflow-x-auto overflow-y-auto'
@@ -186,12 +224,15 @@ export function DiffView({
                 >
                   {lineNo ?? ''}
                 </td>
-                <td className="whitespace-pre px-3 pr-2">{line || ' '}</td>
+                <td className="whitespace-pre px-3 pr-2">{rowIndices.has(key)
+                  ? <><span className="select-none">{line[0]}</span><span data-code-row={rowIndices.get(key)}>{line.slice(1) || ' '}</span></>
+                  : line || ' '}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {selectionAction}
     </div>
   )
 }
@@ -214,15 +255,15 @@ function DiffHeader({
   return (
     <div className="ds-panel-strip flex items-center gap-2.5 border-b border-ds-border-muted px-3 py-2">
       <span
-        className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold ${badge.tone}`}
+        className={`shrink-0 rounded-md px-1.5 py-0.5 font-mono text-ds-2xs font-semibold ${badge.tone}`}
       >
         {badge.label}
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-ds-ink" title={name ?? ''}>
+      <span className="min-w-0 flex-1 truncate font-mono text-ds-sm font-medium text-ds-ink" title={name ?? ''}>
         {name ?? 'patch'}
       </span>
       {added != null || removed != null ? (
-        <span className="shrink-0 font-mono text-[11px] tabular-nums">
+        <span className="shrink-0 font-mono text-ds-xs tabular-nums">
           {(added ?? 0) > 0 ? (
             <span className="text-ds-diff-added">+{added}</span>
           ) : null}

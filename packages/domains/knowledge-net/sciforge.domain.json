@@ -1,0 +1,32 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-knowledge-net",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.knowledge-net",
+    "displayName": "Knowledge Net",
+    "version": "0.4.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 120
+  },
+  "contributionContracts": {},
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "knowledge-net.capabilities"
+        }
+      ]
+    }
+  ]
+}

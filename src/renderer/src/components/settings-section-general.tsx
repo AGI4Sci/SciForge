@@ -73,9 +73,9 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                 />
               </SettingsCard>
               {modelAccess?.mode === 'api' ? <details className="mt-6 overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
-                <summary className="cursor-pointer px-5 py-3 text-[14px] font-semibold text-ds-ink hover:bg-ds-hover">
+                <summary className="cursor-pointer px-5 py-3 text-ds-lg font-semibold text-ds-ink hover:bg-ds-hover">
                   {t('modelAccessAdvancedCapabilities')}
-                  <span className="ml-2 text-[12px] font-normal text-ds-muted">
+                  <span className="ml-2 text-ds-sm font-normal text-ds-muted">
                     {t('modelAccessAdvancedCapabilitiesDesc')}
                   </span>
                 </summary>
@@ -154,7 +154,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                   control={
                     <input
                       aria-label={t('imageGenerationComponentSegmentationRunner')}
-                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
                       placeholder={t('imageGenerationComponentSegmentationRunnerPlaceholder')}
                       value={imageGenerationSettings.componentSegmentationRunnerPath}
                       onChange={(e) =>
@@ -169,7 +169,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                   control={
                     <input
                       aria-label={t('imageGenerationComponentSegmentationModel')}
-                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
+                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
                       placeholder={t('imageGenerationComponentSegmentationModelPlaceholder')}
                       value={imageGenerationSettings.componentSegmentationModelPath}
                       onChange={(e) =>
@@ -216,7 +216,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                     <button
                       type="button"
                       onClick={openOnboardingPreview}
-                      className="w-full rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                      className="w-full rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
                     >
                       {t('onboardingPreviewOpen')}
                     </button>
@@ -272,7 +272,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                       <div className="flex items-center gap-2">
                         <input
                           aria-label={t('workspaceRoot')}
-                          className="w-full rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          className="w-full rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-lg text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
                           value={form.workspaceRoot}
                           onChange={(e) => update({ workspaceRoot: e.target.value })}
                           placeholder={t('workspaceRootPlaceholder')}
@@ -280,20 +280,20 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                         <button
                           type="button"
                           onClick={resetWorkspaceToDefault}
-                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
                         >
                           {t('restoreWorkspaceDefault')}
                         </button>
                         <button
                           type="button"
                           onClick={() => void pickWorkspace()}
-                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                          className="shrink-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
                         >
                           {t('browse')}
                         </button>
                       </div>
                       {workspacePickerError ? (
-                        <p className="mt-2 text-[13px] leading-5 text-amber-700 dark:text-amber-300">
+                        <p className="mt-2 text-ds-md leading-5 text-amber-700 dark:text-amber-300">
                           {workspacePickerError}
                         </p>
                       ) : null}
@@ -435,15 +435,15 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                   control={
                     <div className="flex w-full min-w-0 flex-col items-start gap-2">
                       {logPath ? (
-                        <code className="block w-full max-w-full break-all rounded-xl bg-ds-main/70 px-3 py-2 font-mono text-[12px] text-ds-muted shadow-sm">
+                        <code className="block w-full max-w-full break-all rounded-xl bg-ds-main/70 px-3 py-2 font-mono text-ds-sm text-ds-muted shadow-sm">
                           {logPath}
                         </code>
                       ) : (
-                        <span className="text-[13px] text-ds-faint">…</span>
+                        <span className="text-ds-md text-ds-faint">…</span>
                       )}
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-1.5 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-1.5 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:opacity-50"
                         disabled={typeof window.sciforge?.openLogDir !== 'function'}
                         onClick={async () => {
                           if (typeof window.sciforge?.openLogDir !== 'function') return
@@ -460,7 +460,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                         {t('logDirOpen')}
                       </button>
                       {logDirOpenError ? (
-                        <p className="text-[12px] text-red-700 dark:text-red-300">
+                        <p className="text-ds-sm text-red-700 dark:text-red-300">
                           {logDirOpenError}
                         </p>
                       ) : null}

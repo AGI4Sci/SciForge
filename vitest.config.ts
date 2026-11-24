@@ -18,7 +18,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: [resolve(repositoryRoot, 'scripts/vitest.setup.ts')],
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.integration.test.mjs'],
     maxWorkers: Math.max(1, Math.min(4, availableParallelism()))
   }
 })

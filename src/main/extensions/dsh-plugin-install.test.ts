@@ -19,7 +19,8 @@ async function installDshPluginArtifact(deps: DshPluginInstallDeps, request: Omi
   return installReviewedArtifact(deps, { ...request, expectedApproval: {
     packageName: manifest.packageName, version: manifest.version, sha256: sha256Hex(bytes), publisher: null,
     entry: manifest.entry, tools: Object.entries(manifest.tools).map(([name, grant]) => ({ name, ...grant })),
-    ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies
+    ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies,
+    hostServices: Array.isArray(manifest.hostServices) ? manifest.hostServices : []
   } })
 }
 
@@ -39,7 +40,7 @@ async function setup() {
   await writeFile(join(source, 'cordis.patch.yml'), '- insert: []\n')
   const pack = async (version = '1.0.0', requested: string[] | null = ports) => {
     await writeFile(join(source, 'package.json'), JSON.stringify({ name: packageName, version, type: 'module', main: './dist/main.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
-    await writeFile(join(source, 'sciforge.dsh.json'), JSON.stringify({ schemaVersion: 1, packageName, tools: {}, ...(requested === null ? {} : { ports: requested }) }))
+    await writeFile(join(source, 'sciforge.dsh.json'), JSON.stringify({ schemaVersion: 1, packageName, tools: {}, hostServices: ['agentThreads'], ...(requested === null ? {} : { ports: requested }) }))
     const result = await packDshPlugin({ source, output: join(root, `artifact-${version}.sciforge-dsh-plugin`) })
     return readFile(result.artifact)
   }
@@ -84,7 +85,7 @@ describe('formal packed Host port approval', () => {
     await restarted.dispose()
   })
 
-  it('preserves old artifacts without ports and never grants an undeclared approval', async () => {
+  it('accepts explicit services without ports and never grants an undeclared operation approval', async () => {
     const { pack, deps } = await setup()
     const bytes = await pack('1.0.0', null)
     expect((await readDshPluginArtifactBytes(bytes)).manifest).not.toHaveProperty('ports')
@@ -105,10 +106,10 @@ async function artifact() {
   const payload = {
     'package.json': Buffer.from(JSON.stringify({ name: packageName, version: '1.0.0', main: 'dist/main.js', dsh: { bundle: {} } })),
     'dist/main.js': Buffer.from('export function apply() {}'),
-    'sciforge.dsh.json': Buffer.from(JSON.stringify({ schemaVersion: 1, packageName, ports: ['view.list'] }))
+    'sciforge.dsh.json': Buffer.from(JSON.stringify({ schemaVersion: 1, packageName, hostServices: ['viewService'], ports: ['view.list'] }))
   }
   const manifest = { schemaVersion: 1, packageName, version: '1.0.0', entry: 'dist/main.js', dsh: { bundle: {} },
-    hostDependencies: [], ports: ['view.list'], tools: {}, files: Object.fromEntries(Object.entries(payload).map(([path, bytes]) => [path, sha256Hex(bytes)])) }
+    hostDependencies: [], hostServices: ['viewService'], ports: ['view.list'], tools: {}, files: Object.fromEntries(Object.entries(payload).map(([path, bytes]) => [path, sha256Hex(bytes)])) }
   const zip = new JSZip()
   for (const [path, bytes] of Object.entries(payload)) zip.file(path, bytes)
   zip.file(DSH_PLUGIN_ARTIFACT_MANIFEST_PATH, canonicalJson(manifest))
@@ -126,6 +127,47 @@ async function fixture() {
 }
 
 describe('installation port approval boundary', () => {
+  it('refuses an omitted Host service declaration before activation or policy writes', async () => {
+    const { root, deps, activate } = await setup()
+    const source = join(root, 'source')
+    await writeFile(join(source, 'sciforge.dsh.json'), JSON.stringify({ schemaVersion: 1, packageName, tools: {} }))
+    const packed = await packDshPlugin({ source, output: join(root, 'missing-services.sciforge-dsh-plugin') })
+    const bytes = await readFile(packed.artifact)
+    await expect(installDshPluginArtifact(deps, { artifactBytes: bytes, approvedToolNames: [], source: 'missing-services-review' }))
+      .rejects.toThrow(/explicitly declare requested Host services/)
+    expect(activate).not.toHaveBeenCalled()
+    await expect(readFile(deps.policyPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('records an explicit service-free declaration without granting trusted services', async () => {
+    const { root, deps, activate } = await setup()
+    const source = join(root, 'source')
+    await writeFile(join(source, 'sciforge.dsh.json'), JSON.stringify({ schemaVersion: 1, packageName, tools: {}, hostServices: 'none' }))
+    const packed = await packDshPlugin({ source, output: join(root, 'no-services.sciforge-dsh-plugin') })
+    await installDshPluginArtifact(deps, { artifactBytes: await readFile(packed.artifact), approvedToolNames: [], source: 'service-free-review' })
+    const saved = await readDshPluginPolicy(deps.policyPath)
+    expect(saved.approved[0].hostServices).toBe('none')
+    expect(activate.mock.calls[0][1].dshAuthorization?.hostServices).toBe('none')
+    expect(policyContracts(saved).get(`${packageName}@1.0.0`)?.dshAuthorization?.hostServices).toBe('none')
+  })
+
+  it('rejects a service client grant omitted from the reviewed approval before activation or policy writes', async () => {
+    const { root, deps, activate } = await setup()
+    const source = join(root, 'source')
+    await writeFile(join(source, 'sciforge.dsh.json'), JSON.stringify({ schemaVersion: 1, packageName, tools: {}, hostServices: ['nativeExecution'] }))
+    const packed = await packDshPlugin({ source, output: join(root, 'service.sciforge-dsh-plugin') })
+    const bytes = await readFile(packed.artifact)
+    const { manifest } = await readDshPluginArtifactBytes(bytes)
+    const request = { artifactBytes: bytes, approvedToolNames: [], source: 'review', expectedApproval: {
+      packageName, version: manifest.version, sha256: sha256Hex(bytes), publisher: null,
+      entry: manifest.entry, tools: [], ports: [], hostDependencies: [], hostServices: []
+    } }
+    await expect(installReviewedArtifact(deps, request)).rejects.toThrow(/complete grants differ/)
+    expect(activate).not.toHaveBeenCalled()
+    expect((await readDshPluginPolicy(deps.policyPath)).approved).toEqual([])
+    await installReviewedArtifact(deps, { ...request, expectedApproval: { ...request.expectedApproval, hostServices: ['nativeExecution'] } })
+    expect((await readDshPluginPolicy(deps.policyPath)).approved[0].hostServices).toEqual(['nativeExecution'])
+  })
   it('refuses same-name grants whose reviewed effect or scope is different', async () => {
     const { manifest } = await readDshPluginArtifactBytes(await artifact())
     const actual = { ...manifest, tools: { list: { id: 'view.list', effect: 'destructive' as const, scope: 'workspace' as const, approval: 'confirmation' as const } } }

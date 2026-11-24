@@ -243,11 +243,15 @@ async function installApprovedArtifact(
       packageName: manifest.packageName, version: manifest.version, sha256: artifactSha256,
       publisher: trust?.publisherId ?? null, entry: manifest.entry,
       tools: Object.entries(manifest.tools).map(([name, grant]) => ({ name, ...grant })),
-      ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies
+      ports: manifest.ports ?? [], hostDependencies: manifest.hostDependencies,
+      hostServices: Array.isArray(manifest.hostServices) ? manifest.hostServices : []
     })
     if (canonicalJson(expected as unknown as CanonicalJsonValue) !== canonicalJson(actual as unknown as CanonicalJsonValue)) {
       throw new Error('Verified artifact identity or complete grants differ from approval; refresh and confirm again.')
     }
+  }
+  if (manifest.hostServices === undefined) {
+    throw new Error('Market artifacts must explicitly declare requested Host services or hostServices: none.')
   }
   assertDshPluginPublisherAllowed(manifest, deps.officialPackagePattern)
   assertHostDependenciesSatisfied(manifest, deps.hostProvidedDependencies)

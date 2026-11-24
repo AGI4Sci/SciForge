@@ -147,6 +147,9 @@ const preTurnOutputBindingSnapshotSchema = z.object({
   capturedAt: z.iso.datetime({ offset: true }),
   settledAt: z.iso.datetime({ offset: true }).optional(),
   turnId: z.string().trim().min(1).max(512).optional(),
+  terminalState: z.enum(['completed', 'failed', 'cancelled', 'rejected', 'unknown']).optional(),
+  /** Host settled, but Artifact acceptance is not yet durably recorded. */
+  releasePending: z.boolean().optional(),
   bindings: z.array(turnBoundaryOutputBindingSchema).max(100_000)
 }).strict().superRefine((value, context) => {
   if (value.state === 'skipped') {
@@ -396,7 +399,7 @@ export type DurableTurnBoundaryOwner = Readonly<{
   threadId: string
   clientDirectiveId: string
   workspaceRoot?: string
-  phase: 'pending-start' | 'watching' | 'completed-intent' | 'terminal-settlement'
+  phase: 'pending-start' | 'watching' | 'completed-intent' | 'terminated-intent' | 'terminal-settlement'
   turnId?: string
   terminalState?: 'completed' | 'failed' | 'cancelled' | 'rejected'
 }>
@@ -972,6 +975,7 @@ export class ResearchCheckpointStore {
       runtimeId: string
       threadId: string
       state: 'consumed' | 'released'
+      terminalState?: 'completed' | 'failed' | 'cancelled' | 'rejected'
       turnId?: string
     }>
   ): Promise<void> {
@@ -990,23 +994,34 @@ export class ResearchCheckpointStore {
         existing.runtimeId !== input.runtimeId ||
         existing.threadId !== input.threadId ||
         !sameWorkspace(existing.workspaceRoot, workspaceRoot) ||
-        (existing.turnId && input.turnId && existing.turnId !== input.turnId)
+        (existing.turnId && input.turnId && existing.turnId !== input.turnId) ||
+        (existing.terminalState && input.terminalState && existing.terminalState !== input.terminalState)
       ) {
         throw new CheckpointStoreError('content-mismatch', 'Turn boundary lease settlement changed identity or scope.')
       }
       if (existing.state === 'skipped') return [current, undefined]
-      if (existing.state !== 'open') {
+      const archivedTurn = current.operations.find((operation) => operation.boundaryLeaseId === existing.leaseId)
+      if (archivedTurn?.manifest.turn.terminalState && input.terminalState &&
+        archivedTurn.manifest.turn.terminalState !== input.terminalState) {
+        throw new CheckpointStoreError('content-mismatch', 'Turn settlement changed the journal terminal state.')
+      }
+      const deliveredTermination = existing.state === 'consumed' && input.state === 'released' &&
+        (archivedTurn?.manifest.turn.terminalState === 'failed' || archivedTurn?.manifest.turn.terminalState === 'cancelled')
+      if (existing.state !== 'open' && !deliveredTermination) {
         if (existing.state === input.state) return [current, undefined]
         throw new CheckpointStoreError(
           'content-mismatch',
           'Turn boundary lease received conflicting terminal dispositions.'
         )
       }
+      const releasePending = deliveredTermination && archivedTurn?.state !== 'committed'
       const updated = preTurnOutputBindingSnapshotSchema.parse({
         ...existing,
-        state: input.state,
+        state: releasePending ? 'consumed' : input.state,
+        releasePending: releasePending || undefined,
         settledAt: this.#nowIso(),
         ...(input.turnId ? { turnId: input.turnId } : {}),
+        ...(input.terminalState ? { terminalState: input.terminalState } : {}),
         // Successful completion retains the self-contained exact snapshot
         // until its durable artifact event arrives. Release never needs it.
         bindings: input.state === 'released' ? [] : existing.bindings
@@ -1322,6 +1337,7 @@ export class ResearchCheckpointStore {
         preTurn.threadId !== manifest.recording.threadId ||
         !sameWorkspace(preTurn.workspaceRoot, workspaceRoot) ||
         preTurn.state === 'released' ||
+        (preTurn.terminalState && preTurn.terminalState !== manifest.turn.terminalState) ||
         (preTurn.turnId !== undefined && preTurn.turnId !== manifest.turn.turnId)
       )) {
         throw new CheckpointStoreError(
@@ -1389,6 +1405,7 @@ export class ResearchCheckpointStore {
               state: 'consumed',
               settledAt: this.#nowIso(),
               turnId: manifest.turn.turnId,
+              ...(manifest.turn.terminalState ? { terminalState: manifest.turn.terminalState } : {}),
               bindings: []
             })
           : item)
@@ -1778,6 +1795,8 @@ export class ResearchCheckpointStore {
             owner.runtimeId !== lease.runtimeId ||
             owner.threadId !== lease.threadId ||
             !owner.workspaceRoot ||
+            (lease.turnId && owner.turnId && lease.turnId !== owner.turnId) ||
+            (lease.terminalState && owner.terminalState && lease.terminalState !== owner.terminalState) ||
             !sameWorkspace(owner.workspaceRoot, lease.workspaceRoot)
           )) {
             throw new CheckpointStoreError(
@@ -1806,14 +1825,21 @@ export class ResearchCheckpointStore {
             leases.push(lease)
             continue
           }
-          if (lease.state !== 'open') {
+          const archivedTurn = current.operations.find((operation) => operation.boundaryLeaseId === lease.leaseId)
+          if (owner?.terminalState && archivedTurn?.manifest.turn.terminalState &&
+            owner.terminalState !== archivedTurn.manifest.turn.terminalState) {
+            throw new CheckpointStoreError('content-mismatch', 'Host owner changed the journal terminal state.')
+          }
+          const deliveredTermination = owner?.phase === 'terminal-settlement' && lease.state === 'consumed' &&
+            (archivedTurn?.manifest.turn.terminalState === 'failed' || archivedTurn?.manifest.turn.terminalState === 'cancelled')
+          if (lease.state !== 'open' && !deliveredTermination) {
             if (owner?.phase === 'pending-start' || owner?.phase === 'watching') {
               throw new CheckpointStoreError(
                 'content-mismatch',
                 'Host attempted to reopen an already settled durable turn boundary lease.'
               )
             }
-            const ownerTerminalState = owner?.phase === 'completed-intent'
+            const ownerTerminalState = owner?.phase === 'completed-intent' || owner?.phase === 'terminated-intent'
               ? 'consumed'
               : owner?.phase === 'terminal-settlement'
                 ? owner.terminalState === 'completed' ? 'consumed' : 'released'
@@ -1829,6 +1855,16 @@ export class ResearchCheckpointStore {
           }
           if (owner.phase === 'pending-start' || owner.phase === 'watching') {
             leases.push(lease)
+            continue
+          }
+          if (owner.phase === 'terminated-intent') {
+            // Freeze the terminal fact without releasing the before-turn parent
+            // bindings: the Host still owes us the exact artifact event.
+            leases.push(preTurnOutputBindingSnapshotSchema.parse({
+              ...lease, terminalState: owner.terminalState, turnId: owner.turnId
+            }))
+            changed = true
+            reconciled += 1
             continue
           }
           if (owner?.phase === 'completed-intent') {
@@ -1853,14 +1889,17 @@ export class ResearchCheckpointStore {
           if (owner?.turnId && lease.turnId && owner.turnId !== lease.turnId) {
             throw new CheckpointStoreError('content-mismatch', 'Host settlement changed the lease turn identity.')
           }
-          const state = terminalState === 'completed' ? 'consumed' as const : 'released' as const
+          const releasePending = deliveredTermination && archivedTurn?.state !== 'committed'
+          const state = terminalState === 'completed' || releasePending ? 'consumed' as const : 'released' as const
           changed = true
           reconciled += 1
           leases.push(preTurnOutputBindingSnapshotSchema.parse({
             ...lease,
             state,
+            releasePending: releasePending || undefined,
             settledAt: timestamp,
             ...(owner?.turnId ? { turnId: owner.turnId } : {}),
+            ...(terminalState ? { terminalState } : {}),
             bindings: state === 'released' ? [] : lease.bindings
           }))
         }
@@ -2140,7 +2179,13 @@ export class ResearchCheckpointStore {
         ...current,
         operations,
         recordings,
-        workspaceFileBindings
+        workspaceFileBindings,
+        preTurnOutputBindingSnapshots: current.preTurnOutputBindingSnapshots.map(lease =>
+          lease.leaseId === existing.boundaryLeaseId && lease.releasePending
+            ? preTurnOutputBindingSnapshotSchema.parse({
+                ...lease, state: 'released', releasePending: undefined, bindings: [], settledAt: this.#nowIso()
+              })
+            : lease)
       }, updatedOperation]
     })
   }
@@ -2498,6 +2543,10 @@ function validateDurableTurnBoundarySnapshot(
   const leaseIds = new Set<string>()
   const ownerOrdinals = new Set<number>()
   for (const owner of snapshot.owners) {
+    if (owner.phase === 'terminated-intent' &&
+      (!owner.turnId || (owner.terminalState !== 'failed' && owner.terminalState !== 'cancelled'))) {
+      throw new CheckpointStoreError('content-mismatch', 'Host terminated intent requires an exact turn and failed/cancelled state.')
+    }
     if (
       owner.issuerEpoch !== retirement.issuerEpoch ||
       !Number.isSafeInteger(owner.deliveryAttemptOrdinal) ||

@@ -68,7 +68,18 @@ export function listMainArtifactConsumers(
   return Object.freeze(catalog.listContributions(
     MAIN_ARTIFACT_CONSUMER_CONTRIBUTION_KIND,
     (value): value is DomainArtifactConsumer => isDomainArtifactConsumer(value)
-  ).map((contribution) => contribution.value))
+  ).map((contribution) => Object.freeze({
+    consume: async (event: Parameters<DomainArtifactConsumer['consume']>[0]) => {
+      try {
+        await contribution.value.consume(event)
+      } catch (cause) {
+        throw new Error(
+          `Artifact consumer ${contribution.declaration.id} (${contribution.packageName}@${contribution.owner.moduleVersion}) failed.`,
+          { cause }
+        )
+      }
+    }
+  })))
 }
 
 /**
@@ -407,8 +418,29 @@ export async function activateMainRuntimeContributions(
         controller
       }
       activated.push(lifecycle)
+      const activationStartedAt = Date.now()
+      const traceActivation = process.env.SCIFORGE_STARTUP_TRACE === '1'
+      if (traceActivation) host.log({
+        level: 'info',
+        message: 'Domain runtime lifecycle activation started.',
+        detail: { moduleId: owner.moduleId, contributionId: contribution.declaration.id }
+      })
       const disposer = await contribution.value.activate(Object.freeze({
         ...sharedHost,
+        ...(host.wakeups ? { wakeups: Object.freeze({
+          schedule: (at: string, wake: () => void) => {
+            if (controller.signal.aborted) throw new Error('Runtime lifecycle is stopped.')
+            const cancel = host.wakeups!.schedule(at, () => {
+              controller.signal.removeEventListener('abort', cancel)
+              if (!controller.signal.aborted) wake()
+            })
+            controller.signal.addEventListener('abort', cancel, { once: true })
+            return () => {
+              controller.signal.removeEventListener('abort', cancel)
+              cancel()
+            }
+          }
+        }) } : {}),
         owner,
         capabilities: capabilityInvokers.forDomain(
           owner,
@@ -426,6 +458,15 @@ export async function activateMainRuntimeContributions(
         }),
         signal: controller.signal
       }))
+      if (traceActivation) host.log({
+        level: 'info',
+        message: 'Domain runtime lifecycle activation completed.',
+        detail: {
+          moduleId: owner.moduleId,
+          contributionId: contribution.declaration.id,
+          elapsedMs: Date.now() - activationStartedAt
+        }
+      })
       if (disposer !== undefined && typeof disposer !== 'function') {
         throw new TypeError(
           `Runtime lifecycle contribution ${contribution.declaration.id} returned an invalid disposer.`

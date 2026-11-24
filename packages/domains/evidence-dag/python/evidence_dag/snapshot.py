@@ -72,7 +72,7 @@ def _digest_payload(
         if isinstance(review, dict):
             review = dict(review)
             review.pop("computedAt", None)
-            for key in ("status", "blocking", "reviewedBy", "reviewedAt"):
+            for key in ("status", "blocking", "reviewedBy", "reviewedAt", "reviewRationale", "reviewedSnapshotDigest"):
                 review.pop(key, None)
             reasons = []
             for reason in review.get("reasons") or []:
@@ -99,7 +99,7 @@ def _digest_payload(
             "gateStatus", "pendingCount", "blockingCount", "reviewPacketIds",
             "level", "score", "status", "reasons", "blocking",
             "reviewPacketId", "checker", "machineChecks", "blastRadius",
-            "computedAt", "reviewedBy", "reviewedAt",
+            "computedAt", "reviewedBy", "reviewedAt", "reviewRationale", "reviewedSnapshotDigest",
         ):
             review.pop(key, None)
         packets = []
@@ -109,7 +109,7 @@ def _digest_payload(
             packet = dict(raw)
             packet.pop("computedAt", None)
             packet.pop("assessmentIds", None)
-            for key in ("status", "blocking", "reviewedBy", "reviewedAt"):
+            for key in ("status", "blocking", "reviewedBy", "reviewedAt", "reviewRationale", "reviewedSnapshotDigest"):
                 packet.pop(key, None)
             checks = []
             for raw_check in packet.get("machineChecks") or []:

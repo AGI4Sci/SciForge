@@ -3,6 +3,7 @@ import type { AgentRuntimeContextLedger, AgentRuntimeId } from '@shared/agent-ru
 import { agentRuntimeClient } from '../agent/agent-runtime-client'
 import i18n from '../i18n'
 import type { QueuedUserMessage } from './chat-store-types'
+import { effectiveTurnOptions } from '../lib/runtime-effective-turn-options'
 
 export const INPUT_RECONCILIATION_REQUIRED = 'This input needs its original runtime receipt verified before it can be sent again.'
 export const LEGACY_INPUT_DISPOSITION_REQUIRED = 'This saved input has no durable receipt. Copy it into the composer to send it explicitly, or remove it.'
@@ -38,17 +39,19 @@ export async function ensureSessionInputRecovery(): Promise<void> {
   await recoveryCheckpoint
 }
 
-export async function acceptSessionInput<T extends { id: string; text: string; displayText?: string; admissionReceipt?: SessionInputReceipt }>(
+export async function acceptSessionInput<T extends { id: string; text: string; displayText?: string; admissionReceipt?: SessionInputReceipt; model?: string; reasoningEffort?: string; serviceTier?: string; mode?: string }>(
   ref: SessionAdmissionRef, message: T
 ): Promise<T & { admissionReceipt: SessionInputReceipt }> {
   await ensureSessionInputRecovery()
-  const { admissionReceipt, ...body } = message
+  // Existing receipts bind an immutable payload; editing/retry must never remap it.
+  const effective = message.admissionReceipt ? message : effectiveTurnOptions(ref.runtimeId, message)
+  const { admissionReceipt, ...body } = effective
   const payload = JSON.parse(JSON.stringify(body)) as SessionQueuedInput['payload']
   const receipt = await agentRuntimeClient.acceptQueuedInput({
     ...ref, clientDirectiveId: message.id, text: message.displayText ?? message.text, payload,
     ...(admissionReceipt ? { expectedRevision: admissionReceipt.revision } : {})
   })
-  return { ...message, admissionReceipt: receipt }
+  return { ...effective, admissionReceipt: receipt }
 }
 
 export function canReexecuteSessionInput(receipt: SessionInputReceipt | undefined): boolean {

@@ -44,6 +44,9 @@ test('publishes the complete node-workflow operation set through one governed fa
   assert.equal(definitions.get(CREATE_LOOP_CAPABILITY_IDS.read)?.effect, 'read')
   assert.equal(definitions.get(CREATE_LOOP_CAPABILITY_IDS.save)?.effect, 'workspace-write')
   assert.equal(definitions.get(CREATE_LOOP_CAPABILITY_IDS.run)?.approval, 'confirmation')
+  assert.equal(definitions.get(CREATE_LOOP_CAPABILITY_IDS.testNode)?.effect, 'external-write')
+  assert.equal(definitions.get(CREATE_LOOP_CAPABILITY_IDS.testNode)?.approval, 'confirmation')
+  assert.equal(definitions.get(CREATE_LOOP_CAPABILITY_IDS.checkCode)?.effect, 'compute')
   assert.equal(
     definitions.get(CREATE_LOOP_CAPABILITY_IDS.run)?.concurrency.idempotency,
     'required'

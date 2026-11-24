@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { memoryForExposure, parseResearchMemory, reviseResearchMemory } from './research-memory'
 import type {
   AgentRuntimeMemoryRecord,
   AgentRuntimeMemoryScope,
@@ -59,7 +60,7 @@ export class SharedMemoryService {
       .filter((record) => inScope(record, scopeFilter))
       .filter((record) => queryTokens.length === 0 || matchesTokens(record, queryTokens))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    return records.slice(0, Math.max(1, Math.min(input.limit ?? 200, 500)))
+    return records.slice(0, Math.max(1, Math.min(input.limit ?? 200, 500))).map(memoryForExposure)
   }
 
   async create(input: {
@@ -72,16 +73,23 @@ export class SharedMemoryService {
     tags?: string[]
     confidence?: number
     disabled?: boolean
+    research?: unknown
   }): Promise<AgentRuntimeMemoryRecord> {
+    if (input.scope !== undefined && !normalizeScope(input.scope)) throw new Error('Invalid memory scope.')
     const text = input.text.trim()
     if (!text) throw new Error('Memory text is required.')
+    const research = Object.hasOwn(input, 'research') ? parseResearchMemory(input.research) : undefined
+    if (research && (text.length > 2000 || !input.workspace?.trim() || input.scope === 'user')) {
+      throw new Error('Research memory requires a workspace scope and at most 2000 claim characters.')
+    }
     const now = new Date().toISOString()
     const workspace = input.workspace?.trim() ? await safeCanonical(input.workspace) : ''
     const project = projectKeyForInput(input.project, input.workspace, workspace) || (input.scope === 'project' ? workspace : '')
     const record: AgentRuntimeMemoryRecord = {
       id: `mem_${Date.now()}_${randomUUID()}`,
       text,
-      scope: input.scope ?? 'user',
+      scope: input.scope ?? (research ? 'workspace' : 'user'),
+      ...(research ? { research: { ...research, history: [] } } : {}),
       ...(workspace ? { workspace } : {}),
       ...(project ? { project } : {}),
       ...(input.threadMode ? { threadMode: input.threadMode } : {}),
@@ -96,7 +104,7 @@ export class SharedMemoryService {
     const store = await this.load()
     store.records.unshift(record)
     await this.save(store)
-    return record
+    return memoryForExposure(record)
   }
 
   async update(input: {
@@ -108,8 +116,15 @@ export class SharedMemoryService {
     if (index < 0) throw new Error(`Memory not found: ${input.memoryId}`)
     const previous = store.records[index]
     const patch = input.patch
+    if (patch.scope !== undefined && !normalizeScope(patch.scope)) throw new Error('Invalid memory scope.')
+    if (Object.hasOwn(patch, 'research') && patch.research === undefined) throw new Error('Research metadata cannot be removed.')
+    const researchChanged = previous.research && (typeof patch.text === 'string' || patch.research !== undefined)
+    const research = researchChanged || patch.research !== undefined
+      ? reviseResearchMemory(previous, Object.hasOwn(patch, 'research') ? patch.research : previous.research, typeof patch.text === 'string' ? patch.text.trim() : previous.text)
+      : previous.research
     const next: AgentRuntimeMemoryRecord = {
       ...previous,
+      ...(research ? { research } : {}),
       ...(typeof patch.text === 'string' ? { text: patch.text.trim() } : {}),
       ...(patch.scope ? { scope: patch.scope } : {}),
       ...(typeof patch.workspace === 'string' ? { workspace: await safeCanonical(patch.workspace) } : {}),
@@ -123,9 +138,10 @@ export class SharedMemoryService {
       updatedAt: new Date().toISOString()
     }
     if (!next.text.trim()) throw new Error('Memory text is required.')
+    if (research && (next.text.length > 2000 || !next.workspace || next.scope === 'user')) throw new Error('Research memory requires a workspace scope and at most 2000 claim characters.')
     store.records[index] = next
     await this.save(store)
-    return next
+    return memoryForExposure(next)
   }
 
   async delete(memoryId: string): Promise<AgentRuntimeMemoryRecord> {
@@ -151,7 +167,7 @@ export class SharedMemoryService {
       ...(input.taskType ? { taskType: input.taskType } : {})
     }
     const userMemories = store.records
-      .filter((record) => record.scope === 'user' && record.disabled !== true && record.deleted !== true)
+      .filter((record) => !record.research && record.scope === 'user' && record.disabled !== true && record.deleted !== true)
       .filter((record) => matchesTurnContext(record, scopeFilter))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     const matched = await this.list({
@@ -164,7 +180,15 @@ export class SharedMemoryService {
       query: input.prompt,
       limit
     })
-    return uniqueById([...userMemories, ...matched]).slice(0, Math.max(1, Math.min(limit, 50)))
+    const tokens = tokenize(input.prompt)
+    const research = store.records
+      .filter((record) => record.research && !record.disabled && !record.deleted)
+      .filter((record) => Boolean(workspace) && inScope(record, scopeFilter))
+      .filter((record) => tokens.length > 0 && matchesTokens(record, tokens))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    // A bundle is atomic: conditions, counterexamples and correction history cost one slot.
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.floor(limit), 50)) : 8
+    return uniqueById([...research, ...userMemories, ...matched.filter((record) => !record.research)]).slice(0, boundedLimit).map(memoryForExposure)
   }
 
   private async load(): Promise<StoredMemory> {
@@ -200,9 +224,20 @@ function normalizeRecord(value: unknown): AgentRuntimeMemoryRecord | null {
   const createdAt = stringValue(record.createdAt) || new Date().toISOString()
   const updatedAt = stringValue(record.updatedAt) || createdAt
   if (!id || !text || !scope) return null
+  let research: AgentRuntimeMemoryRecord['research']
+  if (Object.hasOwn(record, 'research')) {
+    try {
+      research = parseResearchMemory(record.research)
+      if (!stringValue(record.workspace) || scope === 'user' || text.length > 2000) throw new Error('Invalid research scope.')
+    } catch {
+      // Preserve a visible quarantined record; never downgrade malformed science into a preference.
+      return { id, text: '[Invalid research metadata; source lookup required]', scope, tags: [], disabled: true, createdAt, updatedAt }
+    }
+  }
   return {
     id,
     text,
+    ...(research ? { research } : {}),
     scope,
     ...(stringValue(record.workspace) ? { workspace: stringValue(record.workspace) } : {}),
     ...(stringValue(record.project) ? { project: stringValue(record.project) } : {}),
@@ -299,7 +334,7 @@ function tokenize(value: string): string[] {
 }
 
 function matchesTokens(record: AgentRuntimeMemoryRecord, tokens: string[]): boolean {
-  const haystack = `${record.text} ${record.tags.join(' ')} ${record.workspace ?? ''} ${record.project ?? ''}`.toLowerCase()
+  const haystack = `${record.text} ${record.research ? JSON.stringify(record.research) : ''} ${record.tags.join(' ')} ${record.workspace ?? ''} ${record.project ?? ''}`.toLowerCase()
   return tokens.some((token) => haystack.includes(token))
 }
 

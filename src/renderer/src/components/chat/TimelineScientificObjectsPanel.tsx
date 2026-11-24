@@ -214,7 +214,7 @@ export function TimelineScientificObjectsPanel({
             type="button"
             onClick={() => setShowGeneratedComparison((current) => !current)}
             aria-expanded={showGeneratedComparison}
-            className="inline-flex h-9 w-fit items-center gap-2 rounded-lg border border-ds-border bg-ds-card px-3 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            className="inline-flex h-9 w-fit items-center gap-2 rounded-lg border border-ds-border bg-ds-card px-3 text-ds-sm font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <GitCompareArrows className="h-4 w-4" aria-hidden="true" />
             {showGeneratedComparison

@@ -204,9 +204,9 @@ export function SpectraWorkspaceViewer({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-8 pt-3 sm:px-4">
       <header className="workspace-preview-spectra-viewer__header">
         <div>
-          <h3 className="text-base font-semibold leading-6 text-ds-ink">{resolvedModel.title}</h3>
+          <h3 className="text-ds-xl font-semibold leading-6 text-ds-ink">{resolvedModel.title}</h3>
           {resolvedModel.subtitle ? (
-            <p className="mt-1 text-xs leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
+            <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
           ) : null}
         </div>
       </header>
@@ -232,15 +232,15 @@ export function SpectraWorkspaceViewer({
             className="workspace-preview-spectra-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Spectra summary"
           >
-            <h4 className="mb-3 text-xs font-semibold uppercase leading-4 text-ds-muted">Spectrum</h4>
+            <h4 className="mb-3 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Spectrum</h4>
             <dl className="grid gap-2 sm:grid-cols-3">
               {resolvedModel.spectrumRows.map((row) => (
                 <div
                   key={row.id}
                   className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                 >
-                  <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{row.label}</dt>
-                  <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+                  <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{row.label}</dt>
+                  <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
                     {row.description ?? row.value}
                   </dd>
                 </div>
@@ -253,8 +253,8 @@ export function SpectraWorkspaceViewer({
             aria-label="Spectra ranges and peaks selection"
             data-selection-kind={resolvedModel.selection.kind}
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
-            <p className="text-sm leading-5 text-ds-ink">{resolvedModel.selection.summary}</p>
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
+            <p className="text-ds-lg leading-5 text-ds-ink">{resolvedModel.selection.summary}</p>
             {resolvedModel.selection.groups.length ? (
               <dl className="mt-3 grid gap-2 sm:grid-cols-2">
                 {resolvedModel.selection.groups.map((group) => (
@@ -262,8 +262,8 @@ export function SpectraWorkspaceViewer({
                     key={group.id}
                     className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                   >
-                    <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{group.title}</dt>
-                    <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+                    <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{group.title}</dt>
+                    <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
                       {formatSelectionGroupDisplay(group)}
                     </dd>
                   </div>
@@ -276,8 +276,8 @@ export function SpectraWorkspaceViewer({
             className="workspace-preview-spectra-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Spectra actions"
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Available tools</h4>
-            <p className="mb-3 text-xs leading-4 text-ds-muted">
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Available tools</h4>
+            <p className="mb-3 text-ds-sm leading-4 text-ds-muted">
               These labels describe what the assistant can request. They are not clickable in this preview.
             </p>
             {resolvedModel.actions.length ? (
@@ -287,14 +287,14 @@ export function SpectraWorkspaceViewer({
                     key={action.id}
                     data-action-id={action.id}
                     data-action-kind={action.kind}
-                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-xs font-medium leading-4 text-ds-ink"
+                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-ds-sm font-medium leading-4 text-ds-ink"
                   >
                     {action.label}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm leading-5 text-ds-muted">
+              <p className="text-ds-lg leading-5 text-ds-muted">
                 No select, annotate, export, or inspect actions are available.
               </p>
             )}
@@ -486,8 +486,8 @@ function SpectraPeakPlotViewport({
         role="img"
         aria-label="Spectra bounded peak plot"
       >
-        <strong className="block text-sm font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
-        <p className="mt-1 text-xs leading-4 text-ds-muted">{viewport.message}</p>
+        <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
+        <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{viewport.message}</p>
       </div>
     )
   }
@@ -501,8 +501,8 @@ function SpectraPeakPlotViewport({
         role="img"
         aria-label={`${viewport.title}: ${viewport.message}`}
       >
-        <strong className="block text-sm font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
-        <p className="mt-1 text-xs leading-4 text-ds-muted">{viewport.message}</p>
+        <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
+        <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{viewport.message}</p>
         <svg
           viewBox="0 0 100 40"
           preserveAspectRatio="none"
@@ -525,8 +525,8 @@ function SpectraPeakPlotViewport({
         </svg>
         <dl className="mt-3 grid gap-2 sm:grid-cols-2" data-spectra-scan-marker-domain>
           <div className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2">
-            <dt className="text-xs font-medium leading-4 text-ds-muted">{viewport.xAxis}</dt>
-            <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+            <dt className="text-ds-sm font-medium leading-4 text-ds-muted">{viewport.xAxis}</dt>
+            <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
               {formatNumber(viewport.xRange.min)}-{formatNumber(viewport.xRange.max)}
             </dd>
           </div>
@@ -543,8 +543,8 @@ function SpectraPeakPlotViewport({
       role="img"
       aria-label={`${viewport.title}: ${viewport.message}`}
     >
-      <strong className="block text-sm font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
-      <p className="mt-1 mb-3 text-xs leading-4 text-ds-muted">{viewport.message}</p>
+      <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{viewport.title}</strong>
+      <p className="mt-1 mb-3 text-ds-sm leading-4 text-ds-muted">{viewport.message}</p>
         <svg
           className="h-44 w-full text-ds-ink"
           viewBox="0 0 100 70"
@@ -595,14 +595,14 @@ function SpectraPeakPlotViewport({
       </svg>
       <dl className="mt-3 grid gap-2 sm:grid-cols-2" data-spectra-peak-plot-domain>
         <div className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2">
-          <dt className="text-xs font-medium leading-4 text-ds-muted">{viewport.xAxis}</dt>
-          <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+          <dt className="text-ds-sm font-medium leading-4 text-ds-muted">{viewport.xAxis}</dt>
+          <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
             {formatNumber(viewport.xRange.min)}-{formatNumber(viewport.xRange.max)}
           </dd>
         </div>
         <div className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2">
-          <dt className="text-xs font-medium leading-4 text-ds-muted">Intensity</dt>
-          <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+          <dt className="text-ds-sm font-medium leading-4 text-ds-muted">Intensity</dt>
+          <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
             {formatNumber(viewport.intensityRange.min)}-{formatNumber(viewport.intensityRange.max)}
           </dd>
         </div>

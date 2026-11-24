@@ -100,7 +100,7 @@ export function AgentFocusNavigation({
                 aria-current={current ? 'page' : undefined}
                 onClick={() => onNavigateTo(item.threadId, index)}
                 title={item.label}
-                className={`inline-flex h-7 max-w-48 items-center gap-1.5 truncate rounded-md px-2 text-[12px] font-medium transition ${
+                className={`inline-flex h-7 max-w-48 items-center gap-1.5 truncate rounded-md px-2 text-ds-sm font-medium transition ${
                   current
                     ? 'bg-ds-hover text-ds-ink'
                     : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'

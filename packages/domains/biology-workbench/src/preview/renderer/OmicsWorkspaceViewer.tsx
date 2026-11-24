@@ -194,9 +194,9 @@ export function OmicsWorkspaceViewer({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-8 pt-3 sm:px-4">
       <header className="workspace-preview-omics-viewer__header">
         <div>
-          <h3 className="text-base font-semibold leading-6 text-ds-ink">{resolvedModel.title}</h3>
+          <h3 className="text-ds-xl font-semibold leading-6 text-ds-ink">{resolvedModel.title}</h3>
           {resolvedModel.subtitle ? (
-            <p className="mt-1 text-xs leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
+            <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
           ) : null}
         </div>
       </header>
@@ -207,8 +207,8 @@ export function OmicsWorkspaceViewer({
           role={statusRole}
           data-state-kind={resolvedModel.status.kind}
         >
-          <strong className="block text-sm font-semibold leading-5 text-ds-ink">{resolvedModel.status.title}</strong>
-          <p className="mt-1 text-xs leading-4 text-ds-muted">{resolvedModel.status.message}</p>
+          <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">{resolvedModel.status.title}</strong>
+          <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{resolvedModel.status.message}</p>
         </div>
       ) : (
         <>
@@ -225,18 +225,18 @@ export function OmicsWorkspaceViewer({
             className="workspace-preview-omics-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Omics matrix summary"
           >
-            <h4 className="mb-3 text-xs font-semibold uppercase leading-4 text-ds-muted">Matrix</h4>
+            <h4 className="mb-3 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Matrix</h4>
             <dl className="grid gap-2 sm:grid-cols-3">
               {resolvedModel.matrixRows.map((row) => (
                 <div
                   key={row.id}
                   className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                 >
-                  <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{row.label}</dt>
-                  <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+                  <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{row.label}</dt>
+                  <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
                     {row.value}
                     {row.description ? (
-                      <small className="mt-1 block text-xs font-normal leading-4 text-ds-muted">
+                      <small className="mt-1 block text-ds-sm font-normal leading-4 text-ds-muted">
                         {row.description}
                       </small>
                     ) : null}
@@ -251,8 +251,8 @@ export function OmicsWorkspaceViewer({
             aria-label="Omics selection"
             data-selection-kind={resolvedModel.selection.kind}
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
-            <p className="text-sm leading-5 text-ds-ink">{resolvedModel.selection.summary}</p>
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
+            <p className="text-ds-lg leading-5 text-ds-ink">{resolvedModel.selection.summary}</p>
             {resolvedModel.selection.groups.length ? (
               <dl className="mt-3 grid gap-2 sm:grid-cols-2">
                 {resolvedModel.selection.groups.map((group) => (
@@ -260,8 +260,8 @@ export function OmicsWorkspaceViewer({
                     key={group.id}
                     className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
                   >
-                    <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{group.title}</dt>
-                    <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+                    <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{group.title}</dt>
+                    <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
                       {group.items.length > 8 ? group.summary : group.items.join(', ')}
                     </dd>
                   </div>
@@ -274,8 +274,8 @@ export function OmicsWorkspaceViewer({
             className="workspace-preview-omics-viewer__section rounded-lg border border-ds-border bg-ds-card p-4 shadow-sm"
             aria-label="Omics actions"
           >
-            <h4 className="mb-2 text-xs font-semibold uppercase leading-4 text-ds-muted">Available tools</h4>
-            <p className="mb-3 text-xs leading-4 text-ds-muted">
+            <h4 className="mb-2 text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Available tools</h4>
+            <p className="mb-3 text-ds-sm leading-4 text-ds-muted">
               These labels describe what the assistant can request. They are not clickable in this preview.
             </p>
             {resolvedModel.actions.length ? (
@@ -285,14 +285,14 @@ export function OmicsWorkspaceViewer({
                     key={action.id}
                     data-action-id={action.id}
                     data-action-kind={action.kind}
-                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-xs font-medium leading-4 text-ds-ink"
+                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-1 text-ds-sm font-medium leading-4 text-ds-ink"
                   >
                     {action.label}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm leading-5 text-ds-muted">
+              <p className="text-ds-lg leading-5 text-ds-muted">
                 No select, preview, inspect, or export actions are available.
               </p>
             )}
@@ -428,16 +428,16 @@ function OmicsMatrixOverview({
       aria-label="Omics metadata matrix overview"
     >
       <header>
-        <strong className="block text-sm font-semibold leading-5 text-ds-ink">
+        <strong className="block text-ds-lg font-semibold leading-5 text-ds-ink">
           {overview.title || fallback.title}
         </strong>
-        <p className="mt-1 text-xs leading-4 text-ds-muted">{fallback.message}</p>
+        <p className="mt-1 text-ds-sm leading-4 text-ds-muted">{fallback.message}</p>
       </header>
 
       <dl className="workspace-preview-omics-viewer__overview-facts grid gap-2 sm:grid-cols-3">
         <div className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2">
-          <dt className="text-xs font-medium leading-4 text-ds-muted">Shape</dt>
-          <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink" data-matrix-shape={overview.dataShape}>
+          <dt className="text-ds-sm font-medium leading-4 text-ds-muted">Shape</dt>
+          <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink" data-matrix-shape={overview.dataShape}>
             {overview.shapeLabel}
           </dd>
         </div>
@@ -448,11 +448,11 @@ function OmicsMatrixOverview({
             data-omics-axis={axis.axis}
             data-axis-count={axis.count ?? 'unknown'}
           >
-            <dt className="text-xs font-medium leading-4 text-ds-muted">{axis.label}</dt>
-            <dd className="mt-1 text-sm font-semibold leading-5 text-ds-ink">
+            <dt className="text-ds-sm font-medium leading-4 text-ds-muted">{axis.label}</dt>
+            <dd className="mt-1 text-ds-lg font-semibold leading-5 text-ds-ink">
               {axis.countLabel}
               {axis.selectedKeyCount ? (
-                <small className="mt-1 block text-xs font-normal leading-4 text-ds-muted">
+                <small className="mt-1 block text-ds-sm font-normal leading-4 text-ds-muted">
                   {formatCount(axis.selectedKeyCount, 'selected key')}
                 </small>
               ) : null}
@@ -499,9 +499,9 @@ function OmicsMatrixOverview({
         className="workspace-preview-omics-viewer__overview-ranges rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
         aria-label="Selected omics ranges"
       >
-        <h4 className="text-xs font-medium leading-4 text-ds-muted">Selected ranges</h4>
+        <h4 className="text-ds-sm font-medium leading-4 text-ds-muted">Selected ranges</h4>
         {overview.selectedRanges.length ? (
-          <ol className="mt-2 space-y-1 text-sm font-semibold leading-5 text-ds-ink">
+          <ol className="mt-2 space-y-1 text-ds-lg font-semibold leading-5 text-ds-ink">
             {overview.selectedRanges.map((range) => (
               <li
                 key={range.id}
@@ -518,7 +518,7 @@ function OmicsMatrixOverview({
             ))}
           </ol>
         ) : (
-          <p className="mt-1 text-sm leading-5 text-ds-ink">No selected omics ranges.</p>
+          <p className="mt-1 text-ds-lg leading-5 text-ds-ink">No selected omics ranges.</p>
         )}
       </section>
 
@@ -545,7 +545,7 @@ function OmicsChipList({
       className="workspace-preview-omics-viewer__overview-chip-section rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
       aria-label={title}
     >
-      <h4 className="text-xs font-medium leading-4 text-ds-muted">{title}</h4>
+      <h4 className="text-ds-sm font-medium leading-4 text-ds-muted">{title}</h4>
       {chips.length ? (
         <ul className="mt-2 flex flex-wrap gap-1.5">
           {chips.map((chip) => (
@@ -554,14 +554,14 @@ function OmicsChipList({
               {...{ [dataAttribute]: chip.id }}
               {...(extraData?.(chip) ?? {})}
               data-selected={chip.selected ? 'true' : 'false'}
-              className="rounded border border-ds-border-muted bg-ds-card px-2 py-0.5 text-xs font-medium leading-4 text-ds-ink"
+              className="rounded border border-ds-border-muted bg-ds-card px-2 py-0.5 text-ds-sm font-medium leading-4 text-ds-ink"
             >
               {chip.label}
             </li>
           ))}
         </ul>
       ) : (
-        <p className="mt-1 text-sm leading-5 text-ds-ink">{empty}</p>
+        <p className="mt-1 text-ds-lg leading-5 text-ds-ink">{empty}</p>
       )}
     </section>
   )

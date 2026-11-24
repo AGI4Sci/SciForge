@@ -9,3 +9,5 @@ export { ResearchRecordPanel } from './ResearchRecordPanel'
 export { createResearchRecordPresentation } from './research-record-presentation'
 
 export { EvidenceRerunReview, EvidenceReviewCoverage } from './EvidenceRerunReview'
+
+export { AuditReviewHistory } from './AuditReviewHistory'

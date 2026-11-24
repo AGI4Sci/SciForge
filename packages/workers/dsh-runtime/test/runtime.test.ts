@@ -1,7 +1,7 @@
 import { tmpdir } from 'node:os'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,14 @@ import { type DshRuntimeOptions, type DshEvent, type DshIdentity, type DshRuntim
 
 const fixture = fileURLToPath(new URL('./fixture.mjs', import.meta.url))
 const context = { settings: {} }
+
+test('deployment probes and ACP startup pass the configured executable prefix exactly once', async () => {
+  const s = await setup({ executableArgs: [fixture, '--fixture-prefix-check'] })
+  try {
+    const thread = await s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root })
+    assert.ok(thread.id)
+  } finally { await s.cleanup() }
+})
 test('disconnect cleanup rejection survives strict host isolation and remains observable', async () => {
   const { execFile } = await import('node:child_process')
   const { promisify } = await import('node:util')
@@ -47,6 +55,42 @@ test('second prompt may exceed the lifecycle budget without replacing the sessio
     assert.equal(JSON.parse(thirdDelta.text).pid, pid)
     assert.equal(second.threadId, first.threadId)
   } finally { await stream?.stop(); await s.cleanup() }
+})
+
+test('permission changes restart the native sandbox in the workspace and preserve the session', async () => {
+  const s = await setup()
+  let stream
+  try {
+    const thread = await s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root })
+    stream = await collect(s.adapter, thread.id)
+    const reports: { pid: number; cwd: string; env: Record<string, string> }[] = []
+    for (const permissionLevel of ['read-only', 'workspace-write', 'danger-full-access', 'read-only']) {
+      const handle = await s.adapter.startTurn(context, { runtimeId: 'dsh', threadId: thread.id, permissionLevel, text: 'env' })
+      await until(stream.events, e => e.turnId === handle.turnId && e.kind === 'turn_lifecycle' && e.state === 'completed')
+      const delta = stream.events.find(e => e.turnId === handle.turnId && e.kind === 'assistant_delta')
+      assert.ok(delta?.kind === 'assistant_delta')
+      const report = JSON.parse(delta.text)
+      assert.equal(report.env.DSH_PERMISSION_MODE, permissionLevel)
+      assert.equal(report.cwd, await realpath(s.root))
+      assert.equal(handle.threadId, thread.id)
+      if (reports.length) assert.notEqual(report.pid, reports.at(-1)!.pid)
+      reports.push(report)
+    }
+  } finally { await stream?.stop(); await s.cleanup() }
+})
+
+test('a missing permission plugin acknowledgement rejects the session before any prompt', async () => {
+  const s = await setup({ safetyPatch: 'derived', executableArgs: [fixture, '--fixture-defaults', '--skip-policy-hook'] })
+  try {
+    await assert.rejects(s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root }), /runtime_config_unsafe/)
+  } finally { await s.cleanup() }
+})
+
+test('restricted native execution rejects a composition without the reviewed sandbox policy owner', async () => {
+  const s = await setup({ commandExecution: true })
+  try {
+    await assert.rejects(s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root }), /runtime_config_unsafe/)
+  } finally { await s.cleanup() }
 })
 
 test('unresponsive cancel has an independent budget and waits for actual child exit', async () => {
@@ -88,6 +132,89 @@ test('a long prompt budget does not relax session lifecycle timeouts', async () 
     await assert.rejects(s.adapter.startTurn(context, { runtimeId: 'dsh', threadId: thread.id, text: 'hello' }), /runtime_disconnected|runtime_request_timeout/)
     assert.ok(existsSync(`${barrier}.started`))
   } finally { await s.cleanup(); await rm(`${barrier}.started`, { force: true }); await rm(`${barrier}.release`, { force: true }) }
+})
+
+test('a prompt that keeps streaming updates outlives the idle budget', async () => {
+  const s = await setup({ requestTimeoutMs: 1000, promptTimeoutMs: 400 })
+  let stream
+  try {
+    const thread = await s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root })
+    stream = await collect(s.adapter, thread.id)
+    const started = Date.now()
+    const turn = await s.adapter.startTurn(context, { runtimeId: 'dsh', threadId: thread.id, text: 'slowstream' })
+    await until(stream.events, e => e.turnId === turn.turnId && e.kind === 'turn_lifecycle' && e.state !== 'running')
+    // The fixture streams a chunk every ~100ms for ~1.2s: three times the
+    // silence budget, but never that long without progress.
+    assert.ok(Date.now() - started > 400, 'the streamed turn must outlive the silence budget')
+    assert.ok(stream.events.some(e => e.turnId === turn.turnId && e.kind === 'turn_lifecycle' && e.state === 'completed'), JSON.stringify(stream.events.filter(e => e.turnId === turn.turnId)))
+    assert.ok(stream.events.filter(e => e.turnId === turn.turnId && e.kind === 'assistant_delta').length >= 10)
+  } finally { await stream?.stop(); await s.cleanup() }
+})
+
+test('a silent prompt fails with the distinct idle timeout and the session stays resumable', async () => {
+  const s = await setup({ requestTimeoutMs: 1000, promptTimeoutMs: 350 })
+  let stream
+  try {
+    const thread = await s.adapter.startThread(context, { runtimeId: 'dsh', workspace: s.root })
+    stream = await collect(s.adapter, thread.id)
+    const stalled = await s.adapter.startTurn(context, { runtimeId: 'dsh', threadId: thread.id, text: 'silent' })
+    await until(stream.events, e => e.turnId === stalled.turnId && e.kind === 'turn_lifecycle' && e.state !== 'running')
+    const terminal = stream.events.find(e => e.turnId === stalled.turnId && e.kind === 'turn_lifecycle' && e.state !== 'running')
+    assert.ok(terminal?.kind === 'turn_lifecycle')
+    assert.equal(terminal.state, 'failed')
+    // Distinguishable from a protocol error, a correlated request failure and a
+    // plain disconnect, so the Host can offer a continuation instead of "failed".
+    assert.equal(terminal.message, 'runtime_prompt_idle_timeout')
+    assert.equal((await s.adapter.readThreadStatus(context, { runtimeId: 'dsh', threadId: thread.id })).status, 'idle')
+    // The durable ACP session identity survives: the next turn reconnects,
+    // resumes the same session and completes.
+    const resumed = await s.adapter.startTurn(context, { runtimeId: 'dsh', threadId: thread.id, text: 'hello' })
+    assert.equal(resumed.threadId, thread.id)
+    await until(stream.events, e => e.turnId === resumed.turnId && e.kind === 'turn_lifecycle' && e.state === 'completed')
+  } finally { await stream?.stop(); await s.cleanup() }
+})
+
+test('transport exposes an explicit idle budget for requests that carry turn work', async () => {
+  const { AcpTransport } = await import('../src/transport.ts')
+  const s = await setup()
+  const transport = new AcpTransport(process.execPath, [fixture], {}, s.root, 250, () => {}, () => {})
+  try {
+    const session = await transport.request('session/new', { cwd: s.root, mcpServers: [] })
+    const started = Date.now()
+    const result = await transport.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: 'slowstream' }] },
+      { timeoutMs: 400, idle: true, matches: message => message.params?.sessionId === session.sessionId })
+    assert.equal(result.stopReason, 'end_turn')
+    assert.ok(Date.now() - started > 400)
+  } finally { await transport.close(); await s.cleanup() }
+})
+
+test('transport reports an idle expiry distinctly from a duration timeout', async () => {
+  const { AcpTransport } = await import('../src/transport.ts')
+  const s = await setup()
+  const transport = new AcpTransport(process.execPath, [fixture], {}, s.root, 250, () => {}, () => {})
+  try {
+    const session = await transport.request('session/new', { cwd: s.root, mcpServers: [] })
+    await assert.rejects(
+      transport.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: 'silent' }] }, { timeoutMs: 300, idle: true }),
+      /runtime_request_idle_timeout/
+    )
+  } finally { await transport.close(); await s.cleanup() }
+})
+
+test('idle activity must belong to the session that owns the request', async () => {
+  const { AcpTransport } = await import('../src/transport.ts')
+  const s = await setup()
+  const transport = new AcpTransport(process.execPath, [fixture], {}, s.root, 250, () => {}, () => {})
+  try {
+    const session = await transport.request('session/new', { cwd: s.root, mcpServers: [] })
+    // Progress is streaming, but for another session: the prompt stays silent
+    // and must expire instead of borrowing that activity.
+    await assert.rejects(
+      transport.request('session/prompt', { sessionId: session.sessionId, prompt: [{ type: 'text', text: 'otherstream' }] },
+        { timeoutMs: 300, idle: true, matches: message => message.params?.sessionId === session.sessionId }),
+      /runtime_request_idle_timeout/
+    )
+  } finally { await transport.close(); await s.cleanup() }
 })
 
 test('responsive cancellation waits for the prompt barrier and preserves the connection', async () => {

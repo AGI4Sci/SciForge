@@ -11,11 +11,11 @@ const scope = { runtimeId: 'codex', threadId: 'original-record', workspaceRoot: 
 const source = { ...scope, runtimeId: 'claude', threadId: 'source-session', turnId: 'turn-7', itemId: 'item-8', digest: 'a'.repeat(64) }
 const view = { node: { id: 'event-1', source }, sourceStatus: 'current', raw: { kind: 'user_message', text: 'Readable original message', id: 'item-8' } } as ResearchRecordView
 
-test('retained historical bytes remain readable with unavailable live source and separate judgment axes', () => {
+test('retained historical bytes remain readable with an actionable source warning', () => {
   const html = renderToStaticMarkup(createElement(ResearchRecordSource, { view: { ...view, sourceStatus: 'unavailable', retainedSource: 'retained', rawOrigin: 'retained' }, busy: false, onOpen: () => undefined }))
   assert.match(html, /Readable original message/)
-  assert.match(html, /来源不可用/); assert.match(html, /当时保全原文/)
-  assert.match(html, /不代表科研结论已验证/)
+  assert.match(html, /暂时无法读取来源/); assert.match(html, /当时保全原文/)
+  assert.doesNotMatch(html, /浏览不代表|科研结论已验证/)
 })
 
 test('default detail shows readable content and keeps coordinates/raw JSON in closed details', () => {
@@ -33,7 +33,7 @@ test('command and failed result remain readable; changed/unavailable states are 
   ])
   for (const status of ['changed', 'unavailable'] as const) {
     const html = renderToStaticMarkup(createElement(ResearchRecordSource, { view: { ...view, sourceStatus: status }, busy: false, onOpen: () => undefined }))
-    assert.match(html, status === 'changed' ? /来源已变化/ : /来源不可用/)
+    assert.match(html, status === 'changed' ? /来源已更新/ : /暂时无法读取来源/)
   }
 })
 
@@ -94,7 +94,7 @@ test('failed/cancelled, truncated and changed states remain visible with all out
   for (const status of ['failed', 'cancelled']) {
     const raw = { status, arguments: JSON.stringify({ cmd: 'false' }), exitCode: 7, detail: 'HIDDEN_OUTPUT'.repeat(3000), truncated: true }
     const html = renderToStaticMarkup(createElement(ResearchRecordSource, { view: { ...view, sourceStatus: 'changed', raw }, busy: false, onOpen: () => undefined }))
-    assert.match(html, /来源已变化/)
+    assert.match(html, /来源已更新/)
     assert.match(html, status === 'failed' ? /失败/ : /已取消/)
     assert.match(html, /退出码 7/)
     assert.match(html, /来源已截断/)
@@ -121,7 +121,7 @@ test('unavailable source keeps coordinates and cannot display stale raw as curre
   const presentation = createResearchRecordPresentation()
   presentation.toggle('source:event-1:json')
   const html = renderToStaticMarkup(createElement(ResearchRecordSource, { view: { ...view, raw: undefined, sourceStatus: 'unavailable' }, presentation, busy: false, onOpen: () => undefined }))
-  assert.match(html, /来源不可用/)
+  assert.match(html, /暂时无法读取来源/)
   assert.match(html, new RegExp(source.digest))
   assert.match(html, /查看原始过程/)
 })

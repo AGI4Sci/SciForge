@@ -460,7 +460,7 @@ export function buildTablesSection(
       row(
         table.id || `table-${index}`,
         table.name || table.id || `Table ${index + 1}`,
-        formatTableShape(table.rowCount, table.columnCount)
+        formatTableShape(table.rowCount, table.columnCount, table.rowCountIsEstimate === true)
       )
     )
   }
@@ -526,8 +526,10 @@ function displayPath(file: ChromeFileSnapshot): string {
   return path
 }
 
-function formatTableShape(rowCount?: number, columnCount?: number): string {
-  const rows = typeof rowCount === 'number' ? formatCount(rowCount, 'row') : 'Unknown rows'
+function formatTableShape(rowCount?: number, columnCount?: number, rowCountIsEstimate = false): string {
+  const rows = typeof rowCount === 'number'
+    ? `${rowCountIsEstimate ? 'approximately ' : ''}${formatCount(rowCount, 'row')}`
+    : 'Unknown rows'
   const columns = typeof columnCount === 'number' ? formatCount(columnCount, 'column') : 'unknown columns'
   return `${rows} x ${columns}`
 }

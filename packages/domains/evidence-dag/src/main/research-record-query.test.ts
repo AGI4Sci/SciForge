@@ -203,3 +203,19 @@ test('native source await cannot mix a previous page with a newer revision', asy
   release()
   await assert.rejects(pending, /记录已更新/)
 })
+
+test('permanent execution rejection projects unavailable with its actual attempt count', () => {
+  const { state } = fixture()
+  const job = state.jobs.r
+  job.unavailableIds = []; job.changedIds = []
+  job.processedIds = []; job.assignedIds = []
+  job.retryBlocked = true; job.attempts = 1
+  const { query } = researchRecordQueryIndex(state)
+  assert.equal(query.project(state.nodes.a).synthesisStatus, 'unavailable')
+  assert.equal(query.organizationCoverage('a').blocked, 1)
+  assert.equal(state.jobs.r.attempts, 1)
+  delete job.retryBlocked
+  state.revision++
+  const { query: resumed } = researchRecordQueryIndex(state)
+  assert.notEqual(resumed.project(state.nodes.a).synthesisStatus, 'unavailable')
+})

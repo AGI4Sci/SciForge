@@ -278,7 +278,7 @@ export class DomainExecutionEventService implements DomainMainExecutionEventsRou
       artifacts: Object.freeze([consumerEvent, ...consumerEvent.artifacts])
     })
     const results = await Promise.allSettled(
-      this.#consumers.map((consumer) => consumer.consume(artifactEvent))
+      this.#consumers.map((consumer) => Promise.resolve().then(() => consumer.consume(artifactEvent)))
     )
     const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : [])
     if (failures.length > 0) {

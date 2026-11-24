@@ -1,3 +1,5 @@
+import { collaborationFailureMessage, stripCapabilityEnvelope } from '../collaboration-errors.js'
+import { translateWorkspace as cw, useWorkspaceTranslation } from '../workspace-i18n.js'
 import React, { useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { DeliveryContent, DeliveryTotal, deliveryLimitError, deliverySourceLabel } from './DeliveryContent.js'
 import { DeliveryDialog } from './DeliveryDialog.js'
@@ -11,11 +13,13 @@ export type DeliveryDraftProps = Readonly<{
   busy?: boolean
   materialSelection?: DeliveryMaterialSelection
   returnControls?: ReactNode
+  onContinueNew?(reason: string): Promise<string | null>
   onContinue?(): void
   onReexecute?(): void
   onPreview?(file: DeliveryDraftFile): void
   onSubmit?(summary: string, files: readonly DeliveryDraftFile[]): Promise<boolean> | void
   onSummaryChange?(summary: string): void
+  onDeclaredMaterialChange?(file: DeliveryDraftFile): void
   onMaterialsChange?(files: readonly DeliveryDraftFile[]): void
   onAiSummaryDecision?(decision: 'replace' | 'keep', summary: string): void
 }>
@@ -26,15 +30,22 @@ function DeliverySnapshot({ snapshot, showAdditional, busy, onPreview }: Readonl
   busy?: boolean
   onPreview?(file: DeliveryDraftFile): void
 }>): ReactElement {
+  useWorkspaceTranslation()
   return <div className="collaboration-workspace-delivery-snapshot" data-testid="delivery-snapshot">
-    <p className="collaboration-workspace-delivery-meta" data-testid="delivery-submitter">{snapshot.submitter} 提交于 <time dateTime={snapshot.submittedAt} data-testid="delivery-submitted-at">{formatWorkspaceTime(snapshot.submittedAt)}</time></p>
-    <div className="collaboration-workspace-delivery-summary" data-testid="delivery-snapshot-summary"><h4>结果说明</h4><p>{snapshot.summary}</p></div>
+    <p className="collaboration-workspace-delivery-meta" data-testid="delivery-submitter">{snapshot.submitter}{' '}{cw("提交于")}{' '}<time dateTime={snapshot.submittedAt} data-testid="delivery-submitted-at">{formatWorkspaceTime(snapshot.submittedAt)}</time></p>
+    <div className="collaboration-workspace-delivery-summary" data-testid="delivery-snapshot-summary"><h4>{cw("结果说明")}</h4><p>{snapshot.summary}</p></div>
     <DeliveryContent declaredFiles={snapshot.declaredFiles} additionalFiles={snapshot.additionalFiles} showAdditional={showAdditional} readOnly busy={busy} onPreview={onPreview} />
   </div>
 }
 
 /** Member-owned renderer draft; external writes remain supplied canonical callbacks. */
-export function DeliveryDraft({ data, busy = false, materialSelection, returnControls, onReexecute, onContinue, onPreview, onSubmit, onSummaryChange, onMaterialsChange, onAiSummaryDecision }: DeliveryDraftProps): ReactElement {
+export function DeliveryDraft({ data, busy = false, materialSelection, returnControls, onReexecute, onContinueNew, onContinue, onPreview, onSubmit, onSummaryChange, onDeclaredMaterialChange, onMaterialsChange, onAiSummaryDecision }: DeliveryDraftProps): ReactElement {
+  useWorkspaceTranslation()
+  const [continuationOpen, setContinuationOpen] = useState(false)
+  const [continuationReason, setContinuationReason] = useState(cw("原会话无法继续，核对已有工作后创建接续会话。"))
+  const [continuationContext, setContinuationContext] = useState<string | null>(null)
+  const [continuationPending, setContinuationPending] = useState(false)
+  const [continuationError, setContinuationError] = useState<string | null>(null)
   const titleId = useId()
   const hintId = useId()
   const confirmTitleId = useId()
@@ -42,6 +53,7 @@ export function DeliveryDraft({ data, busy = false, materialSelection, returnCon
   const historicalSnapshot = data.history?.find((entry) => String(entry.revision) === historyRevision)
   const [text, setText] = useState(data.summary)
   const [additionalFiles, setAdditionalFiles] = useState<readonly DeliveryDraftFile[]>(data.additionalFiles ?? [])
+  const [requiredPicker, setRequiredPicker] = useState<DeliveryDraftFile | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -73,17 +85,24 @@ export function DeliveryDraft({ data, busy = false, materialSelection, returnCon
   const readOnly = data.state === 'submitted' || data.state === 'adopted'
   const submissionPending = submitting || data.state === 'submitting'
   const progressLabel = data.submissionProgress ? {
-    preparing: '正在核对任务要求并保存交付快照…',
-    signing: '正在验证当前设备并签署提交，请稍候…',
-    staging: '正在上传交付文件…',
-    candidate: '文件已上传，正在登记交付…',
-    review: '正在记录本次提交确认…',
-    seal: '正在云端封存交付…'
-  }[data.submissionProgress] : '正在准备提交，请稍候…'
+    preparing: cw("正在核对任务要求并保存交付快照…"),
+    signing: cw("正在验证当前设备并签署提交，请稍候…"),
+    staging: cw("正在上传交付文件…"),
+    candidate: cw("文件已上传，正在登记交付…"),
+    review: cw("正在记录本次提交确认…"),
+    seal: cw("正在云端封存交付…")
+  }[data.submissionProgress] : cw("正在准备提交，请稍候…")
   const locked = busy || submissionPending
   const generating = data.state === 'generating'
   const editLocked = locked || Boolean(data.editLocked)
   const editingDisabled = editLocked || generating
+  // Busy writes temporarily disable the mounted picker; a frozen result ends it.
+  const materialPickerBlocked = submissionPending || Boolean(data.editLocked) || generating || readOnly
+  useEffect(() => {
+    if (!materialPickerBlocked) return
+    setRequiredPicker(null)
+    setPickerOpen(false)
+  }, [materialPickerBlocked])
   const visibleSubmitError = !locked && !readOnly ? data.submitError ?? submitError : null
   const aiFailed = data.state === 'failed' && !data.submitError && !submitError && !submissionPending
   const modifying = data.state === 'modifying'
@@ -92,8 +111,8 @@ export function DeliveryDraft({ data, busy = false, materialSelection, returnCon
   const files = [...data.declaredFiles, ...(hasMaterialSelection ? additionalFiles : [])]
   const limitError = hasMaterialSelection ? deliveryLimitError(files) : null
   const suggestion = (data.aiSummary && data.aiSummary !== resolvedAiSummary ? data.aiSummary : null) ?? conflictingSummary
-  const canSubmit = !locked && !data.materialError && !modifying && !generating && Boolean(text.trim()) && !limitError && Boolean(onSubmit)
-  const stateLabel = data.state === 'adopted' ? '已采纳' : data.state === 'submitted' ? '已提交' : submissionPending ? '提交中…' : visibleSubmitError ? '提交失败' : generating ? 'AI 正在完成任务…' : modifying ? 'AI 正在修改…' : aiFailed ? 'AI 执行失败' : data.state === 'changed' ? '有新改动' : '草稿就绪'
+  const canSubmit = !locked && !data.declaredFiles.some((file) => file.unavailable) && !data.materialError && !data.saveError && !modifying && !generating && Boolean(text.trim()) && !limitError && Boolean(onSubmit)
+  const stateLabel = data.state === 'adopted' ? cw("已采纳") : data.state === 'submitted' ? cw("已提交") : submissionPending ? cw("提交中…") : visibleSubmitError ? cw("提交失败") : generating ? cw("AI 正在完成任务…") : modifying ? cw("AI 正在修改…") : aiFailed ? cw("AI 执行失败") : data.state === 'changed' ? cw("有新改动") : cw("草稿就绪")
   const updateText = (value: string): void => {
     edited.current = true
     setText(value)
@@ -113,83 +132,99 @@ export function DeliveryDraft({ data, busy = false, materialSelection, returnCon
     try {
       const result = await onSubmit(text.trim(), files)
       if (result !== false) setConfirmOpen(false)
-      else setSubmitError('提交未成功，草稿和所选资料已保留，请再次提交。')
-    } catch {
-      setSubmitError('提交失败，草稿和所选资料已保留。请稍后再次提交。')
+      else setSubmitError(cw("提交未成功，草稿和所选资料已保留，请再次提交。"))
+    } catch (cause) {
+      setSubmitError(stripCapabilityEnvelope(collaborationFailureMessage(cause, "提交失败，草稿和所选资料已保留。请稍后再次提交。")))
     } finally {
       submittingRef.current = false
       setSubmitting(false)
     }
   }
   return <section className="collaboration-workspace-delivery-draft" data-testid="delivery-draft" aria-labelledby={titleId} aria-busy={locked}>
-    {data.revisionRequest && !readOnly ? <aside className="collaboration-workspace-delivery-revision-request" data-testid="delivery-revision-request" aria-label="负责人返修意见">
-      <strong>负责人要求返修</strong>
+    {data.revisionRequest && !readOnly ? <aside className="collaboration-workspace-delivery-revision-request" data-testid="delivery-revision-request" aria-label={cw("负责人返修意见")}>
+      <strong>{cw("负责人要求返修")}</strong>
       <p className="collaboration-workspace-delivery-meta">{data.revisionRequest.author} · <time dateTime={data.revisionRequest.at}>{formatWorkspaceTime(data.revisionRequest.at)}</time></p>
       <p>{data.revisionRequest.instruction}</p>
     </aside> : null}
     <header className="collaboration-workspace-delivery-draft-header">
-      <h3 id={titleId}>{readOnly ? '交付快照' : '交付草稿'}</h3>
-      <span className="collaboration-workspace-delivery-version" data-testid="delivery-version">第 {data.revision} 版{readOnly ? '' : '草稿'}</span>
+      <h3 id={titleId}>{readOnly ? cw("交付快照") : cw("交付草稿")}</h3>
+      <span className="collaboration-workspace-delivery-version" data-testid="delivery-version">{cw(readOnly ? "第 {{revision}} 版" : "第 {{revision}} 版草稿", { revision: data.revision })}</span>
       <span className={`collaboration-workspace-delivery-status${aiFailed ? ' tone-warning' : data.state === 'adopted' ? ' tone-success' : ''}`} data-testid="delivery-status" role="status">{stateLabel}</span>
     </header>
     {!readOnly ? <>
       <div className="collaboration-workspace-delivery-source-row" data-testid="delivery-ai-source">
-        <span className="collaboration-workspace-delivery-meta">{data.revisionRequest && modifying ? `基于第 ${data.revision - 1} 版 · AI 正在按返修意见修改…` : source ? <>来自 AI 第 {source.round} 轮{data.revisionRequest ? '（返修）' : ''} · <time dateTime={source.finishedAt}>{formatWorkspaceTime(source.finishedAt)}</time></> : data.revisionRequest ? `基于第 ${data.revision - 1} 版` : '等待 AI 生成草稿'}</span>
-        <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-ask-ai" disabled={editLocked || !onContinue} onClick={onContinue}>让 AI 修改</button>
+        <span className="collaboration-workspace-delivery-meta">{data.revisionRequest && modifying ? cw("基于第 {{value0}} 版 · AI 正在按返修意见修改…", { value0: data.revision - 1 }) : source ? <>{cw(data.revisionRequest ? "来自 AI 第 {{round}} 轮（返修）" : "来自 AI 第 {{round}} 轮", { round: source.round })} · <time dateTime={source.finishedAt}>{formatWorkspaceTime(source.finishedAt)}</time></> : data.revisionRequest ? cw("基于第 {{value0}} 版", { value0: data.revision - 1 }) : cw("填写或粘贴结果，也可以让 AI 写入草稿")}</span>
+        <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-ask-ai" disabled={editLocked || !onContinue} onClick={onContinue}>{cw("与 AI 一起完成")}</button>
       </div>
-      {generating ? <p className="collaboration-workspace-delivery-notice" data-testid="delivery-generating" role="status">AI 正在完成任务… 你可以去会话查看进度。</p> : null}
-      {modifying ? <p className="collaboration-workspace-delivery-notice" data-testid="delivery-modifying" role="status">AI 正在修改… 你可以继续编辑结果说明，完成后再提交。</p> : null}
-      {data.state === 'changed' ? <p className="collaboration-workspace-delivery-notice" data-testid="delivery-changed" role="status">有新改动，请预览后提交</p> : null}
+      {generating ? <p className="collaboration-workspace-delivery-notice" data-testid="delivery-generating" role="status">{cw("AI 正在完成任务… 你可以去会话查看进度。")}</p> : null}
+      {modifying ? <p className="collaboration-workspace-delivery-notice" data-testid="delivery-modifying" role="status">{cw("AI 正在修改… 你可以继续编辑结果说明，完成后再提交。")}</p> : null}
+      {data.state === 'changed' ? <p className="collaboration-workspace-delivery-notice" data-testid="delivery-changed" role="status">{cw("有新改动，请预览后提交")}</p> : null}
       {aiFailed ? <div className="collaboration-workspace-delivery-failure" data-testid="delivery-failure" role="status">
-        <strong>AI 执行失败</strong><p>{data.failureReason ?? '执行遇到问题，请在会话中查看详情。'}</p>
+        <strong>{cw("AI 执行失败")}</strong><p>{data.failureReason ?? cw("执行遇到问题，请在会话中查看详情。")}</p>
         <div className="collaboration-workspace-delivery-actions">
-          {onReexecute ? <button type="button" className="collaboration-workspace-button-secondary" data-testid="delivery-reexecute" disabled={editLocked} onClick={onReexecute}>重新执行</button> : null}
-          <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-continue" disabled={editLocked || !onContinue} onClick={onContinue}>在会话中继续</button>
-        </div><p>已有草稿已保留，你可以继续修改后提交。</p>
+          {onReexecute ? <button type="button" className="collaboration-workspace-button-secondary" data-testid="delivery-reexecute" disabled={editLocked} onClick={onReexecute}>{cw("重新执行")}</button> : null}
+          <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-continue" disabled={editLocked || !onContinue} onClick={onContinue}>{cw("在会话中继续")}</button>
+        </div><p>{cw("已有草稿已保留，你可以继续修改后提交。")}</p>
       </div> : null}
       <label className="collaboration-workspace-revision-input collaboration-workspace-delivery-summary">
-        <span className="collaboration-workspace-delivery-group-header"><span>结果说明</span>{data.saveState ? <small className="collaboration-workspace-delivery-meta" data-testid="delivery-saved" role="status">{data.saveState === 'saving' ? '保存中…' : data.saveState === 'error' ? '保存失败，当前修改已保留在此页面' : '已保存'}</small> : null}</span>
-        <textarea aria-label="结果说明" data-testid="delivery-summary" aria-describedby={!text.trim() && !generating ? hintId : undefined} rows={4} value={text} disabled={editingDisabled} onChange={(event) => updateText(event.target.value)} />
-        {!text.trim() && !generating ? <small id={hintId} className="collaboration-workspace-delivery-meta" data-testid="delivery-summary-required">请填写结果说明</small> : null}
+        <span className="collaboration-workspace-delivery-group-header"><span>{cw("结果说明")}</span>{data.saveState ? <small className="collaboration-workspace-delivery-meta" data-testid="delivery-saved" role="status">{data.saveState === 'saving' ? cw("保存中…") : data.saveState === 'error' ? cw("保存失败，当前修改已保留在此页面") : cw("已保存")}</small> : null}</span>
+        <textarea aria-label={cw("结果说明")} data-testid="delivery-summary" aria-describedby={!text.trim() && !generating ? hintId : undefined} rows={4} value={text} disabled={editingDisabled} onChange={(event) => updateText(event.target.value)} />
+        {!text.trim() && !generating ? <small id={hintId} className="collaboration-workspace-delivery-meta" data-testid="delivery-summary-required">{cw("请填写结果说明")}</small> : null}
       </label>
+      {data.saveError ? <p role="alert" data-testid="delivery-save-error" className="collaboration-workspace-delivery-limit-error">{data.saveError}</p> : null}
       {suggestion ? <div className="collaboration-workspace-delivery-ai-update" data-testid="delivery-ai-update">
-        <p>AI 有新的说明：<span className="collaboration-workspace-delivery-ai-excerpt">{suggestion}</span></p>
+        <p>{cw("AI 有新的说明：")}<span className="collaboration-workspace-delivery-ai-excerpt">{suggestion}</span></p>
         <div className="collaboration-workspace-delivery-actions">
-          <button type="button" className="collaboration-workspace-button-secondary" data-testid="delivery-replace-summary" disabled={editingDisabled} onClick={() => { updateText(suggestion); setResolvedAiSummary(suggestion); setConflictingSummary(null); onAiSummaryDecision?.('replace', suggestion) }}>替换</button>
-          <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-keep-summary" disabled={editingDisabled} onClick={() => { setResolvedAiSummary(suggestion); setConflictingSummary(null); onAiSummaryDecision?.('keep', text) }}>保留我的修改</button>
+          <button type="button" className="collaboration-workspace-button-secondary" data-testid="delivery-replace-summary" disabled={editingDisabled} onClick={() => { updateText(suggestion); setResolvedAiSummary(suggestion); setConflictingSummary(null); onAiSummaryDecision?.('replace', suggestion) }}>{cw("替换")}</button>
+          <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-keep-summary" disabled={editingDisabled} onClick={() => { setResolvedAiSummary(suggestion); setConflictingSummary(null); onAiSummaryDecision?.('keep', text) }}>{cw("保留我的修改")}</button>
         </div>
       </div> : null}
-      <DeliveryContent declaredFiles={data.declaredFiles} additionalFiles={additionalFiles} showAdditional={hasMaterialSelection} busy={editingDisabled} onPreview={onPreview} onAdd={materialSelection ? () => setPickerOpen(true) : undefined} onRemove={materialSelection ? (file) => updateFiles(additionalFiles.filter((item) => item.id !== file.id)) : undefined} />
+      <DeliveryContent declaredFiles={data.declaredFiles} additionalFiles={additionalFiles} showAdditional={hasMaterialSelection} busy={editingDisabled} onPreview={onPreview} onReplaceDeclared={materialSelection && onDeclaredMaterialChange ? setRequiredPicker : undefined} onAdd={materialSelection ? () => setPickerOpen(true) : undefined} onRemove={materialSelection ? (file) => updateFiles(additionalFiles.filter((item) => item.id !== file.id)) : undefined} />
       {data.materialError ? <p role="alert" data-testid="delivery-material-error" className="collaboration-workspace-delivery-limit-error">{data.materialError}</p> : null}
       <div className="collaboration-workspace-delivery-actions">
-        <button type="button" className="collaboration-workspace-button-primary" data-testid="delivery-submit" disabled={!canSubmit} onClick={() => { setSubmitError(null); setConfirmOpen(true) }}>{submissionPending ? '提交中…' : '提交'}</button>
-        <span className="collaboration-workspace-delivery-meta">提交后打包封存，不能再改</span>
+        <button type="button" className="collaboration-workspace-button-primary" data-testid="delivery-submit" disabled={!canSubmit} onClick={() => { setSubmitError(null); setConfirmOpen(true) }}>{submissionPending ? cw("提交中…") : cw("提交")}</button>
+        <span className="collaboration-workspace-delivery-meta">{cw("提交后打包封存，不能再改")}</span>
       </div>
       {visibleSubmitError && !confirmOpen ? <p className="collaboration-workspace-delivery-limit-error" data-testid="delivery-submit-error" role="alert">{visibleSubmitError}</p> : null}
+      {onContinueNew ? <button type="button" className="collaboration-workspace-button-ghost" data-testid="delivery-new-session" disabled={editLocked || generating || modifying} onClick={() => setContinuationOpen(true)}>{cw("原会话不可用，创建接续会话")}</button> : null}
+      {continuationOpen ? <DeliveryDialog titleId={`${titleId}-continuation`} testId="delivery-continuation-dialog" busy={continuationPending} onClose={() => setContinuationOpen(false)}>
+        <h2 id={`${titleId}-continuation`}>{cw("显式接续任务")}</h2>
+        <p>{cw("先核对旧会话、待决指令与外部回执；未知结果会阻止接续。会话已静止且输入已封住也可显式接续，这不代表原会话已丢失。旧会话将保留并封住新输入。确认后 Agent 会携带任务和交接记录继续原任务，不会盲目重发旧工作。")}</p>
+        {continuationContext ? <><label>{cw("交接说明")}<textarea aria-label={cw("交接说明")} readOnly rows={8} value={continuationContext} /></label><p>{cw("交接说明已随持久指令交给接续会话。执行进度和草稿仍在原任务中查看。")}</p><button type="button" onClick={() => { void navigator.clipboard?.writeText(continuationContext) }}>{cw("复制交接说明")}</button><button type="button" onClick={onContinue}>{cw("打开接续会话")}</button></> : <><label>{cw("接续原因")}<textarea aria-label={cw("接续原因")} value={continuationReason} disabled={continuationPending} onChange={(event) => setContinuationReason(event.target.value)} /></label><button type="button" disabled={continuationPending || !continuationReason.trim()} onClick={() => {
+          if (!onContinueNew || continuationPending) return
+          setContinuationPending(true); setContinuationError(null)
+          void onContinueNew(continuationReason.trim()).then((context) => {
+            if (context) setContinuationContext(context)
+            else setContinuationError(cw("接续未完成，请查看任务错误；已有会话与日志已保留。"))
+          }).catch(() => setContinuationError(cw("无法安全接续，请先核对权限和未决回执。"))).finally(() => setContinuationPending(false))
+        }}>{continuationPending ? cw("核对中…") : cw("核对并接续任务")}</button></>}
+        {continuationError ? <p role="alert">{continuationError}</p> : null}
+      </DeliveryDialog> : null}
       {returnControls}
-    </> : <DeliverySnapshot snapshot={{ revision: data.revision, summary: data.summary, declaredFiles: data.declaredFiles, additionalFiles: data.additionalFiles, submitter: data.submitter ?? '成员', submittedAt: data.submittedAt ?? '', adopted: data.state === 'adopted' }} showAdditional={hasMaterialSelection} busy={busy} onPreview={onPreview} />}
-    {data.history?.length ? <section className="collaboration-workspace-delivery-history" data-testid="delivery-history" aria-label="历史版本">
-      <label>历史版本（{data.history.length}） <select aria-label="选择历史版本" value={historicalSnapshot ? historyRevision : ''} onChange={(event) => setHistoryRevision(event.target.value)}>
-        <option value="">选择一个版本查看</option>
-        {data.history.map((snapshot) => <option key={snapshot.revision} value={snapshot.revision}>第 {snapshot.revision} 版 · {snapshot.adopted ? '已采纳' : '已提交'} · {formatWorkspaceTime(snapshot.submittedAt)}</option>)}
+    </> : <DeliverySnapshot snapshot={{ revision: data.revision, summary: data.summary, declaredFiles: data.declaredFiles, additionalFiles: data.additionalFiles, submitter: data.submitter ?? cw("成员"), submittedAt: data.submittedAt ?? '', adopted: data.state === 'adopted' }} showAdditional={hasMaterialSelection} busy={busy} onPreview={onPreview} />}
+    {data.history?.length ? <section className="collaboration-workspace-delivery-history" data-testid="delivery-history" aria-label={cw("历史版本")}>
+      <label>{cw("历史版本（{{count}}）", { count: data.history.length })} <select aria-label={cw("选择历史版本")} value={historicalSnapshot ? historyRevision : ''} onChange={(event) => setHistoryRevision(event.target.value)}>
+        <option value="">{cw("选择一个版本查看")}</option>
+        {data.history.map((snapshot) => <option key={snapshot.revision} value={snapshot.revision}>{cw("第 {{revision}} 版 · {{status}}", { revision: snapshot.revision, status: snapshot.adopted ? cw("已采纳") : cw("已提交") })} · {formatWorkspaceTime(snapshot.submittedAt)}</option>)}
       </select></label>
       {historicalSnapshot ? <div className="collaboration-workspace-delivery-history-version" data-testid="delivery-history-version"><DeliverySnapshot snapshot={historicalSnapshot} showAdditional={hasMaterialSelection} busy={busy} onPreview={onPreview} /></div> : null}
     </section> : null}
-    {pickerOpen && materialSelection && !editingDisabled ? <DeliveryMaterialPicker selection={materialSelection} declaredFiles={data.declaredFiles} additionalFiles={additionalFiles} onClose={() => setPickerOpen(false)} onConfirm={(selected) => { updateFiles(selected); setPickerOpen(false) }} /> : null}
+    {requiredPicker && materialSelection && onDeclaredMaterialChange && !materialPickerBlocked ? <DeliveryMaterialPicker disabled={busy} requiredOutput={requiredPicker} selection={materialSelection} declaredFiles={[]} additionalFiles={[]} onClose={() => setRequiredPicker(null)} onConfirm={(selected) => { if (selected[0]) onDeclaredMaterialChange(selected[0]); setRequiredPicker(null) }} /> : null}
+    {pickerOpen && materialSelection && !materialPickerBlocked ? <DeliveryMaterialPicker disabled={busy} selection={materialSelection} declaredFiles={data.declaredFiles} additionalFiles={additionalFiles} onClose={() => setPickerOpen(false)} onConfirm={(selected) => { updateFiles(selected); setPickerOpen(false) }} /> : null}
     {confirmOpen ? <DeliveryDialog titleId={confirmTitleId} testId="delivery-submit-confirmation" busy={locked} onClose={() => setConfirmOpen(false)}>
-      <h2 id={confirmTitleId}>提交第 {data.revision} 版？</h2>
-      <p>提交后打包封存，之后不能再修改。负责人会收到通知。</p>
+      <h2 id={confirmTitleId}>{cw("提交第 {{revision}} 版？", { revision: data.revision })}</h2>
+      <p>{cw("提交后打包封存，之后不能再修改。负责人会收到通知。")}</p>
       {submissionPending ? <p role="status" aria-live="polite" data-testid="delivery-submit-progress">{progressLabel}</p> : null}
-      <div className="collaboration-workspace-delivery-confirm-summary"><h3>结果说明摘要</h3><p data-testid="delivery-confirm-summary">{text.trim().length > 240 ? `${text.trim().slice(0, 240)}…` : text.trim()}</p></div>
-      <section className="collaboration-workspace-delivery-confirm-files" aria-label="全部提交文件">
-        <h3>提交内容</h3>
-        <ul>{files.map((file) => <li key={file.id} data-testid="delivery-confirm-file"><strong>{file.name}</strong><span>{data.declaredFiles.some((declared) => declared.id === file.id) ? '必交 · AI 产出' : deliverySourceLabel(file.source)}</span><small>{formatBytes(file.byteCount)}</small></li>)}</ul>
+      <div className="collaboration-workspace-delivery-confirm-summary"><h3>{cw("结果说明摘要")}</h3><p data-testid="delivery-confirm-summary">{text.trim().length > 240 ? `${text.trim().slice(0, 240)}…` : text.trim()}</p></div>
+      <section className="collaboration-workspace-delivery-confirm-files" aria-label={cw("全部提交文件")}>
+        <h3>{cw("提交内容")}</h3>
+        <ul>{files.map((file) => <li key={file.id} data-testid="delivery-confirm-file"><strong>{file.name}</strong><span>{data.declaredFiles.some((declared) => declared.id === file.id) ? cw("必交 · {{value0}}", { value0: deliverySourceLabel(file.source) }) : deliverySourceLabel(file.source)}</span><small>{formatBytes(file.byteCount)}</small></li>)}</ul>
       </section>
       <DeliveryTotal files={files} showLimit={hasMaterialSelection} />
       {visibleSubmitError ? <p className="collaboration-workspace-delivery-limit-error" data-testid="delivery-submit-error" role="alert">{visibleSubmitError}</p> : null}
       <div className="collaboration-workspace-dialog-actions">
-        <button type="button" className="collaboration-workspace-button-secondary" data-testid="delivery-submit-cancel" data-autofocus disabled={locked} onClick={() => setConfirmOpen(false)}>再看看</button>
-        <button type="button" className="collaboration-workspace-button-primary" data-testid="delivery-submit-confirm" disabled={!canSubmit} onClick={() => { void submit() }}>{submissionPending ? '提交中…' : '提交'}</button>
+        <button type="button" className="collaboration-workspace-button-secondary" data-testid="delivery-submit-cancel" data-autofocus disabled={locked} onClick={() => setConfirmOpen(false)}>{cw("再看看")}</button>
+        <button type="button" className="collaboration-workspace-button-primary" data-testid="delivery-submit-confirm" disabled={!canSubmit} onClick={() => { void submit() }}>{submissionPending ? cw("提交中…") : cw("提交")}</button>
       </div>
     </DeliveryDialog> : null}
   </section>

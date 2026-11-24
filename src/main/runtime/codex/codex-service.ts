@@ -1,6 +1,6 @@
 import { TASK_EXECUTION_GUIDANCE } from '../agent-runtime/task-execution-guidance'
 import { createHash } from 'node:crypto'
-import { realpath, rm } from 'node:fs/promises'
+import { realpath, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CODEX_MINIMAL_BASE_INSTRUCTIONS, codexMinimalContextConfig } from './codex-minimal-context'
 import {
@@ -614,7 +614,13 @@ export class CodexRuntimeService {
         ...(options.archivedOnly === true ? { archivedOnly: true } : {})
       })
       const liveThreads = readThreadList(response).map(normalizeThread)
-      const knownLiveThreads = liveThreads.filter((thread) => isKnownStoredThread(thread, stored))
+      const knownLiveThreads = liveThreads.filter((thread) => isKnownStoredThread(thread, stored)).map((thread) => {
+        const owned = stored.find((entry) => entry.codexThreadId === (thread.codexThreadId ?? thread.id))
+        // Native discovery reports rollout metadata, which can retain the
+        // original cwd after a session workspace mutation. Durable ownership
+        // supplies the current workspace for both persistence and list results.
+        return owned ? { ...thread, workspace: owned.workspace, workspaceDisplayName: owned.workspaceDisplayName } : thread
+      })
       const persisted = await this.persistThreads(knownLiveThreads, {
         preserveArchived: true
       })
@@ -835,8 +841,6 @@ export class CodexRuntimeService {
           await this.threadStore?.upsert({
             guiThreadId: stored.guiThreadId,
             codexThreadId: stored.codexThreadId,
-            workspace: stored.workspace,
-            title: stored.title,
             latestSeq,
             ...(latestTurnId ? { latestTurnId } : {}),
             latestTurnStatus: durableStatus
@@ -1180,6 +1184,39 @@ export class CodexRuntimeService {
     return this.archiveThread(threadId, true)
   }
 
+  async updateThreadWorkspace(threadId: string, workspace: string): Promise<CodexThreadMutationResult> {
+    try {
+      const stored = await this.findStoredThread(threadId)
+      if (!stored || !this.threadStore) throw new Error('Cannot update workspace of an unknown Codex session.')
+      if (this.activeTurns.has(stored.guiThreadId) || this.turnAdmission || this.historyEditsInFlight.has(stored.guiThreadId)) {
+        throw new Error('Wait for the current Codex operation to finish before changing its workspace.')
+      }
+      if (!workspace.trim()) throw new Error('Session workspace is required.')
+      const resolved = await realpath(workspace)
+      if (!(await stat(resolved)).isDirectory()) throw new Error('Session workspace must be a directory.')
+      const settings = await this.options.settings()
+      const { client } = await this.ensureConnectedClient()
+      const allowedTools = this.allowedToolsByThread.get(stored.guiThreadId)
+      // Warm resumes retain the loaded session configuration. Release this idle
+      // thread so the exact same rollout is restored with the requested cwd.
+      const released = asRecord(await client.request('thread/unsubscribe', { threadId: stored.codexThreadId }))
+      if (!['unsubscribed', 'notLoaded'].includes(stringValue(released?.status))) {
+        throw new Error('Codex cannot safely refresh the workspace for this thread.')
+      }
+      if (!await this.tryResumeNativeThread({ client, settings,
+        threadId: stored.codexThreadId, workspace: resolved, allowedTools: allowedTools ? [...allowedTools] : undefined })) {
+        throw new Error('Cannot change workspace without restoring the existing native Codex thread.')
+      }
+      await this.threadStore.upsert({
+        guiThreadId: stored.guiThreadId, codexThreadId: stored.codexThreadId,
+        workspace: resolved, workspaceDisplayName: ''
+      })
+      return { ok: true }
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
   async archiveThread(threadId: string, archived: boolean): Promise<CodexThreadMutationResult> {
     try {
       const stored = await this.findStoredThread(threadId)
@@ -1326,7 +1363,8 @@ export class CodexRuntimeService {
       const session = this.clientSession
       const dispatch = async (): Promise<unknown> => {
         await this.configureNativeToolPolicy({ client, settings, threadId: codexThreadId,
-          guiThreadId: payload.threadId, workspace, allowedTools })
+          guiThreadId: payload.threadId, workspace, allowedTools,
+          disableNativeWebSearch: codexStructuredJsonObjectTurn(settings, payload.outputSchema) })
         const params = await turnStartParams({
           threadId: codexThreadId,
           guiThreadId: payload.threadId,
@@ -1380,7 +1418,8 @@ export class CodexRuntimeService {
           settings,
           threadId: codexThreadId,
           workspace,
-          allowedTools
+          allowedTools,
+          disableNativeWebSearch: codexStructuredJsonObjectTurn(settings, payload.outputSchema)
         })) {
           try {
             response = await dispatch()
@@ -1397,6 +1436,7 @@ export class CodexRuntimeService {
             storedThread,
             workspace,
             allowedTools,
+            disableNativeWebSearch: codexStructuredJsonObjectTurn(settings, payload.outputSchema),
             replayHistory: true
           })
           const replacementReplay = await this.takePendingHistoryReplay(payload.threadId)
@@ -3569,8 +3609,6 @@ export class CodexRuntimeService {
     await this.threadStore?.upsert({
       guiThreadId,
       codexThreadId: storedThread.codexThreadId,
-      workspace: storedThread.workspace,
-      title: storedThread.title,
       latestSeq: stored.seq,
       ...(turnId ? { latestTurnId: turnId } : {}),
       ...(turnStatus ? { latestTurnStatus: turnStatus } : {}),
@@ -3679,13 +3717,15 @@ export class CodexRuntimeService {
       const nativeThreadId = storedThread?.codexThreadId ?? event.threadId
       const resumed = await this.tryResumeNativeThread({
         client, settings, threadId: nativeThreadId, workspace: recovery.workspace,
-        allowedTools: recovery.allowedTools
+        allowedTools: recovery.allowedTools,
+        disableNativeWebSearch: codexStructuredJsonObjectTurn(settings, recovery.outputSchema)
       })
       // A routing configuration change does not invalidate native conversation history.
       // Replace only when the provider confirms that the original session is unavailable.
       const retryThreadId = resumed ? nativeThreadId : (await this.rematerializeThread({
         client, settings, guiThreadId: event.threadId, storedThread,
         workspace: recovery.workspace, allowedTools: recovery.allowedTools,
+        disableNativeWebSearch: codexStructuredJsonObjectTurn(settings, recovery.outputSchema),
         replayHistory: true, replayExcludeText: recovery.text
       })).codexThreadId
       const replay = resumed ? null : await this.takePendingHistoryReplay(event.threadId)
@@ -3694,6 +3734,11 @@ export class CodexRuntimeService {
         allowedTools: recovery.allowedTools,
         ownedVisualToolsAvailable: recovery.ownedVisualToolsAvailable,
         nativeVisualProofChainPending: recovery.nativeVisualProofChainPending
+      })
+      await this.configureNativeToolPolicy({
+        client, settings, threadId: retryThreadId, guiThreadId: event.threadId,
+        workspace: recovery.workspace, allowedTools: recovery.allowedTools,
+        disableNativeWebSearch: codexStructuredJsonObjectTurn(settings, recovery.outputSchema)
       })
       const response = await client.startTurn(
         await turnStartParams({
@@ -4003,6 +4048,7 @@ export class CodexRuntimeService {
     replayHistory?: boolean
     replayExcludeText?: string
     allowedTools?: readonly string[]
+    disableNativeWebSearch?: boolean
   }): Promise<CodexStoredThread> {
     const threadPolicy = this.allowedToolsByThread.get(input.guiThreadId)
     const allowedTools = input.allowedTools ?? (threadPolicy ? [...threadPolicy] : undefined)
@@ -4013,13 +4059,13 @@ export class CodexRuntimeService {
         dynamicTools
       }),
       ...codexModelAccessThreadParams(input.settings),
-      config: codexToolFreeConfig(allowedTools),
+      config: codexToolFreeConfig(allowedTools, input.disableNativeWebSearch),
       serviceName: 'SciForge',
       ephemeral: false
     })
     const thread = normalizeThread(readThread(response))
     this.nativeToolFreeThreads.set(thread.id, { client: input.client,
-      enabled: allowedTools?.length === 0 })
+      enabled: allowedTools?.length === 0 || input.disableNativeWebSearch === true })
     if (!thread.id) throw new Error('Codex app-server did not return a replacement thread id.')
     const stored = await this.persistThread(thread, {
       guiThreadId: input.storedThread?.guiThreadId ?? input.guiThreadId,
@@ -4072,6 +4118,7 @@ export class CodexRuntimeService {
     threadId: string
     workspace: string
     allowedTools?: readonly string[]
+    disableNativeWebSearch?: boolean
   }): Promise<boolean> {
     if (typeof input.client.resumeThread !== 'function') return false
     try {
@@ -4079,11 +4126,11 @@ export class CodexRuntimeService {
         threadId: input.threadId,
         ...baseThreadParams(input.settings, input.workspace),
         ...codexModelAccessThreadParams(input.settings),
-        config: codexToolFreeConfig(input.allowedTools)
+        config: codexToolFreeConfig(input.allowedTools, input.disableNativeWebSearch)
       })
       const resumed = normalizeThread(readThread(response))
       if (resumed.id === input.threadId) {
-        this.nativeToolFreeThreads.set(resumed.id, { client: input.client, enabled: input.allowedTools?.length === 0 })
+        this.nativeToolFreeThreads.set(resumed.id, { client: input.client, enabled: input.allowedTools?.length === 0 || input.disableNativeWebSearch === true })
       }
       return resumed.id === input.threadId
     } catch (error) {
@@ -4099,8 +4146,9 @@ export class CodexRuntimeService {
     guiThreadId: string
     workspace: string
     allowedTools?: readonly string[]
+    disableNativeWebSearch?: boolean
   }): Promise<void> {
-    const enabled = input.allowedTools?.length === 0
+    const enabled = input.allowedTools?.length === 0 || input.disableNativeWebSearch === true
     const previous = this.nativeToolFreeThreads.get(input.threadId)
     if (previous?.client === input.client && previous.enabled === enabled) return
     if (!enabled && !previous?.enabled) return
@@ -4428,8 +4476,6 @@ export class CodexRuntimeService {
     await this.threadStore.upsert({
       guiThreadId: stored.guiThreadId,
       codexThreadId: stored.codexThreadId,
-      workspace: stored.workspace,
-      title: stored.title,
       latestSeq: stored.latestSeq,
       latestTurnId: turnId,
       latestTurnStatus
@@ -5886,8 +5932,14 @@ function safeUsageInteger(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
 }
 
-function codexToolFreeConfig(allowedTools?: readonly string[]): Record<string, unknown> {
-  return allowedTools?.length === 0 ? { web_search: 'disabled' } : {}
+function codexStructuredJsonObjectTurn(settings: AppSettingsV1, outputSchema?: Readonly<Record<string, unknown>>): boolean {
+  const reasoner = getModelRouterSettings(settings).profiles.default.textReasoner
+  return Boolean(outputSchema) && getModelAccessSettings(settings)?.mode === 'api' &&
+    reasoner.chatStructuredOutputMode === 'json_object' && reasoner.protocol !== 'anthropic-messages'
+}
+
+function codexToolFreeConfig(allowedTools?: readonly string[], disableNativeWebSearch = false): Record<string, unknown> {
+  return allowedTools?.length === 0 || disableNativeWebSearch ? { web_search: 'disabled' } : {}
 }
 
 function isMissingOrUnmaterializedThreadError(error: unknown): boolean {

@@ -40,7 +40,7 @@ describe('development plugin panel handshake', () => {
     await act(async () => root.render(createElement(DevelopmentPluginPanelHost, {
       contribution: { ...descriptor, entryUrl: 'about:blank' }, active: true, ...props
     })))
-    return container.querySelector('iframe')!
+    return document.querySelector('iframe')!
   }
 
   async function ready(frame: HTMLIFrameElement): Promise<void> {
@@ -56,10 +56,60 @@ describe('development plugin panel handshake', () => {
     const initialized = send.mock.calls.length
     await ready(frame)
     expect(send).toHaveBeenCalledTimes(initialized)
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(document.querySelector('[role="status"]')).toBeNull()
     expect(await render({ ...contribution })).toBe(frame)
     expect(send).toHaveBeenCalledTimes(initialized)
     expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+  })
+
+  it('floats the same sandbox beside source and restores it without remounting or losing authority binding', async () => {
+    const frame = await render(contribution, { workspaceRoot: '/ws', sessionId: 's', runtimeId: 'r' })
+    await ready(frame)
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage')
+    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
+      data: { type: 'presentation.set', input: { mode: 'floating' } } })))
+    const dialog = document.querySelector('[data-floating-plugin-panel]') as HTMLElement
+    expect(dialog).not.toBeNull()
+    expect(dialog.contains(frame)).toBe(true)
+    expect(frame.isConnected).toBe(true)
+    expect(post).not.toHaveBeenCalledWith({ type: 'dispose' }, '*')
+    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
+      data: { type: 'presentation.set', input: { mode: 'docked' } } })))
+    expect(document.querySelector('iframe')).toBe(frame)
+    expect(document.querySelector('[data-floating-plugin-panel]')).toBeNull()
+  })
+
+  it('clamps pointer drag, resize and viewport shrink while preserving iframe identity', async () => {
+    const frame = await render()
+    await ready(frame)
+    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow,
+      data: { type: 'presentation.set', input: { mode: 'floating' } } })))
+    const panel = document.querySelector<HTMLElement>('[data-floating-plugin-panel]')!
+    const header = panel.querySelector('header')!
+    await act(async () => {
+      header.dispatchEvent(new PointerEvent('pointerdown', { clientX: 25, clientY: 75, button: 0, bubbles: true }))
+      header.dispatchEvent(new PointerEvent('pointermove', { clientX: -1000, clientY: 2000, bubbles: true }))
+      header.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+    })
+    expect(panel.style.left).toBe('0px')
+    expect(Number.parseInt(panel.style.top) + Number.parseInt(panel.style.height)).toBeLessThanOrEqual(innerHeight)
+    const resize = panel.querySelector<HTMLElement>('[aria-label="Resize plugin panel"]')!
+    await act(async () => {
+      resize.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, button: 0, bubbles: true }))
+      resize.dispatchEvent(new PointerEvent('pointermove', { clientX: 5000, clientY: 5000, bubbles: true }))
+      resize.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+    })
+    expect(panel.style.width).toBe(`${innerWidth}px`)
+    expect(panel.style.height).toBe(`${innerHeight}px`)
+    vi.stubGlobal('innerWidth', 240); vi.stubGlobal('innerHeight', 180)
+    await act(async () => window.dispatchEvent(new Event('resize')))
+    expect(panel.style.width).toBe('240px'); expect(panel.style.height).toBe('180px')
+    expect(panel.querySelector('iframe')).toBe(frame)
+    await act(async () => header.dispatchEvent(new PointerEvent('pointerdown', { clientX: 1, clientY: 1, button: 0, bubbles: true })))
+    const remove = vi.spyOn(header, 'removeEventListener')
+    await render(contribution, { active: false })
+    expect(remove).toHaveBeenCalledWith('pointermove', expect.any(Function))
+    expect(remove).toHaveBeenCalledWith('lostpointercapture', expect.any(Function))
   })
 
   it('keeps a ready frame visible across equivalent contributions and uses the latest host callbacks', async () => {
@@ -81,9 +131,9 @@ describe('development plugin panel handshake', () => {
     })).toBe(frame)
     expect(send).not.toHaveBeenCalled()
     expect(frame.classList.contains('opacity-0')).toBe(false)
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(document.querySelector('[role="status"]')).toBeNull()
     await act(async () => vi.advanceTimersByTime(20_000))
-    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
     await act(async () => {
       window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data: { type: 'collapse' } }))
       window.dispatchEvent(new MessageEvent('message', {
@@ -112,7 +162,7 @@ describe('development plugin panel handshake', () => {
       type: 'host.init', workspaceRoot: '/new', sessionId: 'new-session', activation
     }), '*')
     expect(frame.classList.contains('opacity-0')).toBe(false)
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(document.querySelector('[role="status"]')).toBeNull()
     await ready(frame)
     expect(send).toHaveBeenCalledTimes(1)
     await act(async () => window.dispatchEvent(new MessageEvent('message', {
@@ -177,7 +227,7 @@ describe('development plugin panel handshake', () => {
     expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'dispose' }, '*')
     expect(replacement.classList.contains('opacity-0')).toBe(true)
     await ready(frame)
-    expect(container.querySelector('[role="status"]')).not.toBeNull()
+    expect(document.querySelector('[role="status"]')).not.toBeNull()
     await ready(replacement)
     expect(replacement.classList.contains('opacity-0')).toBe(false)
   })
@@ -185,14 +235,14 @@ describe('development plugin panel handshake', () => {
   it('reports a timeout, recreates the frame on retry and rejects stale-frame messages', async () => {
     const frame = await render()
     await act(async () => vi.advanceTimersByTime(10_000))
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain('pluginPanelLoadFailed')
-    await act(async () => container.querySelector('button')!.click())
-    const retried = container.querySelector('iframe')!
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('pluginPanelLoadFailed')
+    await act(async () => document.querySelector('button')!.click())
+    const retried = document.querySelector('iframe')!
     expect(retried).not.toBe(frame)
     await ready(frame)
-    expect(container.querySelector('[role="status"]')).not.toBeNull()
+    expect(document.querySelector('[role="status"]')).not.toBeNull()
     await ready(retried)
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(document.querySelector('[role="status"]')).toBeNull()
   })
 
   it('drops pending inventory results and stale requests after a generation switch', async () => {
@@ -425,9 +475,9 @@ describe('development plugin panel handshake', () => {
     const send = vi.spyOn(frame.contentWindow!, 'postMessage')
     const next = await render({ ...contribution, capabilityIds: ['test.read'] }, { workspaceRoot: '/second', sessionId: 'second-thread', runtimeId: 'dsh' })
     expect(next).toBe(frame)
-    expect(container.querySelector('[role="status"]')).toBeNull()
+    expect(document.querySelector('[role="status"]')).toBeNull()
     await act(async () => vi.advanceTimersByTime(10_000))
-    expect(container.querySelector('[role="alert"]')).toBeNull()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
     expect(send.mock.calls.some(([message]) => message.type === 'dispose')).toBe(false)
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'host.init', workspaceRoot: '/second', sessionId: 'second-thread', runtimeId: 'dsh', capabilityIds: ['test.read'], locale: 'en' }), '*')
   })

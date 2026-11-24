@@ -256,7 +256,7 @@ export function extractCheckpointFromTurn(
     breakpoints.push({
       code: 'narrative-missing',
       blocking: true,
-      message: 'The completed turn did not expose a durable assistant narrative.'
+      message: 'The terminal turn did not expose a durable assistant narrative.'
     })
   }
 
@@ -339,6 +339,7 @@ export function extractCheckpointFromTurn(
     turn: {
       turnId: event.turnId,
       targetWatermark: event.targetWatermark,
+      terminalState: event.kind === 'turn-terminated' ? event.terminalState : 'completed',
       ...(event.sequence === undefined ? {} : { sequence: event.sequence }),
       occurredAt: event.occurredAt
     },

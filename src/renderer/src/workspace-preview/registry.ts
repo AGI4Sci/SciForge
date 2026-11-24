@@ -1,5 +1,9 @@
 import type { ReactElement } from 'react'
-import type { RendererWorkspacePreviewPluginSlotContribution } from '@sciforge/domain-sdk/workspace-preview'
+import type {
+  RendererWorkspacePreviewPluginSlotContribution,
+  WorkspacePreviewResourceContent,
+  WorkspacePreviewResourceRendererInput
+} from '@sciforge/domain-sdk/workspace-preview'
 import type {
   WorkspacePreviewApplyEditResult,
   WorkspacePreviewExportResult,
@@ -103,7 +107,8 @@ export type RendererWorkspacePreviewPluginContribution =
     WorkspacePreviewActionContribution,
     (observation: WorkspaceObservation) => readonly WorkspacePreviewInspectorSection[],
     WorkspaceStructuredSelection['kind'],
-    (selection: WorkspaceStructuredSelection) => WorkspacePreviewInspectorSection
+    (selection: WorkspaceStructuredSelection) => WorkspacePreviewInspectorSection,
+    (input: WorkspacePreviewResourceRendererInput) => ReactElement | null
   >
 
 export type RendererWorkspacePreviewPluginRegistrationInput = {
@@ -120,6 +125,7 @@ export type RendererWorkspacePreviewPluginDescriptor = Readonly<{
 export type RendererWorkspacePreviewResolveInput = {
   path: string
   mimeType?: string
+  resourceContentKind?: WorkspacePreviewResourceContent['kind']
 }
 
 export type RendererWorkspacePreviewPluginRegistrationDisposable = {
@@ -190,7 +196,10 @@ export function createRendererWorkspacePreviewRegistry(
       const manifest = resolveWorkspacePreviewPlugin({
         path: input.path,
         mimeType: input.mimeType,
-        manifests: registry.manifests()
+        manifests: registry.list()
+          .filter(({ contribution }) => input.resourceContentKind === undefined ||
+            contribution.resource?.contentKinds.includes(input.resourceContentKind))
+          .map(({ manifest }) => manifest)
       })
       if (manifest) return registry.get(manifest.id)
       return null

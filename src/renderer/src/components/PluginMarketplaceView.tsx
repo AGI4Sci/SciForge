@@ -512,10 +512,10 @@ export function PluginMarketplaceView(): ReactElement {
       <div className="mx-auto max-w-6xl">
         <header className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div>
-            <h1 className="text-[30px] font-semibold text-ds-ink md:text-[36px]">
+            <h1 className="text-ds-6xl font-semibold text-ds-ink md:text-[36px]">
               {t('extensionCenterTitle')}
             </h1>
-            <p className="mt-2 max-w-2xl text-[14px] leading-6 text-ds-muted">
+            <p className="mt-2 max-w-2xl text-ds-lg leading-6 text-ds-muted">
               {t('extensionCenterDescription')}
             </p>
           </div>
@@ -524,7 +524,7 @@ export function PluginMarketplaceView(): ReactElement {
               <button
                 type="button"
                 onClick={() => void openManageTarget()}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-ds-md font-semibold text-ds-ink transition hover:bg-ds-hover"
               >
                 <Settings className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
                 {t('pluginManageSkills')}
@@ -532,7 +532,7 @@ export function PluginMarketplaceView(): ReactElement {
               <button
                 type="button"
                 onClick={() => setCustomOpen((value) => !value)}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
               >
                 <Plus className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
                 {t('pluginCreateSkill')}
@@ -575,7 +575,7 @@ export function PluginMarketplaceView(): ReactElement {
                     document.getElementById(`extension-center-${nextTab}-tab`)?.focus()
                   })
                 }}
-                className={`border-b-2 px-4 py-3 text-[14px] font-semibold transition ${
+                className={`border-b-2 px-4 py-3 text-ds-lg font-semibold transition ${
                   selected
                     ? 'border-[var(--ds-accent)] text-ds-ink'
                     : 'border-transparent text-ds-muted hover:text-ds-ink'
@@ -610,8 +610,8 @@ export function PluginMarketplaceView(): ReactElement {
             aria-labelledby="extension-center-skills-tab"
           >
             <div className="mt-7">
-              <h2 className="text-[24px] font-semibold text-ds-ink">{t('pluginSkillTitle')}</h2>
-              <p className="mt-1 text-[13px] leading-5 text-ds-muted">
+              <h2 className="text-ds-5xl font-semibold text-ds-ink">{t('pluginSkillTitle')}</h2>
+              <p className="mt-1 text-ds-md leading-5 text-ds-muted">
                 {t('pluginSkillPageDescription')}
               </p>
             </div>
@@ -626,7 +626,7 @@ export function PluginMarketplaceView(): ReactElement {
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-[15px] text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+                  className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-ds-xl text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
                   placeholder={t('pluginSearchSkill')}
                 />
               </label>
@@ -635,7 +635,7 @@ export function PluginMarketplaceView(): ReactElement {
                 <select
                   value={filter}
                   onChange={(event) => setFilter(event.target.value as SkillFilter)}
-                  className="h-11 w-full appearance-none rounded-2xl border border-ds-border bg-ds-card px-4 pr-9 text-[15px] font-medium text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+                  className="h-11 w-full appearance-none rounded-2xl border border-ds-border bg-ds-card px-4 pr-9 text-ds-xl font-medium text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
                 >
                   <option value="all">{t('pluginFilterAll')}</option>
                   <option value="recommended">{t('pluginFilterRecommended')}</option>
@@ -653,7 +653,7 @@ export function PluginMarketplaceView(): ReactElement {
                 value={selectedSkillRoot?.id ?? ''}
                 aria-label={t('pluginSkillRootLabel')}
                 onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
-                className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+                className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-ds-md text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
               >
                 {skillRootOptions.map((option) => (
                   <option key={option.id} value={option.id} disabled={!option.available}>
@@ -664,7 +664,7 @@ export function PluginMarketplaceView(): ReactElement {
               <button
                 type="button"
                 onClick={() => void openManageTarget()}
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
               >
                 <FolderOpen className="h-4 w-4" aria-hidden="true" />
                 {t('pluginOpenLocation')}
@@ -673,7 +673,7 @@ export function PluginMarketplaceView(): ReactElement {
                 type="button"
                 onClick={() => void refreshSkillList()}
                 disabled={skillListLoading}
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-ds-md font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {skillListLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -683,11 +683,11 @@ export function PluginMarketplaceView(): ReactElement {
                 {t('pluginSkillRefresh')}
               </button>
               {skillListError ? (
-                <span className="text-[12px] text-red-700 dark:text-red-300">
+                <span className="text-ds-sm text-red-700 dark:text-red-300">
                   {skillListError}
                 </span>
               ) : (
-                <span className="text-[12px] text-ds-faint">
+                <span className="text-ds-sm text-ds-faint">
                   {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
                 </span>
               )}
@@ -767,11 +767,11 @@ function SkillSection({
 }): ReactElement {
   return (
     <section className="mt-8">
-      <h2 className="border-b border-ds-border-muted pb-3 text-[20px] font-semibold text-ds-ink">
+      <h2 className="border-b border-ds-border-muted pb-3 text-ds-3xl font-semibold text-ds-ink">
         {title}
       </h2>
       {items.length === 0 ? (
-        <div className="py-8 text-[14px] text-ds-faint">{emptyText}</div>
+        <div className="py-8 text-ds-lg text-ds-faint">{emptyText}</div>
       ) : (
         <div className="grid gap-x-14 md:grid-cols-2">
           {items.map((item) => {
@@ -785,18 +785,18 @@ function SkillSection({
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-[17px] font-semibold text-ds-ink">
+                    <span className="truncate text-ds-2xl font-semibold text-ds-ink">
                       {itemTitle(item, t)}
                     </span>
                     {item.sourceLabel ? (
                       <span
-                        className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${skillSourceTone(item.statusTone)}`}
+                        className={`shrink-0 rounded-md px-2 py-0.5 text-ds-xs font-semibold ${skillSourceTone(item.statusTone)}`}
                       >
                         {item.sourceLabel}
                       </span>
                     ) : null}
                   </div>
-                  <p className="mt-1 line-clamp-2 text-[14px] leading-5 text-ds-muted">
+                  <p className="mt-1 line-clamp-2 text-ds-lg leading-5 text-ds-muted">
                     {itemDescription(item, t)}
                   </p>
                 </div>
@@ -855,14 +855,14 @@ function CustomSkillPanel({
           value={customName}
           onChange={(event) => onNameChange(event.target.value)}
           aria-label={t('pluginCustomName')}
-          className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-[14px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+          className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-ds-lg text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
           placeholder={t('pluginCustomName')}
         />
         <input
           value={customDescription}
           onChange={(event) => onDescriptionChange(event.target.value)}
           aria-label={t('pluginCustomDescription')}
-          className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-[14px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+          className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-ds-lg text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
           placeholder={t('pluginCustomDescription')}
         />
       </div>
@@ -870,7 +870,7 @@ function CustomSkillPanel({
         value={customSkillBody}
         onChange={(event) => onSkillBodyChange(event.target.value)}
         aria-label={t('pluginCustomSkillBody')}
-        className="mt-3 min-h-[140px] w-full rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-[13px] leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+        className="mt-3 min-h-[140px] w-full rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-ds-md leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
         placeholder={t('pluginCustomSkillBody')}
         spellCheck={false}
       />
@@ -879,7 +879,7 @@ function CustomSkillPanel({
           type="button"
           onClick={onAdd}
           disabled={busy}
-          className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-55"
+          className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-55"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} /> : <Plus className="h-4 w-4" strokeWidth={2} />}
           {t('pluginAddCustom')}

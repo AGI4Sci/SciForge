@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { workerFollowupViewSchema } from './task-followup.js'
 import {
   cloudProjectDashboardSchema,
   dashboardCommentDraftSchema,
@@ -38,14 +39,19 @@ export const COLLABORATION_CAPABILITY_IDS = Object.freeze({
   taskList: 'collaboration.task.list',
   workerDeliveryRead: 'collaboration.worker-delivery.read',
   workerDeliveryMaterialsList: 'collaboration.worker-delivery.materials.list',
+  workerDeliveryMaterialImport: 'collaboration.worker-delivery.material.import',
   workerDeliveryDraftSave: 'collaboration.worker-delivery.draft.save',
   deliverySubmit: 'collaboration.delivery.submit',
+  workerDeliveryCancel: 'collaboration.worker-delivery.cancel',
   workerResidualDispose: 'collaboration.worker-residual.dispose',
   taskInteractionRead: 'collaboration.task.interaction.read',
   taskCheckpointAppend: 'collaboration.task.checkpoint.append',
   taskOfferDecide: 'collaboration.task.offer.decide',
   taskReturn: 'collaboration.task.return',
+  taskStart: 'collaboration.task.start',
+  taskPause: 'collaboration.task.pause',
   taskSessionOpen: 'collaboration.task.session.open',
+  taskSessionContinue: 'collaboration.task.session.continue',
   managedContainerInspect: 'collaboration.managed-container.inspect',
   managedContainerProvision: 'collaboration.managed-container.provision',
   managedContainerArchive: 'collaboration.managed-container.archive',
@@ -208,6 +214,7 @@ export const collaborationOfferAvailabilitySchema = z.object({
 export type CollaborationOfferAvailability = z.infer<typeof collaborationOfferAvailabilitySchema>
 
 export const collaborationTaskViewSchema = z.object({
+  followup: workerFollowupViewSchema.optional(),
   taskId: idSchema,
   projectId: idSchema,
   taskOfferId: idSchema,
@@ -217,6 +224,7 @@ export const collaborationTaskViewSchema = z.object({
   contractDigest: sha256Schema.optional(),
   assigneeAgentId: idSchema.optional(),
   hasDedicatedSession: z.boolean(),
+  executionMode: z.enum(['unselected', 'manual', 'ai']).optional(),
   revision: z.number().int().positive(),
   title: displayTextSchema,
   state: z.enum([
@@ -271,6 +279,17 @@ export const collaborationTaskSessionOpenResultSchema = z.object({
   threadId: idSchema
 }).strict()
 export type CollaborationTaskSessionOpenResult = z.infer<typeof collaborationTaskSessionOpenResultSchema>
+
+export const collaborationTaskSessionContinueInputSchema = z.object({
+  projectId: idSchema, taskId: idSchema, executionId: idSchema,
+  predecessorRuntimeId: idSchema, predecessorThreadId: idSchema,
+  reason: z.string().trim().min(1).max(1_000)
+}).strict()
+export type CollaborationTaskSessionContinueInput = z.infer<typeof collaborationTaskSessionContinueInputSchema>
+export const collaborationTaskSessionContinueResultSchema = collaborationTaskSessionOpenResultSchema.extend({
+  context: z.string().min(1).max(32_000), clientDirectiveId: idSchema
+}).strict()
+export type CollaborationTaskSessionContinueResult = z.infer<typeof collaborationTaskSessionContinueResultSchema>
 
 export const collaborationProjectViewSchema = z.object({
   projectId: idSchema,
@@ -452,6 +471,35 @@ export const collaborationTaskInteractionReadInputSchema = z.object({
   executionId: idSchema.optional()
 }).strict()
 
+export const collaborationTaskRuntimeDiagnosticsSchema = z.object({
+  agentJournal: z.array(z.object({
+    logicalInvocationId: z.string().max(256),
+    clientDirectiveId: z.string().max(256),
+    runtimeId: z.string().max(128).nullable(),
+    threadId: z.string().max(512).nullable(),
+    turnId: z.string().max(512).nullable(),
+    state: z.enum(['prepared', 'dispatched', 'observed_success', 'observed_failure', 'late_outcome']),
+    runtimeState: z.enum(['completed', 'failed', 'cancelled']).nullable(),
+    preparedAt: isoDateSchema,
+    dispatchedAt: isoDateSchema.nullable(),
+    observedAt: isoDateSchema.nullable(),
+    safeError: z.string().max(1_000).nullable(),
+    failure: z.object({
+      code: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u),
+      message: z.string().max(1_000),
+      retryable: z.boolean()
+    }).strict().nullable()
+  }).strict()).max(20),
+  coverage: z.object({
+    total: z.number().int().nonnegative(),
+    included: z.number().int().nonnegative(),
+    omitted: z.number().int().nonnegative(),
+    truncated: z.number().int().nonnegative(),
+    selection: z.literal('recent_then_failures'),
+    sanitized: z.boolean()
+  }).strict()
+}).strict()
+
 export const collaborationTaskInteractionViewSchema = z.object({
   projectId: idSchema,
   taskId: idSchema,
@@ -464,6 +512,7 @@ export const collaborationTaskInteractionViewSchema = z.object({
   interactions: z.array(collaborationTaskInteractionSchema).max(100_000),
   latestInteraction: collaborationTaskInteractionSchema.optional(),
   checkpoints: z.array(collaborationTaskCheckpointSchema).max(20_000),
+  runtimeDiagnostics: collaborationTaskRuntimeDiagnosticsSchema.optional(),
   cloudExecutionState: taskExecutionStateSchema.optional(),
   cloudTaskRevision: z.number().int().positive().optional(),
   localUpdatedAt: isoDateSchema.optional()
@@ -506,6 +555,18 @@ export const collaborationTaskOfferDecisionInputSchema = z.discriminatedUnion('d
 export const collaborationTaskOfferDecisionResultSchema = z.object({
   accepted: z.literal(true)
 }).strict()
+
+/** A member explicitly chooses how this Device performs an accepted task. */
+export const collaborationTaskStartInputSchema = z.object({
+  projectId: idSchema,
+  taskId: idSchema,
+  executionId: idSchema,
+  mode: z.enum(['manual', 'ai'])
+}).strict()
+export const collaborationTaskPauseInputSchema = collaborationTaskStartInputSchema.omit({ mode: true })
+export const collaborationTaskPauseResultSchema = z.object({ paused: z.literal(true) }).strict()
+export const collaborationTaskStartResultSchema = z.object({ started: z.literal(true) }).strict()
+export type CollaborationTaskStartInput = z.infer<typeof collaborationTaskStartInputSchema>
 
 /** Desktop human control; the Cloud failure command remains the authority. */
 export const collaborationTaskReturnInputSchema = z.object({
@@ -588,7 +649,8 @@ export type CollaborationManagedContainerManageInput = z.infer<typeof collaborat
 // package. Keep the public contract entrypoint canonical after consolidation.
 export {
   PROJECT_COORDINATOR_CAPABILITY_IDS,
-  projectCoordinatorProjectCreateResultSchema
+  projectCoordinatorProjectCreateResultSchema,
+  projectCoordinatorWorkspaceReadContract
 } from './coordinator/contract.js'
 export type {
   ProjectCoordinatorProjectCreateResult
@@ -622,3 +684,16 @@ export const collaborationNotificationMarkReadResultSchema = z.object({
 }).strict()
 
 export * from './worker-delivery.js'
+
+
+export {
+  DELIVERY_VALIDATION_ACTION,
+  deliveryValidationSpecSchema,
+  deliveryValidationReferenceSchema,
+  deliveryValidationRecordSchema
+} from './coordinator/delivery-validation-contract.js'
+export type {
+  DeliveryValidationSpec,
+  DeliveryValidationReference,
+  DeliveryValidationRecord
+} from './coordinator/delivery-validation-contract.js'

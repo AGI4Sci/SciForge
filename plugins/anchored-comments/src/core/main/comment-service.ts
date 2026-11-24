@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { inflateSync } from 'node:zlib'
 import { join } from 'node:path'
+import { snapshotConversation } from '../conversation-context'
 import {
-  ANCHORED_COMMENT_SCHEMA_VERSION,
+  ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
   anchoredCommentStoreSchema,
   commentScreenshotAssetRefSchema,
   migrateAnchoredCommentStore,
@@ -130,13 +131,28 @@ export class AnchoredCommentService {
   async upsertThread(value: AnchoredCommentThread): Promise<AnchoredCommentThread> {
     return this.enqueue(async () => {
       const thread = parseAnchoredCommentThread(value)
+      if (new Set(thread.messages.map((message) => message.id)).size !== thread.messages.length) {
+        throw new Error('Conversation message IDs must be unique.')
+      }
       await this.assertCaptureAssetsExist(thread)
       const store = structuredClone(await this.load())
+      assertValidParent(thread.id, thread.parentThreadId, store.threads)
       const index = store.threads.findIndex((item) => item.id === thread.id)
       if (index >= 0) {
         assertImmutableCapture(store.threads[index]!, thread)
         store.threads[index] = thread
       } else {
+        if (thread.fork) {
+          const parent = store.threads.find((item) => item.id === thread.fork!.parentThreadId)
+          if (!parent || parent.workspaceKey !== thread.workspaceKey || !parent.anchor.codeAnchor
+            || parent.purpose !== 'research' || thread.purpose !== 'research'
+            || JSON.stringify(parent.anchor) !== JSON.stringify(thread.anchor)) {
+            throw new Error('Conversation fork requires its saved parent and identical workspace/code anchor.')
+          }
+          const snapshot = snapshotConversation(parent, thread.fork.parentMessageId)
+          if (JSON.stringify(snapshot.messages) !== JSON.stringify(thread.fork.messages)
+            || snapshot.truncated !== thread.fork.truncated) throw new Error('Invalid conversation fork snapshot.')
+        }
         store.threads.push(thread)
         store.threadInstances[thread.id] = randomUUID()
       }
@@ -144,6 +160,47 @@ export class AnchoredCommentService {
       await this.save(store)
       this.loaded = Promise.resolve(store)
       return cloneThread(thread)
+    })
+  }
+
+  /** Reconcile explicit current evidence atomically; never replace the frozen anchor. */
+  async reconcileCodeAnchor(threadId: string, current: NonNullable<AnchoredCommentThread['anchor']['codeAnchor']>): Promise<AnchoredCommentThread> {
+    return this.enqueue(async () => {
+      const store = structuredClone(await this.load())
+      const thread = store.threads.find(item => item.id === threadId)
+      const saved = thread?.anchor.codeAnchor
+      if (!thread || !saved || thread.purpose !== 'research') throw new Error('A saved code conversation is required.')
+      if (current.filePath !== saved.filePath || current.side !== saved.side) throw new Error('Current snapshot must match the saved file and diff side.')
+      const changed = current.baseRevision !== saved.baseRevision || current.contentDigest !== saved.contentDigest
+        || current.line !== saved.line || current.code !== saved.code || current.hunkHeader !== saved.hunkHeader
+      // A stale flag stays sticky until an explicit retargeting workflow establishes new evidence.
+      if (changed && thread.anchorResolution !== 'needs_retargeting') {
+        thread.anchorResolution = 'needs_retargeting'
+        thread.updatedAt = new Date().toISOString()
+        store.updatedAt = thread.updatedAt
+        await this.save(store)
+        this.loaded = Promise.resolve(store)
+      }
+      return cloneThread(thread)
+    })
+  }
+
+  /** Parent context is validated again inside the serialized upsert. */
+  async forkThread(parentId: string, messageId: string, childId: string, body: string): Promise<AnchoredCommentThread> {
+    const existing = await this.getThread(childId)
+    if (existing) {
+      if (existing.fork?.parentThreadId === parentId && existing.fork.parentMessageId === messageId
+        && existing.messages[0]?.body === body.trim()) return existing
+      throw new Error('Child conversation identity is already in use.')
+    }
+    const parent = await this.getThread(parentId)
+    if (!parent?.anchor.codeAnchor || parent.purpose !== 'research') throw new Error('A saved code conversation is required.')
+    const now = new Date().toISOString()
+    return this.upsertThread({
+      ...parent, id: childId,
+      fork: { parentThreadId: parentId, parentMessageId: messageId, ...snapshotConversation(parent, messageId) },
+      messages: [{ id: `${childId}:initial`, authorKind: 'user', body, createdAt: now, updatedAt: now }],
+      status: 'open', feedback: { state: 'local' }, createdAt: now, updatedAt: now
     })
   }
 
@@ -197,6 +254,12 @@ export class AnchoredCommentService {
       const store = structuredClone(await this.load())
       const index = store.threads.findIndex((item) => item.id === id)
       if (index < 0) return { deleted: false }
+      if (store.threads.some((thread) => thread.parentThreadId === id || thread.fork?.parentThreadId === id)) {
+        return {
+          deleted: false,
+          warnings: ['A comment thread with branches cannot be deleted while its child threads still exist.']
+        }
+      }
       const [removed] = store.threads.splice(index, 1)
       delete store.threadInstances[id]
       store.updatedAt = new Date().toISOString()
@@ -294,7 +357,7 @@ export class AnchoredCommentService {
       const rawVersion = raw && typeof raw === 'object' && !Array.isArray(raw)
         ? (raw as { schemaVersion?: unknown }).schemaVersion
         : undefined
-      if (rawVersion !== ANCHORED_COMMENT_SCHEMA_VERSION || threadInstances === undefined) await this.save(internal)
+      if (rawVersion !== ANCHORED_COMMENT_THREAD_SCHEMA_VERSION || threadInstances === undefined) await this.save(internal)
       return internal
     } catch (error) {
       if (isMissingFile(error)) return emptyStore()
@@ -340,9 +403,32 @@ function canonicalIdentity(thread: AnchoredCommentThread): string {
   return JSON.stringify([thread.workspaceKey, thread.anchor.targetKey, thread.anchor.canonical])
 }
 
+/**
+ * A thread may branch from exactly one existing parent. The parent must exist,
+ * must not be the thread itself, and must not form a cycle through the parent
+ * chain, so the store always describes a forest of rooted conversations.
+ */
+function assertValidParent(
+  threadId: string,
+  parentThreadId: string | undefined,
+  threads: readonly AnchoredCommentThread[]
+): void {
+  if (!parentThreadId) return
+  if (parentThreadId === threadId) throw new Error('A comment thread cannot be its own parent.')
+  const byId = new Map(threads.map((thread) => [thread.id, thread]))
+  if (!byId.has(parentThreadId)) throw new Error('The parent comment thread does not exist.')
+  const seen = new Set<string>([threadId])
+  let cursor: string | undefined = parentThreadId
+  while (cursor) {
+    if (seen.has(cursor)) throw new Error('The comment thread parent forms a cycle.')
+    seen.add(cursor)
+    cursor = byId.get(cursor)?.parentThreadId
+  }
+}
+
 function emptyStore(): ServiceStore {
   return {
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     threadInstances: {},
     threads: [],
     updatedAt: new Date(0).toISOString()
@@ -370,6 +456,16 @@ function assetDigests(thread: AnchoredCommentThread): Set<string> {
 }
 
 function assertImmutableCapture(previous: AnchoredCommentThread, next: AnchoredCommentThread): void {
+  if (JSON.stringify(previous.fork) !== JSON.stringify(next.fork)) {
+    throw new Error('Conversation fork context is immutable.')
+  }
+  if (previous.anchor.codeAnchor && (next.messages.length < previous.messages.length
+    || previous.messages.some((message, index) => JSON.stringify(message) !== JSON.stringify(next.messages[index])))) {
+    throw new Error('Code conversation messages are append-only.')
+  }
+  if (JSON.stringify(previous.anchor.codeAnchor) !== JSON.stringify(next.anchor.codeAnchor)) {
+    throw new Error('A comment code anchor is immutable.')
+  }
   if (previous.workspaceKey !== next.workspaceKey) {
     throw new Error('A comment thread cannot move between workspaces.')
   }

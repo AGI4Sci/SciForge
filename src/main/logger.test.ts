@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
-import { appendManagedLogLine, configureLogger } from './logger'
+import { appendManagedLogLine, configureLogger, logError } from './logger'
 
 const tempDirs: string[] = []
 
@@ -47,6 +47,33 @@ describe('logger', () => {
     const content = await readFile(join(dir, files[0]), 'utf8')
     expect(content).not.toContain(canary)
     expect(content).toContain('<redacted>')
+  })
+
+  it('retains nested Error diagnostics, consumer identity and redaction', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sciforge-error-logs-'))
+    tempDirs.push(dir)
+    const canary = 'opaque-active-credential-canary'
+    configureLogger({ dir, sensitiveValues: () => [canary] })
+    const cause = Object.assign(new TypeError(`digest mismatch ${canary}`), {
+      token: 'structured-secret',
+      code: 'digest-mismatch'
+    })
+    const failure = new Error('Artifact consumer fixture.artifacts (@fixture/domain@1.0.0) failed.', { cause })
+    const aggregate = new AggregateError([failure], 'fan-out failed')
+    Object.assign(cause, { cycle: aggregate })
+    logError('handoff', 'delivery failed', { failures: [aggregate] })
+    // The sentinel queues behind the fire-and-forget public log call.
+    await appendManagedLogLine('sciforge', 'diagnostics-flushed')
+    const files = await readdir(dir)
+    const content = await readFile(join(dir, files[0]), 'utf8')
+    expect(content).toContain('AggregateError')
+    expect(content).toContain('fixture.artifacts')
+    expect(content).toContain('TypeError')
+    expect(content).toContain('digest mismatch')
+    expect(content).toContain('digest-mismatch')
+    expect(content).toContain('[Circular]')
+    expect(content).not.toContain(canary)
+    expect(content).not.toContain('structured-secret')
   })
 
   it('serializes concurrent writes while initializing the directory once', async () => {

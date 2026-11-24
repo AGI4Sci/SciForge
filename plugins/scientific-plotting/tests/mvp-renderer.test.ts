@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readdir, mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, readdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
@@ -77,6 +77,28 @@ test('configured status reports missing runtime truthfully without attempting ge
   assert.match(status.renderer.message ?? '', /nonexistent-scientific-figures-test\/python.*ENOENT/)
   assert.equal(status.outputPolicy.persistsImages, false)
   assert.deepEqual(status.supportedTemplates, [...SCIENTIFIC_PLOTTING_TEMPLATES])
+  assert.ok(status.guardrails.some(message => message.includes(`${process.platform}/${process.arch}`) && message.includes('complete file-write confinement')))
+  assert.ok(status.guardrails.some(message => message.includes('does not install')))
+  assert.ok(status.guardrails.some(message => message.includes('saved Python snapshots')))
+})
+
+test('status rejects installed Matplotlib metadata when the actual renderer cannot import', async t => {
+  const parent = await realpath(tmpdir())
+  const root = await mkdtemp(join(parent, 'scientific-status-probe-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  // A package may have valid distribution metadata while a native dependency is broken.
+  await mkdir(join(root, 'matplotlib-99.0.dist-info'))
+  await writeFile(join(root, 'matplotlib-99.0.dist-info/METADATA'), 'Name: matplotlib\nVersion: 99.0\n')
+  await mkdir(join(root, 'matplotlib'))
+  await writeFile(join(root, 'matplotlib/__init__.py'), 'raise ImportError("native renderer dependency unavailable")\n')
+  const realPython = process.env.SCIENTIFIC_FIGURES_TEST_PYTHON ?? 'python3'
+  const launcher = join(root, process.platform === 'win32' ? 'probe.cmd' : 'probe')
+  if (process.platform === 'win32') { t.skip('POSIX launcher fixture; production probe is platform independent'); return }
+  await writeFile(launcher, `#!/bin/sh\nexec '${realPython.replaceAll("'", "'\\''")}' -I -c 'import runpy,sys; sys.path.insert(0, ${JSON.stringify(root)}); exec(sys.argv[1])' "$3"\n`, { mode: 0o700 })
+  const status = await getScientificPlottingStatus({ pythonCommand: launcher })
+  assert.equal(status.renderer.available, false)
+  assert.equal(status.degraded, true)
+  assert.match(status.renderer.message ?? '', /native renderer dependency unavailable/)
 })
 
 test('preparation preserves source workspace without running Python or persisting image files', async () => {

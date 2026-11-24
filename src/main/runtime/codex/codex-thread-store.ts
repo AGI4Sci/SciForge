@@ -344,28 +344,37 @@ function normalizeThread(raw: unknown): CodexStoredThread | null {
 }
 
 function dedupeThreads(threads: CodexStoredThread[]): CodexStoredThread[] {
-  const groups: CodexStoredThread[][] = []
-  for (const thread of threads) {
-    const matchingIndexes = groups
-      .map((group, index) => ({ group, index }))
-      .filter(({ group }) => group.some((candidate) => sameThreadIdentity(candidate, thread)))
-      .map(({ index }) => index)
-    if (matchingIndexes.length === 0) {
-      groups.push([thread])
-      continue
+  const groups = new Map<number, CodexStoredThread[]>()
+  const parents: number[] = []
+  const guiIds = new Map<string, number>()
+  const codexIds = new Map<string, number>()
+  const root = (index: number): number => {
+    while (parents[index] !== index) {
+      parents[index] = parents[parents[index]]
+      index = parents[index]
     }
-    const [firstIndex, ...otherIndexes] = matchingIndexes
-    groups[firstIndex].push(thread)
-    for (const index of [...otherIndexes].sort((a, b) => b - a)) {
-      groups[firstIndex].push(...groups[index])
-      groups.splice(index, 1)
-    }
+    return index
   }
-  return groups.map((group) => mergeThreadRecords(group))
-}
-
-function sameThreadIdentity(a: CodexStoredThread, b: CodexStoredThread): boolean {
-  return a.guiThreadId === b.guiThreadId || a.codexThreadId === b.codexThreadId
+  for (const thread of threads) {
+    const matches = [...new Set([guiIds.get(thread.guiThreadId), codexIds.get(thread.codexThreadId)]
+      .filter((index): index is number => index !== undefined).map(root))].sort((a, b) => a - b)
+    let index = matches[0]
+    if (index === undefined) {
+      index = parents.length
+      parents.push(index)
+      groups.set(index, [])
+    }
+    const group = groups.get(index)!
+    group.push(thread)
+    for (const other of matches.slice(1)) {
+      for (const record of groups.get(other)!) group.push(record)
+      groups.delete(other)
+      parents[other] = index
+    }
+    guiIds.set(thread.guiThreadId, index)
+    codexIds.set(thread.codexThreadId, index)
+  }
+  return [...groups.values()].map((group) => mergeThreadRecords(group))
 }
 
 function mergeThreadRecords(

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string.h>
 #include <vector>
+#include <mutex>
 
 namespace {
 
@@ -16,6 +17,25 @@ constexpr size_t kMaximumSecretBytes = 262144;
 constexpr size_t kMinimumSecretBytes = 1;
 NSString* const kKeychainService = @"cn.sciforge.identity-access.private-vault.v1";
 NSString* const kKeychainLabel = @"SciForge Identity private material";
+
+// Legacy macOS login-keychain ACL prompts do not honor the SecItem UI hint.
+// Serialize our operations and restore the process policy before returning.
+std::mutex keychainInteractionMutex;
+class SilentKeychainAccess final {
+ public:
+  SilentKeychainAccess() : lock_(keychainInteractionMutex) {
+    ready_ = SecKeychainGetUserInteractionAllowed(&previous_) == errSecSuccess &&
+        SecKeychainSetUserInteractionAllowed(false) == errSecSuccess;
+  }
+  ~SilentKeychainAccess() {
+    if (ready_) (void)SecKeychainSetUserInteractionAllowed(previous_);
+  }
+  bool ready() const { return ready_; }
+ private:
+  std::unique_lock<std::mutex> lock_;
+  Boolean previous_ = true;
+  bool ready_ = false;
+};
 
 void ClearBytes(void* bytes, size_t length) {
   if (bytes != nullptr && length > 0) (void)memset_s(bytes, length, 0, length);
@@ -87,7 +107,11 @@ NSMutableDictionary* BaseQuery(NSString* account) {
     (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
     (__bridge id)kSecAttrService: kKeychainService,
     (__bridge id)kSecAttrAccount: account,
-    (__bridge id)kSecAttrSynchronizable: @NO
+    (__bridge id)kSecAttrSynchronizable: @NO,
+    // Identity status checks and token refresh run without a user gesture.
+    // Never turn inaccessible credentials into repeated system password prompts.
+    // Fail closed, retaining the item and its existing access control.
+    (__bridge id)kSecUseAuthenticationUI: (__bridge id)kSecUseAuthenticationUIFail
   } mutableCopy];
 }
 
@@ -120,19 +144,22 @@ napi_value StoreSecret(napi_env env, napi_callback_info info) {
       env, arguments[1], kMinimumSecretBytes, kMaximumSecretBytes,
       &secret, &secret_length)) return ThrowUnavailable(env);
   @autoreleasepool {
+    SilentKeychainAccess access;
+    if (!access.ready()) return ThrowUnavailable(env);
     NSMutableData* data = [NSMutableData dataWithBytes:secret.data() length:secret_length];
     NSMutableDictionary* query = BaseQuery(account);
-    NSDictionary* update = @{
-      (__bridge id)kSecValueData: data,
-      (__bridge id)kSecAttrAccessible:
-          (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-    };
+    // Refresh only the payload of an existing item. Reapplying protection
+    // attributes can rewrite the item and trigger a separate authorization;
+    // retain its existing protection and user-approved access control.
+    NSDictionary* update = @{ (__bridge id)kSecValueData: data };
     OSStatus status = SecItemUpdate(
         (__bridge CFDictionaryRef)query,
         (__bridge CFDictionaryRef)update);
     if (status == errSecItemNotFound) {
       [query addEntriesFromDictionary:update];
       query[(__bridge id)kSecAttrLabel] = kKeychainLabel;
+      query[(__bridge id)kSecAttrAccessible] =
+          (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly;
       status = SecItemAdd((__bridge CFDictionaryRef)query, nullptr);
     }
     ClearBytes(data.mutableBytes, data.length);
@@ -152,6 +179,8 @@ napi_value HasSecret(napi_env env, napi_callback_info info) {
   }
   NSString* account = ReadAccount(env, arguments[0]);
   if (account == nil) return ThrowUnavailable(env);
+  SilentKeychainAccess access;
+  if (!access.ready()) return ThrowUnavailable(env);
   OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)BaseQuery(account), nullptr);
   napi_value result;
   if (status == errSecSuccess) napi_get_boolean(env, true, &result);
@@ -175,6 +204,8 @@ struct SecretRead {
 void ExecuteSecretRead(napi_env env, void* raw_context) {
   SecretRead* context = static_cast<SecretRead*>(raw_context);
   @autoreleasepool {
+    SilentKeychainAccess access;
+    if (!access.ready()) { context->failed = true; return; }
     NSMutableDictionary* query = BaseQuery(context->account);
     query[(__bridge id)kSecReturnData] = @YES;
     query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
@@ -254,6 +285,8 @@ napi_value DeleteSecret(napi_env env, napi_callback_info info) {
   }
   NSString* account = ReadAccount(env, arguments[0]);
   if (account == nil) return ThrowUnavailable(env);
+  SilentKeychainAccess access;
+  if (!access.ready()) return ThrowUnavailable(env);
   OSStatus status = SecItemDelete((__bridge CFDictionaryRef)BaseQuery(account));
   if (status != errSecSuccess && status != errSecItemNotFound) return ThrowUnavailable(env);
   napi_value result;
@@ -274,4 +307,3 @@ NAPI_MODULE_INIT() {
   napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties);
   return exports;
 }
-

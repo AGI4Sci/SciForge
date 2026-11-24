@@ -1,5 +1,6 @@
 import { copyFile, lstat, mkdir, readFile, readdir, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isLicenseOnlyArchiveEntries } from './domain-license-archive.cjs'
 
 const METADATA_KEY = 'sciforgeMainNativeAddons'
 const SUPPORTED_PLATFORMS = new Set(['darwin', 'linux', 'win32'])
@@ -11,6 +12,10 @@ export async function stageDomainMainNativeAddons(input) {
     'mainOutputDirectory'
   )
   const platform = requirePlatform(input?.platform)
+  const onSkipPackageDirectory = input?.onSkipPackageDirectory
+  if (onSkipPackageDirectory !== undefined && typeof onSkipPackageDirectory !== 'function') {
+    throw new Error('onSkipPackageDirectory must be a function.')
+  }
   const domainsRoot = join(repositoryRoot, 'packages', 'domains')
   const packageEntries = (await readdir(domainsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
@@ -22,6 +27,10 @@ export async function stageDomainMainNativeAddons(input) {
 
   for (const packageEntry of packageEntries) {
     const packageRoot = join(domainsRoot, packageEntry.name)
+    if (isLicenseOnlyArchiveEntries(await readdir(packageRoot, { withFileTypes: true }))) {
+      onSkipPackageDirectory?.(packageEntry.name)
+      continue
+    }
     const packageJsonPath = join(packageRoot, 'package.json')
     const packageJson = parseJsonObject(
       await readFile(packageJsonPath, 'utf8'),

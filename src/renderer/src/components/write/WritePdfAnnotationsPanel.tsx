@@ -187,7 +187,7 @@ function ResizableTextarea({
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         style={style}
-        className="w-full resize-none rounded-lg border border-ds-border-muted bg-white px-3 py-2 text-[12.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/50 focus:ring-2 focus:ring-accent/10 dark:bg-white/7"
+        className="w-full resize-none rounded-lg border border-ds-border-muted bg-white px-3 py-2 text-ds-sm leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent/50 focus:ring-2 focus:ring-accent/10 dark:bg-white/7"
         aria-label={ariaLabel}
       />
       <button
@@ -486,8 +486,8 @@ function WritePdfAnnotationsPanelComponent({
             <StickyNote className="h-4 w-4" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[13px] font-semibold text-ds-ink">{titleLabel}</h2>
-            <p className="mt-0.5 text-[11.5px] text-ds-faint">
+            <h2 className="truncate text-ds-md font-semibold text-ds-ink">{titleLabel}</h2>
+            <p className="mt-0.5 text-ds-xs text-ds-faint">
               {t('writePdfAnnotationsCount', { count: summaries.length, total: totalThreadCount })}
             </p>
           </div>
@@ -508,7 +508,7 @@ function WritePdfAnnotationsPanelComponent({
 
         {notice ? (
           <div
-            className={`mt-2 rounded-md border px-2.5 py-1.5 text-[11.5px] leading-4 ${
+            className={`mt-2 rounded-md border px-2.5 py-1.5 text-ds-xs leading-4 ${
               notice.tone === 'error'
                 ? 'border-rose-500/20 bg-rose-500/5 text-rose-700 dark:text-rose-200'
                 : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-200'
@@ -528,7 +528,7 @@ function WritePdfAnnotationsPanelComponent({
                 <button
                   type="button"
                   onClick={() => selectPdfReviewScope('document')}
-                  className={`flex min-w-0 items-center justify-center gap-1.5 px-2 text-[11.5px] font-semibold transition ${
+                  className={`flex min-w-0 items-center justify-center gap-1.5 px-2 text-ds-xs font-semibold transition ${
                     pdfReviewScope === 'document' ? 'bg-accent/10 text-accent' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`}
                   aria-label={t('writePdfReviewDocument')}
@@ -542,7 +542,7 @@ function WritePdfAnnotationsPanelComponent({
                   type="button"
                   onClick={() => selectPdfReviewScope('selection')}
                   disabled={!pdfReviewHasSelection}
-                  className={`flex min-w-0 items-center justify-center gap-1.5 border-l border-ds-border-muted px-2 text-[11.5px] font-semibold transition ${
+                  className={`flex min-w-0 items-center justify-center gap-1.5 border-l border-ds-border-muted px-2 text-ds-xs font-semibold transition ${
                     pdfReviewScope === 'selection'
                       ? 'bg-accent/10 text-accent'
                       : pdfReviewHasSelection
@@ -573,11 +573,11 @@ function WritePdfAnnotationsPanelComponent({
                 <span className="sr-only">{t('writePdfReviewRunShort')}</span>
               </button>
             </div>
-            <div className="flex min-w-0 items-center gap-2 text-[11px] text-ds-faint">
+            <div className="flex min-w-0 items-center gap-2 text-ds-xs text-ds-faint">
               <span className="min-w-0 flex-1 truncate">
                 {pdfReviewScope === 'selection' ? pdfReviewSelectionLabel || t('writePdfReviewNoSelection') : t('writePdfReviewFullPdf')}
               </span>
-              <label className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card px-2 text-[11px] font-semibold text-ds-muted">
+              <label className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-ds-border-muted bg-ds-card px-2 text-ds-xs font-semibold text-ds-muted">
                 <MessageSquareText className="h-3.5 w-3.5" strokeWidth={1.9} />
                 <input
                   type="number"
@@ -589,7 +589,7 @@ function WritePdfAnnotationsPanelComponent({
                     setPdfReviewMaxComments(clampPdfReviewMaxComments(Number(event.currentTarget.value)))
                   }}
                   onBlur={() => setPdfReviewMaxComments((value) => clampPdfReviewMaxComments(value))}
-                  className="h-5 w-9 rounded border border-ds-border-muted bg-transparent px-1 text-center font-mono text-[11px] text-ds-ink outline-none focus:border-accent"
+                  className="h-5 w-9 rounded border border-ds-border-muted bg-transparent px-1 text-center font-mono text-ds-xs text-ds-ink outline-none focus:border-accent"
                   aria-label={t('writePdfReviewMaxComments')}
                 />
               </label>
@@ -603,10 +603,10 @@ function WritePdfAnnotationsPanelComponent({
                 }}
               >
                 <div>
-                  <div className="text-[11.5px] font-semibold text-ds-ink">
+                  <div className="text-ds-xs font-semibold text-ds-ink">
                     {t('writePdfReviewPromptTitle')}
                   </div>
-                  <div className="mt-0.5 text-[10.5px] leading-4 text-ds-faint">
+                  <div className="mt-0.5 text-ds-2xs leading-4 text-ds-faint">
                     {t('writePdfReviewPromptDescription')}
                   </div>
                 </div>
@@ -616,7 +616,7 @@ function WritePdfAnnotationsPanelComponent({
                   maxLength={PDF_REVIEW_MAX_PROMPT_LENGTH}
                   rows={6}
                   autoFocus
-                  className="min-h-28 w-full resize-y rounded-md border border-ds-border-muted bg-ds-canvas px-2.5 py-2 text-[11.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent"
+                  className="min-h-28 w-full resize-y rounded-md border border-ds-border-muted bg-ds-canvas px-2.5 py-2 text-ds-xs leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent"
                   aria-label={t('writePdfReviewPromptLabel')}
                   placeholder={t('writePdfReviewPromptPlaceholder')}
                 />
@@ -624,14 +624,14 @@ function WritePdfAnnotationsPanelComponent({
                   <button
                     type="button"
                     onClick={() => setPdfReviewPromptOpen(false)}
-                    className="h-8 rounded-md px-3 text-[11.5px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                    className="h-8 rounded-md px-3 text-ds-xs font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                   >
                     {t('writePdfReviewPromptCancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={!pdfReviewPrompt.trim() || pdfReviewGenerating}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-[11.5px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-ds-xs font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {pdfReviewGenerating
                       ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
@@ -643,7 +643,7 @@ function WritePdfAnnotationsPanelComponent({
             ) : null}
             {pdfReviewNotice ? (
               <div
-                className={`min-w-0 truncate text-[11px] ${
+                className={`min-w-0 truncate text-ds-xs ${
                   pdfReviewNotice.tone === 'error' ? 'text-rose-600 dark:text-rose-300' : 'text-emerald-600 dark:text-emerald-300'
                 }`}
                 role={pdfReviewNotice.tone === 'error' ? 'alert' : 'status'}
@@ -706,7 +706,7 @@ function WritePdfAnnotationsPanelComponent({
             onClick={() => onReloadSidecar?.()}
             disabled={reloadDisabled}
             className={`flex h-8 min-w-0 items-center justify-center rounded-md border border-ds-border-muted bg-ds-surface-subtle text-ds-ink transition hover:border-accent/40 hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6 ${
-              pdfMode ? '' : 'gap-1.5 px-2 text-[12px] font-semibold'
+              pdfMode ? '' : 'gap-1.5 px-2 text-ds-sm font-semibold'
             }`}
             aria-label={t('writePdfAnnotationsReloadSidecar')}
             title={t('writePdfAnnotationsReloadSidecar')}
@@ -719,7 +719,7 @@ function WritePdfAnnotationsPanelComponent({
         </div>
 
         {pdfMode && exportPreviewOpen && sidecar ? (
-          <div className="mt-2 rounded-lg border border-accent/18 bg-accent/5 p-2 text-[11.5px] text-ds-muted">
+          <div className="mt-2 rounded-lg border border-accent/18 bg-accent/5 p-2 text-ds-xs text-ds-muted">
             <div className="flex min-w-0 items-center gap-2">
               <div className="min-w-0 flex-1 font-semibold text-ds-ink">
                 {t('writePdfAnnotationsExportPreviewTitle')}
@@ -753,7 +753,7 @@ function WritePdfAnnotationsPanelComponent({
               <button
                 type="button"
                 onClick={() => setExportPreviewOpen(false)}
-                className="rounded-md px-2 py-1 text-[11.5px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                className="rounded-md px-2 py-1 text-ds-xs font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
               >
                 {t('writePdfAnnotationsExportPreviewCancel')}
               </button>
@@ -764,7 +764,7 @@ function WritePdfAnnotationsPanelComponent({
                   onExportPackage?.()
                 }}
                 disabled={exportDisabled}
-                className="rounded-md bg-accent px-2.5 py-1 text-[11.5px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+                className="rounded-md bg-accent px-2.5 py-1 text-ds-xs font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {t('writePdfAnnotationsExportPreviewConfirm')}
               </button>
@@ -793,7 +793,7 @@ function WritePdfAnnotationsPanelComponent({
                   key={item.mode}
                   type="button"
                   onClick={() => onAnnotationDisplayModeChange?.(item.mode)}
-                  className={`inline-flex h-7 min-w-0 items-center justify-center rounded-md text-[11.5px] font-semibold transition ${
+                  className={`inline-flex h-7 min-w-0 items-center justify-center rounded-md text-ds-xs font-semibold transition ${
                     active
                       ? 'bg-white text-accent shadow-sm ring-1 ring-ds-border-muted dark:bg-white/10 dark:ring-white/10'
                       : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
@@ -814,7 +814,7 @@ function WritePdfAnnotationsPanelComponent({
           <select
             value={kind}
             onChange={(event) => setKind(event.target.value as PdfAnnotationKind | 'all')}
-            className="min-w-0 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-medium text-ds-ink outline-none transition focus:border-accent/50 dark:bg-white/6"
+            className="min-w-0 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-ds-sm font-medium text-ds-ink outline-none transition focus:border-accent/50 dark:bg-white/6"
             aria-label={t('writePdfAnnotationsTypeFilter')}
             title={t('writePdfAnnotationsTypeFilter')}
           >
@@ -826,7 +826,7 @@ function WritePdfAnnotationsPanelComponent({
           <select
             value={status}
             onChange={(event) => setStatus(event.target.value as PdfAnnotationThreadStatus | 'all')}
-            className="min-w-0 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-[12px] font-medium text-ds-ink outline-none transition focus:border-accent/50 dark:bg-white/6"
+            className="min-w-0 rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-2 py-1.5 text-ds-sm font-medium text-ds-ink outline-none transition focus:border-accent/50 dark:bg-white/6"
             aria-label={t('writePdfAnnotationsStatusFilter')}
             title={t('writePdfAnnotationsStatusFilter')}
           >
@@ -845,7 +845,7 @@ function WritePdfAnnotationsPanelComponent({
                 type="number"
                 inputMode="numeric"
                 placeholder={t('writePdfAnnotationsPageFilterShort')}
-                className="min-w-0 flex-1 bg-transparent px-1 text-[12px] font-medium text-ds-ink outline-none placeholder:text-ds-faint"
+                className="min-w-0 flex-1 bg-transparent px-1 text-ds-sm font-medium text-ds-ink outline-none placeholder:text-ds-faint"
                 aria-label={t('writePdfAnnotationsPageFilter')}
                 title={t('writePdfAnnotationsPageFilter')}
               />
@@ -921,11 +921,11 @@ function WritePdfAnnotationsPanelComponent({
                       aria-label={t('writePdfAnnotationsLocate', { defaultValue: 'Locate in document' })}
                     >
                       <div className="flex min-w-0 items-center gap-2">
-                        <span className={`inline-flex h-6 max-w-[116px] shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-semibold ${kindAccent(summary.kind)}`}>
+                        <span className={`inline-flex h-6 max-w-[116px] shrink-0 items-center gap-1 rounded-md px-2 text-ds-xs font-semibold ${kindAccent(summary.kind)}`}>
                           <MessageSquareText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
                           <span className="truncate">{annotationKindLabel(summary.kind, t)}</span>
                         </span>
-                        <span className="inline-flex min-w-0 items-center gap-1 text-[11px] font-medium text-ds-faint">
+                        <span className="inline-flex min-w-0 items-center gap-1 text-ds-xs font-medium text-ds-faint">
                           {answerBusy ? (
                             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" strokeWidth={1.9} />
                           ) : summary.status === 'resolved' || questionStatus === 'answered' ? (
@@ -936,16 +936,16 @@ function WritePdfAnnotationsPanelComponent({
                           <span className="truncate">{statusText}</span>
                         </span>
                         {pageLabel ? (
-                          <span className="ml-auto shrink-0 text-[11px] font-semibold text-ds-muted">{pageLabel}</span>
+                          <span className="ml-auto shrink-0 text-ds-xs font-semibold text-ds-muted">{pageLabel}</span>
                         ) : null}
                       </div>
                       <div className="mt-2 min-w-0">
-                        <div className="text-[13px] font-semibold text-ds-ink [overflow-wrap:anywhere]">{summary.title}</div>
-                        <div className="mt-1 text-[12px] leading-5 text-ds-muted [overflow-wrap:anywhere]">
+                        <div className="text-ds-md font-semibold text-ds-ink [overflow-wrap:anywhere]">{summary.title}</div>
+                        <div className="mt-1 text-ds-sm leading-5 text-ds-muted [overflow-wrap:anywhere]">
                           {summary.preview || summary.quote || t('writePdfAnnotationsNoPreview')}
                         </div>
                       </div>
-                      <div className="mt-2 flex min-w-0 items-center gap-2 text-[11px] text-ds-faint">
+                      <div className="mt-2 flex min-w-0 items-center gap-2 text-ds-xs text-ds-faint">
                         <span className="truncate">
                           {t('writePdfAnnotationsAnnotationCount', { count: summary.annotationCount })}
                         </span>
@@ -1028,7 +1028,7 @@ function WritePdfAnnotationsPanelComponent({
                           disabled={!onDeleteThread}
                           data-testid={`annotation-thread-delete-${summary.thread.id}`}
                           aria-label={t('writePdfAnnotationsDelete')}
-                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rose-500/20 bg-rose-500/5 px-2 text-[11.5px] font-semibold text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-300"
+                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rose-500/20 bg-rose-500/5 px-2 text-ds-xs font-semibold text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-300"
                         >
                           <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
                           {t('writePdfAnnotationsDelete')}
@@ -1053,7 +1053,7 @@ function WritePdfAnnotationsPanelComponent({
                                   }`}
                                 >
                                   <div
-                                    className={`flex min-w-0 items-center gap-1.5 text-[11.5px] font-semibold ${
+                                    className={`flex min-w-0 items-center gap-1.5 text-ds-xs font-semibold ${
                                       assistant
                                         ? 'text-emerald-700 dark:text-emerald-300'
                                         : 'text-violet-700 dark:text-violet-300'
@@ -1103,7 +1103,7 @@ function WritePdfAnnotationsPanelComponent({
                                   </div>
                                   {!answerCollapsed ? (
                                     <div
-                                      className={`ds-selectable-text min-w-0 max-w-full text-[12px] leading-5 text-ds-ink [overflow-wrap:anywhere] ${
+                                      className={`ds-selectable-text min-w-0 max-w-full text-ds-sm leading-5 text-ds-ink [overflow-wrap:anywhere] ${
                                         assistant ? 'ds-markdown ds-chat-answer' : 'whitespace-pre-wrap'
                                       }`}
                                     >
@@ -1111,7 +1111,7 @@ function WritePdfAnnotationsPanelComponent({
                                         <AssistantMarkdown
                                           text={turn.text}
                                           streaming={turn.busy === true}
-                                          className="text-[12px] leading-5 [overflow-wrap:anywhere]"
+                                          className="text-ds-sm leading-5 [overflow-wrap:anywhere]"
                                         />
                                       ) : turn.text}
                                     </div>
@@ -1121,23 +1121,23 @@ function WritePdfAnnotationsPanelComponent({
                             })}
                             {!questionTurns.some((turn) => turn.role === 'assistant' && turn.busy) && answerBusy ? (
                               <div className="rounded-lg border border-emerald-500/18 bg-emerald-500/5 px-3 py-2">
-                                <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11.5px] font-semibold text-emerald-700 dark:text-emerald-300">
+                                <div className="mb-1 flex min-w-0 items-center gap-1.5 text-ds-xs font-semibold text-emerald-700 dark:text-emerald-300">
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
                                   <span className="truncate">{t('writePdfAnnotationsAnswering')}</span>
                                 </div>
-                                <div className="text-[12px] leading-5 text-ds-faint">
+                                <div className="text-ds-sm leading-5 text-ds-faint">
                                   {t('writePdfAnnotationsAnswerPending')}
                                 </div>
                               </div>
                             ) : null}
                             {answerError ? (
-                              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-[12px] leading-5 text-rose-600 [overflow-wrap:anywhere] dark:text-rose-300">
+                              <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-ds-sm leading-5 text-rose-600 [overflow-wrap:anywhere] dark:text-rose-300">
                                 {answerError}
                               </div>
                             ) : null}
                           </div>
                         ) : !selected && questionBody ? (
-                          <div className="ds-selectable-text relative min-w-0 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-2 pr-9 text-[12px] leading-5 text-ds-muted [overflow-wrap:anywhere] dark:bg-white/6">
+                          <div className="ds-selectable-text relative min-w-0 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-surface-subtle px-3 py-2 pr-9 text-ds-sm leading-5 text-ds-muted [overflow-wrap:anywhere] dark:bg-white/6">
                             {questionBody}
                             <CopyTextButton
                               text={questionBody}
@@ -1177,7 +1177,7 @@ function WritePdfAnnotationsPanelComponent({
                                   sendQuestion(summary, prompt, 'translate')
                                 }}
                                 disabled={!onAskQuestion || answerBusy}
-                                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-[11.5px] font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                                className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-ds-xs font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
                               >
                                 <Languages className="h-3.5 w-3.5" strokeWidth={1.9} />
                                 {t('writePdfAnnotationsTranslateSelection')}
@@ -1186,7 +1186,7 @@ function WritePdfAnnotationsPanelComponent({
                                 type="button"
                                 onClick={() => sendQuestion(summary, questionDraft)}
                                 disabled={!onAskQuestion || !questionDraft.trim() || answerBusy}
-                                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[11.5px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+                                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-ds-xs font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
                               >
                                 {answerBusy ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
@@ -1222,7 +1222,7 @@ function WritePdfAnnotationsPanelComponent({
                           <button
                             type="button"
                             onClick={() => cancelEditing(summary)}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11.5px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                            className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-ds-xs font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                           >
                             <X className="h-3.5 w-3.5" strokeWidth={2} />
                             {t('writePdfAnnotationsCancelEdit')}
@@ -1231,7 +1231,7 @@ function WritePdfAnnotationsPanelComponent({
                             type="button"
                             onClick={() => saveEditing(summary)}
                             disabled={!onEditAnnotation}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[11.5px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
+                            className="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-2.5 text-ds-xs font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-45"
                           >
                             <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.9} />
                             {t('writePdfAnnotationsSaveEdit')}
@@ -1244,7 +1244,7 @@ function WritePdfAnnotationsPanelComponent({
                           type="button"
                           onClick={() => startEditing(summary)}
                           disabled={!onEditAnnotation || !firstAnnotationId}
-                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-[11.5px] font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-ds-xs font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
                         >
                           <Pencil className="h-3.5 w-3.5" strokeWidth={1.9} />
                           {t('writePdfAnnotationsEdit')}
@@ -1254,7 +1254,7 @@ function WritePdfAnnotationsPanelComponent({
                             type="button"
                             onClick={() => onImproveAnnotation(summary.thread.id, summary)}
                             disabled={!firstAnnotationId || improving}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-[11.5px] font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
+                            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-ds-border-muted bg-ds-surface-subtle px-2 text-ds-xs font-semibold text-ds-muted transition hover:border-accent/35 hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-45 dark:bg-white/6"
                           >
                             {improving ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
@@ -1268,7 +1268,7 @@ function WritePdfAnnotationsPanelComponent({
                           type="button"
                           onClick={() => onDeleteThread?.(summary.thread.id, summary)}
                           disabled={!onDeleteThread}
-                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rose-500/20 bg-rose-500/5 px-2 text-[11.5px] font-semibold text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-300"
+                          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rose-500/20 bg-rose-500/5 px-2 text-ds-xs font-semibold text-rose-600 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-45 dark:text-rose-300"
                         >
                           <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
                           {t('writePdfAnnotationsDelete')}
@@ -1281,7 +1281,7 @@ function WritePdfAnnotationsPanelComponent({
             })}
           </ul>
         ) : (
-          <div className="flex min-h-full items-center justify-center px-4 text-center text-[13px] leading-6 text-ds-muted">
+          <div className="flex min-h-full items-center justify-center px-4 text-center text-ds-md leading-6 text-ds-muted">
             {sidecar && hasFilter ? noMatchesLabel : emptyLabel}
           </div>
         )}

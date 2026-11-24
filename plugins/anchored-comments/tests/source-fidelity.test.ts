@@ -50,6 +50,13 @@ function assertPluginImport(specifier: string, path: string): void {
   }
 }
 
+test('artifact declaration requests its authenticated cloud service and authorized ports', () => {
+  const declaration = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'sciforge.dsh.json'), 'utf8'))
+  assert.deepEqual(declaration.hostServices, ['identity-access.authenticated-cloud', 'agentDiscussion', 'visualCapture'])
+  assert.deepEqual([...declaration.ports].sort(), ['agent-discussion.run', 'visual-capture.capture', 'visual-capture.read'])
+  assert.equal(declaration.ui.entry, 'dist/ui/index.html')
+})
+
 test('backend sources import only plugin-local files and public dependencies', () => {
   for (const path of pluginSources(join(PLUGIN_ROOT, 'src'))) {
     for (const specifier of imports(readFileSync(path, 'utf8'))) {

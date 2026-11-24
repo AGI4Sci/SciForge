@@ -3,6 +3,8 @@ import {
   type ReactElement
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { createWorkspaceTabularPreview } from '@sciforge/workspace-tabular/engine'
+import { workspaceTabularPreviewInputSchema } from '@sciforge/workspace-tabular/contract'
 import {
   MARKDOWN_COPY_FOR_FEISHU_ACTION_ID,
   MARKDOWN_COPY_FOR_WECHAT_ACTION_ID,
@@ -82,6 +84,21 @@ readonly RendererWorkspacePreviewPluginContribution[] {
   const contributions: RendererWorkspacePreviewPluginContribution[] = [
     {
       manifest: manifest('tabular'),
+      resource: {
+        contentKinds: ['text'],
+        render: ({ content, title, contentKey }) => {
+          if (content.kind !== 'text') return null
+          const preview = createWorkspaceTabularPreview(workspaceTabularPreviewInputSchema.parse({
+            text: content.text, mimeType: content.mimeType, size: content.size,
+            includeObservation: false
+          }))
+          return <TabularWorkspaceViewer key={contentKey} data={{ title, tabular: {
+            header: preview.header, rows: preview.previewRows,
+            truncatedRows: content.truncated || preview.truncatedRows,
+            truncatedColumns: preview.truncatedColumns
+          } }} />
+        }
+      },
       actions: TABULAR_WORKSPACE_PREVIEW_ACTIONS,
       selectionKind: 'tabular',
       inspectSelection: (selection) => buildTabularSelectionSection(
@@ -100,6 +117,17 @@ readonly RendererWorkspacePreviewPluginContribution[] {
     },
     {
       manifest: manifest('text'),
+      resource: {
+        contentKinds: ['text'],
+        render: ({ content, title, contentKey }) => content.kind === 'text' ? (
+          <TextWorkspaceViewer documentContentKey={contentKey} model={{
+            status: { kind: 'ready', title, message: '' }, title, text: content.text,
+            lineCount: content.text ? content.text.split('\n').length : 0,
+            characterCount: content.text.length, truncated: content.truncated,
+            editable: false, agentSummary: ''
+          }} />
+        ) : null
+      },
       actions: TEXT_WORKSPACE_PREVIEW_ACTIONS,
       selectionKind: 'text',
       inspectSelection: (selection) => buildTextSelectionSection(
@@ -169,6 +197,14 @@ readonly RendererWorkspacePreviewPluginContribution[] {
     },
     {
       manifest: manifest('image'),
+      resource: {
+        contentKinds: ['image'],
+        render: ({ content, title, sourceUrl, fileSummary, onLoadError }) => content.kind === 'image' ? (
+          <ImageWorkspaceViewer onLoadError={onLoadError}
+            model={{ status: { kind: 'ready', title, message: '' }, title, fileSummary, agentSummary: '' }}
+            previewState={{ kind: 'ready', title, message: '', dataUrl: sourceUrl, mimeType: content.mimeType, bytesRead: content.size }} />
+        ) : null
+      },
       render: ({ context, observation, asset, transport }) => (
         <ImageWorkspaceViewer
           observation={observation}
@@ -181,6 +217,14 @@ readonly RendererWorkspacePreviewPluginContribution[] {
     },
     {
       manifest: manifest('pdf'),
+      resource: {
+        contentKinds: ['pdf'],
+        render: ({ content, title, sourceUrl, contentKey, fileSummary }) => content.kind === 'pdf' ? (
+          <PdfWorkspaceViewer documentContentKey={contentKey}
+            model={{ status: { kind: 'ready', title, message: '' }, title, fileSummary, agentSummary: '', mimeType: content.mimeType }}
+            previewState={{ kind: 'ready', title, message: '', sourceUrl, mimeType: content.mimeType }} />
+        ) : null
+      },
       render: ({ context, observation, asset, transport, contentKey, annotationQuestionBridge, visualContextComponentId, onPresentationStateChange }) => (
         <DocumentAnnotationPanelController
           context={context}

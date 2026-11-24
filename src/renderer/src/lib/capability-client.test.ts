@@ -223,7 +223,7 @@ describe('RendererCapabilityClient', () => {
     expect(bridge.cancel).not.toHaveBeenCalled()
   })
 
-  it('adds an invocation ID to every non-read action', async () => {
+  it.each(['compute', 'workspace-write', 'external-write', 'destructive'] as const)('adds an invocation ID to a %s action', async (effect) => {
     const bridge = transport({ ok: true })
     const client = new RendererCapabilityClient({
       getTransport: () => bridge,
@@ -231,7 +231,7 @@ describe('RendererCapabilityClient', () => {
     })
     const contract = {
       actionId: 'example.compute',
-      effect: 'compute' as const,
+      effect,
       inputSchema: z.object({}).strict(),
       outputSchema: z.object({ ok: z.boolean() }).strict()
     }

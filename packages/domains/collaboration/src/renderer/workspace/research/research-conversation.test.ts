@@ -53,6 +53,13 @@ test('simple question needs no task, adopted result, or mandatory research templ
   assert.ok(!(f.calls.at(-1)!.input as { text: string }).text.includes(f.summary))
 })
 
+test('missing local binding explains incomplete setup without claiming another device owns the chat', async () => {
+  const f = fixture()
+  const client = { ...f.client, readSessionProjection: async () => ({ bindings: [] }) as unknown as Awaited<ReturnType<ProjectCoordinatorRendererClient['readSessionProjection']>> }
+  await assert.rejects(sendResearchQuestion(client, f.host, f.input), /本机尚未完成项目研究会话初始化/u)
+  assert.equal(f.calls.some(entry => entry.kind === 'send' || entry.kind === 'open'), false)
+})
+
 test('unadopted, superseded, rejected and receipt/manifest mismatches never enter reusable research results', () => {
   for (const disposition of ['unadopted', 'superseded', 'rejected']) {
     const f = fixture(); f.receipt.disposition = disposition

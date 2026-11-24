@@ -60,7 +60,7 @@ describe('applyUiFontScale', () => {
     applyUiFontScale('small')
 
     expect(properties.get('--ds-ui-scale')).toBe('1')
-    expect(setUiZoomFactor).toHaveBeenCalledWith(0.82)
+    expect(setUiZoomFactor).toHaveBeenCalledWith(0.9)
   })
 
   it('keeps the CSS zoom fallback for browser-only development', () => {
@@ -76,6 +76,6 @@ describe('applyUiFontScale', () => {
 
     applyUiFontScale('medium')
 
-    expect(properties.get('--ds-ui-scale')).toBe('0.88')
+    expect(properties.get('--ds-ui-scale')).toBe('1')
   })
 })

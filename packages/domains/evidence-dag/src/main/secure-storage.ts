@@ -1,10 +1,17 @@
 import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, readdirSync, renameSync, unlinkSync, writeFileSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { restrictWindowsStorageSync } from '@sciforge/domain-sdk/node/windows-private-storage'
+import { restrictWindowsStorage, restrictWindowsStorageSync, type WindowsStorageEntry } from '@sciforge/domain-sdk/node/windows-private-storage'
 // Darwin's public fcntl O_NOFOLLOW_ANY; Node exposes only O_NOFOLLOW.
 const noFollow = process.platform === 'darwin' ? 0x20000000 : constants.O_NOFOLLOW
 const restrictedWindowsIdentities = new Set<string>()
+
+/** Cache only entries whose asynchronous ACL enforcement completed. Storage
+ * still revalidates each opened handle and its named identity before use. */
+export async function prepareEvidenceStorage(entries: readonly WindowsStorageEntry[]): Promise<void> {
+  await restrictWindowsStorage(entries)
+  for (const entry of entries) restrictedWindowsIdentities.add(`${entry.dev}:${entry.ino}`)
+}
 
 /** Evidence-owned files only. Validate on each I/O, use no-follow opens and
  * exclusive atomic replacements, and never chmod a grant's ancestors. Sync
@@ -105,6 +112,9 @@ export class EvidenceFileStorage {
   }
 
   readText(maxBytes = Infinity): string {
+    return this.readBytes(maxBytes).toString('utf8')
+  }
+  readBytes(maxBytes = Infinity): Buffer {
     const { root, fd: directory } = this.directory()
     try {
       const path = this.target(root)
@@ -116,11 +126,14 @@ export class EvidenceFileStorage {
         else fchmodSync(fd, 0o600)
         this.unchanged(root, directory, true)
         this.unchanged(path, fd)
-        return readFileSync(fd, 'utf8')
+        return readFileSync(fd)
       } finally { closeSync(fd) }
     } finally { closeSync(directory) }
   }
   writeText(content: string): void {
+    this.writeBytes(Buffer.from(content, 'utf8'))
+  }
+  writeBytes(content: Uint8Array): void {
     const { root, fd: directory } = this.directory()
     const temporary = join(root, `.${basename(this.path)}.${randomUUID()}.tmp`)
     try {

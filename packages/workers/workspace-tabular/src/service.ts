@@ -19,7 +19,6 @@ import {
 } from './contract.js'
 import {
   createWorkspaceTabularPreview,
-  createWorkspaceTabularXlsxPreview,
   deleteWorkspaceTabularColumns,
   deleteWorkspaceTabularRows,
   insertWorkspaceTabularColumns,
@@ -28,6 +27,7 @@ import {
   summarizeWorkspaceTabularSelection,
   updateWorkspaceTabularCell
 } from './workspace-tabular-engine.js'
+import { createWorkspaceTabularXlsxPreview } from './workspace-tabular-xlsx-engine.js'
 
 export class WorkspaceTabularService {
   preview(input: WorkspaceTabularPreviewInput): WorkspaceTabularPreviewResult {

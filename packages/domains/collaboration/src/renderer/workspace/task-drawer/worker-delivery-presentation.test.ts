@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { WorkerDeliveryDraft, WorkerDeliveryView } from '../../../worker-delivery.js'
 import type { TaskCardModel } from '../workspace-types.js'
-import { workerDeliveryPresentation } from './worker-delivery-presentation.js'
+import { deliverySubmissionError, workerDeliveryPresentation } from './worker-delivery-presentation.js'
 
 const at = '2026-10-21T02:00:00.000Z'
 const card: TaskCardModel = {
@@ -102,4 +102,51 @@ test('normal completion is a ready draft without a failure reason', () => {
   assert.equal(result.state, 'ready')
   assert.equal(result.failureReason, undefined)
   assert.equal(result.editLocked, false)
+})
+
+
+test('a newer ready chat draft supersedes a historical task-session failure while retaining its contents', () => {
+  const failedCard = { ...card, executionFailure: { code: 'runtime_failed', reexecutionInputId: 'old-input' } }
+  for (const changed of [false, true]) {
+    const latest = delivery({ state: 'waiting_confirmation', draft: draft({ changed }), candidate: null })
+    const result = workerDeliveryPresentation(latest, failedCard, [])
+    assert.equal(result.state, changed ? 'changed' : 'ready')
+    assert.equal(result.failureReason, undefined)
+    assert.equal(result.revision, 2)
+    assert.equal(result.summary, latest.draft!.summary)
+    assert.equal(result.declaredFiles[0]?.name, 'revision-two.md')
+    assert.equal(result.editLocked, false)
+  }
+  assert.equal(workerDeliveryPresentation(delivery({ state: 'waiting_confirmation', draft: null }), failedCard, []).state, 'failed')
+  assert.equal(workerDeliveryPresentation(delivery({ state: 'executing' }), failedCard, []).state, 'failed')
+  assert.equal(failedCard.executionFailure.code, 'runtime_failed')
+})
+
+
+test('HTTP 413 explains operator correction and explicit retry while the snapshot remains locked', () => {
+  const result = workerDeliveryPresentation(delivery({ state: 'blocked', operationId: 'dop_frozen',
+    error: 'Cloud object request returned HTTP 413.', draft: draft({ changed: true }) }), card, [])
+  assert.equal(result.state, 'failed', 'frozen rejected upload must not request a disabled preview of changed content')
+  assert.equal(result.editLocked, true)
+  assert.match(result.submitError ?? '', /服务器上传大小限制|server upload size limit/u)
+  assert.match(result.submitError ?? '', /冻结快照|frozen snapshot/u)
+  assert.match(result.submitError ?? '', /手动重试|explicitly retry/u)
+  assert.match(result.submitError ?? '', /实际限额未知|actual limit is unknown/u)
+  assert.match(result.submitError ?? '', /撤回失败提交并继续编辑|Cancel failed submission/u)
+  assert.doesNotMatch(result.submitError ?? '', /1 MiB|256 MiB|nginx/u)
+})
+
+
+test('capability-wrapped upload limits retain actionable guidance without exposing the broker envelope', () => {
+  const raw = 'Cloud object request returned HTTP 413.'
+  const expected = deliverySubmissionError(raw)
+  for (const reason of [
+    `Handler for collaboration.delivery.submit failed: handler_failed: ${raw}`,
+    `handler_failed: ${raw}`,
+    `Handler for collaboration.delivery.submit failed: handler_failed: Handler for collaboration.delivery.submit failed: handler_failed: ${raw}`
+  ]) {
+    assert.equal(deliverySubmissionError(reason), expected)
+    assert.doesNotMatch(deliverySubmissionError(reason), /Handler for|handler_failed|collaboration\.delivery\.submit/u)
+  }
+  assert.notEqual(deliverySubmissionError(`Unrelated operation mentioned ${raw}`), expected)
 })

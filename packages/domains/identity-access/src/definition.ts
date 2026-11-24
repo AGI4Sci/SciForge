@@ -15,6 +15,8 @@ export const IDENTITY_CAPABILITY_FACTORY_CONTRIBUTION = contributionFor(
   'main',
   'main.capability-factory'
 )
+export const IDENTITY_HOST_PORTS_CONTRIBUTION = contributionFor('main', 'main.host-ports.v1')
+export const IDENTITY_HOST_PORTS_CONTRACT = domainPackageDefinition.contributionContracts[IDENTITY_HOST_PORTS_CONTRIBUTION.id]!
 export const IDENTITY_PRINCIPAL_PROVIDER_CONTRIBUTION = contributionFor(
   'main',
   'main.principal-provider'
@@ -74,6 +76,15 @@ export const IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION = contributionFor(
 export const IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRACT =
   domainPackageDefinition.contributionContracts[
     IDENTITY_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION.id
+  ]!
+export const IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRIBUTION = contributionFor(
+  'renderer',
+  'renderer.extension',
+  'identity-access.account-navigation-section'
+)
+export const IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRACT =
+  domainPackageDefinition.contributionContracts[
+    IDENTITY_RENDERER_ACCOUNT_NAVIGATION_CONTRIBUTION.id
   ]!
 export const IDENTITY_RENDERER_LIFECYCLE_CONTRIBUTION = contributionFor(
   'renderer',

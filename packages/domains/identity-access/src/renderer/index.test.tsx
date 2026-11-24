@@ -11,10 +11,25 @@ describe('Identity renderer entry', () => {
       'renderer.command',
       'renderer.workbench-toolbar-action',
       'renderer.workbench-global-overlay',
+      'renderer.extension',
       'renderer.lifecycle',
       'renderer.i18n-resource',
       'renderer.i18n-resource'
     ])
+  })
+
+  it('keeps the account block in the sidebar footer through its canonical contract', () => {
+    const entry = createDomainRendererEntry(rendererHost())
+    const navigation = entry.contributions.find(
+      ({ id }) => id === 'identity-access.account-navigation-section'
+    )
+
+    expect(navigation?.contract).toEqual({
+      location: 'workbench.navigation-section',
+      contractVersion: '1.0.0',
+      label: 'identityAccountSection',
+      placement: 'footer'
+    })
   })
 
   it('opens the package-owned global overlay through its generic command', () => {

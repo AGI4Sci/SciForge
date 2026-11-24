@@ -932,6 +932,8 @@ export const CREATE_LOOP_CAPABILITY_IDS = Object.freeze({
 export type CreateLoopSnapshot = Readonly<{
   revision: number
   settings: WorkflowSettingsV1
+  processReceipts?: ProcessReceiptView[]
+  processReceiptCoverage?: ProcessReceiptCoverage
 }>
 
 const createLoopSettingsWireSchema = domainPackageJsonValueSchema.refine(
@@ -1061,7 +1063,25 @@ export const createLoopExportRerunInputSchema = z.object({
   comparator: reproOutputComparatorSchema.optional()
 }).strict()
 
+export const processIdentitySchema = z.object({
+  workflowId: z.string(), runId: z.string(), nodeId: z.string(), invocationId: z.string(), attempt: z.number().int().nonnegative()
+}).strict()
+export type ProcessIdentity = z.infer<typeof processIdentitySchema>
+export const processReceiptViewSchema = processIdentitySchema.extend({
+  executionId: z.string(), directory: z.string(), phase: z.enum(['prepared', 'started', 'finished', 'unknown']),
+  verification: z.enum(['verified', 'unknown']), outcome: z.enum(['known', 'unknown']), reason: z.string(),
+  preparedDigest: z.string().optional(), terminalDigest: z.string().optional()
+}).strict()
+export type ProcessReceiptView = z.infer<typeof processReceiptViewSchema>
+export const processReceiptCoverageSchema = z.object({
+  status: z.enum(['complete', 'partial', 'unavailable']),
+  reason: z.enum(['', 'entry_limit', 'byte_limit', 'journal_unavailable']),
+  scannedEntries: z.number().int().nonnegative()
+}).strict()
+export type ProcessReceiptCoverage = z.infer<typeof processReceiptCoverageSchema>
 export const createLoopSnapshotSchema = z.object({
+  processReceipts: z.array(processReceiptViewSchema).optional(),
+  processReceiptCoverage: processReceiptCoverageSchema.optional(),
   revision: z.number().int().nonnegative(),
   settings: createLoopSettingsWireSchema
 }).strict()

@@ -4,6 +4,7 @@
  */
 import {
   ANCHORED_COMMENT_SCHEMA_VERSION,
+  ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
   type AnchoredCommentThread,
   type ProductFeedbackPacket
 } from '../src/core/contract.js'
@@ -22,7 +23,7 @@ export const PNG_BYTES = Uint8Array.from(Buffer.from(
 
 export function researchThread(id = 'thread-1'): AnchoredCommentThread {
   return {
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     id,
     workspaceKey: WORKSPACE_KEY,
     purpose: 'research',
@@ -58,7 +59,7 @@ export function researchThread(id = 'thread-1'): AnchoredCommentThread {
 
 export function productFeedbackThread(id = 'thread-feedback'): AnchoredCommentThread {
   return {
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     id,
     workspaceKey: WORKSPACE_KEY,
     purpose: 'product_feedback',

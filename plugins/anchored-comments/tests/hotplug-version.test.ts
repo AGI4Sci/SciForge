@@ -54,15 +54,15 @@ test('candidate → check → replace → apply moves the live version once', { 
     const candidate = await stageCandidate(harness)
     const packagePath = join(candidate, 'package.json')
     const parsed = JSON.parse(await readFile(packagePath, 'utf8')) as Record<string, unknown>
-    parsed.version = '0.2.2'
+    parsed.version = '0.2.4'
     await writeFile(packagePath, `${JSON.stringify(parsed, null, 2)}\n`)
     // The exact-version approval follows the candidate.
-    harness.contracts.set(PACKAGE_NAME, contractFor(PACKAGE_NAME, '0.2.2'))
+    harness.contracts.set(PACKAGE_NAME, contractFor(PACKAGE_NAME, '0.2.4'))
 
     await harness.service.checkCandidate(PACKAGE_NAME, candidate)
     await harness.service.replacePlugin(PACKAGE_NAME, candidate)
     const applied = await harness.service.updateStatus(PACKAGE_NAME)
-    assert.equal(applied.version, '0.2.2')
+    assert.equal(applied.version, '0.2.4')
     assert.notEqual(applied.version, PACKAGE_VERSION)
 
     // Applying again would be a same-version replacement.
@@ -70,7 +70,7 @@ test('candidate → check → replace → apply moves the live version once', { 
       harness.service.applyCandidate(PACKAGE_NAME),
       /version must change/i
     )
-    assert.equal((await harness.service.updateStatus(PACKAGE_NAME)).version, '0.2.2')
+    assert.equal((await harness.service.updateStatus(PACKAGE_NAME)).version, '0.2.4')
     assert.deepEqual(anchoredCommentIds(harness.registry), EXPECTED_IDS)
   } finally {
     await harness.dispose()

@@ -59,6 +59,7 @@ function createTabularObservation(
         id: 'table-1',
         name: 'samples.csv',
         rowCount: 3,
+        rowCountIsEstimate: false,
         columnCount: 2
       }
     ],
@@ -121,6 +122,25 @@ function findElementByDataAttribute(
 }
 
 describe('TabularWorkspaceViewer', () => {
+  it('uses the same filter and sort model for resource data without a workspace observation or writes', () => {
+    const data = { title: 'Resource table', tabular: {
+      header: ['sample', 'count'], rows: [
+        { index: 0, values: ['alpha', '2'] }, { index: 1, values: ['beta', '1'] }
+      ], truncatedRows: true, truncatedColumns: false
+    } }
+    const filtered = buildTabularWorkspaceViewerModel(data, { filterText: 'beta' })
+    expect(filtered.grid.rows.map(row => row.values)).toEqual([['beta', '1']])
+    expect(filtered.grid.truncatedRows).toBe(true)
+    expect(filtered.actions).toEqual([])
+    expect(filtered.selection.kind).toBe('none')
+    const sorted = buildTabularWorkspaceViewerModel(data, { sort: { columnIndex: 1, direction: 'asc' } })
+    expect(sorted.grid.rows.map(row => row.index)).toEqual([1, 0])
+    const html = renderToStaticMarkup(createElement(TabularWorkspaceViewer, { data }))
+    expect(html).toContain('data-workspace-preview-tabular-viewer')
+    expect(html).toContain('data-edit-enabled="false"')
+    expect(html).not.toContain('data-tabular-cell-apply')
+  })
+
   it('builds an agent-readable tabular view model from table summary, visible text, and actions', () => {
     const model = buildTabularWorkspaceViewerModel(createTabularObservation())
 
@@ -186,6 +206,28 @@ describe('TabularWorkspaceViewer', () => {
     expect(model.agentSummary).toContain('Filter: none. Sort: none.')
     expect(model.agentSummary).toContain('tables: samples.csv (3 rows x 2 columns)')
     expect(model.agentSummary).toContain('actions: Preview Table, Inspect Columns, Filter Rows, Sort Rows, Select Cells, Update Cell, Insert Rows, Insert Columns, Delete Rows, Delete Columns, Export CSV, Select')
+  })
+
+  it('labels estimated table row counts instead of presenting truncated parses as exact', () => {
+    const model = buildTabularWorkspaceViewerModel(createTabularObservation({
+      tables: [{
+        id: 'table-1',
+        name: '02_intervals.csv',
+        rowCount: 25_800,
+        rowCountIsEstimate: true,
+        columnCount: 6
+      }]
+    }))
+
+    expect(model.tables).toEqual([
+      {
+        id: 'table-1',
+        name: '02_intervals.csv',
+        rowCount: 'approximately 25,800',
+        columnCount: '6',
+        summary: 'approximately 25,800 rows x 6 columns'
+      }
+    ])
   })
 
   it('filters visible cells, sorts bounded rows, and reports that state without dumping the table', () => {

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { AcpFileChangeProjection } from './acp-file-change.js'
 import { isAbsolute } from 'node:path'
 import { AcpTransport, DshRuntimeError, type Wire } from './transport.js'
 import { prepareDeployment } from './deployment.js'
@@ -11,6 +12,30 @@ export { DshRuntimeError, resolveDshLaunchInvocation } from './transport.js'
 export { DSH_DEFAULT_ACP_ROUTE, DSH_COMMAND_EXECUTION_ENTRY_IDS, DSH_COMMAND_EXECUTION_PLUGIN_NAMES, DSH_DISABLED_ENTRY_IDS, DSH_DISABLED_PLUGIN_NAME_PATTERNS, DSH_SAFETY_PATCH, createDiscoveredDshDeployment, createDshDerivedSafetyPatch, createDshEnvironment, createDshSafetyPatch, dshDisabledEntryIds, validateDshComposedConfig, validateDshDerivedComposedConfig } from './deployment.js'
 
 const DSH_PROBE_FAILURE_CODES: ReadonlySet<string> = new Set(['runtime_not_found', 'runtime_path_invalid', 'runtime_not_executable', 'runtime_version_unsupported', 'runtime_architecture_incompatible'])
+
+/** Default maximum *silence* for a prompt, not maximum turn duration. Ten
+ * minutes without a single ACP notification means the runtime is stuck; a turn
+ * that keeps streaming session/update notifications is never cut off by a
+ * clock. The Host composition overrides this only to tighten or relax that
+ * silence budget. */
+export const DSH_DEFAULT_PROMPT_IDLE_TIMEOUT_MS = 600_000
+/** The first ACP handshake happens while the child is still loading its plugin
+ * graph; measured cold starts are ~17s on Windows, so an initialize/`session/new`
+ * budget below this value would report "timeout" for a healthy runtime. */
+export const DSH_COLD_START_TIMEOUT_MS = 90_000
+
+/** Turn-terminal reason for a prompt that stopped producing activity. It stays
+ * distinguishable from a protocol error (`runtime_protocol_invalid`), a
+ * correlated JSON-RPC error (`runtime_request_failed`), a lifecycle budget
+ * expiry (`runtime_request_timeout`) and a child disconnect so the Host/UI can
+ * offer continuation instead of treating the work as a generic failure. */
+const DSH_PROMPT_IDLE_TIMEOUT_CODE = 'runtime_prompt_idle_timeout'
+
+function promptFailureReason(error: unknown, fallback: string): string {
+  return error instanceof DshRuntimeError && error.code === 'runtime_request_idle_timeout'
+    ? DSH_PROMPT_IDLE_TIMEOUT_CODE
+    : fallback
+}
 
 /** How the effective safety closure is proven: a pinned artifact's static patch,
  * or an overlay derived from a discovered install's own composed config. */
@@ -42,7 +67,7 @@ function stringField(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-type Turn = { identity: DshIdentity; generation: number; controller: AbortController; finished: boolean; cancelling?: boolean; cancellation?: Promise<void>; transport?: AcpTransport; prompt?: Promise<void>; startup: Promise<void>; startupDone: () => void; items: Map<string, DshToolItem>; toolKinds: Map<string, string>; abortCleanup?: () => void }
+type Turn = { identity: DshIdentity; generation: number; controller: AbortController; finished: boolean; cancelling?: boolean; cancellation?: Promise<void>; transport?: AcpTransport; prompt?: Promise<void>; startup: Promise<void>; startupDone: () => void; items: Map<string, DshToolItem>; fileChanges: AcpFileChangeProjection; toolKinds: Map<string, string>; abortCleanup?: () => void }
 type Approval = { id: string | number; turn: Turn; options: { optionId: string; kind: string; name: string }[]; timer: NodeJS.Timeout }
 type Listener = { threadId: string; push: (e: DshEvent) => void; stop: () => void }
 export function createDshRuntimeAdapter(options: DshRuntimeOptions) { return new DshRuntimeAdapter(options) }
@@ -59,9 +84,11 @@ export class DshRuntimeAdapter {
   // Retain fenced cleanup ownership even when its single attempt rejects.
   private retirementOwner?: { transport?: AcpTransport; cleanup?: () => Promise<void> }
   private modelRouterIdentity?: string
+  private processPolicy?: { sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspace: string }
   private deploymentCleanup?: () => Promise<void>
   private deployedVersion?: string
   private toolImageInputAllowed = false
+  private assertSessionPolicy?: (sessionId: string) => Promise<void>
   private threads = new Map<string, DshThread>()
   private mounted = new Map<string, string>()
   private active?: Turn
@@ -100,10 +127,10 @@ export class DshRuntimeAdapter {
       return { runtimeId: this.runtimeId, available: false, executablePath, source, version: null, protocol: null, deploymentIntegrity: deploymentIntegrityOf(safetyPatch), failure: { code, technicalDetail } }
     }
   }
-  async connect(context: DshContext): Promise<void> {
+  async connect(context: DshContext, policy?: { sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'; workspace: string }): Promise<void> {
     await this.retiring
     if (this.closed) throw new DshRuntimeError('runtime_closed')
-    if (this.connecting) { await this.connecting; return this.connect(context) }
+    if (this.connecting) { await this.connecting; return this.connect(context, policy) }
     const task = (async () => {
       let modelRouter = this.options.modelRouter
       try { modelRouter = this.options.getModelRouter ? await this.options.getModelRouter(context) : modelRouter }
@@ -112,7 +139,8 @@ export class DshRuntimeAdapter {
         await this.retire(); this.modelRouterIdentity = undefined
         throw error
       }
-      const identity = JSON.stringify(modelRouter)
+      const effectivePolicy = policy ?? this.processPolicy
+      const identity = JSON.stringify({ modelRouter, ...effectivePolicy })
       if (this.connection && identity === this.modelRouterIdentity) return
       if (this.connection) {
         if (this.active && this.active.generation !== -1) this.finish(this.active, 'failed', 'runtime_model_route_changed')
@@ -120,27 +148,36 @@ export class DshRuntimeAdapter {
       }
       const generation = ++this.generation
       const target = await this.resolveTarget({ settings: context.settings })
-      const deployment = await prepareDeployment({ ...this.options, ...target, modelRouter })
+      const deployment = await prepareDeployment({ ...this.options, ...target, modelRouter, sandboxMode: effectivePolicy?.sandboxMode })
+      this.processPolicy = effectivePolicy
       if (this.closed || generation !== this.generation) { await deployment.cleanup(); throw new DshRuntimeError('runtime_stale_generation') }
       this.deploymentCleanup = deployment.cleanup
       this.deployedVersion = deployment.version
       this.toolImageInputAllowed = deployment.toolImageInputAllowed
-      const transport = new AcpTransport(target.executable, deployment.args, deployment.env, this.options.stateDirectory,
+      this.assertSessionPolicy = deployment.assertSessionPolicy
+      const transport = new AcpTransport(deployment.executable, deployment.args, deployment.env, effectivePolicy?.workspace ?? this.options.stateDirectory,
         this.options.requestTimeoutMs ?? 15_000,
         message => { if (generation === this.generation && !this.closed) this.receive(message, generation) },
-        () => {
+        (error) => {
           if (generation !== this.generation) return
           const turn = this.active
           // retire retains the rejected promise and owner for public observers.
           void this.retire().catch(() => {})
-          if (turn && !turn.cancelling) this.finish(turn, 'failed', 'runtime_disconnected')
+          // Prompt silence is not a protocol fault and must not be reported as a
+          // generic disconnect: the session is still resumable, so the Host can
+          // tell the user the turn was paused rather than corrupted.
+          if (turn && !turn.cancelling) this.finish(turn, 'failed', promptFailureReason(error, 'runtime_disconnected'))
         })
       this.connection = transport
       this.modelRouterIdentity = identity
       try {
         const initialized = await transport.request('initialize', { protocolVersion: 1,
           clientInfo: { name: 'sciforge-dsh-runtime', version: '0.1.0' },
-          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } },
+        // A cold ACP boot loads the whole DSH plugin graph; measured cold starts
+        // exceed the 15s lifecycle budget, so the first handshake gets the
+        // cold-start budget while later lifecycle calls keep the tight one.
+        { timeoutMs: Math.max(this.options.requestTimeoutMs ?? 15_000, DSH_COLD_START_TIMEOUT_MS) })
         if (initialized?.protocolVersion !== 1 || initialized?.agentInfo?.name !== 'deepseek-harness-acp') throw new DshRuntimeError('runtime_protocol_unsupported')
         if (generation !== this.generation || this.closed) throw new DshRuntimeError('runtime_stale_generation')
         this.serverCapabilities = initialized.agentCapabilities ?? {}
@@ -161,9 +198,10 @@ export class DshRuntimeAdapter {
     this.assertRuntime(input)
     const cwd = this.workspace(this.options.resolveWorkspace ? await this.options.resolveWorkspace(context, input) : input.workspace)
     if (this.active) throw new DshRuntimeError('runtime_busy')
-    await this.connect(context)
-    const result = await this.connection!.request('session/new', { cwd, mcpServers: [] })
+    await this.connect(context, { sandboxMode: this.options.sandboxMode ?? 'workspace-write', workspace: cwd })
+    const result = await this.connection!.request('session/new', { cwd, mcpServers: [] }, { timeoutMs: Math.max(this.options.requestTimeoutMs ?? 15_000, DSH_COLD_START_TIMEOUT_MS) })
     if (typeof result?.sessionId !== 'string' || !result.sessionId) throw new DshRuntimeError('runtime_protocol_invalid')
+    await this.assertSessionPolicy?.(result.sessionId)
     const thread: DshThread = { id: result.sessionId, runtimeId: 'dsh', workspace: cwd, title: '', updatedAt: new Date().toISOString(), state: 'idle' }
     this.threads.set(thread.id, thread)
     this.mounted.set(thread.id, '[]')
@@ -183,15 +221,17 @@ export class DshRuntimeAdapter {
     this.assertRuntime(input)
     if (this.active) throw new DshRuntimeError('runtime_busy')
     const cwd = this.workspace(this.options.resolveWorkspace ? await this.options.resolveWorkspace(context, input) : input.workspace)
-    await this.connect(context)
+    await this.connect(context, { sandboxMode: this.processPolicy?.sandboxMode ?? this.options.sandboxMode ?? 'workspace-write', workspace: cwd })
     if (!this.serverCapabilities.sessionCapabilities?.resume) throw new DshRuntimeError('runtime_unsupported')
-    await this.connection!.request('session/resume', { sessionId: input.sessionId, cwd, mcpServers: [] })
+    await this.connection!.request('session/resume', { sessionId: input.sessionId, cwd, mcpServers: [] }, { timeoutMs: Math.max(this.options.requestTimeoutMs ?? 15_000, DSH_COLD_START_TIMEOUT_MS) })
+    await this.assertSessionPolicy?.(input.sessionId)
     this.mounted.set(input.sessionId, '[]')
     this.threads.set(input.sessionId, { id: input.sessionId, runtimeId: 'dsh', workspace: cwd, title: '', updatedAt: new Date().toISOString(), state: 'idle' })
     return { runtimeId: this.runtimeId, sessionId: input.sessionId, threadId: input.sessionId }
   }
   async startTurn(context: DshContext, input: DshTurnInput): Promise<DshTurnHandle> {
     this.assertRuntime(input)
+    if (this.options.contextProfile === 'minimal' && (!input.allowedTools || input.allowedTools.length)) throw new DshRuntimeError('runtime_minimal_context_unsafe')
     if (this.active) throw new DshRuntimeError('runtime_busy')
     const thread = input.threadId ? this.threads.get(input.threadId) : undefined
     if (!thread) throw new DshRuntimeError('runtime_thread_not_found')
@@ -200,7 +240,7 @@ export class DshRuntimeAdapter {
     const identity: DshIdentity = structuredClone({ runtimeId: 'dsh', threadId: thread.id, turnId: randomUUID(), principal: context.principal, principalContext: context.principalContext })
     let startupDone!: () => void
     const startup = new Promise<void>(resolve => { startupDone = resolve })
-    const turn: Turn = { identity, generation: -1, controller: new AbortController(), finished: false, startup, startupDone, items: new Map(), toolKinds: new Map() }
+    const turn: Turn = { identity, generation: -1, controller: new AbortController(), finished: false, startup, startupDone, items: new Map(), fileChanges: new AcpFileChangeProjection(), toolKinds: new Map() }
     this.active = turn
     try {
       if (input.signal) {
@@ -211,11 +251,15 @@ export class DshRuntimeAdapter {
       }
 
       this.checkTurn(turn)
-      await this.connect(context)
+      const sandboxMode = input.permissionLevel === 'read-only' ? 'read-only'
+        : input.permissionLevel === 'danger-full-access' || input.permissionLevel === 'full-access' ? 'danger-full-access'
+          : 'workspace-write'
+      await this.connect(context, { sandboxMode, workspace: thread.workspace! })
       turn.generation = this.generation
       turn.transport = this.connection
       const servers = await this.waitForHost(turn, () => this.options.getAuthorizedMcpServers?.({ ...structuredClone(identity), workspace: thread.workspace!, toolImageInputAllowed: this.toolImageInputAllowed, allowedTools: input.allowedTools ? [...input.allowedTools] : undefined, permissionLevel: input.permissionLevel, governanceProfile: input.governanceProfile, signal: turn.controller.signal }) ?? Promise.resolve([]))
       this.checkTurn(turn)
+      if (this.options.contextProfile === 'minimal' && servers.length) throw new DshRuntimeError('runtime_minimal_context_unsafe')
       this.validateServers(servers)
       if (servers.length && this.serverCapabilities.mcpCapabilities?.http !== true) throw new DshRuntimeError('runtime_mcp_unsupported')
       const config = JSON.stringify(servers)
@@ -228,6 +272,7 @@ export class DshRuntimeAdapter {
         if (mounted !== undefined && mounted !== '[]') throw new DshRuntimeError('runtime_mcp_rebind_unsupported')
         if (mounted !== undefined) await this.connection!.request('session/close', { sessionId: thread.id })
         await this.connection!.request('session/resume', { sessionId: thread.id, cwd: thread.workspace, mcpServers: servers })
+        await this.assertSessionPolicy?.(thread.id)
         this.mounted.set(thread.id, config)
       }
       this.checkTurn(turn)
@@ -236,11 +281,27 @@ export class DshRuntimeAdapter {
       this.checkTurn(turn)
       this.emit(turn, { kind: 'turn_lifecycle', state: 'running' })
       const transport = this.connection!
-      turn.prompt = transport.request('session/prompt', { sessionId: thread.id, prompt: [{ type: 'text', text: input.text }] }, this.options.promptTimeoutMs ?? 15_000).then(result => {
+      // Only session/prompt's completion spans model and tool execution, so
+      // only it gets the silence budget. Lifecycle requests above keep the
+      // genuine per-request budget: they are dispatched outside a live turn
+      // (startTurn rejects with runtime_busy) and never wait for tool work.
+      turn.prompt = transport.request('session/prompt', { sessionId: thread.id, prompt: [{ type: 'text', text: input.text }] }, {
+        timeoutMs: this.options.promptTimeoutMs ?? DSH_DEFAULT_PROMPT_IDLE_TIMEOUT_MS,
+        idle: true,
+        // ACP identifies sessions, not turns; a notification for any other
+        // session is not progress for this prompt and must not extend it.
+        matches: message => message.params?.sessionId === thread.id
+      }).then(result => {
         if (!this.current(turn)) return
         const state = result?.stopReason === 'cancelled' ? 'interrupted' : ['end_turn', 'max_tokens', 'max_turn_requests', 'refusal'].includes(result?.stopReason) ? 'completed' : 'failed'
         this.finish(turn, state, state === 'failed' ? 'runtime_stop_reason_unknown' : undefined)
-      }, () => { if (this.current(turn)) this.finish(turn, 'failed', 'runtime_request_failed') })
+      }, error => {
+        // The transport failure callback has already emitted the terminal event
+        // (promptFailureReason) when it retired the connection; this path covers
+        // a rejection that did not tear the transport down.
+        if (!this.current(turn)) return
+        this.finish(turn, 'failed', promptFailureReason(error, 'runtime_request_failed'))
+      })
       return handle
     } catch (error) {
       const ownsConnection = turn.generation === this.generation
@@ -284,11 +345,13 @@ export class DshRuntimeAdapter {
       else if (['tool_call', 'tool_call_update'].includes(update?.sessionUpdate) && typeof update.toolCallId === 'string') {
         const previous = turn.items.get(update.toolCallId)
         const statuses: Record<string, DshToolItem['status']> = { pending: 'pending', in_progress: 'running', completed: 'completed', failed: 'failed' }
-        const item: DshToolItem = { ...previous, id: update.toolCallId, turnId: turn.identity.turnId, kind: 'tool', toolKind: 'tool_call',
+        const fileChange = turn.fileChanges.update(update)
+        const item: DshToolItem = { ...previous, id: update.toolCallId, turnId: turn.identity.turnId, kind: 'tool', toolKind: fileChange ? 'file_change' : 'tool_call',
           status: statuses[update.status] ?? previous?.status ?? 'pending',
           summary: typeof update.title === 'string' ? update.title : previous?.summary,
-          detail: acpToolDetail(update, previous?.detail),
-          meta: { origin: 'acp', authoritativeExecutionReceipt: false } }
+          detail: fileChange ?? acpToolDetail(update, previous?.toolKind === 'tool_call' ? previous.detail : undefined),
+          meta: { origin: 'acp', authoritativeExecutionReceipt: false,
+            ...(fileChange ? { factSource: 'runtime_lifecycle', evidenceStrength: 'runtime_lifecycle', acpToolKind: 'edit', acpContentType: 'diff', acpToolCallId: update.toolCallId, acpSessionId: turn.identity.threadId } : {}) } }
         turn.items.set(update.toolCallId, item)
         // ACP declares the tool kind on the call itself; permissions for that
         // call may arrive without it, so the turn remembers what it observed.

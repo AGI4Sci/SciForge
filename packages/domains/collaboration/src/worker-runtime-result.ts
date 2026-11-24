@@ -1,5 +1,6 @@
 import { domainMainAgentExecutionOutputSchemaSchema } from '@sciforge/domain-sdk/agent-execution'
 import { z } from 'zod'
+import { workerFollowupRequestSchema } from './task-followup.js'
 
 // A worst-case JSON-escaped summary at this limit still leaves more than
 // 15 KiB in the default 64 KiB text-task task.result.submit body.
@@ -117,9 +118,16 @@ const needsHumanWorkerRuntimeResultSchema = z.object({
   requiredAssurance: z.enum(['verified', 'strong'])
 }).strict()
 
+const deferredWorkerRuntimeResultSchema = z.object({
+  schemaVersion: z.literal(1),
+  outcome: z.literal('deferred'),
+  followup: workerFollowupRequestSchema
+}).strict()
+
 export const workerRuntimeResultSchema = z.discriminatedUnion('outcome', [
   completedWorkerRuntimeResultSchema,
-  needsHumanWorkerRuntimeResultSchema
+  needsHumanWorkerRuntimeResultSchema,
+  deferredWorkerRuntimeResultSchema
 ])
 
 export type WorkerRuntimeResult = z.infer<typeof workerRuntimeResultSchema>
@@ -140,7 +148,8 @@ const workerRuntimeResultStructuredSchema = z.object({
   // above remains the canonical semantic validator.
   result: z.union([
     completedWorkerRuntimeResultSchema,
-    needsHumanWorkerRuntimeResultSchema
+    needsHumanWorkerRuntimeResultSchema,
+    deferredWorkerRuntimeResultSchema
   ])
 }).strict()
 
@@ -156,7 +165,15 @@ const workerRuntimeResultProviderSchema = z.object({
       outcome: z.literal('needs_human'),
       question: providerQuestionString(4_000),
       requiredAssurance: z.enum(['verified', 'strong'])
-    }).strict()
+    }).strict(),
+    deferredWorkerRuntimeResultSchema.extend({
+      followup: workerFollowupRequestSchema.extend({
+        // JSON-object upstreams enforce the same datetime constraint through
+        // Zod's public regex; their local validator deliberately rejects format.
+        // The canonical parser above retains the ISO datetime semantic schema.
+        at: z.string().regex(z.regexes.datetime({ offset: true }))
+      })
+    })
   ])
 }).strict()
 

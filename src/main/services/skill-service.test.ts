@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
@@ -12,11 +12,19 @@ import {
 } from '../../shared/app-settings'
 import { guiSkillRootsForRuntime, listGuiSkills } from './skill-service'
 
+const testHome = vi.hoisted(() => ({ root: '' }))
+vi.mock('node:os', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:os')>(),
+  homedir: () => testHome.root
+}))
+
 describe('skill-service', () => {
   let tempRoot = ''
 
   beforeEach(async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'gui-skills-'))
+    testHome.root = join(tempRoot, 'home')
+    await mkdir(testHome.root, { recursive: true })
   })
 
   afterEach(async () => {
@@ -45,6 +53,20 @@ describe('skill-service', () => {
       name: 'Openspec Apply Change',
       description: 'Implement tasks from an OpenSpec change.',
       scope: 'project'
+    }))
+  })
+
+  it('discovers default global skills from the isolated user home', async () => {
+    const workspaceRoot = join(tempRoot, 'workspace-global')
+    const skillRoot = join(testHome.root, '.agents', 'skills', 'global-helper')
+    await writeSkill(skillRoot, { name: 'Global Helper', description: 'Default user instructions.' })
+
+    const result = await listGuiSkills(createSettings(workspaceRoot), workspaceRoot)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.skills).toContainEqual(expect.objectContaining({
+      id: 'global-helper', root: skillRoot, scope: 'global'
     }))
   })
 
@@ -234,23 +256,12 @@ describe('skill-service', () => {
   }
 
   async function withHome<T>(homeRoot: string, action: () => Promise<T>): Promise<T> {
-    const originalHome = process.env.HOME
-    const originalUserProfile = process.env.USERPROFILE
-    process.env.HOME = homeRoot
-    process.env.USERPROFILE = homeRoot
+    const originalHome = testHome.root
+    testHome.root = homeRoot
     try {
       return await action()
     } finally {
-      if (originalHome === undefined) {
-        delete process.env.HOME
-      } else {
-        process.env.HOME = originalHome
-      }
-      if (originalUserProfile === undefined) {
-        delete process.env.USERPROFILE
-      } else {
-        process.env.USERPROFILE = originalUserProfile
-      }
+      testHome.root = originalHome
     }
   }
 

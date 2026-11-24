@@ -269,18 +269,35 @@ export const projectBudgetSchema = z.object({
 })
 export type ProjectBudget = z.infer<typeof projectBudgetSchema>
 
+export const projectDescriptionSchema = z.string().trim().max(32_000)
+
+export const projectDispatchAuthorizationSchema = z.object({
+  requirementsDocumentId: projectRequirementsDocumentIdSchema,
+  requirementsDocumentRevision: revisionSchema,
+  requirementsContentDigest: sha256Schema,
+  assignments: z.array(z.object({ planItemId: planItemIdSchema, workerUserId: userIdSchema }).strict()).min(1).max(100),
+  expiresAt: timestampSchema,
+  approvedByUserId: userIdSchema,
+  approvedAt: timestampSchema,
+  coordinatorAuthorityEpoch: revisionSchema,
+  executionAuthorityEpoch: revisionSchema
+}).strict()
+export type ProjectDispatchAuthorization = z.infer<typeof projectDispatchAuthorizationSchema>
+
 export const projectSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('project'),
   projectId: projectIdSchema,
   ownerUserId: userIdSchema,
   displayName: displayNameSchema,
-  goal: nonEmptyTextSchema,
+  goal: projectDescriptionSchema,
   coordinatorAgentId: agentIdSchema,
   coordinatorAuthorityEpoch: revisionSchema,
   executionAuthorityEpoch: revisionSchema,
   status: projectStatusSchema,
-  budget: projectBudgetSchema
+  budget: projectBudgetSchema,
+  executionMode: z.enum(['manual', 'ai_leader']).default('manual'),
+  dispatchAuthorization: projectDispatchAuthorizationSchema.nullable().default(null)
 }).strict()
 export type Project = z.infer<typeof projectSchema>
 
@@ -315,9 +332,18 @@ export const taskStatusSchema = z.enum([
 ])
 export type TaskStatus = z.infer<typeof taskStatusSchema>
 
+export const taskContentChangeSchema = z.object({
+  proposedByUserId: userIdSchema,
+  proposedAt: timestampSchema,
+  title: displayNameSchema,
+  objective: nonEmptyTextSchema,
+  completionCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(100),
+}).strict()
+
 const taskBaseSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('task'),
+  contentChange: taskContentChangeSchema.nullable().optional(),
   taskId: taskIdSchema,
   projectId: projectIdSchema,
   createdByCoordinatorAgentId: agentIdSchema,
@@ -334,6 +360,7 @@ const taskBaseSchema = z.object({
   currentExecutionId: executionIdSchema.nullable(),
   currentExecutionState: taskExecutionStateSchema.nullable(),
   status: taskStatusSchema,
+  /** Claimed attempts for the current immutable contract revision. */
   executionCount: z.number().int().min(0).max(101),
   maxRetries: z.number().int().min(0).max(100),
   completedAt: timestampSchema.nullable()
@@ -502,6 +529,25 @@ export const confirmableHumanActionSchema = z.object({
 }).strict()
 export type ConfirmableHumanAction = z.infer<typeof confirmableHumanActionSchema>
 
+export const humanDecisionOptionSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/u),
+  label: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(2000).optional()
+}).strict()
+export const humanDecisionInteractionSchema = z.discriminatedUnion('kind', [
+  z.object({kind:z.literal('clarification')}).strict(),
+  z.object({kind:z.literal('choice'),options:z.array(humanDecisionOptionSchema).min(2).max(12),recommendedOptionId:humanDecisionOptionSchema.shape.id.optional()}).strict().superRefine((value,ctx)=>{
+    if(new Set(value.options.map(item=>item.id)).size!==value.options.length)ctx.addIssue({code:'custom',path:['options'],message:'Option IDs must be unique.'})
+    if(value.recommendedOptionId!==undefined&&!value.options.some(item=>item.id===value.recommendedOptionId))ctx.addIssue({code:'custom',path:['recommendedOptionId'],message:'Recommendation must name an existing option.'})
+  }),
+  z.object({kind:z.literal('approval')}).strict()
+])
+export type HumanDecisionInteraction = z.infer<typeof humanDecisionInteractionSchema>
+export const humanRequestDeferralSchema=z.object({deferredAt:timestampSchema,deferredByUserId:userIdSchema,reason:z.string().trim().min(1).max(2000)}).strict()
+export function refineHumanDecisionRequest(value:{interaction:HumanDecisionInteraction;confirmableAction?:unknown},ctx:z.RefinementCtx):void {
+  if((value.interaction.kind==='approval')!==(value.confirmableAction!=null))ctx.addIssue({code:'custom',path:['confirmableAction'],message:'Only approval requests require an exact confirmable action.'})
+}
+
 export const humanNeededSchema = z.object({
   ...entityMetadataShape,
   type: z.literal('human_needed'),
@@ -512,10 +558,12 @@ export const humanNeededSchema = z.object({
   requestedByAgentId: agentIdSchema,
   requiredAssurance: assuranceLevelSchema,
   prompt: nonEmptyTextSchema,
+  interaction: humanDecisionInteractionSchema,
+  deferred: humanRequestDeferralSchema.nullable(),
   confirmableAction: confirmableHumanActionSchema.nullable(),
   status: humanNeededStatusSchema,
   expiresAt: timestampSchema
-}).strict()
+}).strict().superRefine(refineHumanDecisionRequest)
 export type HumanNeeded = z.infer<typeof humanNeededSchema>
 
 export const humanAnswerSourceSchema = z.discriminatedUnion('type', [
@@ -542,6 +590,7 @@ export const humanAnswerSchema = z.object({
   answeredFrom: humanAnswerSourceSchema,
   assurance: assuranceLevelSchema,
   answer: nonEmptyTextSchema,
+  selectedOptionId: humanDecisionOptionSchema.shape.id.nullable(),
   decision: z.enum(['approve', 'reject']).nullable(),
   confirmationId: confirmationIdSchema.nullable(),
   answeredAt: timestampSchema

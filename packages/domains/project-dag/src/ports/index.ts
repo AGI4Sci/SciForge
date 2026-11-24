@@ -8,6 +8,8 @@ export interface ProjectDagPorts {
   readSession(identity: Readonly<{ runtimeId: string; threadId: string }>): Promise<Readonly<{
     runtimeId: string; id: string; workspaceRoot?: string
   }>>
+  /** Resolve through the workspace-authorized Evidence owner and validate its
+   * authoritative chain binding. Snapshot threadId may be a Session successor. */
   readCommittedSnapshot(identity: ProjectDagSessionIdentity): Promise<EvidenceDagCommittedSnapshot>
   /** Canonical Project service commands; host authorizes target workspace before dispatch.
    * Cancellation before dispatch prevents mutation; after admission awaits quiescence,

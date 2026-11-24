@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.user-decisions",
     "displayName": "User Decisions",
-    "version": "1.0.0",
+    "version": "1.1.1",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"
@@ -29,8 +29,8 @@
         "missing requirement",
         "ask the user",
         "clarification",
-        "\u7528\u6237\u51b3\u7b56",
-        "\u9700\u8981\u7528\u6237\u9009\u62e9"
+        "用户决策",
+        "需要用户选择"
       ],
       "allowedRoutes": [
         "structured-input"
@@ -38,7 +38,7 @@
       "workflow": [
         {
           "id": "ask",
-          "description": "Discover user-decisions.request, inspect its schema, and invoke it with 1\u20133 concise questions. Wait for the tool result; do not assume an answer.",
+          "description": "Discover user-decisions.request, inspect its schema, and invoke it with 1–3 concise questions. Wait for the tool result; do not assume an answer.",
           "capabilityId": "user-decisions.request"
         }
       ],
@@ -69,6 +69,10 @@
         {
           "kind": "renderer.extension",
           "id": "user-decisions.presentation"
+        },
+        {
+          "kind": "renderer.i18n-resource",
+          "id": "user-decisions.translations"
         }
       ]
     }

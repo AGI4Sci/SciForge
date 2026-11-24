@@ -663,6 +663,18 @@ describe('workspace-service boundary checks', () => {
     expect(result.content).toBe('inside')
   })
 
+  it.each(['py', 'R', 'jl', 'sh', 'bash', 'zsh', 'ps1'])('previews scientific %s scripts as read-only text without executing them', async extension => {
+    const content = '# script data only\r\nraise RuntimeError("must never execute")\r\n'
+    const path = `analysis.${extension}`
+    await writeFile(join(workspaceRoot, path), content, 'utf8')
+    const result = await readWorkspaceFile({ path, workspaceRoot })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.kind).toBe('text')
+    expect(result.content).toBe(content)
+    expect(await readFile(join(workspaceRoot, path), 'utf8')).toBe(content)
+  })
+
   it('uses workspace-intel text preview metadata for source files', async () => {
     await writeFile(join(workspaceRoot, 'app.ts'), 'export const value = 42\n', 'utf8')
 

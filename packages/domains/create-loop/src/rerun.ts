@@ -383,7 +383,7 @@ function addEmbeddedCredentialValues(secrets: Set<string>, value: string): void 
     if (token) secrets.add(token)
     if (match[0]) secrets.add(match[0])
   }
-  for (const match of value.matchAll(/[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/@\s]+)@/gu)) {
+  for (const match of value.matchAll(/(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/@\s]+)@/gu)) {
     const userinfo = match[1] ?? ''
     if (!userinfo) continue
     secrets.add(userinfo)
@@ -410,7 +410,7 @@ function redactKnownSecretsFromString(value: string, secretValues: readonly stri
   }
   return redacted
     .replace(/\bBearer\s+[^\s"'<>]+/giu, `Bearer ${SECRET_REDACTION_TEXT}`)
-    .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/@\s]+@/gu, `$1${SECRET_REDACTION_TEXT}@`)
+    .replace(/(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/@\s]+@/gu, `$1${SECRET_REDACTION_TEXT}@`)
 }
 
 function safeDecodeURIComponent(value: string): string {

@@ -1,3 +1,0 @@
-- insert:
-    - id: git-checkpoints
-      name: "@sciforge/plugin-git-checkpoints"

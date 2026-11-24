@@ -1,8 +1,32 @@
 import { z } from 'zod'
+import { codeAnchorSchema } from '@sciforge/domain-sdk/renderer'
 import { captureSourceSchema } from '../ports/visual-capture'
+import { codeConversationCommandSchema, codeConversationSchema, projectIdSchema, projectCoordinationCursorSchema, restProjectPageResponseSchema } from '@sciforge/collaboration-contracts'
 
 export const ANCHORED_COMMENT_SCHEMA_VERSION = 1
+/**
+ * Version of the persisted thread and store documents. Independent of the
+ * feedback wire protocol (`ANCHORED_COMMENT_SCHEMA_VERSION`).
+ *
+ * - v1: flat list of independent threads.
+ * - v2: threads may carry an optional `parentThreadId`, so a conversation can
+ *   branch. The field is additive and optional: a v1 thread has no parent and
+ *   migrates by simply gaining the current version number (see
+ *   `migrateAnchoredCommentThread`).
+ */
+export const ANCHORED_COMMENT_THREAD_SCHEMA_VERSION = 2
 export const ANCHORED_COMMENT_CAPABILITY_IDS = Object.freeze({
+  translate: 'anchored-comments.prose.translate',
+  reconcileAnchor: 'anchored-comments.anchor.reconcile',
+  sharedProjects: 'anchored-comments.shared.projects',
+  sharedPull: 'anchored-comments.shared.pull',
+  sharedRetry: 'anchored-comments.shared.retry',
+  sharedDiscard: 'anchored-comments.shared.discard',
+  sharedSubmit: 'anchored-comments.shared.submit',
+  sharedPublish: 'anchored-comments.shared.publish',
+  fork: 'anchored-comments.conversation.fork',
+  reply: 'anchored-comments.conversation.reply',
+  cancel: 'anchored-comments.conversation.cancel',
   list: 'anchored-comments.list',
   get: 'anchored-comments.get',
   upsert: 'anchored-comments.upsert',
@@ -21,6 +45,44 @@ const requiredIdSchema = z.string().trim().min(1).max(256)
 const optionalText = (max: number) => z.string().trim().max(max).optional()
 const timestampSchema = z.string().trim().min(1).max(64)
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/)
+
+export const proseTranslationInputSchema = z.object({
+  text: z.string().min(1).max(8_000),
+  targetLanguage: z.string().regex(/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8}){0,3}$/)
+}).strict()
+export const proseTranslationResultSchema = z.object({
+  original: z.string().max(8_000), translation: z.string().max(24_000),
+  targetLanguage: proseTranslationInputSchema.shape.targetLanguage,
+  machineTranslated: z.literal(true), runtimeId: z.string()
+}).strict()
+export type ProseTranslationInput = z.infer<typeof proseTranslationInputSchema>
+export type ProseTranslation = z.infer<typeof proseTranslationResultSchema>
+
+export const reconcileCodeAnchorInputSchema = z.object({
+  threadId: requiredIdSchema, current: codeAnchorSchema
+}).strict()
+
+export const sharedConversationProjectInputSchema = z.object({ projectId: projectIdSchema }).strict()
+export const sharedConversationProjectsInputSchema = z.object({ cursor: projectCoordinationCursorSchema.optional() }).strict()
+export const sharedConversationProjectsResultSchema = restProjectPageResponseSchema
+export const sharedConversationDiscardInputSchema = z.object({ projectId: projectIdSchema,
+  idempotencyKey: z.string().min(16).max(256) }).strict()
+export const sharedConversationRejectionSchema = z.object({
+  idempotencyKey: z.string().min(16).max(256), conversationId: requiredIdSchema,
+  status: z.number().int().min(400).max(499), code: z.string().min(1).max(256), message: z.string().max(2_000)
+}).strict()
+export const sharedConversationOutcomeReceiptSchema = z.object({
+  idempotencyKey: z.string().min(16).max(256), outcome: z.enum(['acknowledged', 'rejected'])
+}).strict()
+export const sharedConversationSubmitInputSchema = z.object({ projectId: projectIdSchema,
+  command: codeConversationCommandSchema.refine(command => command.type !== 'project.code_conversation.pull' && command.type !== 'project.code_conversation.publish',
+    'Use explicit local-message publication or a shared mutation.') }).strict()
+export const sharedConversationPublishInputSchema = z.object({ projectId: projectIdSchema, threadId: requiredIdSchema,
+  requestId: requiredIdSchema, idempotencyKey: z.string().min(16).max(256), messageIds: z.array(requiredIdSchema).min(1).max(32) }).strict()
+export const sharedConversationResultSchema = z.object({ projectId: projectIdSchema,
+  conversations: z.array(codeConversationSchema), rejectedCommands: z.array(sharedConversationRejectionSchema).max(100).default([]),
+  outcomeReceipts: z.array(sharedConversationOutcomeReceiptSchema).max(100).default([]),
+  pendingCount: z.number().int().nonnegative(), afterSequence: z.number().int().nonnegative() }).strict()
 
 const commentSelectionScalarSchema = z.union([
   z.string().max(4_096),
@@ -112,10 +174,14 @@ export const commentCanonicalTargetSchema = z.discriminatedUnion('kind', [
 
 export type CommentCanonicalTarget = z.infer<typeof commentCanonicalTargetSchema>
 
+/** Frozen, portable code evidence. Never contains an absolute workspace path. */
+export const commentCodeAnchorSchema = codeAnchorSchema
+
 export const commentAnchorSchema = z.object({
   targetKey: z.string().trim().min(1).max(2_048),
   targetLabel: z.string().trim().min(1).max(512),
   canonical: commentCanonicalTargetSchema,
+  codeAnchor: commentCodeAnchorSchema.optional(),
   domFingerprint: commentDomFingerprintSchema.optional(),
   bounds: commentRectSchema
 }).strict()
@@ -242,6 +308,37 @@ export const anchoredCommentMessageSchema = z.object({
 
 export type AnchoredCommentMessage = z.infer<typeof anchoredCommentMessageSchema>
 
+export const anchoredCommentForkSchema = z.object({
+  parentThreadId: requiredIdSchema,
+  parentMessageId: requiredIdSchema,
+  messages: z.array(anchoredCommentMessageSchema).max(32),
+  truncated: z.boolean()
+}).strict()
+
+export const anchoredCommentForkInputSchema = z.object({
+  threadId: requiredIdSchema,
+  messageId: requiredIdSchema,
+  childId: requiredIdSchema,
+  body: z.string().trim().min(1).max(20_000)
+}).strict()
+
+export const anchoredCommentReplyInputSchema = z.object({
+  threadId: requiredIdSchema,
+  requestId: z.string().uuid(),
+  body: z.string().trim().min(1).max(20_000).optional()
+}).strict()
+export const anchoredCommentCancelInputSchema = z.object({
+  threadId: requiredIdSchema,
+  requestId: z.string().uuid()
+}).strict()
+export const anchoredCommentReplyResultSchema = z.object({
+  thread: z.lazy(() => anchoredCommentThreadSchema),
+  state: z.enum(['completed', 'failed', 'cancelled']),
+  truncated: z.boolean(),
+  error: z.string().max(2_000).optional()
+}).strict()
+export const anchoredCommentCancelResultSchema = z.object({ cancelled: z.boolean() }).strict()
+
 export const feedbackDisclosureChoicesSchema = z.object({
   annotatedScreenshots: z.boolean(),
   applicationEnvironment: z.boolean(),
@@ -288,13 +385,20 @@ export const anchoredCommentFeedbackStateSchema = z.object({
 export type AnchoredCommentFeedbackState = z.infer<typeof anchoredCommentFeedbackStateSchema>
 
 export const anchoredCommentThreadSchema = z.object({
-  schemaVersion: z.literal(ANCHORED_COMMENT_SCHEMA_VERSION),
+  schemaVersion: z.literal(ANCHORED_COMMENT_THREAD_SCHEMA_VERSION),
   id: requiredIdSchema,
+  /**
+   * The thread this one branches from, when the thread continues a conversation
+   * rather than starting a fresh one. Absent for a root thread. The parent must
+   * already exist and must not form a cycle; the service enforces both.
+   */
+  parentThreadId: requiredIdSchema.optional(),
   workspaceKey: z.string().trim().min(1).max(2_048),
   purpose: z.enum(['research', 'product_feedback']),
   anchor: commentAnchorSchema,
   capture: anchoredCommentCaptureBundleSchema,
   messages: z.array(anchoredCommentMessageSchema).min(1).max(500),
+  fork: anchoredCommentForkSchema.optional(),
   status: z.enum(['open', 'attached', 'ai_responded', 'awaiting_verification', 'resolved']),
   anchorResolution: z.enum(['resolved', 'needs_retargeting']),
   feedback: anchoredCommentFeedbackStateSchema,
@@ -305,7 +409,7 @@ export const anchoredCommentThreadSchema = z.object({
 export type AnchoredCommentThread = z.infer<typeof anchoredCommentThreadSchema>
 
 export const anchoredCommentStoreSchema = z.object({
-  schemaVersion: z.literal(ANCHORED_COMMENT_SCHEMA_VERSION),
+  schemaVersion: z.literal(ANCHORED_COMMENT_THREAD_SCHEMA_VERSION),
   threads: z.array(anchoredCommentThreadSchema).max(100_000),
   updatedAt: timestampSchema
 }).strict()
@@ -447,13 +551,16 @@ export function parseFeedbackGatewayResult(value: unknown): FeedbackGatewayResul
 export function migrateAnchoredCommentThread(value: unknown): AnchoredCommentThread {
   const raw = objectRecord(value, 'Anchored comment thread must be an object.')
   const schemaVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
-  if (schemaVersion > ANCHORED_COMMENT_SCHEMA_VERSION) {
+  if (schemaVersion > ANCHORED_COMMENT_THREAD_SCHEMA_VERSION) {
     throw new Error(`Unsupported anchored comment schema version: ${schemaVersion}.`)
   }
   const createdAt = stringOr(raw.createdAt, new Date(0).toISOString())
+  // v1 → v2 is additive: `parentThreadId` is optional and absent on legacy
+  // threads, so no field is rewritten beyond the version number. Older sparse
+  // documents still receive their defaults below.
   const migrated = {
     ...raw,
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     purpose: raw.purpose ?? 'research',
     status: raw.status ?? 'open',
     anchorResolution: raw.anchorResolution ?? 'resolved',
@@ -467,14 +574,14 @@ export function migrateAnchoredCommentThread(value: unknown): AnchoredCommentThr
 export function migrateAnchoredCommentStore(value: unknown): AnchoredCommentStore {
   const raw = objectRecord(value, 'Anchored comment store must be an object.')
   const schemaVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
-  if (schemaVersion > ANCHORED_COMMENT_SCHEMA_VERSION) {
+  if (schemaVersion > ANCHORED_COMMENT_THREAD_SCHEMA_VERSION) {
     throw new Error(`Unsupported anchored comment store schema version: ${schemaVersion}.`)
   }
   const threadValue = raw.threads ?? raw.comments ?? []
   if (!Array.isArray(threadValue)) throw new Error('Anchored comment store threads must be an array.')
   const threads = threadValue
   return anchoredCommentStoreSchema.parse({
-    schemaVersion: ANCHORED_COMMENT_SCHEMA_VERSION,
+    schemaVersion: ANCHORED_COMMENT_THREAD_SCHEMA_VERSION,
     threads: threads.map(migrateAnchoredCommentThread),
     updatedAt: stringOr(raw.updatedAt, new Date(0).toISOString())
   })

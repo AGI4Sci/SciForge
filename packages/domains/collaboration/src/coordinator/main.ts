@@ -1,3 +1,7 @@
+import { DELIVERY_VALIDATION_ACTION, deliveryValidationSpecSchema, deliveryValidationRecordSchema } from './delivery-validation-contract.js'
+import { createLeaderPlanning, leaderPlanningKey } from './leader-planning.js'
+import { createHumanDirectedCommands } from './human-directed-commands.js'
+import { createResultAssessment, assessmentKey } from './result-assessment.js'
 import {
   deliveryDriveViewSchema,
   deliveryReadViewSchema,
@@ -42,6 +46,13 @@ import {
 import { createDeliveryContentCapabilities } from './delivery-content.js'
 
 import {
+  projectCoordinatorProjectRenameInputSchema,
+  projectCoordinatorProjectExecutionModeSetInputSchema,
+  projectCoordinatorProjectDispatchAuthorizeInputSchema,
+  projectCoordinatorTaskContentUpdateInputSchema,
+  projectCoordinatorTaskContentDecideInputSchema,
+  projectCoordinatorLeaderProposalRetryInputSchema,
+  projectCoordinatorLeaderProposalDeferInputSchema,
   PROJECT_COORDINATOR_CAPABILITY_IDS,
   projectCoordinatorActivationAcknowledgeInputSchema,
   projectCoordinatorActivationAcknowledgeResultSchema,
@@ -51,6 +62,7 @@ import {
   projectCoordinatorDriveListInputSchema,
   projectCoordinatorHumanAnswerInputSchema,
   projectCoordinatorHumanNeededCreateInputSchema,
+  projectCoordinatorHumanNeededDeferInputSchema,
   projectCoordinatorMembershipAcceptInputSchema,
   projectCoordinatorMembershipAddInputSchema,
   projectCoordinatorMembershipRemoveInputSchema,
@@ -136,6 +148,7 @@ export type ProjectCoordinatorCapabilityOptions = Readonly<{
   scope: 'global' | 'resource'
   resourceKinds?: readonly string[]
   effect: 'read' | 'compute' | 'workspace-write' | 'external-write' | 'destructive'
+  autonomousWrite?: 'human-decision-request'
   approval: 'none' | 'confirmation'
   concurrency: Readonly<{
     revision: 'none'
@@ -190,7 +203,144 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       allowedDirectTransports: Object.freeze([]) as readonly []
     }),
     createDefinitions: () => [
-      ...createDeliveryContentCapabilities({ defineCapability: options.defineCapability, read: (input) => options.ports.delivery.readObject(input) }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalRetry, version: '1.0.0', title: 'Retry AI leader planning',
+        description: 'The Project Owner retries local recommendation generation without authorizing task execution.',
+        audiences: ['ui'], scope: 'global', effect: 'workspace-write', approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'leader', 'retry'],
+        inputSchema: projectCoordinatorLeaderProposalRetryInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('Only the User may retry a recommendation.')
+          context.assertPrincipalCurrent()
+          const input = projectCoordinatorLeaderProposalRetryInputSchema.parse(raw)
+          if (!options.ports.humanCommands) throw new Error('Human decision service unavailable.')
+          const output = await options.ports.humanCommands.retryLeaderProposal(input.projectId)
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.leaderProposalDefer, version: '1.0.0', title: 'Defer AI leader recommendation',
+        description: 'The Project Owner defers one exact current local recommendation without authorizing work.',
+        audiences: ['ui'], scope: 'global', effect: 'workspace-write', approval: 'none',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'leader', 'decision'],
+        inputSchema: projectCoordinatorLeaderProposalDeferInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('Only the User may defer a recommendation.')
+          context.assertPrincipalCurrent()
+          const input = projectCoordinatorLeaderProposalDeferInputSchema.parse(raw)
+          if (!options.ports.humanCommands) throw new Error('Human decision service unavailable.')
+          const output = await options.ports.humanCommands.deferLeaderProposal(input.projectId, input.key)
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectRename, version: '1.0.0',
+        title: 'project.rename', description: 'Apply an explicit human decision to the exact Cloud revision.',
+        audiences: ['ui'], scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'human-decision'],
+        inputSchema: projectCoordinatorProjectRenameInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('This decision requires the User.');
+          context.assertPrincipalCurrent()
+          if (!options.ports.humanCommands) throw new Error('Human decision command service unavailable.')
+          const output = await options.ports.humanCommands.execute('project.rename', projectCoordinatorProjectRenameInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectRename, context))
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectExecutionModeSet, version: '1.0.0',
+        title: 'project.execution_mode.set', description: 'Apply an explicit human decision to the exact Cloud revision.',
+        audiences: ['ui'], scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'human-decision'],
+        inputSchema: projectCoordinatorProjectExecutionModeSetInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('This decision requires the User.');
+          context.assertPrincipalCurrent()
+          if (!options.ports.humanCommands) throw new Error('Human decision command service unavailable.')
+          const output = await options.ports.humanCommands.execute('project.execution_mode.set', projectCoordinatorProjectExecutionModeSetInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectExecutionModeSet, context))
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectDispatchAuthorize, version: '1.0.0',
+        title: 'project.dispatch.authorize', description: 'Apply an explicit human decision to the exact Cloud revision.',
+        audiences: ['ui'], scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'human-decision'],
+        inputSchema: projectCoordinatorProjectDispatchAuthorizeInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('This decision requires the User.');
+          context.assertPrincipalCurrent()
+          if (!options.ports.humanCommands) throw new Error('Human decision command service unavailable.')
+          const output = await options.ports.humanCommands.execute('project.dispatch.authorize', projectCoordinatorProjectDispatchAuthorizeInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.projectDispatchAuthorize, context), true)
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentUpdate, version: '1.0.0',
+        title: 'task.content.update', description: 'Apply an explicit human decision to the exact Cloud revision.',
+        audiences: ['ui'], scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'human-decision'],
+        inputSchema: projectCoordinatorTaskContentUpdateInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('This decision requires the User.');
+          context.assertPrincipalCurrent()
+          if (!options.ports.humanCommands) throw new Error('Human decision command service unavailable.')
+          const output = await options.ports.humanCommands.execute('task.content.update', projectCoordinatorTaskContentUpdateInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentUpdate, context))
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentDecide, version: '1.0.0',
+        title: 'task.content.decide', description: 'Apply an explicit human decision to the exact Cloud revision.',
+        audiences: ['ui'], scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'human-decision'],
+        inputSchema: projectCoordinatorTaskContentDecideInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('This decision requires the User.');
+          context.assertPrincipalCurrent()
+          if (!options.ports.humanCommands) throw new Error('Human decision command service unavailable.')
+          const output = await options.ports.humanCommands.execute('task.content.decide', projectCoordinatorTaskContentDecideInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.taskContentDecide, context))
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
+        id: DELIVERY_VALIDATION_ACTION, version: '1.0.0', title: 'Freeze and check Delivery JSON assertions',
+        description: 'Freezes bounded field assertions and checks exact sealed bytes; passing covers only these assertions.',
+        audiences: ['ui'], scope: 'global', effect: 'workspace-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['delivery', 'validation'],
+        inputSchema: deliveryValidationSpecSchema, outputSchema: deliveryValidationRecordSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('Frozen validation requires the human UI.')
+          context.assertPrincipalCurrent()
+          const output = await options.ports.delivery.validate(deliveryValidationSpecSchema.parse(raw))
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      ...createDeliveryContentCapabilities({
+        defineCapability: options.defineCapability,
+        read: (input, requestOptions) => options.ports.delivery.readObject(input, requestOptions),
+        authorize: async (input, requestOptions) => {
+          const view = await options.ports.delivery.read({ deliveryManifestId: input.deliveryManifestId }, requestOptions)
+          const object = view.manifest.objects.find((item) => item.objectId === input.objectId)
+          if (view.manifest.deliveryManifestId !== input.deliveryManifestId || !object) {
+            throw new Error('The selected object is not part of this exact sealed Delivery.')
+          }
+          return object
+        }
+      }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.workspaceRead,
         version: '2.0.0',
@@ -222,9 +372,9 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.projectCreate,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Create Project',
-        description: 'Creates one Cloud-authoritative Project and a fresh reviewable Coordinator Session.',
+        description: 'Creates or resumes one Cloud-authoritative Project by durable intent; returns a ready Coordinator Session or an explicit session-pending draft that can be opened and retried with the same intent.',
         audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
@@ -363,16 +513,6 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
             input,
             capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.requirementsDraftSave, context)
           )
-          // Saving returns immediately; the same capability boundary starts the
-          // Coordinator completion for the exact saved revision. Failures are
-          // persisted as a typed reason by the requirements port.
-          void options.ports.requirements.complete({
-            projectId: input.projectId,
-            expectedRequirementsRevision: document.revision
-          }, capabilityIdempotencyKey(
-            PROJECT_COORDINATOR_CAPABILITY_IDS.requirementsComplete,
-            context
-          )).catch(() => undefined)
           return { output: document }
         }
       }),
@@ -410,7 +550,8 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
             return {
               output: {
                 status: 'failed' as const,
-                reason: error.reason
+                reason: error.reason,
+                ...(error.invalidFields ? { invalidFields: [...error.invalidFields] } : {})
               }
             }
           }
@@ -499,7 +640,7 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         version: '1.0.0',
         title: 'Reassign Task offer',
         description: 'Re-reads the current revision-requested Task and creates one successor User-level offer from package-derived Cloud CAS and file-intent facts.',
-        audiences: agentAudiences,
+        audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -508,12 +649,29 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         inputSchema: projectCoordinatorTaskOfferReassignInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('Task assignment requires an explicit human decision.')
           const parsedInput = projectCoordinatorTaskOfferReassignInputSchema.parse(raw)
           const input = {
             ...parsedInput,
             nextOutputFileName: parsedInput.nextOutputFileName ?? null
           }
           await authorizeAgentProject(options.sessions, context, input.projectId, 'coordinator')
+          if (input.previousTaskOfferId === null) {
+            const workspace = await options.ports.workspace.readWorkspace({ projectId: input.projectId })
+            const project = workspace.projects.find(entry => entry.project.projectId === input.projectId)
+            const document = project?.confirmedRequirements
+            if (!project || !document || !input.planItemId || !options.ports.humanCommands) throw new Error('Confirmed task assignment unavailable.')
+            const grant = project.project.dispatchAuthorization
+            if (!grant || grant.requirementsContentDigest !== document.contentDigest || grant.expiresAt < input.offerExpiresAt ||
+                !grant.assignments.some(item => item.planItemId === input.planItemId && item.workerUserId === input.workerUserId)) {
+              await options.ports.humanCommands.execute('project.dispatch.authorize', {
+                projectId: input.projectId, expectedRevision: project.project.revision,
+                requirementsDocumentId: document.requirementsDocumentId, requirementsDocumentRevision: document.documentRevision,
+                requirementsContentDigest: document.contentDigest,
+                assignments: [{ planItemId: input.planItemId, workerUserId: input.workerUserId }], expiresAt: input.offerExpiresAt
+              }, `${capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.taskOfferReassign, context)}.authorize`)
+            }
+          }
           return {
             output: await taskOfferReassignment.reassign(
               input,
@@ -606,13 +764,14 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
       }),
       options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededCreate,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Ask a Project member User',
-        description: 'Creates one Project-scoped HumanNeeded for an explicit active member User through the current Coordinator Agent.',
+        description: 'Creates a clarification, single-choice request, or project proposal approval for an active member. Approval records the proposal decision only; it never dispatches or starts tasks. Action digests are derived by this domain, never supplied by the Agent.',
         audiences: agentAudiences,
         scope: 'global',
         effect: 'external-write',
-        approval: 'confirmation',
+        approval: 'none',
+        autonomousWrite: 'human-decision-request',
         concurrency: { revision: 'none', idempotency: 'required' },
         tags: ['project', 'coordinator', 'human-needed'],
         inputSchema: projectCoordinatorHumanNeededCreateInputSchema,
@@ -629,11 +788,27 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         }
       }),
       options.defineCapability({
+        id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededDefer,
+        version: '1.0.0', title: 'Defer a Project decision request',
+        description: 'Records the target User deferral of the exact pending request revision. Does not resume or authorize execution.',
+        audiences: ['ui'], scope: 'global', effect: 'external-write', approval: 'confirmation',
+        concurrency: { revision: 'none', idempotency: 'required' }, tags: ['project', 'human', 'human-answer'],
+        inputSchema: projectCoordinatorHumanNeededDeferInputSchema, outputSchema: projectCoordinatorWorkspaceSchema,
+        handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('Deferring a request requires the User.')
+          context.assertPrincipalCurrent()
+          const output = await options.ports.actions.deferHumanNeeded(projectCoordinatorHumanNeededDeferInputSchema.parse(raw),
+            capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanNeededDefer, context))
+          context.assertPrincipalCurrent()
+          return { output }
+        }
+      }),
+      options.defineCapability({
         id: PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer,
-        version: '2.0.0',
+        version: '3.0.0',
         title: 'Answer Project HumanNeeded',
         description: 'Submits the exact target Project member User answer through the OIDC User path.',
-        audiences: agentAudiences,
+        audiences: ['ui'],
         scope: 'global',
         effect: 'external-write',
         approval: 'confirmation',
@@ -642,14 +817,15 @@ export function createProjectCoordinatorCapabilityFactory<CapabilityDefinition>(
         inputSchema: projectCoordinatorHumanAnswerInputSchema,
         outputSchema: projectCoordinatorWorkspaceSchema,
         handler: async (raw, context) => {
+          if (context.caller.audience !== 'ui') throw new Error('A human answer requires the User.')
+          context.assertPrincipalCurrent()
           const input = projectCoordinatorHumanAnswerInputSchema.parse(raw)
-          await authorizeAgentProject(options.sessions, context, input.projectId, 'member')
-          return {
-            output: await options.ports.actions.answerHumanNeeded(
+          const output = await options.ports.actions.answerHumanNeeded(
               input,
               capabilityIdempotencyKey(PROJECT_COORDINATOR_CAPABILITY_IDS.humanAnswer, context)
             )
-          }
+          context.assertPrincipalCurrent()
+          return { output }
         }
       }),
       options.defineCapability({
@@ -839,6 +1015,27 @@ export function createCoordinatorMainEntry<CapabilityDefinition = unknown>(
       readCoordinatorTransferFeedback: (projectId) => (
         state.readCoordinatorTransferFeedback(projectId)
       ),
+      readLeaderStatus: async view => {
+        const bindings = (await state.readCoordinatorSessionBindings()).filter(binding =>
+          binding.projectId === view.project.projectId && binding.principalUserId === view.project.ownerUserId &&
+          binding.coordinatorAgentId === view.project.coordinatorAgentId && binding.coordinatorAuthorityEpoch === view.project.coordinatorAuthorityEpoch)
+        if (bindings.length !== 1) return { leaderPlanningStatus: null, leaderSession: null }
+        const binding = bindings[0]!
+        const status = await state.readLeaderPlanningStatus(view.project.projectId)
+        return { leaderSession: { runtimeId: binding.runtimeId, threadId: binding.threadId },
+          leaderPlanningStatus: status?.key === leaderPlanningKey(view, binding) ? status : null }
+      },
+      readLeaderProposal: async view => {
+        const proposal = await state.readLeaderProposal(view.project.projectId)
+        if (!proposal) return null
+        const bindings = (await state.readCoordinatorSessionBindings()).filter(binding =>
+          binding.projectId === view.project.projectId && binding.principalUserId === view.project.ownerUserId &&
+          binding.coordinatorAgentId === view.project.coordinatorAgentId && binding.coordinatorAuthorityEpoch === view.project.coordinatorAuthorityEpoch)
+        return bindings.length === 1 && proposal.key === leaderPlanningKey(view, bindings[0]!) ? proposal : null
+      },
+      readResultAssessments: async (project) => (await state.readResultAssessments(project.project.projectId)).filter((entry) =>
+        entry.coordinatorAuthorityEpoch === project.project.coordinatorAuthorityEpoch &&
+        entry.principalUserId === project.project.ownerUserId && entry.key === assessmentKey(project, entry.projectResultId)),
       readRequirementsCompletion: (input) => (
         state.readRequirementsCompletion(input)
       )
@@ -876,19 +1073,28 @@ export function createCoordinatorMainEntry<CapabilityDefinition = unknown>(
       coordinatorCloudCommands,
       transport
     })
+    let resultAssessment: ReturnType<typeof createResultAssessment> | undefined
     const actions = createProjectCoordinatorActionPort({
       workspace,
       coordinatorCloudCommands,
       transport,
       state,
       requirementsDispatch,
+      resultAssessment: { enqueue: (projectId, resultId) => resultAssessment?.enqueue(projectId, resultId) ?? Promise.resolve() },
       log: (entry) => {
         runtimeLog?.(entry)
       }
     })
-    const disposeCoordinatorInbox = coordinatorCloudCommands.subscribe((message) => actions.handleInbox(message))
+    const leaderPlanning = createLeaderPlanning({ workspace, state, transport, createHumanNeeded: actions.createHumanNeeded,
+      onFailure: (projectId, stage) => runtimeLog?.({ level: 'warn', message: `AI leader planning failed for ${projectId} at ${stage}; retry is available in the Project panel.` }),
+      localAgentId: () => coordinatorCloudCommands.localAgentId() ?? null, getAgentExecution: () => agentExecution })
+    const disposeCoordinatorInbox = coordinatorCloudCommands.subscribe(async (message) => {
+      await actions.handleInbox(message)
+      if (message.payload.type === 'human.answer.received') await leaderPlanning.enqueue(message.payload.answer.projectId)
+      else if ('projectId' in message.payload && typeof message.payload.projectId === 'string') await leaderPlanning.enqueue(message.payload.projectId)
+    })
     const membership = createProjectCoordinatorMembershipPort({ workspace, transport })
-    const delivery = createProjectCoordinatorDeliveryPort({ workspace, transport, commands: coordinatorCloudCommands,
+    const delivery = createProjectCoordinatorDeliveryPort({ workspace, transport, validationState: state, commands: coordinatorCloudCommands,
       signing: signingService,
       humanActions: {
         capture: (input) => {
@@ -901,7 +1107,11 @@ export function createCoordinatorMainEntry<CapabilityDefinition = unknown>(
         }
       }
     })
+    resultAssessment = createResultAssessment({ workspace, state, transport, delivery,
+      localAgentId: () => coordinatorCloudCommands.localAgentId() ?? null, getAgentExecution: () => agentExecution })
+    const humanCommands = createHumanDirectedCommands({ transport, workspace, retryProposal: projectId => leaderPlanning.enqueue(projectId, { retry: true }), deferProposal: (projectId, key) => state.deferLeaderPlanning(projectId, key), dispatch: requirementsDispatch, onProjectChanged: projectId => leaderPlanning.enqueue(projectId) })
     const ports: ProjectCoordinatorMainPorts = Object.freeze({
+      humanCommands,
       workspace,
       requirements,
       actions,
@@ -911,10 +1121,14 @@ export function createCoordinatorMainEntry<CapabilityDefinition = unknown>(
     })
     const lifecycle: DomainMainRuntimeLifecycleContribution = Object.freeze({
       activate: (context) => {
+        resultAssessment!.start()
+        leaderPlanning.start()
         agentExecution = context.agentExecution
         runtimeLog = context.log
         const runVisibleSweeps = async (): Promise<void> => {
           await Promise.all([
+            leaderPlanning.sweep().catch(() => context.log({ level: 'warn', message: 'AI leader planning unavailable; no work dispatched.' })),
+            resultAssessment!.sweep().catch(() => context.log({ level: 'warn', message: 'Result observation sweep unavailable; no action was taken.' })),
             requirementsDispatch.reconcileVisibleProjects().catch((error: unknown) => {
               context.log({
                 level: 'warn',
@@ -928,6 +1142,8 @@ export function createCoordinatorMainEntry<CapabilityDefinition = unknown>(
         const unregisterConnectionReadySweep = options.registerConnectionReadySweep?.(runVisibleSweeps)
         const disposer = () => {
           unregisterConnectionReadySweep?.()
+          resultAssessment!.dispose()
+          leaderPlanning.dispose()
           agentExecution = undefined
           runtimeLog = undefined
           if (activeDisposer === disposer) activeDisposer = undefined
@@ -952,6 +1168,7 @@ export function createCoordinatorMainEntry<CapabilityDefinition = unknown>(
   }
 
   const lazyPorts = Object.freeze({
+    humanCommands: lazyCoordinatorPort(() => ensureCoordinator().ports.humanCommands!),
     workspace: lazyCoordinatorPort(() => ensureCoordinator().ports.workspace),
     requirements: lazyCoordinatorPort(() => ensureCoordinator().ports.requirements),
     actions: lazyCoordinatorPort(() => ensureCoordinator().ports.actions),

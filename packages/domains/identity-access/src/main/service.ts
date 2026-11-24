@@ -80,6 +80,10 @@ export class IdentityService implements DomainMainPrincipalProvider {
     return this.executeMutation((store) => store.renameAccount(userId, username))
   }
 
+  deleteAccount(accountId: string): IdentityAvailableState {
+    return this.executeMutation((store) => store.deleteAccount(accountId))
+  }
+
   exitAccount(): IdentityAvailableState {
     return this.executeMutation((store) => store.exitAccount())
   }

@@ -5,6 +5,10 @@ import {
   type CollaborationTaskRun
 } from './store.js'
 import type { TaskExecutionState } from '@sciforge/collaboration-contracts'
+import { toWellFormedUnicode, truncateWellFormedUnicode } from '@sciforge/domain-sdk/unicode'
+import type { z } from 'zod'
+import type { collaborationTaskRuntimeDiagnosticsSchema } from '../contract.js'
+import { prioritizeJournalRecords } from './worker-session-continuation-context.js'
 import {
   TaskInteractionJournal,
   type TaskCheckpointCreate
@@ -49,6 +53,7 @@ export type TaskInteractionControllerOptions = Readonly<{
   /** Return false once result finalization has begun; do not leave stale intents queued. */
   canSubmit?: (executionId: string) => boolean
   now?: () => Date
+  sanitizeText?: (value: string) => string
 }>
 
 export type TaskInteractionSubmit = Readonly<{
@@ -71,11 +76,51 @@ export type LocalTaskInteractionView = Readonly<{
   interactions: readonly CollaborationTaskInteraction[]
   latestInteraction?: CollaborationTaskInteraction
   checkpoints: readonly CollaborationTaskCheckpoint[]
+  runtimeDiagnostics?: z.infer<typeof collaborationTaskRuntimeDiagnosticsSchema>
   /** Cloud state is retained as an observation, never replaced locally. */
   cloudExecutionState?: TaskExecutionState
   cloudTaskRevision?: number
   localUpdatedAt?: string
 }>
+
+function runtimeDiagnostics(
+  run: CollaborationTaskRun,
+  sanitizeText?: (value: string) => string
+): z.infer<typeof collaborationTaskRuntimeDiagnosticsSchema> {
+  const agentJournal: z.infer<typeof collaborationTaskRuntimeDiagnosticsSchema>['agentJournal'] = []
+  let used = 0
+  let truncated = 0
+  for (const entry of prioritizeJournalRecords(run.agentJournal, (item) =>
+    ['observed_failure', 'late_outcome'].includes(item.state))) {
+    const safe = (value: string): string => toWellFormedUnicode(sanitizeText?.(value) ?? value)
+    // Whole identity envelopes are admitted or omitted; references are never sliced.
+    const identity = {
+      logicalInvocationId: safe(entry.logicalInvocationId), clientDirectiveId: safe(entry.clientDirectiveId),
+      runtimeId: entry.runtimeId === null ? null : safe(entry.runtimeId),
+      threadId: entry.threadId === null ? null : safe(entry.threadId),
+      turnId: entry.turnId === null ? null : safe(entry.turnId)
+    }
+    if (identity.logicalInvocationId.length > 256 || identity.clientDirectiveId.length > 256 ||
+      (identity.runtimeId?.length ?? 0) > 128 || (identity.threadId?.length ?? 0) > 512 ||
+      (identity.turnId?.length ?? 0) > 512) continue
+    const error = entry.safeError === null ? null : safe(entry.safeError)
+    const failureMessage = entry.failure ? safe(entry.failure.message) : null
+    const record = { ...identity, state: entry.state, runtimeState: entry.runtimeState,
+      preparedAt: entry.preparedAt, dispatchedAt: entry.dispatchedAt, observedAt: entry.observedAt,
+      safeError: error === null ? null : truncateWellFormedUnicode(error, 1_000),
+      failure: entry.failure ? { code: entry.failure.code, retryable: entry.failure.retryable,
+        message: truncateWellFormedUnicode(failureMessage!, 1_000) } : null }
+    const size = JSON.stringify(record).length
+    if (agentJournal.length >= 20 || used + size > 16_000) continue
+    agentJournal.push(record)
+    used += size
+    if ((error !== null && record.safeError!.length < error.length) ||
+        (failureMessage !== null && record.failure!.message.length < failureMessage.length)) truncated += 1
+  }
+  return { agentJournal, coverage: { total: run.agentJournal.length, included: agentJournal.length,
+    omitted: run.agentJournal.length - agentJournal.length, truncated,
+    selection: 'recent_then_failures', sanitized: Boolean(sanitizeText) } }
+}
 
 /**
  * Local interaction coordinator for a Worker Task.  It provides durable
@@ -259,6 +304,7 @@ export class TaskInteractionController {
       pending: Object.freeze(pending),
       ...(latestInteraction ? { latestInteraction } : {}),
       checkpoints: Object.freeze(checkpoints),
+      ...(run ? { runtimeDiagnostics: runtimeDiagnostics(run, this.options.sanitizeText) } : {}),
       ...(run?.execution ? { cloudExecutionState: run.execution.state } : {}),
       ...(run?.task ? { cloudTaskRevision: run.task.revision } : {}),
       ...(run || latestInteraction ? {

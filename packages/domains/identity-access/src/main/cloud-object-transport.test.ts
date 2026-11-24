@@ -1,6 +1,10 @@
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { createHash } from 'node:crypto'
+import { createCollaborationError } from '@sciforge/collaboration-contracts'
 import { describe, expect, it, vi } from 'vitest'
-import { stageCloudObject, readCloudObject, type WithObjectTransportLease } from './cloud-object-transport.js'
+import { stageCloudObject, readCloudObject } from './cloud-object-transport.js'
+import type { WithCloudTransportLease } from './cloud-authority.js'
 
 const body = new TextEncoder().encode('frozen result')
 const hash = createHash('sha256').update(body).digest('hex')
@@ -18,7 +22,7 @@ const query = { projectId: object.projectId, objectId: object.objectId, delivery
 function leaseWith(response: Response) {
   const fetch = vi.fn(async () => response)
   const assertCurrent = vi.fn()
-  const withLease: WithObjectTransportLease = async (run) => run({ fetch, assertCurrent, userId: object.ownerUserId })
+  const withLease: WithCloudTransportLease = async (run) => run({ fetch, assertCurrent, userId: object.ownerUserId })
   return { withLease, fetch, assertCurrent }
 }
 function objectResponse(overrides: Record<string, string> = {}, bytes: Uint8Array = body) {
@@ -55,7 +59,7 @@ describe('Identity object byte transport', () => {
       expect(init.body).toEqual(body)
       return Response.json({ protocolVersion: '1.0', type: 'rest.object.staged', requestId: stage.request.requestId, object })
     })
-    const withLease: WithObjectTransportLease = async (run) => {
+    const withLease: WithCloudTransportLease = async (run) => {
       bytes.fill(0)
       await Promise.resolve()
       return run({ fetch, assertCurrent: () => undefined, userId: object.ownerUserId })
@@ -94,9 +98,94 @@ describe('Identity object byte transport', () => {
     expect(cancel).toHaveBeenCalledOnce()
   })
 
+  it('maps validated server classifications without exposing arbitrary messages or details', async () => {
+    const error = createCollaborationError('internal_error', 'DO_NOT_EXPOSE_SERVER_SECRET', { details: { reason: 'size_mismatch' } })
+    const h = leaseWith(Response.json({ protocolVersion: '1.0', type: 'rest.error', requestId: stage.request.requestId, error }, { status: 500 }))
+    await expect(stageCloudObject(stage, h.withLease)).rejects.toMatchObject({ code: 'cloud_unavailable',
+      message: 'Cloud object byte-count verification failed; the original operation must be reconciled.' })
+    const rejected = createCollaborationError('permission_denied', 'DO_NOT_EXPOSE_SERVER_SECRET')
+    await expect(stageCloudObject(stage, leaseWith(Response.json({ protocolVersion: '1.0', type: 'rest.error', requestId: stage.request.requestId, error: rejected }, { status: 403 })).withLease))
+      .rejects.toMatchObject({ code: 'cloud_rejected', message: 'The current Worker or Project authorization does not permit this object operation.' })
+  })
+
+  it('does not expose malformed or status-mismatched error response content', async () => {
+    const error = createCollaborationError('internal_error', 'DO_NOT_EXPOSE_SERVER_SECRET', { details: { reason: 'size_mismatch' } })
+    for (const body of [{ arbitrary: 'DO_NOT_EXPOSE_SERVER_SECRET' }, { protocolVersion: '1.0', type: 'rest.error', requestId: stage.request.requestId, error }]) {
+      await expect(stageCloudObject(stage, leaseWith(Response.json(body, { status: 403 })).withLease))
+        .rejects.toMatchObject({ code: 'cloud_rejected', message: 'Cloud object request returned HTTP 403.' })
+    }
+  })
+
   it.each([[403, 'cloud_rejected'], [503, 'cloud_unavailable']] as const)('preserves HTTP %i as %s without retrying', async (status, code) => {
     const h = leaseWith(new Response('{}', { status }))
     await expect(stageCloudObject(stage, h.withLease)).rejects.toMatchObject({ code })
     expect(h.fetch).toHaveBeenCalledOnce()
   })
+})
+
+
+it('read cancellation reaches actual HTTP fetch before headers and during body streaming', async () => {
+  for (const streamBody of [false, true]) {
+    let requestArrived!: () => void, requestClosed!: () => void
+    const arrived = new Promise<void>(resolve => { requestArrived = resolve })
+    const closed = new Promise<void>(resolve => { requestClosed = resolve })
+    const server = createServer((req, res) => {
+      req.on('close', requestClosed)
+      if (streamBody) {
+        res.writeHead(200, Object.fromEntries(objectResponse().headers))
+        res.write(body.subarray(0, 1))
+      }
+      requestArrived()
+    })
+    server.listen(0, '127.0.0.1'); await once(server, 'listening')
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Missing local fixture address')
+    const controller = new AbortController()
+    const withLease: WithCloudTransportLease = async (run, options) => {
+      expect(options?.signal).toBe(controller.signal)
+      return run({ fetch: (path, init) => fetch(`http://127.0.0.1:${address.port}${path}`, init),
+        assertCurrent: () => options?.signal?.throwIfAborted(), userId: object.ownerUserId })
+    }
+    try {
+      const read = expect(readCloudObject({ request: query, expected: object }, withLease, { signal: controller.signal })).rejects.toThrow()
+      await arrived
+      controller.abort(new Error('Cancelled actual object read'))
+      await read; await closed
+      expect(controller.signal.aborted).toBe(true)
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+  }
+})
+
+it('uses a typed 413 rejection with non-JSON proxy body and replays the same bytes after correction over local HTTP', async () => {
+  let rejectUpload = true
+  const received: Buffer[] = []
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(Buffer.from(chunk))
+    received.push(Buffer.concat(chunks))
+    res.writeHead(rejectUpload ? 413 : 200, { 'content-type': rejectUpload ? 'text/html' : 'application/json' })
+    res.end(rejectUpload ? '<html>Request Entity Too Large</html>' : JSON.stringify({
+      protocolVersion: '1.0', type: 'rest.object.staged', requestId: stage.request.requestId, object
+    }))
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Missing local fixture address')
+  const withLease: WithCloudTransportLease = async run => run({
+    fetch: (path, init) => fetch(`http://127.0.0.1:${address.port}${path}`, init),
+    assertCurrent: () => undefined, userId: object.ownerUserId
+  })
+  try {
+    await expect(stageCloudObject(stage, withLease)).rejects.toMatchObject({ code: 'object_upload_limit' })
+    rejectUpload = false
+    await expect(stageCloudObject(stage, withLease)).resolves.toMatchObject({ object })
+    expect(received).toEqual([Buffer.from(body), Buffer.from(body)])
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  }
 })

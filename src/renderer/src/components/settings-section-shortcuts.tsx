@@ -88,7 +88,7 @@ export function KeyboardShortcutsSettingsSection({ ctx }: { ctx: Record<string, 
       <div className="mb-3 flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 py-2 shadow-sm">
         <Search className="h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.75} />
         <input
-          className="min-w-0 flex-1 bg-transparent text-[14px] text-ds-ink placeholder:text-ds-faint focus:outline-none"
+          className="min-w-0 flex-1 bg-transparent text-ds-lg text-ds-ink placeholder:text-ds-faint focus:outline-none"
           value={query}
           placeholder={t('shortcutSearchPlaceholder')}
           onChange={(event) => setQuery(event.target.value)}
@@ -101,7 +101,7 @@ export function KeyboardShortcutsSettingsSection({ ctx }: { ctx: Record<string, 
         </div>
       ) : null}
       <SettingsCard title={t('keyboardShortcuts')}>
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(180px,240px)_40px] gap-3 border-b border-ds-border-muted px-3 py-3 text-[12px] font-semibold text-ds-muted">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(180px,240px)_40px] gap-3 border-b border-ds-border-muted px-3 py-3 text-ds-sm font-semibold text-ds-muted">
           <div>{t('shortcutCommandColumn')}</div>
           <div>{t('shortcutBindingColumn')}</div>
           <div aria-hidden />
@@ -116,8 +116,8 @@ export function KeyboardShortcutsSettingsSection({ ctx }: { ctx: Record<string, 
                 className="grid grid-cols-[minmax(0,1fr)_minmax(180px,240px)_40px] items-center gap-3 px-3 py-3"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-[14px] font-medium text-ds-ink">{t(command.labelKey)}</div>
-                  <div className="mt-0.5 truncate text-[12px] text-ds-muted">{t(command.descriptionKey)}</div>
+                  <div className="truncate text-ds-lg font-medium text-ds-ink">{t(command.labelKey)}</div>
+                  <div className="mt-0.5 truncate text-ds-sm text-ds-muted">{t(command.descriptionKey)}</div>
                 </div>
                 <button
                   type="button"
@@ -132,18 +132,18 @@ export function KeyboardShortcutsSettingsSection({ ctx }: { ctx: Record<string, 
                   }`}
                 >
                   {capturing ? (
-                    <span className="text-[13px] font-medium">{t('shortcutRecording')}</span>
+                    <span className="text-ds-md font-medium">{t('shortcutRecording')}</span>
                   ) : shortcuts.length > 0 ? (
                     shortcuts.map((shortcut) => (
                       <span
                         key={formatKeyboardShortcut(shortcut, window.sciforge?.platform ?? 'unknown')}
-                        className="rounded-full bg-ds-subtle px-2 py-0.5 text-[12px] font-medium text-ds-ink"
+                        className="rounded-full bg-ds-subtle px-2 py-0.5 text-ds-sm font-medium text-ds-ink"
                       >
                         {formatKeyboardShortcut(shortcut, window.sciforge?.platform ?? 'unknown')}
                       </span>
                     ))
                   ) : (
-                    <span className="text-[13px]">{t('shortcutUnassigned')}</span>
+                    <span className="text-ds-md">{t('shortcutUnassigned')}</span>
                   )}
                 </button>
                 <button

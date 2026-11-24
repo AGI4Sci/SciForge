@@ -223,3 +223,15 @@ test('restore receipt exactly adopts the returned Version as recording current',
     restoredRef: { ...ref, versionId: 'artifact-version:other' }
   }).success, false)
 })
+
+
+test('terminal outcome is independent of formal execution references and missing history stays unknown', () => {
+  const legacy = liveManifest()
+  assert.equal(legacy.turn.terminalState ?? 'unknown', 'unknown')
+  for (const terminalState of ['completed', 'failed', 'cancelled', 'unknown'] as const) {
+    const manifest = researchCheckpointManifestV1Schema.parse({ ...legacy, turn: { ...legacy.turn, terminalState } })
+    assert.equal(manifest.turn.terminalState, terminalState)
+    assert.deepEqual(manifest.status, legacy.status)
+  }
+  assert.equal(researchCheckpointManifestV1Schema.safeParse({ ...legacy, turn: { ...legacy.turn, terminalState: 'succeeded' } }).success, false)
+})

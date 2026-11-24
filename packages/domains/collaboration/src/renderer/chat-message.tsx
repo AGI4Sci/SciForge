@@ -1,3 +1,4 @@
+import { useWorkspaceTranslation } from './workspace/workspace-i18n.js'
 import React, { useEffect, useState, type ReactElement } from 'react'
 import type { DomainRendererChatMessageRenderContext, DomainRendererChatMessageValue } from '@sciforge/domain-sdk/renderer'
 import { parseWorkerRuntimeResult } from '../worker-runtime-result.js'
@@ -75,18 +76,19 @@ const bodyClassName = 'whitespace-pre-wrap break-words'
 const rawClassName = 'mt-3 whitespace-pre-wrap break-words font-mono text-inherit'
 
 function TaskMessageCard({ task }: Readonly<{ task: TaskMessage }>): ReactElement {
-  return <section className={cardClassName} data-testid="collaboration-task-message" aria-label="协作任务说明">
-    <h3 className="font-semibold">协作任务说明</h3>
+  const cw = useWorkspaceTranslation()
+  return <section className={cardClassName} data-testid="collaboration-task-message" aria-label={cw("协作任务说明")}>
+    <h3 className="font-semibold">{cw("协作任务说明")}</h3>
     <dl className="space-y-3">
-      <div><dt className="font-semibold">标题</dt><dd className={bodyClassName}>{task.title}</dd></div>
-      <div><dt className="font-semibold">目标</dt><dd className={bodyClassName}>{task.objective}</dd></div>
-      {task.revisionInstruction ? <div><dt className="font-semibold">返修意见</dt><dd className={bodyClassName}>{task.revisionInstruction}</dd></div> : null}
-      <div><dt className="font-semibold">完成标准</dt><dd><ol className="list-decimal space-y-1 pl-5">
+      <div><dt className="font-semibold">{cw("标题")}</dt><dd className={bodyClassName}>{task.title}</dd></div>
+      <div><dt className="font-semibold">{cw("目标")}</dt><dd className={bodyClassName}>{task.objective}</dd></div>
+      {task.revisionInstruction ? <div><dt className="font-semibold">{cw("返修意见")}</dt><dd className={bodyClassName}>{task.revisionInstruction}</dd></div> : null}
+      <div><dt className="font-semibold">{cw("完成标准")}</dt><dd><ol className="list-decimal space-y-1 pl-5">
         {task.completionCriteria.map((criterion, index) => <li key={index} className={bodyClassName}>{criterion}</li>)}
       </ol></dd></div>
     </dl>
     <details className={disclosureClassName} data-testid="collaboration-task-protocol">
-      <summary className={disclosureSummaryClassName}>系统格式要求</summary>
+      <summary className={disclosureSummaryClassName}>{cw("系统格式要求")}</summary>
       <pre className={rawClassName}>{task.protocol}</pre>
     </details>
   </section>
@@ -99,6 +101,7 @@ function WorkerResultCard({ client, identity, turnId, summary, rawText }: Readon
   summary: string
   rawText: string
 }>): ReactElement {
+  const cw = useWorkspaceTranslation()
   const [updated, setUpdated] = useState(false)
   const { projectId, taskId, executionId } = identity
   useEffect(() => {
@@ -121,12 +124,12 @@ function WorkerResultCard({ client, identity, turnId, summary, rawText }: Readon
     void read(0)
     return () => { abort.abort(); clearTimeout(timer); clearTimeout(deadline) }
   }, [client, projectId, taskId, executionId, turnId, summary])
-  return <section className={cardClassName} data-testid="collaboration-result-message" aria-label="结果说明">
-    <h3 className="font-semibold">结果说明</h3>
+  return <section className={cardClassName} data-testid="collaboration-result-message" aria-label={cw("结果说明")}>
+    <h3 className="font-semibold">{cw("结果说明")}</h3>
     <p className={bodyClassName} data-testid="collaboration-result-summary">{summary}</p>
-    {updated ? <p className="text-ds-text-muted" data-testid="collaboration-result-updated" role="status">已更新交付草稿</p> : null}
+    {updated ? <p className="text-ds-text-muted" data-testid="collaboration-result-updated" role="status">{cw("已更新交付草稿")}</p> : null}
     <details className={disclosureClassName} data-testid="collaboration-result-json">
-      <summary className={disclosureSummaryClassName}>原始 JSON</summary>
+      <summary className={disclosureSummaryClassName}>{cw("原始 JSON")}</summary>
       <pre className={rawClassName}>{rawText}</pre>
     </details>
   </section>

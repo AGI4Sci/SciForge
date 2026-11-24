@@ -1,9 +1,17 @@
 {
   "name": "@sciforge/plugin-anchored-comments",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Independent DSH anchored comments plugin with host-bound workspace state and evidence assets.",
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "sciforge.dsh.json",
+    "src/core/contract.ts",
+    "src/ports/visual-capture.ts",
+    "src/selection.ts"
+  ],
   "scripts": {
     "build": "node ./build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -15,6 +23,7 @@
     "baseline": "node --import tsx ./tests/baseline/generate.ts"
   },
   "dependencies": {
+    "@sciforge/collaboration-contracts": "10.0.0",
     "@sciforge/domain-sdk": "^0.2.18",
     "zod": "^4.4.3"
   },

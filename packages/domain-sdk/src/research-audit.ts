@@ -162,6 +162,42 @@ export const researchAuditScientificReviewSchema = z.object({
   }).strict()).length(5)
 }).strict()
 
+/** Authority events are read from Evidence's existing decision journal, never appended by a query. */
+export const researchAuditReviewReceiptSchema = z.object({
+  scope: z.union([
+    z.object({ kind: z.literal('unknown') }).strict(),
+    z.object({ kind: z.literal('review-packet'), snapshotDigest: sha256DigestSchema,
+      reviewPacketId: boundedIdSchema, targetIds: z.array(boundedIdSchema).max(10000),
+      assessmentIds: z.array(boundedIdSchema).max(10000) }).strict()
+  ]),
+  identity: z.object({ status: z.enum(['unverified', 'unknown']), source: z.enum(['caller-label', 'not-recorded']), principal: z.null() }).strict(),
+  timing: z.object({ status: z.literal('unknown'), elapsedMs: z.null(), activeMs: z.null() }).strict(),
+  previousDecisionEventId: boundedIdSchema.nullable()
+}).strict()
+/** Per-target outcome of a human review: whether an error was found and where it originates. */
+export const researchAuditReviewTargetOutcomeSchema = z.object({
+  targetId: boundedIdSchema, errorFound: z.boolean(),
+  errorOrigin: z.enum(['source', 'inherited', 'undetermined']).nullable()
+}).strict().superRefine((value, context) => {
+  if (value.errorFound !== (value.errorOrigin !== null)) {
+    context.addIssue({ code: 'custom', message: 'errorOrigin is required exactly when an error is found', path: ['errorOrigin'] })
+  }
+})
+export const researchAuditHumanDecisionSchema = z.object({
+  type: z.literal('HumanReviewDecisionRecorded'), persistent: z.boolean(),
+  eventId: boundedIdSchema, sequence: z.number().int().positive(), idempotencyKey: boundedIdSchema,
+  occurredAt: timestampSchema, threadId: boundedIdSchema, snapshotDigest: sha256DigestSchema,
+  reviewPacketId: boundedIdSchema, action: z.enum(['approve', 'reject', 'request_evidence', 'defer']),
+  actor: z.string().min(1).max(4000), rationale: z.string().min(1).max(16000),
+  reviewReceipt: researchAuditReviewReceiptSchema,
+  targetOutcomes: z.array(researchAuditReviewTargetOutcomeSchema).min(1).max(10000).optional()
+}).strict()
+export const researchAuditReviewDecisionsSchema = z.object({
+  status: z.enum(['available', 'partial', 'unavailable']), asOf: timestampSchema.optional(),
+  records: z.array(researchAuditHumanDecisionSchema).max(1000), reasons: z.array(z.string().min(1).max(256)).max(64)
+}).strict()
+export type ResearchAuditReviewDecisions = z.infer<typeof researchAuditReviewDecisionsSchema>
+
 /** Output of the `evidence-dag.audit-query` read port. */
 export const researchAuditEvidenceAuditQueryOutputSchema = z.object({
   subject: researchAuditSubjectSchema,
@@ -172,6 +208,7 @@ export const researchAuditEvidenceAuditQueryOutputSchema = z.object({
   }).strict(),
   freshness: researchAuditFreshnessSchema,
   scientificReview: researchAuditScientificReviewSchema.optional(),
+  reviewDecisions: researchAuditReviewDecisionsSchema.optional(),
   source: z.literal('evidence-dag')
 }).strict()
 export type ResearchAuditEvidenceAuditQueryOutput = z.infer<

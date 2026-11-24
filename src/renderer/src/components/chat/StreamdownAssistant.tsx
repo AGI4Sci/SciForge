@@ -3,8 +3,14 @@ import { Streamdown, type AnimateOptions, type StreamdownProps } from 'streamdow
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import 'streamdown/styles.css'
-import { MARKDOWN_MATH_KATEX_OPTIONS, normalizeMarkdownMathDelimiters } from '@shared/write-markdown-math'
+import { MARKDOWN_MATH_KATEX_OPTIONS } from '@shared/write-markdown-math'
+import {
+  normalizeChatMarkdown,
+  remarkCurrencyMath
+} from '@shared/markdown-normalize'
 import {
   isFileReferenceHref,
   parseFileReferenceHref,
@@ -33,12 +39,37 @@ const STREAMING_ANIMATED: AnimateOptions = {
   animation: 'fadeIn'
 }
 
+/**
+ * Chat answers routinely contain inline HTML (`<br>`, `<sub>`, `<details>`,
+ * `<table>`). Streamdown's default rehype chain is replaced as soon as this
+ * prop is supplied, so raw HTML has to be parsed and sanitized explicitly —
+ * otherwise the tags are escaped and shown as source text.
+ */
+const SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [...(defaultSchema.attributes?.code ?? []), ['className', /^language-./]],
+    span: [...(defaultSchema.attributes?.span ?? []), ['className', /^katex/]],
+    div: [...(defaultSchema.attributes?.div ?? []), ['className', /^katex/]],
+    input: [...(defaultSchema.attributes?.input ?? []), 'checked', 'disabled', 'type']
+  },
+  tagNames: [...(defaultSchema.tagNames ?? []), 'details', 'summary', 'figure', 'figcaption']
+}
+
 const rehypePlugins = [
+  rehypeRaw,
+  [rehypeSanitize, SANITIZE_SCHEMA],
   rehypeFileReferences,
+  // KaTeX output must be produced after sanitization or its markup is stripped.
   [rehypeKatex, MARKDOWN_MATH_KATEX_OPTIONS]
 ] satisfies StreamdownProps['rehypePlugins']
 
-const remarkPlugins = [remarkMath, remarkGfm] satisfies StreamdownProps['remarkPlugins']
+const remarkPlugins = [
+  remarkMath,
+  remarkCurrencyMath,
+  remarkGfm
+] satisfies StreamdownProps['remarkPlugins']
 
 const components = {
   code: StreamdownCode,
@@ -65,6 +96,16 @@ function StreamdownLink({
   const validation = useValidatedFileReference(fileTarget, workspaceRoot)
   const isExternal = href ? /^(https?:|mailto:)/i.test(href) : false
   const cleanClassName = className?.replace(/\bds-file-reference-link\b/g, '').trim()
+
+  // While a link is still streaming its destination is a placeholder. Rendering
+  // it as an anchor would offer a dead `streamdown:` navigation target.
+  if (href?.startsWith('streamdown:')) {
+    return (
+      <span className={cleanClassName} title={title}>
+        {children}
+      </span>
+    )
+  }
 
   if (fileReferenceHref && !fileTarget) {
     return (
@@ -173,7 +214,7 @@ type Props = {
 export function StreamdownAssistant({ text, streaming, className }: Props): ReactElement {
   const animated = streaming && shouldAnimateStreamingText(text) ? STREAMING_ANIMATED : false
   const isAnimating = animated !== false
-  const normalizedText = useMemo(() => normalizeMarkdownMathDelimiters(text), [text])
+  const normalizedText = useMemo(() => normalizeChatMarkdown(text), [text])
 
   return (
     <Streamdown

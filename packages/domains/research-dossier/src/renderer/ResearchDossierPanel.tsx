@@ -1,4 +1,6 @@
+import { ExactArtifactText } from './ExactArtifactText'
 import { ExactArtifactImageCard } from './ExactArtifactImageCard.js'
+import { LocalMaterialRegistration } from './LocalMaterialRegistration.js'
 import { ResearchDossierEvidenceReview } from './ResearchDossierEvidenceReview.js'
 import {
   AlertTriangle,
@@ -29,12 +31,14 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactElement,
   type ReactNode
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { artifactVersionRefV1Schema } from '@sciforge/domain-sdk/research-audit'
 
 import type {
   ArtifactVersionCompareV1,
@@ -78,7 +82,9 @@ import {
 } from './research-dossier-loader.js'
 import {
   artifactHistoryInput,
+  comparisonTargetVersionId,
   artifactMetadataRows,
+  LOCAL_MATERIAL_KIND,
   bundleV2Destination,
   bundleV2IdempotencyKey,
   computeRunRefs,
@@ -152,6 +158,13 @@ export type LegacyImportLoadState =
   | Readonly<{ status: 'ready'; preview: ResearchCheckpointLegacyPreviewV1 }>
   | Readonly<{ status: 'error'; message: string }>
 
+export type ResearchDossierResolvedArtifact = Readonly<{
+  reference: ArtifactVersionRefV1
+  title: string
+  isCurrent: boolean
+  evidenceSession?: Readonly<{ runtimeId: string; threadId: string }>
+}>
+
 export type ResearchDossierPanelProps = Readonly<{
   client: ResearchDossierCapabilityClient
   session: DomainWorkbenchRightPanelSession
@@ -159,10 +172,15 @@ export type ResearchDossierPanelProps = Readonly<{
   active: boolean
   className?: string
   onCollapse: () => void
-  surfaceId: string
+  surfaceId?: string
+  sourcePresentation?: 'right-panel' | 'global-overlay'
   workbench?: DomainRendererWorkbenchHost
   workspacePreview?: DomainRendererWorkspacePreviewHost
   researchSummaries?: readonly DomainRendererContribution[]
+  embedded?: boolean
+  controlledPage?: ResearchDossierPage
+  onNavigate?: (activation?: DomainWorkbenchRightPanelActivation) => void
+  onResolvedArtifact?: (value: ResearchDossierResolvedArtifact | null) => void
 }>
 
 export function ResearchDossierPanel({
@@ -175,7 +193,11 @@ export function ResearchDossierPanel({
   surfaceId,
   workbench,
   workspacePreview,
-  researchSummaries = []
+  researchSummaries = [],
+  embedded = false,
+  controlledPage,
+  onNavigate,
+  onResolvedArtifact
 }: ResearchDossierPanelProps): ReactElement {
   const { t } = useTranslation('common')
   const parsedActivation = useMemo(
@@ -193,6 +215,9 @@ export function ResearchDossierPanel({
     ? JSON.stringify([parsedActivation.value.target, parsedActivation.value.expectedDigest])
     : parsedActivation.kind
   const loadedTargetRef = useRef(targetKey)
+  const actionScope = useMemo(() => ({}), [contentScope, targetKey, activation, active])
+  const actionScopeRef = useRef(actionScope)
+  actionScopeRef.current = actionScope
   const state: LoadState = loadedScopeRef.current === contentScope && loadedTargetRef.current === targetKey ? loadedState : { status: 'loading' }
   const browseCache = useRef<{ scope: object; value: ResearchDossierBrowseV1 } | null>(null)
   const [browseBusy, setBrowseBusy] = useState(false)
@@ -200,6 +225,8 @@ export function ResearchDossierPanel({
   const [browsePosition, setBrowsePosition] = useState({ scope: contentScope, query: '', page: 0 })
   const browseScroll = useRef(0)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const readingPositions = useRef(new Map<string, number>())
+  const readingKey = JSON.stringify([targetKey, controlledPage ?? (parsedActivation.kind === 'valid' ? parsedActivation.value.page : 'overview')])
   const [refreshing, setRefreshing] = useState(false)
   const hasContentRef = useRef(false)
   const [previewBusy, setPreviewBusy] = useState(false)
@@ -283,6 +310,7 @@ export function ResearchDossierPanel({
     if (generation === loadGeneration.current) {
       setPreviewIssue(null)
       setVersionNotice(null)
+      setVersionBusy(null)
       setComparison(null)
     }
     try {
@@ -329,12 +357,22 @@ export function ResearchDossierPanel({
   }, [load])
 
   useEffect(() => {
+    setVersionBusy(null)
+    setVersionNotice(null)
+    setComparison(null)
+  }, [actionScope])
+
+  useEffect(() => {
     browseRequest.current = false
     setBrowseBusy(false)
     setHistoryBusy(false)
   }, [contentScope, parsedActivation, browseQuery])
 
-  useEffect(() => { browseScroll.current = 0 }, [contentScope])
+  useEffect(() => { browseScroll.current = 0; readingPositions.current.clear() }, [contentScope])
+
+  useLayoutEffect(() => {
+    if (state.status === 'ready' && bodyRef.current) bodyRef.current.scrollTop = readingPositions.current.get(readingKey) ?? 0
+  }, [readingKey, state.status])
 
   useEffect(() => {
     if (state.status === 'browse' && bodyRef.current) bodyRef.current.scrollTop = browseScroll.current
@@ -564,11 +602,15 @@ export function ResearchDossierPanel({
   }
 
   const navigate = (page: ResearchDossierPage) => {
+    if (onNavigate && parsedActivation.kind === 'valid') {
+      onNavigate(moveResearchDossierActivationToPage(parsedActivation.value, page, (activation?.revision ?? 0) + 1))
+      return
+    }
     if (!workbench || parsedActivation.kind !== 'valid') return
     workbench.openRightPanel({
       contributionId: 'research-dossier.workbench-right-panel',
       sessionId: session.id,
-      surfaceId,
+      ...(surfaceId ? { surfaceId } : {placement:'focused' as const}),
       activation: moveResearchDossierActivationToPage(
         parsedActivation.value,
         page,
@@ -578,13 +620,9 @@ export function ResearchDossierPanel({
   }
 
   const openArtifact = (ref: ArtifactVersionRefV1, page: ResearchDossierPage = 'overview') => {
-    if (!workbench) return
+    if (!workbench && !onNavigate) return
     if (state.status === 'browse') browseScroll.current = bodyRef.current?.scrollTop ?? 0
-    workbench.openRightPanel({
-      contributionId: 'research-dossier.workbench-right-panel',
-      sessionId: session.id,
-      surfaceId,
-      activation: createResearchDossierActivation({
+    const nextActivation = createResearchDossierActivation({
         kind: 'artifact-version',
         versionId: ref.versionId
       }, {
@@ -592,7 +630,8 @@ export function ResearchDossierPanel({
         expectedDigest: `sha256:${ref.contentDigest}`,
         revision: (activation?.revision ?? 0) + 1
       })
-    })
+    if (onNavigate) onNavigate(nextActivation)
+    else workbench!.openRightPanel({ contributionId: 'research-dossier.workbench-right-panel', sessionId: session.id, ...(surfaceId ? { surfaceId } : {placement:'focused' as const}), activation: nextActivation })
   }
 
   const loadMoreBrowse = async () => {
@@ -633,7 +672,8 @@ export function ResearchDossierPanel({
       const result = await client.materializeArtifactVersion(session.workspaceRoot, {
         idempotencyKey: previewIdempotencyKey(ref),
         versionId: ref.versionId,
-        destinationPath: previewDestination(ref)
+        destinationPath: previewDestination(ref, state.record.kind === 'artifact-version' && typeof state.record.descriptor.version.metadata.observedWorkspacePath === 'string'
+          ? state.record.descriptor.version.metadata.observedWorkspacePath : undefined)
       })
       if (!result.ok) {
         setPreviewIssue(result.issue.message)
@@ -644,10 +684,10 @@ export function ResearchDossierPanel({
         previewRef: ref,
         recordDigest: exactRecordDigest(state.record),
         sessionId: session.id,
-        surfaceId,
+        ...(surfaceId ? { surfaceId } : {placement:'focused' as const}),
         workspaceRoot: session.workspaceRoot,
         target: parsedActivation.value.target,
-        page: parsedActivation.value.page,
+        page: controlledPage ?? parsedActivation.value.page,
         revision: activation?.revision ?? 1,
         label: t('researchTitle')
       }))
@@ -700,25 +740,44 @@ export function ResearchDossierPanel({
 
   const compareSelectedVersion = async () => {
     if (state.status !== 'ready' || state.record.kind !== 'artifact-version' || !session.workspaceRoot) return
+    if (versionBusy || !active) return
     const descriptor = state.record.descriptor
-    const targetVersionId = descriptor.isCurrent
-      ? descriptor.version.parentVersionId
-      : descriptor.artifact.currentVersionId
-    if (!targetVersionId) return
+    const targetVersionId = comparisonTargetVersionId(state.record)
+    if (!targetVersionId) {
+      setVersionNotice(t('researchDossierCompareTargetMissing'))
+      return
+    }
+    const scope = actionScope
+    const generation = loadGeneration.current
+    const isCurrent = () => actionScopeRef.current === scope && loadGeneration.current === generation
     setVersionBusy('compare')
     setVersionNotice(null)
+    setComparison(null)
     try {
       const result = await client.compareArtifactVersions(session.workspaceRoot, {
         fromVersionId: descriptor.version.versionId,
         toVersionId: targetVersionId,
         textPreviewMaxBytes: 8 * 1024
       })
+      if (!isCurrent()) return
       if (!result.ok) setVersionNotice(result.issue.message)
-      else setComparison(result.value)
+      else {
+        const from = artifactVersionRefV1Schema.parse(result.value.from)
+        const to = artifactVersionRefV1Schema.parse(result.value.to)
+        const expectedFrom = artifactVersionRefV1Schema.parse(descriptor.ref)
+        const knownTarget = state.record.history.items.find(item => item.ref.versionId === targetVersionId && item.ref.artifactId === descriptor.ref.artifactId)?.ref
+        if (JSON.stringify(from) !== JSON.stringify(expectedFrom) ||
+            to.versionId !== targetVersionId || to.artifactId !== descriptor.ref.artifactId ||
+            knownTarget && JSON.stringify(to) !== JSON.stringify(artifactVersionRefV1Schema.parse(knownTarget))) {
+          setVersionNotice(t('researchDossierCompareIdentityMismatch'))
+          return
+        }
+        setComparison(result.value)
+      }
     } catch (error) {
-      setVersionNotice(errorMessage(error))
+      if (isCurrent()) setVersionNotice(errorMessage(error))
     } finally {
-      setVersionBusy(null)
+      if (isCurrent()) setVersionBusy(null)
     }
   }
 
@@ -796,9 +855,18 @@ export function ResearchDossierPanel({
     }
   }
 
-  const requestedPage = parsedActivation.kind === 'valid'
+  useEffect(() => {
+    if (state.status === 'ready' && state.record.kind === 'artifact-version' && parsedActivation.kind === 'valid' && parsedActivation.value.target.kind === 'artifact-version' && parsedActivation.value.target.versionId === state.record.descriptor.ref.versionId && (!parsedActivation.value.expectedDigest || parsedActivation.value.expectedDigest === `sha256:${state.record.descriptor.ref.contentDigest}`)) {
+      const descriptor = state.record.descriptor
+      const { runtimeId, threadId } = descriptor.version.metadata
+      onResolvedArtifact?.({ reference: descriptor.ref, title: browseArtifactTitle(descriptor), isCurrent: descriptor.isCurrent,
+        ...(typeof runtimeId === 'string' && runtimeId.trim() && typeof threadId === 'string' && threadId.trim() ? { evidenceSession: { runtimeId: runtimeId.trim(), threadId: threadId.trim() } } : {}) })
+    } else if (state.status === 'error' || parsedActivation.kind !== 'valid') onResolvedArtifact?.(null)
+  }, [state, onResolvedArtifact, parsedActivation])
+
+  const requestedPage = controlledPage ?? (parsedActivation.kind === 'valid'
     ? parsedActivation.value.page
-    : 'overview'
+    : 'overview')
   const visiblePages = visibleDossierPages(parsedActivation, state)
   const page = visiblePages.some((item) => item.id === requestedPage)
     ? requestedPage
@@ -810,18 +878,18 @@ export function ResearchDossierPanel({
       className={`flex min-h-0 min-w-0 flex-col border-l border-ds-border bg-ds-sidebar ${className}`}
       data-active={active ? 'true' : 'false'}
     >
-      <header className="shrink-0 border-b border-ds-border bg-ds-main/40">
+      {!embedded && <header className="shrink-0 border-b border-ds-border bg-ds-main/40">
         <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-accent/20 bg-accent-soft text-accent">
               <BookOpenCheck className="h-4 w-4" strokeWidth={1.8} />
             </span>
             <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-ds-ink">{t('researchTitle')}</div>
-              <div className="truncate text-[9.5px] text-ds-faint">
+              <div className="text-ds-md font-semibold text-ds-ink">{t('researchTitle')}</div>
+              <div className="truncate text-ds-2xs text-ds-faint">
                 {t('researchDossierSubtitle')}
               </div>
-              <div className="truncate text-[9.5px] text-ds-faint/80">
+              <div className="truncate text-ds-2xs text-ds-faint/80">
                 {targetLabel(
                   parsedActivation,
                   t('researchDossierArtifactHistory'),
@@ -864,7 +932,7 @@ export function ResearchDossierPanel({
               type="button"
               disabled={parsedActivation.kind !== 'valid'}
               onClick={() => navigate(item.id)}
-              className={`shrink-0 border-b-2 px-2.5 py-2 text-[10.5px] font-medium transition ${
+              className={`shrink-0 border-b-2 px-2.5 py-2 text-ds-2xs font-medium transition ${
                 page === item.id
                   ? 'border-accent text-ds-ink'
                   : 'border-transparent text-ds-muted hover:text-ds-ink'
@@ -875,11 +943,22 @@ export function ResearchDossierPanel({
           ))}
           </nav>
         ) : null}
-      </header>
+      </header>}
 
-      <div ref={bodyRef} className="min-h-0 min-w-0 flex-1 overflow-auto p-3">
+      <div ref={bodyRef} data-dossier-reading-pane onScroll={event => { if (state.status === 'ready') readingPositions.current.set(readingKey, event.currentTarget.scrollTop) }} className="min-h-0 min-w-0 flex-1 overflow-auto p-3">
+        {embedded && <button type="button" className="mb-2 rounded px-2 py-1 text-ds-xs text-ds-muted hover:bg-ds-hover disabled:opacity-50" disabled={refreshing || state.status === 'loading' || parsedActivation.kind === 'invalid'} onClick={() => { browseCache.current = null; void load() }}>刷新材料</button>}
+        {session.workspaceRoot?.trim() && parsedActivation.kind === 'empty' ? <LocalMaterialRegistration
+          key={JSON.stringify([session.workspaceRoot, session.runtimeId, session.id])}
+          client={client}
+          workspaceRoot={session.workspaceRoot}
+          runtimeId={session.runtimeId}
+          sessionId={session.id}
+          canOpen={Boolean(workbench || onNavigate)}
+          onOpen={ref => openArtifact(ref, 'versions')}
+          onRegistered={() => { browseCache.current = null; void load() }}
+        /> : null}
         {refreshing ? (
-          <div className="mb-2 flex items-center gap-1.5 text-[9.5px] text-ds-faint">
+          <div className="mb-2 flex items-center gap-1.5 text-ds-2xs text-ds-faint">
             <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
             {t('researchDossierLoading')}
           </div>
@@ -904,6 +983,7 @@ export function ResearchDossierPanel({
             session={session}
             workbench={workbench}
             researchSummaries={researchSummaries}
+            materialsOnly={embedded}
             recordingState={recordingState}
             recordingAction={recordingAction}
             recordingNotice={recordingNotice}
@@ -930,17 +1010,13 @@ export function ResearchDossierPanel({
           />
         ) : state.status === 'ready' ? (
           <div className="grid gap-3">
-            <button type="button" className={actionButtonClass} onClick={() => workbench?.openRightPanel({
-              contributionId: 'research-dossier.workbench-right-panel', sessionId: session.id, surfaceId
-            })} disabled={!workbench}>{t('researchDossierBackToHistory')}</button>
+            {!embedded && <button type="button" className={actionButtonClass} onClick={() => onNavigate ? onNavigate() : workbench?.openRightPanel({
+              contributionId: 'research-dossier.workbench-right-panel', sessionId: session.id, ...(surfaceId ? { surfaceId } : {placement:'focused' as const})
+            })} disabled={!workbench && !onNavigate}>{t('researchDossierBackToHistory')}</button>}
             {previewIssue ? <InlineIssue message={previewIssue} /> : null}
-            {state.record.kind === 'artifact-version' && session.workspaceRoot ? (
-              <ResearchDossierEvidenceReview active={active} key={`${session.workspaceRoot}:${state.record.descriptor.ref.versionId}:${state.record.descriptor.ref.contentDigest}`}
-                client={client} reference={state.record.descriptor.ref} workspaceRoot={session.workspaceRoot}
-                sessionId={session.id} runtimeId={session.runtimeId} workbench={workbench} />
-            ) : null}
-            {page === 'overview' ? (
-              <OverviewPage
+            {embedded && controlledPage === 'versions' && state.record.kind !== 'artifact-version' ? <p className="text-ds-sm text-ds-muted">此计算记录没有材料版本列表，可从概览打开关联材料。</p> : page === 'overview' ? (
+              <><OverviewPage
+                content={embedded && state.record.kind === 'artifact-version' && session.workspaceRoot ? <ExactArtifactText key={JSON.stringify([session.workspaceRoot, state.record.descriptor.ref])} reference={state.record.descriptor.ref} client={client} workspaceRoot={session.workspaceRoot} active={active} /> : undefined}
                 imageCard={(ref) => session.workspaceRoot ? <ExactArtifactImageCard reference={ref} client={client} workspaceRoot={session.workspaceRoot} sessionId={session.id} workbench={workbench} /> : null}
                 record={state.record}
                 issues={state.issues}
@@ -948,9 +1024,10 @@ export function ResearchDossierPanel({
                 previewBusy={previewBusy}
                 onPreview={() => void preview()}
                 onOpenArtifact={openArtifact}
-              />
+              />{embedded && <details open={parsedActivation.kind === 'valid' && parsedActivation.value.page === 'reproduction'}><summary className="cursor-pointer text-ds-sm">方法、来源与复现</summary><div className="mt-3 grid gap-3"><ReproductionPage record={state.record} checkpointIssue={state.issues.checkpoint} issue={state.issues.reproduction} onOpenArtifact={openArtifact} /></div></details>}</>
             ) : page === 'versions' ? (
               <VersionsPage
+                active={active}
                 record={state.record}
                 issue={state.issues.versions}
                 actionNotice={versionNotice}
@@ -972,6 +1049,17 @@ export function ResearchDossierPanel({
                 issue={state.issues.reproduction}
                 onOpenArtifact={openArtifact}
               />
+            ) : null}
+            {state.record.kind === 'artifact-version' && session.workspaceRoot ? (
+              <details key={`${session.workspaceRoot}:${state.record.descriptor.ref.versionId}:${state.record.descriptor.ref.contentDigest}`}
+                className="rounded-md border border-border/60 p-3">
+                <summary className="cursor-pointer text-ds-xs text-text-secondary">{t('researchDossierRelatedEvidence')}</summary>
+                <div className="mt-3">
+                  <ResearchDossierEvidenceReview active={active}
+                    client={client} reference={state.record.descriptor.ref} workspaceRoot={session.workspaceRoot}
+                    sessionId={session.id} runtimeId={session.runtimeId} workbench={workbench} />
+                </div>
+              </details>
             ) : null}
           </div>
         ) : null}
@@ -1004,9 +1092,11 @@ function BrowsePage({
   browseBusy,
   onLoadMore,
   position,
-  onPosition
+  onPosition,
+  materialsOnly = false
 }: Readonly<{
   value: ResearchDossierBrowseV1
+  materialsOnly?: boolean
   session: DomainWorkbenchRightPanelSession
   workbench?: DomainRendererWorkbenchHost
   researchSummaries: readonly DomainRendererContribution[]
@@ -1036,9 +1126,7 @@ function BrowsePage({
   const page = Math.min(position.page, Math.max(0, Math.ceil(matching.length / 25) - 1))
   const visible = matching.slice(page * 25, (page + 1) * 25)
   const complete = value.streams.every(stream => stream.complete)
-  return (
-    <div className="grid gap-3">
-      <details className="rounded-lg border border-ds-border p-3"><summary className="cursor-pointer text-xs text-ds-muted">研究概览与正式证据状态</summary><p className="my-2 text-[11px] text-ds-muted">来源已归类、版本字节校验、正式证据与复现状态分别记录；阶段摘要不代表证据核验。</p>
+  const management = (<><details className="rounded-lg border border-ds-border p-3"><summary className="cursor-pointer text-ds-sm text-ds-muted">研究概览与正式证据状态</summary><p className="my-2 text-ds-xs text-ds-muted">来源已归类、版本字节校验、正式证据与复现状态分别记录；阶段摘要不代表证据核验。</p>
       <ResearchSummaryList
         session={session}
         workbench={workbench}
@@ -1063,24 +1151,28 @@ function BrowsePage({
         onTitleChange={onLegacyTitleChange}
         onImport={onImportLegacy}
       />
-      <SectionCard title={t('researchDossierArtifactHistory')} icon={<Boxes />}>
+</>)
+  return (
+    <div className="grid gap-3">
+      {materialsOnly ? <details className="rounded border border-ds-border p-2"><summary className="cursor-pointer text-ds-sm text-ds-muted">记录设置与来源状态</summary>{management}</details> : management}
+      <SectionCard title={materialsOnly ? "材料变化" : t('researchDossierArtifactHistory')} icon={<Boxes />}>
         {value.issues.artifacts ? <InlineIssue message={value.issues.artifacts} /> : null}
-        <label className="mb-2 grid gap-1 text-xs text-ds-muted">
+        <label className="mb-2 grid gap-1 text-ds-sm text-ds-muted">
           {t('researchDossierSearchLoaded')}
           <input type="search" value={position.query} className="min-w-0 w-full rounded border border-ds-border bg-ds-main px-2 py-1.5 text-ds-ink"
             onChange={event => onPosition({ query: event.target.value, page: 0 })} />
         </label>
-        <p className="mb-2 text-[11px] text-ds-muted" role="status" data-dossier-browse-scope>
+        <p className="mb-2 text-ds-xs text-ds-muted" role="status" data-dossier-browse-scope>
           {t('researchDossierLoadedScope', { count: value.artifacts.items.length, matches: matching.length })}
           {' · '}{t(complete ? 'researchDossierHistoryExhausted' : 'researchDossierHistoryPartial')}
         </p>
-        <p className="mb-2 text-[11px] text-ds-muted">{t('researchDossierBrowseNotReview')}</p>
-        {position.query.trim() && !matching.length ? <p className="mb-2 text-xs text-ds-muted">{t('researchDossierNoLoadedMatches')}</p> : null}
-        <details className="mb-2 text-[11px] text-ds-muted"><summary>{t('researchDossierQueryCoverage')}</summary>
+        <p className="mb-2 text-ds-xs text-ds-muted">{t('researchDossierBrowseNotReview')}</p>
+        {position.query.trim() && !matching.length ? <p className="mb-2 text-ds-sm text-ds-muted">{t('researchDossierNoLoadedMatches')}</p> : null}
+        <details className="mb-2 text-ds-xs text-ds-muted"><summary>{t('researchDossierQueryCoverage')}</summary>
           {value.streams.map(stream => <p key={stream.kind}>{stream.kind}: {stream.pagesRead} {t('researchDossierPagesRead')} · {stream.scanned} {t('researchDossierRowsRead')} · {stream.issue ?? t(stream.complete ? 'researchDossierHistoryExhausted' : 'researchDossierHistoryPartial')}</p>)}
         </details>
         <BrowseSessionArtifacts items={visible} knownItems={value.artifacts.items} session={session} onOpen={onOpenArtifact} />
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs" aria-label={t('researchDossierHistoryPagination')}>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-ds-sm" aria-label={t('researchDossierHistoryPagination')}>
           <button type="button" className={actionButtonClass} disabled={page === 0} onClick={() => onPosition({ ...position, page: page - 1 })}>{t('researchDossierPreviousPage')}</button>
           <span>{page + 1} / {Math.max(1, Math.ceil(matching.length / 25))}</span>
           <button type="button" className={actionButtonClass} disabled={(page + 1) * 25 >= matching.length} onClick={() => onPosition({ ...position, page: page + 1 })}>{t('researchDossierNextPage')}</button>
@@ -1112,7 +1204,7 @@ export function ResearchRecordingCallout({
   const { t } = useTranslation('common')
   if (state.status === 'unavailable') {
     return (
-      <section className="rounded-xl border border-ds-border bg-[var(--ds-warning-soft)] p-3 text-[10.5px] text-ds-muted">
+      <section className="rounded-xl border border-ds-border bg-[var(--ds-warning-soft)] p-3 text-ds-2xs text-ds-muted">
         <div className="flex items-center gap-2 font-semibold">
           <AlertTriangle className="h-4 w-4" />
           {t('researchDossierRecordingUnavailable')}
@@ -1124,7 +1216,7 @@ export function ResearchRecordingCallout({
 
   if (state.status !== 'ready') {
     return (
-      <section className="rounded-xl border border-ds-border bg-ds-main/50 p-3 text-[10.5px] text-ds-muted">
+      <section className="rounded-xl border border-ds-border bg-ds-main/50 p-3 text-ds-2xs text-ds-muted">
         <div className="flex items-center gap-2 font-semibold text-ds-ink">
           <Loader2 className={`h-4 w-4 ${state.status === 'loading' ? 'animate-spin' : ''}`} />
           {t('researchDossierRecordingChecking')}
@@ -1158,7 +1250,7 @@ export function ResearchRecordingCallout({
 
   return (
     <section
-      className="rounded-xl border border-ds-border bg-ds-main/50 p-3 text-[10.5px]"
+      className="rounded-xl border border-ds-border bg-ds-main/50 p-3 text-ds-2xs"
       data-research-recording-state={recording?.state ?? 'not-started'}
       data-research-recording-mode={state.recordingMode}
       data-research-recording-automatic-enabled={state.automaticEnabled ? 'true' : 'false'}
@@ -1261,11 +1353,11 @@ export function LegacyImportPanel({
     >
       <header className="flex items-start justify-between gap-3 border-b border-ds-border-muted p-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[11px] font-semibold text-ds-ink">
+          <div className="flex items-center gap-2 text-ds-xs font-semibold text-ds-ink">
             <Import className="h-3.5 w-3.5 text-accent" />
             {t('researchDossierLegacyImportTitle')}
           </div>
-          <p className="mt-1 text-[9.5px] leading-relaxed text-ds-muted">
+          <p className="mt-1 text-ds-2xs leading-relaxed text-ds-muted">
             {t('researchDossierLegacyImportHint')}
           </p>
         </div>
@@ -1280,18 +1372,18 @@ export function LegacyImportPanel({
           <InlineIssue message={state.message} />
         ) : (
           <>
-            <label className="grid gap-1 text-[9.5px] font-medium text-ds-muted">
+            <label className="grid gap-1 text-ds-2xs font-medium text-ds-muted">
               {t('researchDossierLegacyRecordTitle')}
               <input
                 value={title}
                 onChange={(event) => onTitleChange(event.currentTarget.value)}
                 maxLength={512}
                 placeholder={t('researchDossierLegacyImportTitle')}
-                className="rounded-lg border border-ds-border bg-ds-sidebar px-2.5 py-2 text-[10.5px] text-ds-ink outline-none transition focus:border-accent/50"
+                className="rounded-lg border border-ds-border bg-ds-sidebar px-2.5 py-2 text-ds-2xs text-ds-ink outline-none transition focus:border-accent/50"
               />
             </label>
             <div>
-              <div className="mb-1.5 text-[9.5px] font-medium text-ds-muted">{t('researchDossierLegacySelect')}</div>
+              <div className="mb-1.5 text-ds-2xs font-medium text-ds-muted">{t('researchDossierLegacySelect')}</div>
               {state.preview.turns.length ? (
                 <ol className="grid max-h-72 gap-1.5 overflow-auto pr-1">
                   {state.preview.turns.map((turn) => {
@@ -1307,8 +1399,8 @@ export function LegacyImportPanel({
                             : 'border-ds-border-muted bg-ds-main/45 hover:border-accent/25'}`}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-[9.5px] font-semibold text-ds-ink">{turn.summary}</span>
-                            <span className="shrink-0 text-[9px] text-ds-faint">{turn.completedAt ? formatTime(turn.completedAt) : turn.status}</span>
+                            <span className="truncate text-ds-2xs font-semibold text-ds-ink">{turn.summary}</span>
+                            <span className="shrink-0 text-ds-2xs text-ds-faint">{turn.completedAt ? formatTime(turn.completedAt) : turn.status}</span>
                           </div>
                         </button>
                       </li>
@@ -1317,7 +1409,7 @@ export function LegacyImportPanel({
                 </ol>
               ) : <MutedText>{t('researchDossierLegacyEmpty')}</MutedText>}
             </div>
-            <div className="rounded-lg border border-ds-border bg-ds-danger-soft p-2 text-[9.5px] leading-relaxed text-ds-danger">
+            <div className="rounded-lg border border-ds-border bg-ds-danger-soft p-2 text-ds-2xs leading-relaxed text-ds-danger">
               <AlertTriangle className="mr-1 inline h-3 w-3" />
               {t('researchDossierLegacyIncomplete')}
             </div>
@@ -1419,7 +1511,7 @@ function ResearchSummaryList({
 
   if (state === 'loading') {
     return (
-      <section className="rounded-xl border border-ds-border bg-ds-main/40 p-3 text-[10.5px] text-ds-muted">
+      <section className="rounded-xl border border-ds-border bg-ds-main/40 p-3 text-ds-2xs text-ds-muted">
         <div className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t('researchDossierSummaryLoading')}</div>
       </section>
     )
@@ -1464,21 +1556,21 @@ function ResearchSummaryCard({
   const result = summary.result
   return (
     <section className="rounded-xl border border-ds-border bg-ds-main/45 p-3" data-research-summary={summary.id} data-research-summary-slot={summary.slot}>
-      <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold text-ds-ink">
+      <div className="mb-2 flex items-center gap-2 text-ds-xs font-semibold text-ds-ink">
         <Scale className="h-3.5 w-3.5 text-accent" />
         {summary.label}
       </div>
       {result.status === 'unavailable' ? (
-        <p className="text-[10px] leading-relaxed text-ds-muted">
+        <p className="text-ds-2xs leading-relaxed text-ds-muted">
           {result.reason ?? t('researchDossierSummaryUnavailable')}
         </p>
       ) : (
         <>
-          {result.title ? <div className="mb-1.5 text-[10px] text-ds-muted">{result.title}</div> : null}
+          {result.title ? <div className="mb-1.5 text-ds-2xs text-ds-muted">{result.title}</div> : null}
           {result.items.length ? (
             <dl className="grid gap-1.5">
               {result.items.map((item) => (
-                <div key={`${item.label}:${item.value}`} className="flex items-start justify-between gap-3 text-[10px]">
+                <div key={`${item.label}:${item.value}`} className="flex items-start justify-between gap-3 text-ds-2xs">
                   <dt className="text-ds-muted">{item.label}</dt>
                   <dd className={item.tone === 'critical' ? 'text-ds-danger' : item.tone === 'warning' ? 'text-ds-warning' : item.tone === 'positive' ? 'text-ds-success' : 'text-ds-ink'}>{item.value}</dd>
                 </div>
@@ -1509,7 +1601,10 @@ function ResearchSummaryCard({
 }
 
 export function groupBrowseArtifacts(items: ArtifactVersionListV2['items'], session: DomainWorkbenchRightPanelSession): { current: ArtifactVersionListV2['items']; other: ArtifactVersionListV2['items'] } {
-  const belongs = (item: ArtifactVersionListV2['items'][number]) => item.version.metadata?.runtimeId === session.runtimeId && item.version.metadata?.threadId === session.id
+  const belongs = (item: ArtifactVersionListV2['items'][number]) => (
+    (item.version.metadata?.runtimeId === session.runtimeId && item.version.metadata?.threadId === session.id) ||
+    (item.artifact.kind === LOCAL_MATERIAL_KIND && item.version.metadata.registrationSessionId === session.id && item.version.metadata.registrationRuntimeId === session.runtimeId)
+  )
   const recordingIds = new Set(items.filter(belongs).map(item => item.version.metadata?.researchRecordingId).filter(value => typeof value === 'string'))
   const current = items.filter(item => belongs(item) || (typeof item.version.metadata?.researchRecordingId === 'string' && recordingIds.has(item.version.metadata?.researchRecordingId)))
   const selected = new Set(current.map(item => item.version.versionId))
@@ -1528,9 +1623,9 @@ function BrowseSessionArtifacts({ items, knownItems, session, onOpen }: {
     other: knownGroups.other.filter(item => visibleIds.has(item.version.versionId))
   }
   return <div className="space-y-3">
-    <h3 className="text-xs text-ds-muted">当前会话</h3>
+    <h3 className="text-ds-sm text-ds-muted">当前会话</h3>
     <BrowseArtifactList items={groups.current} onOpen={onOpen} />
-    {!!groups.other.length && <details><summary className="cursor-pointer text-xs text-ds-muted">其他会话与未确定归属（{groups.other.length}）</summary><div className="mt-2"><BrowseArtifactList items={groups.other} onOpen={onOpen} /></div></details>}
+    {!!groups.other.length && <details><summary className="cursor-pointer text-ds-sm text-ds-muted">其他会话与未确定归属（{groups.other.length}）</summary><div className="mt-2"><BrowseArtifactList items={groups.other} onOpen={onOpen} /></div></details>}
   </div>
 }
 
@@ -1556,19 +1651,19 @@ function BrowseArtifactList({
   return (
     <ol className="grid gap-1.5">
       {items.map((item) => (
-        <li key={item.version.versionId} title={[item.artifact.label, item.version.metadata?.runtimeId, item.version.metadata?.threadId, item.version.versionId].filter(Boolean).join(" · ")}>
+        <li key={item.version.versionId} title={item.artifact.label ?? undefined}>
           <button
             type="button"
             onClick={() => onOpen(item.ref)}
             className={listButtonClass}
           >
-            <div className="flex items-center justify-between gap-2 text-[10.5px]">
+            <div className="flex items-center justify-between gap-2 text-ds-2xs">
               <span className="truncate font-semibold text-ds-ink">
                 {browseArtifactTitle(item)}
               </span>
-              <span className="font-mono text-ds-faint">v{item.artifactOrdinal}</span>
+              <span className="text-ds-faint">{t(item.isCurrent ? 'researchDossierCurrent' : 'researchDossierHistorical')}</span>
             </div>
-            <div className="mt-1 flex items-center justify-between gap-2 text-[9.5px] text-ds-muted">
+            <div className="mt-1 flex items-center justify-between gap-2 text-ds-2xs text-ds-muted">
               <span>{formatTime(item.version.createdAt)}</span>
               <ChevronRight className="h-3 w-3 shrink-0 transition group-hover:translate-x-0.5" />
             </div>
@@ -1580,6 +1675,7 @@ function BrowseArtifactList({
 }
 
 export function OverviewPage({
+  content,
   imageCard,
   record,
   issues = {},
@@ -1589,6 +1685,7 @@ export function OverviewPage({
   onOpenArtifact
 }: Readonly<{
   record: ResearchDossierExactRecord
+  content?: ReactNode
   imageCard?: (ref: ArtifactVersionRefV1) => ReactNode
   issues?: Readonly<Partial<Record<'checkpoint' | 'reproduction', string>>>
   canPreview: boolean
@@ -1614,16 +1711,16 @@ export function OverviewPage({
           </div>
         </SectionCard>
       ) : null}
-      <SectionCard title={t('researchDossierVerifiedRecord')} icon={<Fingerprint />}>
-        <div className="grid gap-2 text-[10.5px]">
+      <SectionCard title={t('researchDossierVerifiedRecord')} icon={<BookOpenCheck />}>
+        <div className="grid gap-2 text-ds-2xs">
           {record.kind === 'artifact-version' ? (
             <>
               <div className="font-semibold text-ds-ink">
                 {record.descriptor.artifact.label ?? record.descriptor.artifact.kind}
               </div>
               <LabeledValue label={t('researchDossierVersions')} value={record.descriptor.isCurrent
-                ? `${t('researchDossierCurrent')} · v${record.descriptor.artifactOrdinal}`
-                : `${t('researchDossierHistorical')} · v${record.descriptor.artifactOrdinal}`} />
+                ? t('researchDossierCurrent')
+                : t('researchDossierHistorical')} />
               <LabeledValue label={t('researchDossierOccurredAt')} value={formatTime(record.descriptor.version.createdAt)} />
             </>
           ) : (
@@ -1634,6 +1731,7 @@ export function OverviewPage({
             </>
           )}
         </div>
+        {content}
         <button
           type="button"
           disabled={!canPreview || previewBusy}
@@ -1645,7 +1743,7 @@ export function OverviewPage({
           {t('researchDossierPreview')}
         </button>
         <TechnicalDetails>
-          <div className="grid gap-2 text-[10px]">
+          <div className="grid gap-2 text-ds-2xs">
             <LabeledValue label={record.kind === 'artifact-version' ? 'Version ID' : 'Run ID'}
               value={record.kind === 'artifact-version'
                 ? record.descriptor.version.versionId
@@ -1668,9 +1766,11 @@ export function OverviewPage({
         </>
       ) : null}
 
-      {visibleAxes.length ? (
+      {visibleAxes.length ? (<>
+      {visibleAxes.some(axis => !/^(succeeded|success|complete|committed|accepted|approved|not_needed|clear|fresh|isolated-attested|replicates|formal-references-present)$/u.test(axis.value)) && <p className="text-ds-sm text-ds-muted" data-dossier-status-attention>{visibleAxes.filter(axis => !/^(succeeded|success|complete|committed|accepted|approved|not_needed|clear|fresh|isolated-attested|replicates|formal-references-present)$/u.test(axis.value)).map(axis => `${t(axis.label)}：${t(researchStatusKey(axis.value))}`).join('；')}。</p>}
+      <details><summary className="cursor-pointer text-ds-sm text-ds-muted">{t('researchDossierTrustSummary')}</summary>
       <SectionCard title={t('researchDossierTrustSummary')} icon={<ShieldCheck />}>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2 @sm:grid-cols-2">
         {visibleAxes.map((axis) => (
           <AxisCard
             key={axis.key}
@@ -1683,7 +1783,7 @@ export function OverviewPage({
         ))}
       </div>
       <TechnicalDetails>
-        <div className="grid gap-2 text-[10px]">
+        <div className="grid gap-2 text-ds-2xs">
           <LabeledValue label={t('researchDossierExecution')} value={axes.execution} mono />
           <LabeledValue label={t('researchDossierProvenance')} value={axes.provenance} mono />
           <LabeledValue label={t('researchDossierControl')} value={axes.control} mono />
@@ -1691,14 +1791,14 @@ export function OverviewPage({
           <LabeledValue label={t('researchDossierEvidence')} value={axes.evidence} mono />
         </div>
       </TechnicalDetails>
-      </SectionCard>
+      </SectionCard></details></>
       ) : null}
 
       {groupedBreakpoints.length ? (
         <SectionCard title={t('researchDossierLimitations')} icon={<AlertTriangle />}>
           <ul className="grid gap-2">
             {groupedBreakpoints.map((breakpoint) => (
-              <li key={breakpoint.code} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10.5px]">
+              <li key={breakpoint.code} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
                 <div className="flex items-center gap-1.5 font-semibold text-ds-ink">
                   {breakpoint.blocking
                     ? <AlertTriangle className="h-3 w-3 text-ds-danger" />
@@ -1725,6 +1825,7 @@ export function OverviewPage({
 }
 
 function VersionsPage({
+  active,
   record,
   issue,
   actionNotice,
@@ -1739,6 +1840,7 @@ function VersionsPage({
   onRestore,
   onExportBundle
 }: Readonly<{
+  active: boolean
   record: ResearchDossierExactRecord
   issue?: string
   actionNotice: string | null
@@ -1761,53 +1863,79 @@ function VersionsPage({
       </SectionCard>
     )
   }
+  const compareReason = !active ? t('researchDossierPanelInactive') : versionBusy ? t('researchDossierVersionBusy') : !comparisonTargetVersionId(record) ? t('researchDossierCompareTargetMissing') : undefined
+  const previewReason = versionBusy ? t('researchDossierVersionBusy') : !canPreview ? t('researchDossierPreviewUnavailable') : undefined
+  const restoreReason = versionBusy ? t('researchDossierVersionBusy') : record.descriptor.isCurrent ? t('researchDossierAlreadyCurrent') : record.descriptor.ref.availability !== 'available' ? t('researchDossierVersionUnavailable') : undefined
+  const bundleReason = versionBusy ? t('researchDossierVersionBusy') : !record.descriptor.ref.accessPolicy.allowExport ? t('researchDossierExportDenied') : undefined
   return (
     <SectionCard title={record.descriptor.artifact.label ?? record.descriptor.artifact.kind} icon={<History />}>
+      {record.descriptor.artifact.kind === LOCAL_MATERIAL_KIND ? <div className="mb-3 grid gap-1 break-all text-ds-xs text-ds-muted" data-local-material-details>
+        <p>{t('researchDossierMaterialBoundary')}</p>
+        <p>{String(record.descriptor.version.metadata.observedWorkspacePath ?? '')}</p>
+        <p>{t('researchDossierMaterialRole')}: {t(`researchDossierMaterialRole_${String(record.descriptor.version.metadata.materialRole ?? 'other')}`)}</p>
+        <p>{String(record.descriptor.version.metadata.description ?? '')}</p>
+        <p>SHA-256: {record.descriptor.ref.contentDigest}</p>
+        {!canPreview ? <p>{t('researchDossierMaterialPreviewUnavailable')}</p> : null}
+      </div> : null}
       {issue ? <InlineIssue message={issue} /> : null}
       {actionNotice ? <InlineIssue message={actionNotice} /> : null}
-      <p className="mb-2 break-words text-xs text-ds-muted" data-dossier-selected-version={record.descriptor.ref.versionId}>
-        {t('researchDossierSelectedVersion')}: v{record.descriptor.artifactOrdinal} · {record.descriptor.ref.versionId}
+      <p className="mb-2 break-words text-ds-sm text-ds-muted" data-dossier-selected-version={record.descriptor.ref.versionId}>
+        {t(record.descriptor.isCurrent ? 'researchDossierCurrent' : 'researchDossierHistorical')} · {formatTime(record.descriptor.version.createdAt)}
       </p>
       <div className="mb-2 flex flex-wrap gap-1.5">
         <button
           type="button"
-          disabled={Boolean(versionBusy) || (!record.descriptor.version.parentVersionId && record.descriptor.isCurrent)}
+          disabled={Boolean(compareReason)}
+          title={compareReason}
+          aria-busy={versionBusy === 'compare'}
           onClick={onCompare}
           className={actionButtonClass}
         >
           {versionBusy === 'compare' ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitCompareArrows className="h-3 w-3" />}
-          {t('researchDossierCompare')}
+          {t(versionBusy === 'compare' ? 'researchDossierComparing' : 'researchDossierCompare')}
         </button>
+        <MutedText>{compareReason ?? t(record.descriptor.isCurrent ? 'researchDossierCompareWithParent' : 'researchDossierCompareWithCurrent')}</MutedText>
         <button
           type="button"
-          disabled={Boolean(versionBusy) || !canPreview}
+          disabled={Boolean(previewReason)}
+          title={previewReason}
           onClick={onPreview}
           className={actionButtonClass}
         >
           <ExternalLink className="h-3 w-3" />{t('researchDossierPreview')}
         </button>
+        {previewReason ? <MutedText>{previewReason}</MutedText> : null}
+      </div>
+      <details className="mb-2" data-dossier-more-actions>
+        <summary className="cursor-pointer text-ds-xs">{t('researchDossierMoreActions')}</summary>
+        <div className="flex flex-wrap gap-2 py-2">
         <button
           type="button"
-          disabled={Boolean(versionBusy) || record.descriptor.isCurrent || record.descriptor.ref.availability !== 'available'}
+          title={restoreReason}
+          disabled={Boolean(restoreReason)}
           onClick={onRestore}
           className={actionButtonClass}
         >
           {versionBusy === 'restore' ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
           {t('researchDossierRestore')}
         </button>
+        {restoreReason ? <MutedText>{restoreReason}</MutedText> : null}
         <button
           type="button"
-          disabled={Boolean(versionBusy) || !record.descriptor.ref.accessPolicy.allowExport}
+          title={bundleReason}
+          disabled={Boolean(bundleReason)}
           onClick={onExportBundle}
           className={actionButtonClass}
         >
           {versionBusy === 'bundle' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Archive className="h-3 w-3" />}
           {t('researchDossierBundle')}
         </button>
-      </div>
+        {bundleReason ? <MutedText>{bundleReason}</MutedText> : null}
+        </div>
+      </details>
       {comparison ? (
-        <div className="grid gap-2" data-artifact-version-comparison>
-          <div className="grid gap-2 rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
+        <div className="grid gap-2" role="status" data-artifact-version-comparison>
+          <div className="grid gap-2 rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
             <div className="font-semibold text-ds-ink">{t('researchDossierComparisonSummary')}</div>
             <ul className="grid gap-1 text-ds-muted">
               <li>{comparison.sameContent ? t('researchDossierSameContent') : t('researchDossierDifferentContent')}</li>
@@ -1861,10 +1989,10 @@ function VersionsPage({
                 className="group w-full text-left"
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[11px] font-semibold text-ds-ink">v{item.artifactOrdinal}</span>
-                  <span className="text-[9.5px] text-ds-faint">{formatTime(item.version.createdAt)}</span>
+                  <span className="text-ds-xs font-semibold text-ds-ink">{t(item.isCurrent ? 'researchDossierCurrent' : 'researchDossierHistorical')}</span>
+                  <span className="text-ds-2xs text-ds-faint">{formatTime(item.version.createdAt)}</span>
                 </div>
-                <div className="mt-1 flex items-center justify-between gap-2 text-[9.5px] text-ds-muted">
+                <div className="mt-1 flex items-center justify-between gap-2 text-ds-2xs text-ds-muted">
                   <span className="line-clamp-2">{versionReason(item.version.metadata, item.version.intent)}</span>
                   <ChevronRight className="h-3 w-3 transition group-hover:translate-x-0.5" />
                 </div>
@@ -1965,7 +2093,7 @@ export function ReproductionPage({
         </TechnicalDetails>
       </SectionCard>
       <SectionCard title={t('researchDossierExecutionFacts')} icon={<FlaskConical />}>
-        <div className="grid gap-2 text-[10.5px]">
+        <div className="grid gap-2 text-ds-2xs">
           <LabeledValue label={t('researchDossierExecution')} value={t(researchStatusKey(record.run.outcome))} />
           <LabeledValue label={t('researchDossierControl')} value={t(researchStatusKey(record.run.control))} />
           <LabeledValue label={t('researchDossierOccurredAt')} value={formatTime(record.run.updatedAt)} />
@@ -1989,7 +2117,7 @@ export function ReproductionPage({
         {record.run.outputs.length ? (
           <ul className="grid gap-2">
             {record.run.outputs.map((output) => (
-              <li key={output.outputId} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
+              <li key={output.outputId} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
                 <div className="font-semibold text-ds-ink">{output.outputId}</div>
                 <div className="mt-1 text-ds-muted">{output.versionRef.mediaType ?? 'data'} · {formatBytes(output.versionRef.byteLength)}</div>
                 {output.quarantined
@@ -2024,7 +2152,7 @@ function ResearchCheckpointNarrative({
           </div>
           <BoundedText value={manifest.narrative.canonicalText} />
           <TechnicalDetails>
-            <div className="grid gap-2 text-[10px]">
+            <div className="grid gap-2 text-ds-2xs">
               <LabeledValue label={t('researchDossierRecordedTurn')} value={manifest.turn.turnId} mono />
               <LabeledValue label={t('researchDossierOrigin')} value={manifest.recording.origin} />
               <LabeledValue label="Recording ID" value={manifest.recording.recordingId} mono />
@@ -2036,11 +2164,11 @@ function ResearchCheckpointNarrative({
         <SectionCard title={t('researchDossierSources')} icon={<ExternalLink />}>
           <ul className="grid gap-2" data-research-checkpoint-sources>
             {sources.map((source) => (
-              <li key={source.sourceId} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
-                <div className="font-semibold text-ds-ink">{source.title ?? source.sourceId}</div>
-                <div className="mt-1 break-all font-mono text-[9.5px] text-ds-muted">{source.uri}</div>
+              <li key={source.sourceId} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
+                <div className="font-semibold text-ds-ink">{source.title ?? '原始材料'}</div>
+                <details className="mt-1 text-ds-2xs text-ds-muted"><summary>来源位置</summary><p className="break-all">{source.uri}</p></details>
                 {!source.artifactVersionRef && !source.contentDigest
-                  ? <div className="mt-1 text-[9px] text-ds-faint">{t('researchDossierSourceUnpinned')}</div>
+                  ? <div className="mt-1 text-ds-2xs text-ds-faint">{t('researchDossierSourceUnpinned')}</div>
                   : null}
                 <TechnicalDetails className="mt-2">
                   <LabeledValue label="Source ID" value={source.sourceId} mono />
@@ -2078,7 +2206,7 @@ function ResearchCheckpointKeyArtifacts({
     <SectionCard title={t('researchDossierKeyArtifacts')} icon={<Boxes />}>
       <ul className="grid gap-2" data-research-checkpoint-key-artifacts>
         {files.map((file) => (
-          <li key={`${file.role}:${file.path}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
+          <li key={`${file.role}:${file.path}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
             <div className="flex min-w-0 items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="break-all font-semibold text-ds-ink">{file.path}</div>
@@ -2139,7 +2267,7 @@ function ResearchCheckpointReproduction({
         <SectionCard title={t('researchDossierDeclaredFiles')} icon={<Database />}>
           <ul className="grid gap-2" data-research-checkpoint-files>
             {researcherFiles.map((file) => (
-              <li key={`${file.role}:${file.path}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
+              <li key={`${file.role}:${file.path}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
                 <div className="flex items-start justify-between gap-2">
                   <span className="break-all font-semibold text-ds-ink">{file.path}</span>
                   <span className="shrink-0 text-ds-faint">{file.role}</span>
@@ -2173,12 +2301,12 @@ function ResearchCheckpointReproduction({
       ) : null}
       {technicalFiles.length ? (
         <TechnicalDetails>
-          <p className="mb-2 text-[10px] text-ds-muted">
+          <p className="mb-2 text-ds-2xs text-ds-muted">
             {t('researchDossierTechnicalFileSummary', { count: technicalFiles.length })}
           </p>
           <ul className="grid gap-1.5" data-research-checkpoint-technical-files>
             {technicalFiles.map((file) => (
-              <li key={`${file.role}:${file.path}`} className="break-all font-mono text-[9.5px] text-ds-faint">
+              <li key={`${file.role}:${file.path}`} className="break-all font-mono text-ds-2xs text-ds-faint">
                 {file.path} · {file.capture}
               </li>
             ))}
@@ -2207,8 +2335,8 @@ function ResearchCheckpointReproduction({
           <ul className="grid gap-2" data-research-checkpoint-compute-runs>
             {manifest.computeRuns.map((run) => (
               <li key={run.runId} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2">
-                <div className="text-[10px] font-semibold text-ds-ink">{t('researchDossierFormalRun')}</div>
-                <div className="mt-1 text-[9.5px] text-ds-muted">
+                <div className="text-ds-2xs font-semibold text-ds-ink">{t('researchDossierFormalRun')}</div>
+                <div className="mt-1 text-ds-2xs text-ds-muted">
                   {run.receiptRef ? t('researchDossierStatusVerified') : t('researchDossierStatusAvailable')}
                 </div>
                 <TechnicalDetails className="mt-2">
@@ -2225,13 +2353,13 @@ function ResearchCheckpointReproduction({
       ) : null}
       {manifest.untrackedOperations.length ? (
         <SectionCard title={t('researchDossierUntrackedOperations')} icon={<Square />}>
-          <p className="rounded-lg border border-ds-border-muted bg-[var(--ds-warning-soft)] p-2 text-[10px] text-ds-muted">
+          <p className="rounded-lg border border-ds-border-muted bg-[var(--ds-warning-soft)] p-2 text-ds-2xs text-ds-muted">
             {t('researchDossierUntrackedSummary', { count: manifest.untrackedOperations.length })}
           </p>
           <TechnicalDetails className="mt-2">
             <ul className="grid gap-2" data-research-checkpoint-untracked>
               {manifest.untrackedOperations.map((operation, index) => (
-                <li key={`${operation.itemId ?? operation.kind}:${index}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
+                <li key={`${operation.itemId ?? operation.kind}:${index}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
                   <div className="font-mono font-semibold text-ds-ink">{operation.kind}</div>
                   {operation.summary ? <p className="mt-1 break-words text-ds-muted">{operation.summary}</p> : null}
                 </li>
@@ -2245,7 +2373,7 @@ function ResearchCheckpointReproduction({
           <div className="font-semibold text-ds-ink">{t('researchDossierGitProjection')}</div>
           <ul className="grid gap-2" data-research-checkpoint-git>
             {manifest.gitCheckpoints.map((git) => (
-              <li key={`${git.provider}:${git.checkpointId}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-[10px]">
+              <li key={`${git.provider}:${git.checkpointId}`} className="rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-ds-2xs">
                 <LabeledValue label={t('researchDossierProvider')} value={git.provider} />
                 <LabeledValue label={t('researchDossierCheckpoint')} value={git.checkpointId} mono />
                 <LabeledValue label={t('researchDossierRevision')} value={git.revision} mono />
@@ -2265,7 +2393,7 @@ function SectionCard({
 }: Readonly<{ title: string; icon: ReactNode; children: ReactNode }>): ReactElement {
   return (
     <section className="min-w-0 overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/35">
-      <header className="flex items-center gap-2 border-b border-ds-border-muted px-3 py-2.5 text-[11px] font-semibold text-ds-ink">
+      <header className="flex items-center gap-2 border-b border-ds-border-muted px-3 py-2.5 text-ds-xs font-semibold text-ds-ink">
         <span className="text-accent [&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</span>
         {title}
       </header>
@@ -2285,11 +2413,11 @@ function AxisCard({
   return (
     <article className={`relative overflow-hidden rounded-xl border border-ds-border-muted bg-ds-main/45 p-2.5 ${wide ? 'col-span-2' : ''}`}>
       <span className={`absolute inset-y-0 left-0 w-0.5 ${tone.bar}`} />
-      <div className="flex items-center gap-1.5 text-[9.5px] font-medium uppercase tracking-[0.08em] text-ds-faint">
+      <div className="flex items-center gap-1.5 text-ds-2xs font-medium uppercase tracking-[0.08em] text-ds-faint">
         <span className="[&>svg]:h-3 [&>svg]:w-3">{icon}</span>
         {label}
       </div>
-      <div className={`mt-1.5 break-words font-mono text-[10.5px] font-semibold ${tone.text}`}>{value}</div>
+      <div className={`mt-1.5 break-words font-mono text-ds-2xs font-semibold ${tone.text}`}>{value}</div>
     </article>
   )
 }
@@ -2309,8 +2437,8 @@ function RefList({
         <li key={`${role}:${ref.versionId}`} className="min-w-0 rounded-lg border border-ds-border-muted bg-ds-main/50 p-2">
           <div className="flex min-w-0 items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="text-[10px] font-semibold text-ds-ink">{role}</div>
-              <div className="mt-1 text-[9.5px] text-ds-muted">
+              <div className="text-ds-2xs font-semibold text-ds-ink">{role}</div>
+              <div className="mt-1 text-ds-2xs text-ds-muted">
                 {ref.availability === 'available'
                   ? t('researchDossierStatusAvailable')
                   : t('researchDossierStatusUnavailableShort')}
@@ -2342,7 +2470,7 @@ function MetadataTable({ metadata }: Readonly<{ metadata: Readonly<Record<string
   const rows = artifactMetadataRows(metadata as never)
   if (!rows.length) return <MutedText>{t('researchDossierEmpty')}</MutedText>
   return (
-    <dl className="grid grid-cols-[minmax(80px,auto)_minmax(0,1fr)] gap-x-3 gap-y-2 text-[10px]">
+    <dl className="grid grid-cols-[minmax(80px,auto)_minmax(0,1fr)] gap-x-3 gap-y-2 text-ds-2xs">
       {rows.map(({ key, value }) => (
         <div key={key} className="contents">
           <dt className="truncate font-mono text-ds-faint" title={key}>{key}</dt>
@@ -2355,7 +2483,7 @@ function MetadataTable({ metadata }: Readonly<{ metadata: Readonly<Record<string
 
 function JsonBlock({ value }: Readonly<{ value: unknown }>): ReactElement {
   return (
-    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-sidebar/60 p-2.5 font-mono text-[9.5px] leading-relaxed text-ds-muted">
+    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-sidebar/60 p-2.5 font-mono text-ds-2xs leading-relaxed text-ds-muted">
       {JSON.stringify(value, null, 2).slice(0, 24_000)}
     </pre>
   )
@@ -2368,7 +2496,7 @@ function TechnicalDetails({
   const { t } = useTranslation('common')
   return (
     <details className={`group rounded-lg border border-ds-border-muted bg-ds-sidebar/35 ${className}`} data-technical-details>
-      <summary className="cursor-pointer select-none px-2.5 py-2 text-[9.5px] font-medium text-ds-muted transition hover:text-ds-ink">
+      <summary className="cursor-pointer select-none px-2.5 py-2 text-ds-2xs font-medium text-ds-muted transition hover:text-ds-ink">
         {t('researchDossierTechnicalDetails')}
       </summary>
       <div className="grid gap-2 border-t border-ds-border-muted p-2.5">{children}</div>
@@ -2392,7 +2520,7 @@ function BoundedText({ value }: Readonly<{ value: string }>): ReactElement {
   const truncated = value.length > limit
   return (
     <div className="min-w-0" data-research-checkpoint-text>
-      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-sidebar/60 p-3 text-[10.5px] leading-relaxed text-ds-muted">
+      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-sidebar/60 p-3 text-ds-2xs leading-relaxed text-ds-muted">
         {value.slice(0, limit)}
       </pre>
       {truncated ? <MutedText className="mt-1">Content preview truncated at {limit.toLocaleString()} characters.</MutedText> : null}
@@ -2403,10 +2531,10 @@ function BoundedText({ value }: Readonly<{ value: string }>): ReactElement {
 function ComparisonText({ label, value }: Readonly<{ label: string; value: string }>): ReactElement {
   return (
     <div className="min-w-0">
-      <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-[0.06em] text-ds-faint">
+      <div className="mb-1 text-ds-2xs font-semibold uppercase tracking-[0.06em] text-ds-faint">
         {label}
       </div>
-      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-sidebar/60 p-2.5 font-mono text-[9.5px] leading-relaxed text-ds-muted">
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-ds-border-muted bg-ds-sidebar/60 p-2.5 font-mono text-ds-2xs leading-relaxed text-ds-muted">
         {value}
       </pre>
     </div>
@@ -2421,14 +2549,14 @@ function LabeledValue({
   return (
     <div className="grid grid-cols-[minmax(76px,auto)_minmax(0,1fr)] items-start gap-2">
       <span className="text-ds-faint">{label}</span>
-      <span className={`min-w-0 break-words text-ds-muted ${mono ? 'font-mono text-[9.5px]' : ''}`} title={value}>{value}</span>
+      <span className={`min-w-0 break-words text-ds-muted ${mono ? 'font-mono text-ds-2xs' : ''}`} title={value}>{value}</span>
     </div>
   )
 }
 
 function UnavailableSection({ message, compact = false }: Readonly<{ message: string; compact?: boolean }>): ReactElement {
   return (
-    <div className={`rounded-lg border border-dashed border-ds-border bg-ds-sidebar/50 text-ds-faint ${compact ? 'p-2 text-[9.5px]' : 'p-4 text-center text-[10.5px]'}`}>
+    <div className={`rounded-lg border border-dashed border-ds-border bg-ds-sidebar/50 text-ds-faint ${compact ? 'p-2 text-ds-2xs' : 'p-4 text-center text-ds-2xs'}`}>
       <CircleDashed className={`mx-auto mb-1 h-3.5 w-3.5 ${compact ? 'hidden' : ''}`} />
       {message}
     </div>
@@ -2441,7 +2569,7 @@ function EmptyState({ icon, message, tone = 'neutral' }: Readonly<{
   tone?: 'neutral' | 'error'
 }>): ReactElement {
   return (
-    <div className={`grid min-h-48 place-items-center rounded-xl border border-dashed p-6 text-center text-[11px] ${
+    <div className={`grid min-h-48 place-items-center rounded-xl border border-dashed p-6 text-center text-ds-xs ${
       tone === 'error'
         ? 'border-ds-border bg-ds-danger-soft text-ds-danger'
         : 'border-ds-border text-ds-muted'
@@ -2461,8 +2589,8 @@ function ErrorState({ code, message, onRetry }: Readonly<{
 }>): ReactElement {
   const { t } = useTranslation('common')
   return (
-    <div className="rounded-xl border border-ds-border bg-ds-danger-soft p-4 text-[10.5px] text-ds-danger">
-      <div className="flex items-center gap-2 font-mono font-semibold"><AlertTriangle className="h-4 w-4" />{code}</div>
+    <div className="rounded-xl border border-ds-border bg-ds-danger-soft p-4 text-ds-2xs text-ds-danger">
+      <div className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" />材料暂不可用</div><details><summary>读取详情</summary><code>{code}</code></details>
       <p className="mt-2 leading-relaxed">{message}</p>
       <button type="button" onClick={onRetry} className={`${actionButtonClass} mt-3`}>
         <RefreshCw className="h-3 w-3" />{t('researchDossierRetry')}
@@ -2473,7 +2601,7 @@ function ErrorState({ code, message, onRetry }: Readonly<{
 
 function InlineIssue({ message }: Readonly<{ message: string }>): ReactElement {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-ds-border bg-[var(--ds-warning-soft)] p-2 text-[10px] text-ds-muted">
+    <div className="flex items-start gap-2 rounded-lg border border-ds-border bg-[var(--ds-warning-soft)] p-2 text-ds-2xs text-ds-muted">
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span className="break-words">{message}</span>
     </div>
@@ -2481,7 +2609,7 @@ function InlineIssue({ message }: Readonly<{ message: string }>): ReactElement {
 }
 
 function MutedText({ children, className = '' }: Readonly<{ children: ReactNode; className?: string }>): ReactElement {
-  return <div className={`text-[10px] text-ds-faint ${className}`}>{children}</div>
+  return <div className={`text-ds-2xs text-ds-faint ${className}`}>{children}</div>
 }
 
 export function parseDossierActivation(
@@ -2524,7 +2652,7 @@ function researchStatusKey(value: string):
   if (/^(not-run|not-applicable|untracked|observed-untracked|inconclusive|eligible|pinned-nonhermetic)$/u.test(value)) {
     return 'researchDossierStatusNotVerified'
   }
-  return 'researchDossierStatusAvailable'
+  return 'researchDossierStatusNotVerified'
 }
 
 function limitationSummaryKey(code: string):
@@ -2713,6 +2841,6 @@ function visibleDossierPages(
 const iconButtonClass =
   'rounded-lg p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40'
 const actionButtonClass =
-  'inline-flex items-center gap-1.5 rounded-lg border border-ds-border bg-ds-sidebar px-2 py-1.5 text-[10px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40'
+  'inline-flex items-center gap-1.5 rounded-lg border border-ds-border bg-ds-sidebar px-2 py-1.5 text-ds-2xs font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-40'
 const listButtonClass =
   'group w-full rounded-lg border border-ds-border-muted bg-ds-main/50 p-2 text-left transition hover:border-accent/30 hover:bg-ds-hover'

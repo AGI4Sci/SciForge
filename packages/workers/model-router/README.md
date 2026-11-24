@@ -54,7 +54,7 @@ Capabilities can be configured for private gateways without adding provider-spec
 
 All compatibility fields are optional. `allowedProtocols` is also a safety boundary: negotiation never sends a request on a wire outside that list. Working protocols are cached by normalized base URL, model, and compatibility settings.
 
-The router retries another protocol only after protocol-level HTTP status evidence (`404`, `405`, or `415`). It never infers retry safety from localized error-message keywords or vendor-specific error codes. Authentication, quota, rate-limit, timeout, ambiguous server, and ordinary validation failures remain terminal. An explicit error inside a 2xx Responses payload may trigger fallback only before any model output or ambiguous provider data has arrived; malformed successful payloads and partial streams are terminal and are never resubmitted.
+The router advances to another protocol only after protocol-level HTTP status evidence (`404`, `405`, or `415`). It never infers protocol incompatibility from localized error-message keywords or vendor-specific error codes. Transient upstream failures are the one case where the *same* wire and the *same* prepared request are retried: transport timeouts (`upstream_timeout`), network failures, HTTP `408`/`425`, and `429`, plus `5xx` responses that are not the protocol-level conversion rejection above. The policy is bounded and shared by every role: at most three attempts, `Retry-After` honoured as delta seconds or as an HTTP date (capped at 60 s), equal-jitter exponential backoff from 500 ms capped at 8 s, and an attempt-admission window calculated as one full attempt timeout plus a 60 s budget. This is not a hard full-call completion deadline: admission is checked before the backoff delay, and an admitted attempt still has its full per-attempt timeout. With a 300 s timeout, a later attempt can therefore finish after the 360 s admission window; fast `429`s can use all three attempts. The request body is prepared once per protocol and reused, which is what makes the re-send byte-identical; nothing else about the call is replayed, and no tool side effect is ever repeated by a retry. A retry is never attempted after a text or reasoning delta has reached the caller, because a replay would duplicate streamed output. When the budget is exhausted the failure keeps its established `upstream_http_<status>` / `upstream_timeout` code and gains a distinct `reasonCode` (for example `upstream_http_429_exhausted`), `retryable`, and `attempts`; every attempt is recorded in Full Trace with its own `retry` index and the terminal error carries the same `reasonCode`. Authentication, quota, ambiguous malformed-success payloads, and ordinary validation failures remain terminal and are never re-sent. An explicit error inside a 2xx Responses payload may trigger fallback only before any model output or ambiguous provider data has arrived; malformed successful payloads and partial streams are terminal and are never resubmitted.
 
 Tool JSON Schema passes through one bounded, prototype-safe normalizer on every protocol path. Property names, `required`, composition keywords, and validation constraints are never truncated or silently removed. If a configured provider cannot safely represent a schema constraint such as `pattern`, the candidate fails closed before a provider request is sent.
 
@@ -62,7 +62,7 @@ Structured-output requests use one canonical resolver for SciForge `outputSchema
 
 Once a structured-output contract is active, the provider's output is schema-owned opaque text. Router control-message decoding, provider-name redaction, degraded-mode prefixes, and scientific-evidence presentation never rewrite that payload. The public Responses item is rebuilt only from the checked payload instead of forwarding provider-owned item metadata. Scientific evidence still enters the reasoner's input context and Full Trace. If structured output contains provider-private data that would require user-visible redaction, the request fails closed instead of returning contract-breaking JSON.
 
-`chatStructuredOutputMode` declares the strongest Chat Completions `response_format` a connection accepts: `json_schema` (default) or `json_object`. For a `json_object` connection, a JSON Schema contract is sent as `response_format: {"type":"json_object"}` plus a system instruction that names "json" and carries the schema name, description, schema, and an example shape; the router then validates the returned text against the schema locally and fails with `structured_output_invalid` instead of forwarding non-conforming output. The local validator enforces `type`, `properties`, `required`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`, `maxLength`, `pattern`, `enum`, `const`, and `anyOf`; a schema with any other validation keyword fails closed before a provider request. Responses and Anthropic Messages wires are unaffected by this setting.
+`chatStructuredOutputMode` declares the strongest structured-output format a connection accepts on both OpenAI Responses and Chat Completions wires, including automatic protocol selection: `json_schema` (default) or `json_object`. For a `json_object` connection, a JSON Schema contract is sent as `response_format: {"type":"json_object"}` plus a system instruction that names "json" and carries the schema name, description, schema, and an example shape; the router then validates the returned text against the schema locally and fails with `structured_output_invalid` instead of forwarding non-conforming output. The local validator enforces `type`, `properties`, `required`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`, `maxLength`, `pattern`, `minimum`, `maximum`, `enum`, `const`, and `anyOf`; a schema with any other validation keyword fails closed before a provider request. Responses sends the equivalent `text.format: {"type":"json_object"}` with the same schema instruction and local validation. Anthropic Messages keeps native schema output. This setting never changes provider or model.
 
 The router never strips output-schema constraints to satisfy a narrower provider subset. If an upstream rejects a constraint it does not implement, that validation response is terminal; callers retain their original contract instead of receiving a response generated against a weaker schema.
 
@@ -172,6 +172,30 @@ compaction remain authoritative. Request hygiene still handles oversized
 historical arguments and pasted encoded user payloads; it does not rewrite
 opaque native continuation state.
 
+Leading live prose retains its canonical output index. If prose has preceding
+output items, it waits for their complete ordered block rather than opening a
+message ahead of opaque reasoning. The `output_item.added`, `output_item.done`
+and terminal output sequences agree. Ordinary index-zero prose still streams
+before the upstream terminal frame. Message IDs, reasoning `content`, signatures
+and encrypted/provider fields are preserved on the native Responses path.
+Tool-result follow-ups retain the same order with or without a
+`previous_response_id`; cached continuation blocks include commentary.
+
+Protocol conversion groups reasoning, commentary and parallel calls within one
+assistant turn and respects tool-result, user and explicit `final_answer`
+boundaries. Full `reasoning_text` content is distinct from a display summary:
+a summary is never invented as full provider thinking. Anthropic thinking
+signatures survive the corresponding round trip. Opaque encrypted/compaction
+state cannot be represented as Chat or Anthropic messages and is rejected
+explicitly, rather than dropped or turned into fabricated plaintext.
+
+Regression coverage exercises plain/thinking streams across Responses, Chat
+Completions and Anthropic Messages; three-protocol tool-result round trips;
+and three-round, parallel-tool native Responses replay across streaming and
+nonstreaming upstream/public combinations, with and without continuation
+handles. These are protocol guarantees for supported structures, not a claim
+that every provider extension or model is interoperable.
+
 `profiles.<id>.contextWindow` describes the text reasoner's operating budget.
 `profiles.<id>.translators.vision.contextWindow` independently bounds a visual
 request (default 16384 tokens). Each visual request contains one image and the
@@ -180,3 +204,12 @@ not compete for one aggregate image budget. Existing derived previews and
 content-addressed inspection caching remain the canonical visual path;
 original workspace files are not resized or rewritten. A missing visual result
 cannot be reported as successful visual verification.
+
+Structured-output agent workflows retain their requested schema on every round.
+Native Responses `function_call`, `custom_tool_call`, and explicitly client-executed
+`tool_search_call` yield control to the caller without requiring a final JSON message.
+Their matching results participate in the same ordered continuation path; hosted
+search/tool activity does not bypass the final-output requirement. Final structured
+messages retain preceding reasoning items, including opaque continuation fields.
+The regression matrix covers three-round native custom/search tool workflows with
+streaming and non-streaming upstream/public responses and cached or explicit replay.

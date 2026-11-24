@@ -9,7 +9,8 @@ import type { DomainPackageJsonValue } from '@sciforge/domain-sdk/contract'
 import {
   describe,
   expect,
-  it
+  it,
+  vi
 } from 'vitest'
 import {
   AUTHENTICATED_CLOUD_COMMAND_OPERATION_ID,
@@ -172,8 +173,56 @@ describe('authenticated Cloud transport contract', () => {
     }).success).toBe(true)
   })
 
+  it('validates cloud space providers at the public boundary and forwards cancellation', async () => {
+    const spaceId = `spc_${'a'.repeat(32)}`
+    const space = { spaceId, scope: { kind: 'personal' as const, ownerUserId: 'usr_one' }, status: 'queued' as const,
+      revision: 1, createdAt: TEST_TIMESTAMP, updatedAt: TEST_TIMESTAMP }
+    const listCloudSpaces = vi.fn(async () => ({ spaces: [space] }))
+    const ensureCloudSpace = vi.fn(async () => ({ space }))
+    const createCloudSpaceSession = vi.fn(async () => ({ spaceId, editorUrl: 'https://space.example/',
+      bootstrapUrl: 'https://space.example/_sciforge/session', bootstrapCode: 'x'.repeat(40), expiresAt: TEST_TIMESTAMP }))
+    const provider = {
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces, ensureCloudSpace, createCloudSpaceSession,
+      stageObject: async () => { throw new Error('Unused') }, readObject: async () => { throw new Error('Unused') },
+      status: () => ({ state: 'unavailable' as const, reason: 'Offline' }),
+      execute: async () => { throw new Error('Unused') }
+    }
+    const transport = defineAuthenticatedCloudTransport(provider)
+    const options = { signal: new AbortController().signal }
+    expect(await transport.listCloudSpaces(options)).toEqual({ spaces: [space] })
+    expect(listCloudSpaces).toHaveBeenCalledWith(options)
+    await transport.ensureCloudSpace({ scope: { kind: 'personal' } }, options)
+    expect(ensureCloudSpace).toHaveBeenCalledWith({ scope: { kind: 'personal' } }, options)
+    await transport.createCloudSpaceSession({ spaceId }, options)
+    expect(createCloudSpaceSession).toHaveBeenCalledWith({ spaceId }, options)
+    await expect(transport.createCloudSpaceSession({ spaceId: 'invalid' })).rejects.toBeDefined()
+    expect(createCloudSpaceSession).toHaveBeenCalledTimes(1)
+    await expect(defineAuthenticatedCloudTransport({ ...provider,
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => ({ spaces: [], token: 'SECRET' })
+    }).listCloudSpaces()).rejects.toBeDefined()
+    expect(() => defineAuthenticatedCloudTransport({ ...provider, ensureCloudSpace: undefined } as never)).toThrow()
+  })
+
   it('validates provider status and provider output', async () => {
     const transport = defineAuthenticatedCloudTransport({
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Not exercised in JSON transport contract test.') },
       readObject: async () => { throw new Error('Not exercised in JSON transport contract test.') },
       status: () => ({
@@ -208,6 +257,14 @@ describe('authenticated Cloud transport contract', () => {
     })).resolves.toMatchObject({ status: 200, body: { type: 'rest.entity' } })
 
     const drifted = defineAuthenticatedCloudTransport({
+      lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+      listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+      createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
       stageObject: async () => { throw new Error('Not exercised in JSON transport contract test.') },
       readObject: async () => { throw new Error('Not exercised in JSON transport contract test.') },
       status: () => ({

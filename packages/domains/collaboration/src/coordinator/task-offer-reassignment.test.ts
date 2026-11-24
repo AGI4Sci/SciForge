@@ -10,8 +10,9 @@ import {
 } from '@sciforge/collaboration-contracts'
 import { canonicalTaskIdForRequirementsModule } from '@sciforge/collaboration-contracts/node'
 import type {
+  CoordinatorUserCloudCommand,
   CoordinatorCloudCommand,
-  CoordinatorCloudCommandReplay,
+  CoordinatorUserCloudCommandReplay,
   CoordinatorCloudCommandService
 } from '../coordinator-cloud-command.js'
 
@@ -44,12 +45,12 @@ test('the real handler replays one exact reassignment after its first Cloud resp
   const commands: unknown[] = []
   let cloudWorkspace = current
   let cloudTransitions = 0
-  let committed: CoordinatorCloudCommandReplay | undefined
+  let committed: CoordinatorUserCloudCommandReplay | undefined
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
+      execute: async () => { throw new Error('Unexpected Agent command.') },
+      resume: async () => null,
     localAgentId: () => undefined,
-    execute: async (command) => {
+    executeUser: async (command) => {
       commands.push(command)
       if (committed) {
         assert.deepEqual(command, committed.command)
@@ -74,7 +75,7 @@ test('the real handler replays one exact reassignment after its first Cloud resp
       }
       throw new Error('response lost after canonical Cloud commit')
     },
-    resume: async (idempotencyKey, validateCommand) => {
+    resumeUser: async (idempotencyKey, validateCommand) => {
       if (!committed || committed.command.idempotencyKey !== idempotencyKey) return null
       validateCommand(committed.command)
       commands.push(committed.command)
@@ -136,14 +137,14 @@ test('the real handler replays one exact reassignment after its first Cloud resp
 test('the real handler normalizes an omitted text output filename for exact replay', async () => {
   const current = textWorkspaceFixture('current')
   const reassigned = textWorkspaceFixture('reassigned')
-  const commands: CoordinatorCloudCommand[] = []
+  const commands: CoordinatorUserCloudCommand[] = []
   let cloudWorkspace = current
-  let committed: CoordinatorCloudCommandReplay | undefined
+  let committed: CoordinatorUserCloudCommandReplay | undefined
   const coordinatorCloudCommands: CoordinatorCloudCommandService = {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
+      execute: async () => { throw new Error('Unexpected Agent command.') },
+      resume: async () => null,
     localAgentId: () => undefined,
-    execute: async (command) => {
+    executeUser: async (command) => {
       commands.push(command)
       cloudWorkspace = reassigned
       const project = reassigned.projects[0]!
@@ -163,7 +164,7 @@ test('the real handler normalizes an omitted text output filename for exact repl
       }
       throw new Error('response lost after text reassignment commit')
     },
-    resume: async (idempotencyKey, validateCommand) => {
+    resumeUser: async (idempotencyKey, validateCommand) => {
       if (!committed || committed.command.idempotencyKey !== idempotencyKey) return null
       validateCommand(committed.command)
       return committed
@@ -225,10 +226,10 @@ for (const terminalExecutionState of ['failed', 'cancelled'] as const) {
         }
       },
       coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
-        resume: async () => null,
-        execute: async (command) => {
+      execute: async () => { throw new Error('Unexpected Agent command.') },
+      resume: async () => null,
+        resumeUser: async () => null,
+        executeUser: async (command) => {
           commands.push(command)
           const project = fresh.projects[0]!
           return restResponseSchema.parse({
@@ -368,10 +369,10 @@ test('Task offer reassignment rejects an output rename before a Cloud command', 
   const port = createProjectCoordinatorTaskOfferReassignmentPort({
     workspace: { readWorkspace: async () => workspaceFixture('current', 'failed') },
     coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
+      execute: async () => { throw new Error('Unexpected Agent command.') },
       resume: async () => null,
-      execute: async () => {
+      resumeUser: async () => null,
+      executeUser: async () => {
         commandCalls += 1
         throw new Error('renamed reassignment must not reach Cloud')
       },
@@ -395,10 +396,10 @@ test('Task offer reassignment rejects a case-only output rename before a Cloud c
   const port = createProjectCoordinatorTaskOfferReassignmentPort({
     workspace: { readWorkspace: async () => workspaceFixture('current', 'failed') },
     coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
+      execute: async () => { throw new Error('Unexpected Agent command.') },
       resume: async () => null,
-      execute: async () => {
+      resumeUser: async () => null,
+      executeUser: async () => {
         commandCalls += 1
         throw new Error('case-colliding reassignment must not reach Cloud')
       },
@@ -422,10 +423,10 @@ test('Task offer reassignment keeps the successor output distinct from its input
   const port = createProjectCoordinatorTaskOfferReassignmentPort({
     workspace: { readWorkspace: async () => workspaceFixture('current', 'failed') },
     coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
+      execute: async () => { throw new Error('Unexpected Agent command.') },
       resume: async () => null,
-      execute: async () => {
+      resumeUser: async () => null,
+      executeUser: async () => {
         commandCalls += 1
         throw new Error('input-colliding reassignment must not reach Cloud')
       },
@@ -457,10 +458,10 @@ test('Task offer replay checks the current OIDC owner before resuming a durable 
   const port = createProjectCoordinatorTaskOfferReassignmentPort({
     workspace: { readWorkspace: async () => unauthorized },
     coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
-      execute: async () => { throw new Error('unauthorized replay must not execute') },
-      resume: async () => {
+      execute: async () => { throw new Error('Unexpected Agent command.') },
+      resume: async () => null,
+      executeUser: async () => { throw new Error('unauthorized replay must not execute') },
+      resumeUser: async () => {
         resumeCalls += 1
         throw new Error('unauthorized replay must not resume')
       },
@@ -483,10 +484,10 @@ test('Task offer reassignment fails closed for every mismatched reassignment Tas
         readWorkspace: async () => unclaimedWorkspaceFixture(reassignmentTaskRevision)
       },
       coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
-      resumeUser: async () => null,
-        resume: async () => null,
-        execute: async () => {
+      execute: async () => { throw new Error('Unexpected Agent command.') },
+      resume: async () => null,
+        resumeUser: async () => null,
+        executeUser: async () => {
           commandCalls += 1
           throw new Error('revision-mismatched reassignment must not reach Cloud')
         },
@@ -597,10 +598,10 @@ function reassignmentPortForPostRead(
       }
     },
     coordinatorCloudCommands: {
-      executeUser: async () => { throw new Error('Unexpected User command.') },
+      execute: async () => { throw new Error('Unexpected Agent command.') },
       resumeUser: async () => null,
       resume: async () => null,
-      execute: async (command) => {
+      executeUser: async (command) => {
         const project = committed.projects[0]!
         return restResponseSchema.parse({
           protocolVersion: '1.0',

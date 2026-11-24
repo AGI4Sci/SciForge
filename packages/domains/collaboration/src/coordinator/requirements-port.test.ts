@@ -52,6 +52,8 @@ const project = {
   createdAt,
   updatedAt,
   type: 'project' as const,
+  executionMode: 'manual' as const,
+  dispatchAuthorization: null,
   projectId,
   ownerUserId,
   displayName: 'Requirements meeting',
@@ -85,7 +87,8 @@ function requirementsDocument(input: Readonly<{
     inputReferences: [],
     workModules: [{
       planItemId: 'item_qc', title: 'Quality control',
-      objective: 'Run the exact QC pipeline.', dependencyPlanItemIds: []
+      objective: 'Run the exact QC pipeline.', dependencyPlanItemIds: [],
+      output: { kind: 'delivery.output', fileName: 'data.csv', mediaType: 'text/csv', maxBytes: 1_048_576 }
     }],
     acceptanceCriteria: [
       { target: 'item_qc', criteria: 'The QC report exists.', evidenceMethod: 'Published Drive object.' },
@@ -139,6 +142,14 @@ function transportFixture(
 ): AuthenticatedCloudTransport {
   const servedDocuments = typeof documents === 'function' ? documents : () => documents
   return {
+    lookupDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    createDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    revokeDocumentShare: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    readDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    mutateDocumentComments: async () => { throw new Error('Document sharing is not used by this fixture.') },
+    listCloudSpaces: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    ensureCloudSpace: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
+    createCloudSpaceSession: async () => { throw new Error('Cloud space operations are not used by this fixture.') },
     stageObject: async () => { throw new Error('Unexpected object staging.') },
     readObject: async () => { throw new Error('Unexpected object read.') },
     status: () => ({
@@ -350,14 +361,16 @@ function generatedRequirements(overrides: Readonly<{
         title: 'Quality control',
         objective: 'Run the exact QC pipeline.',
         dependencyPlanItemIds: [],
-        requiredCapabilityTags: ['agent-runtime.codex']
+        requiredCapabilityTags: ['agent-runtime.codex'],
+        output: { kind: 'delivery.output', fileName: 'data.csv', mediaType: 'text/csv', maxBytes: 1_048_576 }
       },
       {
         planItemId: 'item_report',
         title: 'Report',
         objective: 'Write the audited report.',
         dependencyPlanItemIds: ['item_qc'],
-        requiredCapabilityTags: []
+        requiredCapabilityTags: [],
+        output: { kind: 'delivery.output', fileName: 'report.pdf', mediaType: 'application/pdf', maxBytes: 8_388_608 }
       }
     ],
     acceptanceCriteria: overrides.acceptanceCriteria ?? [
@@ -386,10 +399,10 @@ function completionAgent(
   state: 'completed' | 'failed' = 'completed'
 ): DomainMainAgentExecutionHost {
   return {
-    prepareSession: async () => ({
-      runtimeId: 'runtime-requirements',
-      threadId: 'thread-requirements'
-    }),
+    prepareSession: async (request) => {
+      assert.deepEqual(request.allowedTools, [])
+      return { runtimeId: 'runtime-requirements', threadId: 'thread-requirements' }
+    },
     run: async (request) => {
       requests.push(request)
       return {
@@ -496,6 +509,7 @@ test('Coordinator completion derives modules and criteria locally then writes th
   ])
   assert.match(command.idempotencyKey, /^idem_requirements-completion\.[a-f0-9]{48}$/u)
   assert.equal(requests.length, 1)
+  assert.deepEqual(requests[0]!.allowedTools, [])
   assert.match(requests[0]!.title ?? '', /Requirements meeting · 需求补全 v3/u)
   assert.match(requests[0]!.prompt, /Owner goals and deliverables: Goal: annotated cells/u)
   assert.match(requests[0]!.prompt, /Owner inputs and boundaries: Input: the exact QC matrix/u)
@@ -503,6 +517,64 @@ test('Coordinator completion derives modules and criteria locally then writes th
   assert.match(JSON.stringify(requests[0]!.outputSchema), /"workModules"/u)
   assert.match(JSON.stringify(requests[0]!.outputSchema), /"acceptanceCriteria"/u)
   assert.match(JSON.stringify(requests[0]!.outputSchema), /"requiredCapabilityTags"/u)
+  assert.match(JSON.stringify(requests[0]!.outputSchema), /"output"/u)
+  assert.match(requests[0]!.prompt, /Preserve the exact deliverable filename and format/u)
+  assert.deepEqual(command.workModules.map(module => module.output), [
+    { kind: 'delivery.output', fileName: 'data.csv', mediaType: 'text/csv', maxBytes: 1_048_576 },
+    { kind: 'delivery.output', fileName: 'report.pdf', mediaType: 'application/pdf', maxBytes: 8_388_608 }
+  ])
+})
+
+test('Coordinator output schema and local validation reject directory filenames with exact field paths', async () => {
+  const commands: CoordinatorCloudCommand[] = []
+  const requests: DomainMainAgentExecutionRequest[] = []
+  for (const fileName of ['outputs/result.zip', 'outputs\\\\result.zip', '../result.zip', 'CON.zip']) {
+    const content = generatedRequirements()
+    ;(content.workModules[0] as { output: { fileName: string } }).output.fileName = fileName
+    const port = completionPort({ commands, requests, text: () => JSON.stringify(content) })
+    await assert.rejects(() => port.complete({ projectId }), (error: unknown) =>
+      error instanceof ProjectCoordinatorRequirementsCompletionError &&
+      error.reason === 'invalid_structured_output' &&
+      error.invalidFields?.includes('workModules.0.output.fileName') === true &&
+      error.message.includes('workModules.0.output.fileName'))
+  }
+  assert.equal(commands.length, 0)
+  const outputSchema = requests[0]!.outputSchema as { properties: { workModules: { items: { properties: { output: { properties: { fileName: { pattern: string; description: string } } } } } } } }
+  const filename = outputSchema.properties.workModules.items.properties.output.properties.fileName
+  assert.match(filename.description, /basename/u)
+  assert.equal(new RegExp(filename.pattern, 'u').test('outputs/result.zip'), false)
+  assert.equal(new RegExp(filename.pattern, 'u').test('result.zip'), true)
+  assert.match(requests[0]!.prompt, /output.fileName must be a single/u)
+})
+
+test('the exact production requirements schema is fully enforceable in JSON object compatibility mode', async () => {
+  const { assertLocallyEnforceableJsonSchema, structuredOutputValidationIssues } = await import('../../../../workers/model-router/src/structured-output-validation')
+  const requests: DomainMainAgentExecutionRequest[] = []
+  await completionPort({ commands: [], requests }).complete({ projectId })
+  const schema = requests[0]!.outputSchema! as import('../../../../workers/model-router/src/response-compat').JsonObject
+  assert.doesNotThrow(() => assertLocallyEnforceableJsonSchema(schema))
+  assert.deepEqual(structuredOutputValidationIssues(JSON.stringify(generatedRequirements()), schema), [])
+  for (const [field, value] of [
+    ['maxBytes', 0], ['maxBytes', 1_073_741_825], ['maxBytes', 1.5],
+    ['fileName', 'outputs/result.zip'], ['fileName', ''], ['fileName', 'a'.repeat(129)],
+    ['mediaType', ''], ['kind', 'wrong-kind'],
+  ] as const) {
+    const content = generatedRequirements()
+    const output = (content.workModules[0] as { output: Record<string, unknown> }).output
+    output[field] = value
+    assert.ok(structuredOutputValidationIssues(JSON.stringify(content), schema).some(issue => issue.includes(`$.workModules[0].output.${field}`)), `${field}=${value}`)
+  }
+  for (const mutate of [
+    (value: ReturnType<typeof generatedRequirements>) => { value.workModules = [] },
+    (value: ReturnType<typeof generatedRequirements>) => { (value.workModules[0] as Record<string, unknown>).planItemId = 'invalid' },
+    (value: ReturnType<typeof generatedRequirements>) => { (value.acceptanceCriteria[0] as Record<string, unknown>).target = 'invalid' },
+    (value: ReturnType<typeof generatedRequirements>) => { delete (value.workModules[0] as Record<string, unknown>).title },
+    (value: ReturnType<typeof generatedRequirements>) => { (value.workModules[0] as Record<string, unknown>).extra = true },
+  ]) {
+    const content = generatedRequirements()
+    mutate(content)
+    assert.ok(structuredOutputValidationIssues(JSON.stringify(content), schema).length > 0)
+  }
 })
 
 test('Coordinator completion offers only the exact Worker capability catalog and rejects topical tags', async () => {
@@ -519,6 +591,7 @@ test('Coordinator completion offers only the exact Worker capability catalog and
             title: 'Quality control',
             objective: 'Run the exact QC pipeline.',
             dependencyPlanItemIds: [],
+            output: { kind: 'delivery.output', fileName: 'data.csv', mediaType: 'text/csv', maxBytes: 1_048_576 },
             requiredCapabilityTags: ['public-data-selection', 'single-cell-rna-seq', 'quality-control', 'documentation']
           }],
           acceptanceCriteria: [
@@ -1337,4 +1410,15 @@ test('an expired lease cannot overwrite the resumed attempt or issue its success
   assert.equal(await state.readRequirementsCompletion(visible), null)
   await state.recordRequirementsCompletionSuccess(resumed, completedDocument)
   assert.equal((await state.readRequirementsCompletion(visible))?.state, 'completed')
+})
+
+test('Coordinator refuses a generated module without a declared output instead of inventing a filename', async () => {
+  const commands: CoordinatorCloudCommand[] = []
+  const content = generatedRequirements()
+  const first = content.workModules[0] as Record<string, unknown>
+  delete first.output
+  const port = completionPort({ commands, requests: [], text: () => JSON.stringify(content) })
+  await assert.rejects(port.complete({ projectId, expectedRequirementsRevision: draftDocument.revision }),
+    (error: unknown) => error instanceof ProjectCoordinatorRequirementsCompletionError && error.reason === 'invalid_structured_output')
+  assert.equal(commands.length, 0)
 })

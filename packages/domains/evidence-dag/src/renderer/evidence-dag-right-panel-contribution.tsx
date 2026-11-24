@@ -3,6 +3,12 @@ import { ListTree } from 'lucide-react'
 import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
+  RENDERER_EXTENSION_CONTRIBUTION_KIND,
+  domainRendererAuditWorkspaceContractSchema,
+  isDomainRendererAuditWorkspaceValue,
+  type DomainRendererResearchContentRenderContext,
+  type DomainRendererWorkbenchSurfaceValue,
+  type DomainRendererAuditWorkspaceValue,
   type DomainRendererCommandHandler,
   type DomainRendererWorkbenchToolbarActionValue,
   type DomainRendererResourceNavigationValue,
@@ -41,7 +47,6 @@ const EvidenceDagPanel = lazy(() =>
     default: module.EvidenceWorkspacePanel
   }))
 )
-const ResearchRecordPanel = lazy(() => import('./ResearchRecordPanel').then(module => ({ default: module.ResearchRecordPanel })))
 
 export type EvidenceDagRightPanelContribution =
   DomainRendererWorkbenchRightPanelValue<ReactElement>
@@ -60,7 +65,7 @@ export function createEvidenceDagRightPanelContribution(
   host: DomainRendererHost,
   getPresentation = createResearchRecordPresentationRegistry(),
   returnContributionId: string = EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
-): EvidenceDagRightPanelContribution {
+): DomainRendererWorkbenchSurfaceValue<DomainRendererResearchContentRenderContext, ReactElement> {
   const client = createEvidenceDagCapabilityClient(host.capabilityInvoker)
   return Object.freeze({
     render: ({ activation, ...context }) => (
@@ -82,7 +87,8 @@ export function createEvidenceDagRightPanelContribution(
         getPresentation={getPresentation}
         returnContributionId={returnContributionId}
         embedded={returnContributionId !== EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id}
-        {...(host.workbench?.toggleGlobalOverlay ? { onExpand: (scope: import('../research-record-contract').ResearchRecordScope) => {
+        sourcePresentation={context.sourcePresentation}
+        {...(host.workbench?.toggleGlobalOverlay && context.sourcePresentation !== 'global-overlay' ? { onExpand: (scope: import('../research-record-contract').ResearchRecordScope) => {
           host.workbench!.toggleGlobalOverlay!({ contributionId: EVIDENCE_DAG_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION.id,
             sessionId: scope.threadId, open: true, activation: { revision: Date.now(), payload: { recordScope: scope, returnContributionId } } })
           context.onCollapse()
@@ -93,8 +99,7 @@ export function createEvidenceDagRightPanelContribution(
 }
 
 export function createEvidenceDagGlobalOverlayContribution(
-  host: DomainRendererHost,
-  getPresentation = createResearchRecordPresentationRegistry()
+  host: DomainRendererHost
 ): DomainRendererWorkbenchGlobalOverlayValue<ReactElement> {
   return {
     placement: 'workspace',
@@ -102,48 +107,29 @@ export function createEvidenceDagGlobalOverlayContribution(
       const scope = researchRecordSurfaceScope(context.activation?.payload, {
         runtimeId: context.session.runtimeId, threadId: context.session.id, workspaceRoot: context.session.workspaceRoot
       })
-      if (!scope) return <section className={`${context.className} z-20 bg-ds-main p-4 text-ds-ink`}><p className="text-xs">选择带工作区的会话以查看研究记录。</p><button onClick={context.onClose}>关闭</button></section>
+      if (!scope) return <section className={`${context.className} z-20 bg-ds-main p-4 text-ds-ink`}><p className="text-ds-sm">选择带工作区的会话以查看研究记录。</p><button onClick={context.onClose}>关闭</button></section>
+      const shell = (host.contributions?.list(RENDERER_EXTENSION_CONTRIBUTION_KIND) ?? []).flatMap(contribution => {
+        const contract = domainRendererAuditWorkspaceContractSchema.safeParse(contribution.contract)
+        return contract.success && isDomainRendererAuditWorkspaceValue(contribution.value)
+          ? [{id:contribution.id,contract:contract.data,value:contribution.value as DomainRendererAuditWorkspaceValue<ReactElement>}] : []
+      }).sort((a,b)=>a.contract.order-b.contract.order || a.id.localeCompare(b.id))[0]
+      if (!shell) return <section className={`${context.className} z-20 bg-ds-main p-4 text-ds-ink`}><p role="status">审计工作区当前不可用，请确认研究工作区组件已启用。</p><button onClick={context.onClose}>关闭</button></section>
       const payload = context.activation?.payload
       const returnContributionId = payload && typeof payload === 'object' && !Array.isArray(payload) && typeof payload.returnContributionId === 'string'
-        ? payload.returnContributionId : EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id
-      const presentation = getPresentation(scope)
+        ? payload.returnContributionId : shell.contract.sideContributionId
       const back = async () => {
-        if (!host.workbench?.openSession || !await host.workbench.openSession({ runtimeId: scope.runtimeId, threadId: scope.threadId, focusComposer: false, readOnly: true })) {
-          throw new Error('来源主会话当前不可用；研究记录仍保留在此处。')
-        }
-        host.workbench?.openRightPanel({ contributionId: returnContributionId,
+        if (!host.workbench?.openSession || !await host.workbench.openSession({ runtimeId: scope.runtimeId, threadId: scope.threadId, focusComposer: false, readOnly: true })) throw new Error('来源会话当前不可用，审计内容仍保留。')
+        host.workbench.openRightPanel({ contributionId: returnContributionId,
           sessionId: scope.threadId, activation: { contributionId: returnContributionId,
             revision: Date.now(), payload: { recordScope: scope } } })
         context.onClose()
       }
-      return <ResearchRecordGlobalFrame className={context.className} onBack={back} onClose={context.onClose}>
-        <ResearchRecordPanel sourcePresentation="global-overlay" returnContributionId={returnContributionId} key={JSON.stringify(scope)} scope={scope} invoker={host.capabilityInvoker} workbench={host.workbench ? {
-          ...host.workbench, openResource: input => {
-            const opened = host.workbench?.openResource?.(input) ?? false
-            if (opened) context.onClose()
-            return opened
-          }
-        } : undefined} presentation={presentation} visibleContext={host.visibleContext} active={context.active} />
-      </ResearchRecordGlobalFrame>
+      return shell.value.render({ ...context,
+        session: {...context.session,id:scope.threadId,runtimeId:scope.runtimeId,workspaceRoot:scope.workspaceRoot},
+        onReturnToSide: back
+      })
     }
   }
-}
-
-function ResearchRecordGlobalFrame({ className, onBack, onClose, children }: {
-  className: string; onBack: () => Promise<void>; onClose: () => void; children: ReactElement
-}): ReactElement {
-  const [error, setError] = React.useState('')
-  const [busy, setBusy] = React.useState(false)
-  const back = async () => {
-    setBusy(true); setError('')
-    try { await onBack() } catch (error) { setError(error instanceof Error ? error.message : String(error)) }
-    finally { setBusy(false) }
-  }
-  return <section className={`${className} z-20 flex min-h-0 flex-col bg-ds-main text-ds-ink`} aria-label="全局研究记录">
-    <header className="flex shrink-0 items-center gap-2 border-b border-ds-border px-4 py-2 text-xs"><span className="font-medium">科研审计</span><button className="ml-auto rounded px-2 py-1 text-ds-muted hover:bg-ds-hover disabled:opacity-50" disabled={busy} onClick={() => void back()}>返回侧面</button><button className="rounded px-2 py-1 text-ds-muted hover:bg-ds-hover" onClick={onClose}>关闭</button></header>
-    {error && <p role="alert" className="px-4 py-2 text-xs">{error}</p>}
-    <div className="min-h-0 flex-1">{children}</div>
-  </section>
 }
 
 export function createEvidenceDagResearchSummaryContribution(
@@ -259,7 +245,7 @@ export function createDomainRendererEntry(
       {
         ...EVIDENCE_DAG_RENDERER_GLOBAL_OVERLAY_CONTRIBUTION,
         contract: EVIDENCE_DAG_RENDERER_GLOBAL_OVERLAY_CONTRACT,
-        value: createEvidenceDagGlobalOverlayContribution(host, getPresentation)
+        value: createEvidenceDagGlobalOverlayContribution(host)
       },
       {
         ...EVIDENCE_DAG_RENDERER_RESEARCH_SUMMARY_CONTRIBUTION,

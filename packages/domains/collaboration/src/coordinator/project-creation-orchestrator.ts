@@ -4,6 +4,7 @@ import type { DomainMainAgentExecutionHost } from '@sciforge/domain-sdk/agent-ex
 import {
   projectCoordinatorActivationRequestIdSchema,
   projectCoordinatorProjectCreateInputSchema,
+  projectCoordinatorProjectCreatePendingReasonSchema,
   projectCoordinatorProjectCreateReceiptSchema,
   projectCoordinatorProjectCreateResultSchema,
   type ProjectCoordinatorOrdinarySession,
@@ -21,6 +22,15 @@ export type ProjectCreationRequestContext = Readonly<{
   preferredRuntimeId?: string
   assertPrincipalCurrent: () => void
 }>
+
+function projectCreationPreparationFailure(error: unknown) {
+  if (!(error instanceof Error)) return null
+  // Hosts expose stable failure identity through code or Error.name. Never parse
+  // arbitrary messages/serialized handler JSON or treat unknown exceptions as success.
+  const code = 'code' in error ? error.code : error.name
+  const parsed = projectCoordinatorProjectCreatePendingReasonSchema.safeParse(code)
+  return parsed.success ? parsed.data : null
+}
 
 export class ProjectCreationOrchestrator {
   private readonly now: () => Date
@@ -91,10 +101,14 @@ export class ProjectCreationOrchestrator {
         projectId: committed.projectId
       })
       context.assertPrincipalCurrent()
+      if (workspace.connection.state !== 'ready' || workspace.connection.userId !== principalUserId) {
+        throw new Error('Project creation receipt does not belong to the current Principal.')
+      }
       return projectCoordinatorProjectCreateResultSchema.parse({
         createIntentId: input.createIntentId,
         createdProjectId: committed.projectId,
         workspace,
+        initializationState: 'ready',
         coordinatorSession: {
           projectId: committed.projectId,
           ...committed.coordinatorSession
@@ -103,14 +117,24 @@ export class ProjectCreationOrchestrator {
       })
     }
 
-    const receipt = projectCoordinatorProjectCreateReceiptSchema.parse(
-      await this.options.workspace.createProject(input)
-    )
-    context.assertPrincipalCurrent()
     const preparation = await this.options.state.readProjectCreationPreparation(
       principalUserId,
       input
     )
+    context.assertPrincipalCurrent()
+    const receipt = projectCoordinatorProjectCreateReceiptSchema.parse(preparation?.createdProjectId
+      ? {
+          createIntentId: input.createIntentId,
+          createdProjectId: preparation.createdProjectId,
+          workspace: await this.options.workspace.readWorkspace({ projectId: preparation.createdProjectId })
+        }
+      : await this.options.workspace.createProject(input))
+    context.assertPrincipalCurrent()
+    if (receipt.workspace.connection.state !== 'ready' || receipt.workspace.connection.userId !== principalUserId) {
+      throw new Error('Project creation receipt does not belong to the current Principal.')
+    }
+    await this.options.state.persistProjectCreationReceipt(principalUserId, input, receipt)
+    context.assertPrincipalCurrent()
     let coordinatorSession = preparation?.createdProjectId === receipt.createdProjectId
       ? preparation.coordinatorSession
       : null
@@ -123,7 +147,12 @@ export class ProjectCreationOrchestrator {
       if (!pendingPreparation) {
         const prepareSession = this.options.getAgentExecution()?.prepareSession
         if (!prepareSession) {
-          throw new Error('Project creation requires reviewable Agent Session preparation.')
+          context.assertPrincipalCurrent()
+          return projectCoordinatorProjectCreateResultSchema.parse({
+            ...receipt,
+            initializationState: 'session_pending',
+            reason: 'session_preparation_unavailable'
+          })
         }
         const createdPreparation = (async (): Promise<Readonly<{
           coordinatorSession: ProjectCoordinatorOrdinarySession
@@ -157,7 +186,15 @@ export class ProjectCreationOrchestrator {
         if (this.preparedCreations.get(preparationKey) === preparationPromise) {
           this.preparedCreations.delete(preparationKey)
         }
-        throw error
+        // A Principal change always wins over a recoverable local failure.
+        context.assertPrincipalCurrent()
+        const reason = projectCreationPreparationFailure(error)
+        if (!reason) throw error
+        return projectCoordinatorProjectCreateResultSchema.parse({
+          ...receipt,
+          initializationState: 'session_pending',
+          reason
+        })
       }
       coordinatorSession = pendingValues.coordinatorSession
       activationRequestId = pendingValues.activationRequestId
@@ -203,6 +240,7 @@ export class ProjectCreationOrchestrator {
     this.preparedCreations.delete(`${principalUserId}\u0000${input.createIntentId}`)
     return projectCoordinatorProjectCreateResultSchema.parse({
       ...receipt,
+      initializationState: 'ready',
       coordinatorSession: {
         projectId: commit.projectId,
         ...commit.coordinatorSession

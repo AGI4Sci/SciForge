@@ -3,15 +3,15 @@
  * This is deliberately conservative for markup/JSON, which may encode tools.
  */
 export function publicTextPrefixStream(
-  emit: (text: string, phase?: string) => void,
+  emit: (text: string, phase?: string, outputIndex?: number) => void,
   sensitiveValues: string[],
-): (text: string, phase?: string) => void {
+): (text: string, phase?: string, outputIndex?: number) => void {
   let raw = '';
   let started = false;
   let deferred = false;
   const sensitive = sensitiveValues.map(value => value.trim()).filter(value => value.length >= 4);
   const keywords = ['Authorization', 'Bearer', 'sk-', 'api_key', 'api-key', 'apikey', 'token', 'secret', 'password', 'credential'];
-  return (text, phase) => {
+  return (text, phase, outputIndex) => {
     if (deferred) return;
     raw += text;
     if (!started) {
@@ -36,7 +36,7 @@ export function publicTextPrefixStream(
     }
     const pendingAssignment = /\b(?:Authorization|Bearer|api[_-]?key|token|secret|password|credential)\s*$/iu.exec(raw);
     if (pendingAssignment) end = Math.min(end, pendingAssignment.index);
-    if (end > 0) emit(raw.slice(0, end), phase);
+    if (end > 0) emit(raw.slice(0, end), phase, outputIndex);
     // Only retain the ambiguous suffix; never rescan the entire generated answer.
     raw = deferred ? '' : raw.slice(end);
   };

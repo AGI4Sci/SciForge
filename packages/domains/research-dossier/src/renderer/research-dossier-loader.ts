@@ -8,6 +8,7 @@ import type { ResearchDossierActivationPayloadV1 } from '../contract.js'
 
 import type { ResearchDossierCapabilityClient } from './research-dossier-capability-client.js'
 import {
+  LOCAL_MATERIAL_KIND,
   artifactHistoryInput,
   expectedDigestMatches,
   type ResearchDossierExactRecord
@@ -48,14 +49,15 @@ export type ResearchDossierBrowseStreamV1 = Readonly<{
 export const RESEARCH_DOSSIER_SECONDARY_OWNER_TIMEOUT_MS = 1_500
 export const RESEARCH_DOSSIER_BROWSE_ARTIFACT_KINDS = [
   'research-checkpoint',
-  'research-output'
+  'research-output',
+  LOCAL_MATERIAL_KIND
 ] as const
 const RESEARCH_DOSSIER_BROWSE_LIMIT = 25
 
 function isResearchDossierBrowseArtifact(
   item: ArtifactVersionListV2['items'][number]
 ): boolean {
-  if (item.artifact.kind === 'research-checkpoint') return true
+  if (item.artifact.kind === 'research-checkpoint' || item.artifact.kind === LOCAL_MATERIAL_KIND) return true
   if (item.artifact.kind !== 'research-output') return false
   // Legacy ambient capture used the same broad kind before authenticated
   // executor attribution existed. It remains immutable and directly readable,

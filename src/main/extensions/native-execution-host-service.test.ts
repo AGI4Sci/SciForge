@@ -7,14 +7,55 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createNativeExecutionHostService, type NativeExecutionPolicy } from './native-execution-host-service'
 
 const fixtures: { root: string; provider: HostServiceProvider; owner: HostServiceOwner }[] = []
+const realNativeKill = process.kill.bind(process)
+const ownedFaultGroups = new Map<HostServiceProvider, Set<number>>()
+const expectedDisposeFailures = new Map<HostServiceProvider, { code?: string; message?: string }>()
+
+async function proveRealGroupAbsent(pid: number): Promise<void> {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) throw new Error('Unsafe test cleanup group.')
+  const end = Date.now() + 5_000
+  while (Date.now() < end) {
+    try { realNativeKill(-pid, 0) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error
+    }
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  throw new Error('Test cleanup could not prove real process-group ESRCH.')
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs()
-  vi.restoreAllMocks()
+  vi.restoreAllMocks() // Real cleanup must never use an injected syscall result.
+  const failures: unknown[] = []
   for (const fixture of fixtures.splice(0)) {
-    await fixture.provider.dispose?.(fixture.owner)
-    if (!fixture.root.startsWith(join(homedir(), '.sciforge-native-test-'))) throw new Error('Unexpected fixture cleanup target.')
-    await rm(fixture.root, { force: true, recursive: true })
+    let provenAbsent = false
+    try {
+      const expected = expectedDisposeFailures.get(fixture.provider)
+      if (expected) await expect(Promise.resolve(fixture.provider.dispose?.(fixture.owner))).rejects.toMatchObject(expected)
+      else { await fixture.provider.dispose?.(fixture.owner); provenAbsent = true }
+    } catch (error) { failures.push(error) }
+    const groups = ownedFaultGroups.get(fixture.provider)
+    if (groups) {
+      try {
+        for (const pid of groups) {
+          if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) throw new Error('Unsafe test cleanup group.')
+          try { realNativeKill(-pid, 'SIGKILL') } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+          }
+          await proveRealGroupAbsent(pid)
+        }
+        provenAbsent = true
+      } catch (error) { provenAbsent = false; failures.push(error) }
+    }
+    ownedFaultGroups.delete(fixture.provider)
+    expectedDisposeFailures.delete(fixture.provider)
+    if (!fixture.root.startsWith(join(homedir(), '.sciforge-native-test-'))) {
+      failures.push(new Error('Unexpected fixture cleanup target.'))
+    } else if (provenAbsent) await rm(fixture.root, { force: true, recursive: true })
+    // Failed/unproved cleanup retains the exact fixture directory as evidence.
   }
+  if (failures.length) throw new AggregateError(failures, 'Native fixture teardown failed.')
 })
 async function fixture(mode: NativeExecutionPolicy['mode'] = 'danger-full-access', nodeExecutable?: string) {
   // Deliberately outside platform tmp: sandbox tmp writes must not mask workspace denial.
@@ -102,6 +143,18 @@ describe('native execution Host service', () => {
     expect(await f.request('process.wait', handle)).toMatchObject({ exitCode: 0, stdout: { text: 'trusted\n' } })
   })
 
+  it.skipIf(process.platform === 'win32')('preserves the invoked symlink path for environment-sensitive interpreters', async () => {
+    const f = await fixture()
+    const target = join(f.root, 'interpreter')
+    await writeFile(target, '#!/bin/sh\nprintf "%s" "$0"\n')
+    await chmod(target, 0o755)
+    const alias = join(f.workspace, 'environment-python')
+    await symlink(target, alias)
+    const plan = await f.request('process.confine', { argv: [alias], policy: { mode: 'danger-full-access', workspaceRoot: f.workspace } }) as { argv: string[] }
+    const handle = await f.request('process.spawn', { argv: plan.argv, cwd: f.workspace, stdio: f.io })
+    expect(await f.request('process.wait', handle)).toMatchObject({ exitCode: 0, stdout: { text: alias } })
+  })
+
   it('trusted PATH preserves the explicit Electron Node configuration requirement', async () => {
     const original = Object.getOwnPropertyDescriptor(process.versions, 'electron')
     Object.defineProperty(process.versions, 'electron', { value: 'fixture', configurable: true })
@@ -180,10 +233,10 @@ describe('native execution Host service', () => {
     const handle = await f.start(`const{spawn}=require('child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore',process.stdout,process.stderr]});require('fs').writeFileSync(${JSON.stringify(marker)},String(c.pid));setInterval(()=>{},1000)`, {}, { signal: controller.signal })
     // Read readiness through ordinary Host execution, avoiding a timing-only assumption.
     let pid = 0
-    for (let attempt = 0; attempt < 100; attempt++) {
-      try { pid = Number(await readFile(marker, 'utf8')); break } catch { await new Promise(resolve => setTimeout(resolve, 10)) }
-    }
-    expect(pid).toBeGreaterThan(0)
+    await vi.waitFor(async () => {
+      pid = Number(await readFile(marker, 'utf8'))
+      expect(pid).toBeGreaterThan(0)
+    }, { timeout: 10_000, interval: 25 })
     const waiting = f.request('process.wait', handle, { signal: controller.signal })
     controller.abort()
     await expect(waiting).rejects.toThrow()
@@ -234,5 +287,113 @@ describe('native execution Host service', () => {
     const denied = await f.start(`require('fs').writeFileSync(${JSON.stringify(inside)},'bad')`)
     expect(await f.request('process.wait', denied)).toMatchObject({ exitCode: 1 })
     expect(await readFile(inside, 'utf8')).toBe('ok')
+  })
+})
+
+
+type NativeFault = 'pre-kill-probe' | 'post-kill-probe' | 'persistent-probe' | 'SIGTERM' | 'SIGKILL'
+type NativeSignalEvent = { signal: string | number; result: string }
+
+async function heldNativeGroup() {
+  const f = await fixture()
+  const rootMarker = join(f.workspace, 'root-pid')
+  const childMarker = join(f.workspace, 'child-pid')
+  const release = join(f.workspace, 'release-root')
+  const child = `process.on('SIGTERM',()=>{});require('fs').writeFileSync(${JSON.stringify(childMarker)},String(process.pid));console.log(process.pid);setInterval(()=>{},1000)`
+  const code = `const fs=require('fs');require('child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:['ignore',process.stdout,process.stderr]});fs.writeFileSync(${JSON.stringify(rootMarker)},String(process.pid));const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(childMarker)})&&fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},5)`
+  const handle = await f.start(code, { graceMs: 25 })
+  let rootPid = 0, childPid = 0
+  await vi.waitFor(async () => {
+    rootPid = Number(await readFile(rootMarker, 'utf8'))
+    childPid = Number(await readFile(childMarker, 'utf8'))
+    expect(Number.isSafeInteger(rootPid) && rootPid > 0 && rootPid !== process.pid).toBe(true)
+    expect(Number.isSafeInteger(childPid) && childPid > 0 && childPid !== rootPid).toBe(true)
+  }, { timeout: 5_000, interval: 10 })
+  // Only a PGID supplied by this real, held fixture is ever intercepted or cleaned.
+  ownedFaultGroups.set(f.provider, new Set([rootPid]))
+  realNativeKill(-rootPid, 0)
+  return { ...f, handle, rootPid, childPid, release: () => writeFile(release, 'release') }
+}
+
+function injectOwnedNativeFault(rootPid: number, fault: NativeFault) {
+  const events: NativeSignalEvent[] = []
+  let injected = false, killed = false
+  vi.spyOn(process, 'kill').mockImplementation((pid, signal: string | number = 'SIGTERM') => {
+    if (pid !== -rootPid) return realNativeKill(pid, signal)
+    const shouldDeny = fault === 'persistent-probe' && signal === 0 ||
+      (fault === 'SIGTERM' || fault === 'SIGKILL') && signal === fault ||
+      fault === 'pre-kill-probe' && signal === 0 && !injected ||
+      fault === 'post-kill-probe' && signal === 0 && killed && !injected
+    if (signal === 'SIGKILL') killed = true
+    if (shouldDeny) {
+      injected = true
+      events.push({ signal, result: 'injected-EPERM' })
+      throw Object.assign(new Error('Injected owned-group signal denial.'), { code: 'EPERM' })
+    }
+    try {
+      const result = realNativeKill(pid, signal)
+      events.push({ signal, result: 'success' })
+      return result
+    } catch (error) {
+      events.push({ signal, result: (error as NodeJS.ErrnoException).code ?? 'unknown' })
+      throw error
+    }
+  })
+  return events
+}
+
+function expectRealDescendantAbsent(pid: number): void {
+  try { realNativeKill(pid, 0) } catch (error) {
+    expect(error).toMatchObject({ code: 'ESRCH' })
+    return
+  }
+  throw new Error('Real native descendant is still present.')
+}
+
+describe('native process-group syscall uncertainty stays fail-closed', () => {
+  it('pre-KILL probe EPERM is presence: real SIGKILL and ESRCH are still required', async () => {
+    const f = await heldNativeGroup()
+    const events = injectOwnedNativeFault(f.rootPid, 'pre-kill-probe')
+    await f.release()
+    expect(await f.request('process.wait', f.handle)).toMatchObject({ exitCode: 0 })
+    expect(events).toContainEqual({ signal: 0, result: 'injected-EPERM' })
+    expect(events.some(event => event.signal === 'SIGKILL' && ['success', 'ESRCH'].includes(event.result))).toBe(true)
+    expect(events.at(-1)).toEqual({ signal: 0, result: 'ESRCH' })
+    expectRealDescendantAbsent(f.childPid)
+    expect(await f.request('process.stop', f.handle)).toMatchObject({ quiescent: true, exitCode: 0 })
+  })
+
+  it('post-KILL probe EPERM waits for later real ESRCH before quiescence', async () => {
+    const f = await heldNativeGroup()
+    const events = injectOwnedNativeFault(f.rootPid, 'post-kill-probe')
+    await f.release()
+    expect(await f.request('process.wait', f.handle)).toMatchObject({ exitCode: 0 })
+    expect(events).toContainEqual({ signal: 0, result: 'injected-EPERM' })
+    expect(events.at(-1)).toEqual({ signal: 0, result: 'ESRCH' })
+    expectRealDescendantAbsent(f.childPid)
+    expect(await f.request('process.stop', f.handle)).toMatchObject({ quiescent: true, exitCode: 0 })
+  })
+
+  it('persistent probe EPERM rejects wait and stop at the unchanged five-second deadline', async () => {
+    const f = await heldNativeGroup()
+    const events = injectOwnedNativeFault(f.rootPid, 'persistent-probe')
+    const started = Date.now()
+    await f.release()
+    const failure = { message: 'Cannot prove native process group teardown.' }
+    await expect(f.request('process.wait', f.handle)).rejects.toMatchObject(failure)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(5_000)
+    await expect(f.request('process.stop', f.handle)).rejects.toMatchObject(failure)
+    expectedDisposeFailures.set(f.provider, failure)
+    expect(events.some(event => event.signal === 'SIGKILL' && ['success', 'ESRCH'].includes(event.result))).toBe(true)
+  }, 15_000)
+
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) it(`${signal} EPERM rejects wait, stop and disposal instead of certifying quiescence`, async () => {
+    const f = await heldNativeGroup()
+    const events = injectOwnedNativeFault(f.rootPid, signal)
+    await f.release()
+    await expect(f.request('process.wait', f.handle)).rejects.toMatchObject({ code: 'EPERM' })
+    await expect(f.request('process.stop', f.handle)).rejects.toMatchObject({ code: 'EPERM' })
+    expectedDisposeFailures.set(f.provider, { code: 'EPERM' })
+    expect(events).toContainEqual({ signal, result: 'injected-EPERM' })
   })
 })

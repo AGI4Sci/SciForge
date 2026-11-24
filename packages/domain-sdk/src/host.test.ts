@@ -440,3 +440,15 @@ describe('domain host contracts', () => {
     }
   })
 })
+
+
+it('scopes terminated turns without treating them as completed executions', () => {
+  for (const terminalState of ['failed', 'cancelled'] as const) {
+    assert.deepEqual(domainArtifactEventScope({
+      contractVersion: 1, kind: 'turn-terminated', terminalState,
+      runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1',
+      targetWatermark: '7', sequence: 7, workspaceRoot: '/workspace',
+      occurredAt: '2026-11-10T00:00:00.000Z', artifacts: []
+    }), { runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1', workspaceRoot: '/workspace' })
+  }
+})

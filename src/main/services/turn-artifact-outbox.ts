@@ -34,8 +34,8 @@ import {
   type TurnFileMetadataV1
 } from './turn-file-effect-capture'
 
-const OUTBOX_VERSION = 6
-const LEGACY_OUTBOX_VERSIONS = new Set([1, 2, 3, 4, 5])
+const OUTBOX_VERSION = 7
+const LEGACY_OUTBOX_VERSIONS = new Set([1, 2, 3, 4, 5, 6])
 const BOUNDARY_OWNERSHIP_VERSION = 4
 const PRINCIPAL_ATTRIBUTION_VERSION = 5
 const START_PHASE_VERSION = 6
@@ -47,6 +47,8 @@ const MAX_RETIRED_ORDINAL_RANGES =
 const DEFAULT_MAX_SERIALIZED_BYTES = 64 * 1024 * 1024
 
 type TurnArtifactIntentPayload = Readonly<{
+  /** Absent only for historical completed intents; never infer from later status. */
+  terminalState?: 'completed' | 'failed' | 'cancelled'
   runtimeId: string
   threadId: string
   turnId: string
@@ -775,7 +777,7 @@ export class TurnArtifactOutbox {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           })
-      const lifecycle = completedLifecycleSettlementForIntent(intent)
+      const lifecycle = terminalLifecycleSettlementForIntent(intent)
       const lifecycleKey = lifecycle ? turnLifecycleSettlementKey(lifecycle) : undefined
       const existingLifecycle = lifecycleKey
         ? this.#lifecycleSettlements.get(lifecycleKey) ?? this.#lifecycleReceipts.get(lifecycleKey)
@@ -832,7 +834,9 @@ export class TurnArtifactOutbox {
   }
 
   nextAttemptAt(): number | null {
-    const values = [...this.#records.values(), ...this.#lifecycleSettlements.values()]
+    const values = [...this.#records.values(), ...[...this.#lifecycleSettlements.values()].filter(
+      (record) => !this.hasPendingTerminatedArtifact(record.event.boundaryLeaseId)
+    )]
       .map((record) => record.nextAttemptAt ? Date.parse(record.nextAttemptAt) : Date.now())
       .filter(Number.isFinite)
     return values.length > 0 ? Math.min(...values) : null
@@ -913,6 +917,13 @@ export class TurnArtifactOutbox {
         throw error
       }
     })
+  }
+
+  hasPendingTerminatedArtifact(boundaryLeaseId: string): boolean {
+    return [...this.#records.values()].some(({ intent }) => (
+      intent.boundaryLeaseId === boundaryLeaseId &&
+      intent.terminalState !== undefined && intent.terminalState !== 'completed'
+    ))
   }
 
   readyLifecycleSettlements(now = Date.now()): readonly TurnLifecycleSettlementRecord[] {
@@ -1048,9 +1059,10 @@ export class TurnArtifactOutbox {
           ...(intent.workspaceRoot ? { workspaceRoot: intent.workspaceRoot } : {}),
           turnId: intent.turnId
         },
-        'completed-intent',
+        intent.terminalState && intent.terminalState !== 'completed'
+          ? 'terminated-intent' : 'completed-intent',
         record.updatedAt,
-        'completed'
+        intent.terminalState ?? 'completed'
       ))
     }
     for (const receipt of this.#lifecycleReceipts.values()) {
@@ -1099,6 +1111,9 @@ export class TurnArtifactOutbox {
       const current = this.#records.get(key)
       if (!current) throw new Error(`Completed turn artifact intent ${key} is missing.`)
       if (current.stage === 'pending_fanout') {
+        if (JSON.stringify(parseTurnArtifactEvent(value, current.intent)) !== JSON.stringify(current.event)) {
+          throw new Error('Materialized turn artifact event conflicts with the retained event.')
+        }
         materialized = current
         return
       }
@@ -1171,7 +1186,8 @@ export class TurnArtifactOutbox {
     await this.#mutate(async () => {
       const current = this.#records.get(key)
       if (!current) return
-      if ((legacyOnly && !current.legacyArtifactOnly) || current.stage !== 'pending_materialization') {
+      if ((legacyOnly && !current.legacyArtifactOnly) || current.stage !== 'pending_materialization' ||
+        (current.intent.terminalState !== undefined && current.intent.terminalState !== 'completed')) {
         throw new Error(
           legacyOnly
             ? 'Only a legacy artifact-only pending materialization may be quarantined.'
@@ -1214,8 +1230,9 @@ export class TurnArtifactOutbox {
     await this.#mutate(async () => {
       const current = this.#records.get(key)
       if (!current) return
-      if (current.stage !== 'pending_materialization') {
-        throw new Error('Only a pending materialization may be settled as a terminal failure.')
+      if (current.stage !== 'pending_materialization' ||
+        (current.intent.terminalState !== undefined && current.intent.terminalState !== 'completed')) {
+        throw new Error('Only a completed pending materialization may be settled as a terminal failure.')
       }
       const receiptsBefore = new Map(this.#receipts)
       const lifecycleBefore = new Map(this.#lifecycleSettlements)
@@ -2650,6 +2667,10 @@ function parseIntent(
   persisted = false
 ): TurnArtifactReplayIntent {
   if (!isRecord(value)) throw new Error('Completed turn artifact intent must be an object.')
+  const terminalState = value.terminalState
+  if (terminalState !== undefined && terminalState !== 'completed' && terminalState !== 'failed' && terminalState !== 'cancelled') {
+    throw new Error('Turn artifact intent has an invalid terminal state.')
+  }
   const runtimeId = required(value.runtimeId, 'runtimeId')
   const threadId = required(value.threadId, 'threadId')
   const turnId = required(value.turnId, 'turnId')
@@ -2661,6 +2682,9 @@ function parseIntent(
   const sequence = value.sequence
   if (sequence !== undefined && (!Number.isSafeInteger(sequence) || Number(sequence) < 0)) {
     throw new Error('Completed turn artifact sequence must be a non-negative safe integer.')
+  }
+  if (terminalState && terminalState !== 'completed' && (!Number.isSafeInteger(sequence) || Number(sequence) <= 0)) {
+    throw new Error('Terminated turn artifact requires a positive durable terminal sequence.')
   }
   const workspaceRoot = value.workspaceRoot === undefined
     ? undefined
@@ -2695,6 +2719,7 @@ function parseIntent(
     runtimeId,
     threadId,
     turnId,
+    ...(terminalState === undefined ? {} : { terminalState }),
     ...binding,
     ...boundary,
     principal,
@@ -2716,7 +2741,10 @@ function parseTurnArtifactEvent(
   intent: TurnArtifactReplayIntent,
   legacy = false
 ): DomainTurnArtifactEvent {
-  if (!isRecord(value) || value.contractVersion !== 1 || value.kind !== 'turn-completed') {
+  const terminalState = intent.terminalState ?? 'completed'
+  const expectedKind = terminalState === 'completed' ? 'turn-completed' : 'turn-terminated'
+  if (!isRecord(value) || value.contractVersion !== 1 || value.kind !== expectedKind ||
+    value.terminalState !== (terminalState === 'completed' ? undefined : terminalState)) {
     throw new Error('Materialized turn artifact event has an invalid contract.')
   }
   if (
@@ -2758,7 +2786,9 @@ function parseTurnArtifactEvent(
   ) throw new Error('Materialized turn artifact filePatchReceipts do not match its durable intent.')
   const durable = jsonClone({
     contractVersion: 1 as const,
-    kind: 'turn-completed' as const,
+    ...(terminalState === 'completed'
+      ? { kind: 'turn-completed' as const }
+      : { kind: 'turn-terminated' as const, terminalState }),
     runtimeId: intent.runtimeId,
     threadId: intent.threadId,
     turnId: intent.turnId,
@@ -2846,6 +2876,7 @@ function assertSameIntent(
     left.bindingSource !== right.bindingSource ||
     left.clientDirectiveId !== right.clientDirectiveId ||
     left.inputDigest !== right.inputDigest ||
+    left.terminalState !== right.terminalState ||
     left.sequence !== right.sequence ||
     left.workspaceRoot !== right.workspaceRoot ||
     left.workspaceLocator?.contractVersion !== right.workspaceLocator?.contractVersion ||
@@ -3301,7 +3332,7 @@ function parseLifecycleSettlement(
   }) as DomainMainAfterTurnEvent
 }
 
-function completedLifecycleSettlementForIntent(
+function terminalLifecycleSettlementForIntent(
   intent: TurnArtifactReplayIntent
 ): DomainMainAfterTurnEvent | undefined {
   if (
@@ -3313,7 +3344,7 @@ function completedLifecycleSettlementForIntent(
   ) return undefined
   return Object.freeze({
     kind: 'after-turn',
-    state: 'completed',
+    state: intent.terminalState ?? 'completed',
     issuerEpoch: intent.issuerEpoch,
     deliveryAttemptId: intent.deliveryAttemptId,
     deliveryAttemptOrdinal: intent.deliveryAttemptOrdinal,
@@ -3579,6 +3610,9 @@ function setBoundarySnapshot(
   )) {
     throw new Error(`Turn boundary ownership collision: ${next.boundaryLeaseId}`)
   }
+  // A queued failure settlement must not release the original lease while
+  // its artifact still awaits materialization or any consumer acknowledgement.
+  if (current?.phase === 'terminated-intent' && next.phase === 'terminal-settlement') return
   values.set(next.boundaryLeaseId, Object.freeze({
     ...next,
     ...(next.turnId ? { turnId: next.turnId } : current?.turnId ? { turnId: current.turnId } : {})

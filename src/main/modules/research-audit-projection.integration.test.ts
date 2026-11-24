@@ -93,7 +93,7 @@ describe('installed DAG domains and independent Change Inspector process plugin'
     const contracts = new Map<string, PluginAdapterContract>([[packageName, {
       hostApiRange: '^1.0.0', permissions: [], approved: true,
       dshAuthorization: {
-        packageName, packageVersion, dshRuntimeVersion: '0.2.0-rc.2',
+        packageName, packageVersion, dshRuntimeVersion: '0.2.1-rc.4',
         tools: EXPECTED_HOST_GRANTS, ports: [AGENT_THREADS_READ_PORT]
       }
     }]])
@@ -118,7 +118,7 @@ describe('installed DAG domains and independent Change Inspector process plugin'
     }))
     const plugins = new DevelopmentExternalPluginService({
       root: resolve('plugins'), userDataPath: userDataDir,
-      hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.0-rc.2',
+      hostApiVersion: '1.11.0', dshRuntimeVersion: '0.2.1-rc.4',
       adapterContracts: contracts, authorizeWorkspace, ...hostServices
     })
     const activated = await activateMainRuntimeContributions(catalog, {

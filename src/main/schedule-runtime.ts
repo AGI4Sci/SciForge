@@ -54,6 +54,7 @@ type RunningScheduleTask = {
 }
 
 export class ScheduleRuntime {
+  private readonly wakeups = new Map<symbol, { at: number; wake: () => void }>()
   private readonly deps: ScheduleRuntimeDeps
   private scheduler: ReturnType<typeof setInterval> | null = null
   private readonly runningTasks = new Map<string, RunningScheduleTask>()
@@ -73,6 +74,7 @@ export class ScheduleRuntime {
   }
 
   stop(): void {
+    this.wakeups.clear()
     if (this.scheduler) {
       clearInterval(this.scheduler)
       this.scheduler = null
@@ -344,7 +346,25 @@ export class ScheduleRuntime {
     void this.tick()
   }
 
+  /** Package-owned intents share the application's clock; no model is called here. */
+  scheduleWakeup(at: string, wake: () => void): () => void {
+    const due = Date.parse(at)
+    if (!Number.isFinite(due)) throw new Error('Wakeup requires an ISO timestamp.')
+    const key = Symbol('wakeup')
+    this.wakeups.set(key, { at: due, wake })
+    return () => { this.wakeups.delete(key) }
+  }
+
   private async tick(): Promise<void> {
+    for (const [key, entry] of this.wakeups) {
+      if (entry.at > Date.now()) continue
+      this.wakeups.delete(key)
+      try { entry.wake() } catch (error) {
+        this.deps.logError('schedule-wakeup', 'Package wakeup failed.', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
     const settings = await this.deps.store.load()
     if (!settings.schedule.enabled) return
     await this.ensureNextRuns(settings)

@@ -206,13 +206,13 @@ export function SequenceWorkspaceViewer({
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.14)]" aria-hidden="true" />
-              <h3 className="min-w-0 truncate text-sm font-semibold leading-5 text-ds-ink">{resolvedModel.title}</h3>
+              <h3 className="min-w-0 truncate text-ds-lg font-semibold leading-5 text-ds-ink">{resolvedModel.title}</h3>
             </div>
             {resolvedModel.subtitle ? (
-              <p className="mt-1 truncate text-xs leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
+              <p className="mt-1 truncate text-ds-sm leading-4 text-ds-muted">{resolvedModel.subtitle}</p>
             ) : null}
           </div>
-          <span className="shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium leading-4 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200">
+          <span className="shrink-0 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-ds-sm font-medium leading-4 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200">
             {resolvedModel.status.kind === 'ready' ? 'Ready' : titleCase(resolvedModel.status.kind)}
           </span>
         </div>
@@ -225,8 +225,8 @@ export function SequenceWorkspaceViewer({
             role={statusRole}
             data-state-kind={resolvedModel.status.kind}
           >
-            <strong className="block text-sm font-semibold text-ds-ink">{resolvedModel.status.title}</strong>
-            <p className="mt-2 text-sm leading-6 text-ds-muted">{resolvedModel.status.message}</p>
+            <strong className="block text-ds-lg font-semibold text-ds-ink">{resolvedModel.status.title}</strong>
+            <p className="mt-2 text-ds-lg leading-6 text-ds-muted">{resolvedModel.status.message}</p>
           </div>
         </div>
       ) : (
@@ -279,8 +279,8 @@ function SequenceSummaryPanel({
       aria-label="Sequence summary"
     >
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Sequence</h4>
-        <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium leading-4 text-slate-600 dark:bg-white/10 dark:text-slate-200">
+        <h4 className="text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Sequence</h4>
+        <span className="rounded-md bg-slate-100 px-2 py-1 text-ds-sm font-medium leading-4 text-slate-600 dark:bg-white/10 dark:text-slate-200">
           {formatCount(rows.length, 'metric')}
         </span>
       </div>
@@ -290,11 +290,11 @@ function SequenceSummaryPanel({
             key={row.id}
             className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
           >
-            <dt className="truncate text-xs font-medium leading-4 text-ds-muted">{row.label}</dt>
-            <dd className="mt-1 min-w-0 text-sm font-semibold leading-5 text-ds-ink">
+            <dt className="truncate text-ds-sm font-medium leading-4 text-ds-muted">{row.label}</dt>
+            <dd className="mt-1 min-w-0 text-ds-lg font-semibold leading-5 text-ds-ink">
               <span className="block truncate">{row.value}</span>
               {row.description ? (
-                <small className="mt-1 block overflow-hidden text-ellipsis whitespace-nowrap text-xs font-normal leading-4 text-ds-muted">
+                <small className="mt-1 block overflow-hidden text-ellipsis whitespace-nowrap text-ds-sm font-normal leading-4 text-ds-muted">
                   {row.description}
                 </small>
               ) : null}
@@ -319,9 +319,9 @@ function SequenceSelectionPanel({
     >
       <div className="mb-3 flex items-center gap-2">
         <Crosshair aria-hidden="true" className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-300" strokeWidth={1.9} />
-        <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
+        <h4 className="text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Selection</h4>
       </div>
-      <p className="text-sm leading-6 text-ds-ink">{selection.summary}</p>
+      <p className="text-ds-lg leading-6 text-ds-ink">{selection.summary}</p>
       {selection.groups.length ? (
         <dl className="mt-3 space-y-2">
           {selection.groups.map((group) => (
@@ -329,11 +329,11 @@ function SequenceSelectionPanel({
               key={group.id}
               className="min-w-0 rounded-md border border-ds-border-muted bg-ds-subtle px-3 py-2"
             >
-              <dt className="flex items-center justify-between gap-3 text-xs font-medium leading-4 text-ds-muted">
+              <dt className="flex items-center justify-between gap-3 text-ds-sm font-medium leading-4 text-ds-muted">
                 <span>{group.title}</span>
                 <span>{group.summary}</span>
               </dt>
-              <dd className="mt-1 truncate text-sm font-medium leading-5 text-ds-ink">
+              <dd className="mt-1 truncate text-ds-lg font-medium leading-5 text-ds-ink">
                 {group.items.join(', ')}
               </dd>
             </div>
@@ -355,8 +355,8 @@ function SequenceActionPanel({
       aria-label="Sequence actions"
     >
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Actions</h4>
-        <span className="text-xs leading-4 text-ds-faint">{formatCount(actions.length, 'tool')}</span>
+        <h4 className="text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Actions</h4>
+        <span className="text-ds-sm leading-4 text-ds-faint">{formatCount(actions.length, 'tool')}</span>
       </div>
       {actions.length ? (
         <ul className="grid gap-2">
@@ -366,7 +366,7 @@ function SequenceActionPanel({
               <li
                 key={action.id}
                 className={compactClassName(
-                  'flex min-h-9 min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium leading-5',
+                  'flex min-h-9 min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-ds-lg font-medium leading-5',
                   sequenceActionTone(action.kind)
                 )}
                 data-action-id={action.id}
@@ -380,7 +380,7 @@ function SequenceActionPanel({
           })}
         </ul>
       ) : (
-        <p className="text-sm leading-6 text-ds-muted">No select, search, export, or inspect actions are available.</p>
+        <p className="text-ds-lg leading-6 text-ds-muted">No select, search, export, or inspect actions are available.</p>
       )}
     </section>
   )
@@ -407,9 +407,9 @@ function SequenceAnnotationPanel({
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Tags aria-hidden="true" className="h-3.5 w-3.5 text-sky-600 dark:text-sky-300" strokeWidth={1.9} />
-          <h4 className="text-xs font-semibold uppercase leading-4 text-ds-muted">Annotations</h4>
+          <h4 className="text-ds-sm font-semibold uppercase leading-4 text-ds-muted">Annotations</h4>
         </div>
-        <span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium leading-4 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
+        <span className="rounded-md bg-sky-50 px-2 py-1 text-ds-sm font-medium leading-4 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
           {formatCount(markers.length, 'marker')}
         </span>
       </div>
@@ -444,12 +444,12 @@ function SequenceAnnotationPanel({
                 >
                   <span className={compactClassName('h-2.5 w-2.5 rounded-full', sequenceMarkerSwatch(marker))} aria-hidden="true" />
                   <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold leading-5">{marker.label}</span>
-                    <span className="mt-0.5 block truncate text-xs leading-4 text-ds-muted">
+                    <span className="block truncate text-ds-lg font-semibold leading-5">{marker.label}</span>
+                    <span className="mt-0.5 block truncate text-ds-sm leading-4 text-ds-muted">
                       {markerCoordinateLabel(marker)}
                     </span>
                   </span>
-                  <span className="flex items-center gap-1 rounded bg-white/70 px-1.5 py-1 text-xs font-medium leading-4 text-ds-muted shadow-sm dark:bg-white/10">
+                  <span className="flex items-center gap-1 rounded bg-white/70 px-1.5 py-1 text-ds-sm font-medium leading-4 text-ds-muted shadow-sm dark:bg-white/10">
                     {selected ? <MousePointer2 aria-hidden="true" className="h-3 w-3" strokeWidth={2} /> : null}
                     {markerKindLabel(marker)}
                   </span>
@@ -459,7 +459,7 @@ function SequenceAnnotationPanel({
           })}
         </ol>
       ) : (
-        <p className="text-sm leading-6 text-ds-muted">
+        <p className="text-ds-lg leading-6 text-ds-muted">
           {browser.kind === 'map' ? 'No coordinate annotations are reported.' : browser.message}
         </p>
       )}
@@ -700,8 +700,8 @@ function SequenceBrowserViewport({
         className="workspace-preview-sequence-viewer__browser-empty rounded-lg border border-dashed border-ds-border bg-ds-card p-6 text-center shadow-sm"
         data-sequence-browser-empty
       >
-        <strong className="block text-sm font-semibold text-ds-ink">{browser.title || fallback.title}</strong>
-        <p className="mt-2 text-sm leading-6 text-ds-muted">{browser.message || fallback.message}</p>
+        <strong className="block text-ds-lg font-semibold text-ds-ink">{browser.title || fallback.title}</strong>
+        <p className="mt-2 text-ds-lg leading-6 text-ds-muted">{browser.message || fallback.message}</p>
       </div>
     )
   }
@@ -718,17 +718,17 @@ function SequenceBrowserViewport({
     >
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ds-border px-4 py-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase leading-4 text-ds-muted">Reference map</p>
-          <h4 className="mt-1 truncate text-sm font-semibold leading-5 text-ds-ink">{browser.reference}</h4>
+          <p className="text-ds-sm font-medium uppercase leading-4 text-ds-muted">Reference map</p>
+          <h4 className="mt-1 truncate text-ds-lg font-semibold leading-5 text-ds-ink">{browser.reference}</h4>
         </div>
         <div className="flex flex-wrap gap-2">
-          <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium leading-4 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200">
+          <span className="rounded-md bg-emerald-50 px-2 py-1 text-ds-sm font-medium leading-4 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200">
             {formatCount(browser.selectedRanges.length, 'selection')}
           </span>
-          <span className="rounded-md bg-sky-50 px-2 py-1 text-xs font-medium leading-4 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
+          <span className="rounded-md bg-sky-50 px-2 py-1 text-ds-sm font-medium leading-4 text-sky-700 dark:bg-sky-400/10 dark:text-sky-200">
             {formatCount(browser.features.length, 'feature')}
           </span>
-          <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-medium leading-4 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
+          <span className="rounded-md bg-amber-50 px-2 py-1 text-ds-sm font-medium leading-4 text-amber-700 dark:bg-amber-400/10 dark:text-amber-200">
             {formatCount(browser.indexedRanges.length, 'range')}
           </span>
         </div>
@@ -811,7 +811,7 @@ function SequenceBrowserViewport({
         ))}
       </svg>
       </div>
-      <figcaption className="flex flex-wrap items-center justify-between gap-2 border-t border-ds-border px-4 py-3 text-xs leading-5 text-ds-muted">
+      <figcaption className="flex flex-wrap items-center justify-between gap-2 border-t border-ds-border px-4 py-3 text-ds-sm leading-5 text-ds-muted">
         <span>{browser.summary}</span>
         {browser.truncated ? (
           <small className="font-medium text-amber-700 dark:text-amber-200">Bounded preview; omitted sequence records may not be shown.</small>

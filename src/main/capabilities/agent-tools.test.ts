@@ -66,6 +66,67 @@ const context: CapabilityAgentToolRequestContext = {
 }
 
 describe('CapabilityAgentToolSurface', () => {
+  it('offers copyable invoke arguments for each authorized resource without guessing a discovery resource', async () => {
+    const read = defineCapability({
+      id: 'example.read-bound-content', version: '1', title: 'Read bound content',
+      description: 'Read the resource selected by the caller.', audiences: ['agent'],
+      scope: 'resource', resourceKinds: ['example-content'], effect: 'read', approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(), outputSchema: z.object({ resourceId: z.string() }).strict(),
+      handler: async (_input, invocation) => ({ output: { resourceId: invocation.resource!.resourceId } })
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([read]))
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+    const discovered = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: read.descriptor.id, includeSchema: true }, context })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery')
+    expect(discovered.value[0]).not.toHaveProperty('invokeTemplate')
+    const refs: string[] = []
+    for (const [index, resourceId] of ['first-document', 'second-document'].entries()) {
+      const issued = broker.issueResource(caller, {
+        resourceId, resourceKind: 'example-content', semanticRevision: '1', audiences: ['agent'],
+        observe: async () => ({ state: {}, semanticRevision: '1', operationIds: [read.descriptor.id] })
+      })
+      const observed = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+        arguments: { resourceRef: issued.resourceRef, includeSchema: index === 0 }, context })
+      if (observed.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) throw new Error('Expected observation')
+      const template = observed.value.operations[0]!.invokeTemplate!
+      expect(template).toEqual({ operationRef: discovered.value[0]!.operationRef,
+        resourceRef: observed.value.resourceRef, input: {} })
+      refs.push(template.resourceRef)
+      const invoked = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.invoke, arguments: template, context })
+      expect(invoked).toMatchObject({ value: { output: { resourceId } } })
+    }
+    expect(refs[0]).not.toBe(refs[1])
+    await expect(surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: discovered.value[0]!.operationRef, input: {} }, context
+    })).rejects.toMatchObject({ code: 'resource_required' })
+  })
+
+  it('preserves required fields separately for first-page and continuation input variants', async () => {
+    const read = defineCapability({
+      id: 'example.read-pages', version: '1', title: 'Read pages', description: 'Read a stable content version.',
+      audiences: ['agent'], scope: 'global', effect: 'read', approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.union([
+        z.object({ offset: z.literal(0).optional() }).strict(),
+        z.object({ offset: z.number().int().min(1), contentHash: z.string().min(1) }).strict()
+      ]),
+      outputSchema: z.object({}).strict(), handler: async () => ({ output: {} })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry([read])), resolveCaller: () => caller
+    })
+    const discovered = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: { capabilityId: read.descriptor.id, includeSchema: true }, context })
+    if (discovered.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discovery')
+    expect(discovered.value[0]).not.toHaveProperty('invokeTemplate')
+    expect(discovered.value[0]!.inputShape).toMatchObject({ type: 'union', variants: [
+      { properties: { offset: { const: 0, required: false } } },
+      { properties: { offset: { minimum: 1, required: true }, contentHash: { required: true } } }
+    ] })
+  })
+
   it('keeps capability and provider event attribution structurally distinct', () => {
     const capabilityEvent: AgentCapabilityEvent = {
       eventId: 'event_abcdefghijklmnopqrstuvwxyz',
@@ -150,7 +211,7 @@ describe('CapabilityAgentToolSurface', () => {
     expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.invoke)?.description)
       .toMatch(/directly.*input.*JSON object.*not.*JSON-encoded string/iu)
     expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.observe)?.description)
-      .toMatch(/operationRefs.*input shapes.*directly.*rediscovering/iu)
+      .toMatch(/input shapes.*invokeTemplate.*operationRef and resourceRef.*top-level.*without rediscovering/iu)
     expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.description)
       .toMatch(/omitting frame inspects frame 1, not the page currently shown in the UI/iu)
     expect(JSON.stringify(surface.tools())).not.toMatch(
@@ -384,6 +445,7 @@ describe('CapabilityAgentToolSurface', () => {
     })
     expect(operation).not.toHaveProperty('id')
     expect(operation).not.toHaveProperty('inputShape')
+    expect(operation).not.toHaveProperty('invokeTemplate')
 
     const discoveredWithSchema = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.discover,
@@ -1353,15 +1415,18 @@ describe('CapabilityAgentToolSurface', () => {
     }
     expect(observed.value.operations[0]).toMatchObject({
       operationRef: expect.stringMatching(/^op_/u),
-      inputShape: expect.any(Object)
+      inputShape: expect.any(Object),
+      invokeTemplate: {
+        operationRef: observed.value.operations[0]!.operationRef,
+        resourceRef: transferred.resourceRef,
+        input: {}
+      }
     })
 
     const invoked = await surface.call({
       name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
       arguments: {
-        operationRef: observed.value.operations[0]!.operationRef,
-        resourceRef: transferred.resourceRef,
-        input: {}
+        ...observed.value.operations[0]!.invokeTemplate
       },
       context: { ...context, turnId: 'turn-output-observation', callId: 'call-create-root' }
     })
@@ -1593,6 +1658,23 @@ describe('CapabilityAgentToolSurface', () => {
       context: { ...context, turnId: 'invalid-output', callId: 'invoke-invalid-output' }
     })).rejects.toMatchObject({ code: 'invalid_output' })
     expect(dispatch).toHaveBeenCalledOnce()
+  })
+
+  it('enforces permission policy before dispatch even when confirmation is not required', async () => {
+    const operation = globalMutationDescriptor('document.permission-barrier', 'Permission barrier')
+    const invoke = vi.fn()
+    const assertInvocationAllowed = vi.fn(async () => { throw new Error('Read-only permission does not allow this operation.') })
+    const surface = createCapabilityAgentToolSurface({
+      broker: { ...brokerStub(), discover: async () => [operation], invoke },
+      resolveCaller: () => caller,
+      assertInvocationAllowed
+    })
+    const invocationContext = { ...context, turnId: 'permission-turn', callId: 'permission-call' }
+    const discovered = await surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.discover, arguments: {}, context: invocationContext })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+    await expect(surface.call({ name: CAPABILITY_AGENT_TOOL_NAMES.invoke, arguments: { operationRef, input: {} }, context: invocationContext })).rejects.toThrow('Read-only permission')
+    expect(assertInvocationAllowed).toHaveBeenCalledWith(invocationContext, operation)
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('reports outcome_unknown when registration changes while projecting a committed mutation result', async () => {

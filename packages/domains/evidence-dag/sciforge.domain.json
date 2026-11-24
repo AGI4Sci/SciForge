@@ -9,7 +9,7 @@
   "module": {
     "id": "sciforge.evidence-dag",
     "displayName": "Evidence DAG",
-    "version": "2.13.0",
+    "version": "2.19.2",
     "hostApi": {
       "minimum": "1.0.0",
       "maximumExclusive": "2.0.0"

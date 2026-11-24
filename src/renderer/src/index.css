@@ -1,3 +1,9 @@
+/*
+ * The affordance layer must be part of the Tailwind entry so its `@layer base`
+ * block is hoisted into the emitted base layer (which keeps utilities winning).
+ */
+@import './styles/ui-affordance.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

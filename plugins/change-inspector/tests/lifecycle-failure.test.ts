@@ -114,7 +114,7 @@ for (const retire of ['cancel', 'disable'] as const) {
       assert.equal(settled, false, 'outer invocation must await held provider settlement')
       const rejection = assert.rejects(call, retire === 'cancel'
         ? { code: 'invocation_cancelled' }
-        : /Host invocation authority closed/)
+        : /Host (?:invocation authority closed|service outer invocation authority is no longer current)/)
       held = false
       release.release()
       await rejection

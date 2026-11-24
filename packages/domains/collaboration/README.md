@@ -1,6 +1,15 @@
 # `@sciforge/domain-collaboration`
 
+15.3.0 adds a bounded one-shot Worker follow-up through the existing Task journal,
+ScheduleRuntime clock and AgentExecution path. A `deferred` result ends the model
+turn, pins its source turn, Session, contract and input references, and rechecks
+current authority when due. Unknown outcomes are retained without automatic
+business retries. The task drawer distinguishes waiting from active model work.
+Protocol and scope: [Task follow-up](../../../docs/task-followup.md).
+
 SciForge 的统一用户—手机—Agent 协作领域包。
+
+13.6.0 改善有界科研上下文与显式 Worker Session 接续。Coordinator 根据待答问题、活跃任务与依赖和相关结果选取事实，提供范围与省略信息；Worker 接续保留近期进展、结构化失败、人工备注、局部结果和精确资源/传输引用。截取范围不等于完整历史，运行成功不代表科研有效；未标注的旧阴性结果仍可能遗漏。原始记录与公开读取路径保留，未知操作仍需核对，不自动重跑。任意 SSH 训练作业的持久接管仍未实现。
 
 协作默认保留主区域打开方式，也可从面板标题栏切换到左侧、右侧或底部，与会话并排显示。边缘可拖动或用方向键调整大小，位置与尺寸保存在本机；同侧面板通过标签切换。窄面板内的导航自动改为顶部布局。
 
@@ -144,6 +153,8 @@ Project workspace, requirements completion, invitations, Task dispatch, Delivery
 adoption and completion. Identity owns OIDC, Device enrollment, credentials and signing.
 All Cloud operations use the existing authenticated transport and command service.
 
+Each requirements work module declares its exact `output` (delivery output filename, media type and size bound). AI requirements completion emits this structured field for human review; dispatch copies the approved declaration into the immutable Task contract. Descriptive prose is not parsed for filenames, and the system does not replace named scientific artifacts with a generic document. Historical modules without a declaration remain readable but must be edited and confirmed before dispatch.
+
 The Owner saves a requirements draft through the UI. The Coordinator completes its work
 modules and acceptance criteria in the Project-bound Session. The Owner confirms the
 exact document revision and digest through the UI. Explicit invitations use the same
@@ -223,3 +234,28 @@ Device 在线校验没有正向 TTL 缓存，仅复用 Identity 已有的在途�
 受控 source 基准：`node --import tsx packages/domains/collaboration/scripts/sync-benchmark.mjs --baseline=<commit>`。
 真实 source 应用的只读重放：`node scripts/measure-collaboration-sync.mjs --ports=<独立 source 调试端口> --output=artifacts/<结果>.json`。
 重放器拒绝 A–E 演示端口及其他 worktree/打包应用。受控 HTTP 基准不等于真实云端或物理设备性能。
+
+
+### Shared human decision requests
+
+Project clarification, single-choice and proposal approval cards use the existing Cloud `human.needed.create` / `human.answer` records. The Agent may create a request without first asking permission to ask; this one capability has no confirmation requirement and grants no execution authority. The Coordinator derives the project-proposal approval digest from the complete reviewed prompt, Project revision, authority epoch, target member and assurance. Its sole supported effect is recording the proposal decision; it never dispatches or starts a task. Caller-supplied action digests are rejected. Existing concrete Worker approvals keep their action binding. Answering and deferring are UI-only User operations, tied to the reviewed request revision; deferral preserves the pending request and never resumes work.
+
+AI leader planning produces structured requests through the same action port, with stable idempotency and pending-request deduplication. Its local observation key advances only across its own request additions; unrelated changes invalidate the proposal. Human answer audits feed later planning, including decisions already resolved, while natural-language answers cannot authorize a task dispatch or execution. Invalid cached recommendations are discarded without deleting session bindings or Cloud requests.
+
+### Explicit Worker Session continuation
+
+The Worker draft exposes **原会话不可用，创建接续会话**. The explicit confirmation uses the single UI-only `collaboration.task.session.continue` capability. It may also replace a quiescent Session deliberately; quiescence does not mean the original Session was lost.
+
+The adapter rechecks current Cloud execution ownership and task/contract/resource versions, requires settled local Runtime/external/outbox receipts, fences the predecessor through the canonical Session admission ledger, and asks the runtime-neutral Host to inspect native status. Only a native-owner missing marker or a known quiescent state is accepted. Transport errors, unknown states and active work do not establish absence. An unsuccessful preparation releases its exact input fence; a committed successor leaves the predecessor fenced.
+
+Append-only `sessionContinuations` preserve both bindings, exact input resource references, task/execution/contract revisions, the fence identity and a bounded handoff packet. Old invocation entries are retained. The adapter then sends the first continuation turn with that packet through the existing Agent Host and durable invocation journal using one stable directive ID. Desktop restart reconciles the same Session/directive and can apply an already observed result without another turn. Opening or copying the explanation is optional; the user does not need to paste context to execute the handoff.
+
+Success updates only the editable Worker draft. It never submits, seals or adopts a delivery, changes the assignee or creates a Cloud Execution. Cross-device or cross-Worker recovery still uses the existing reassignment flow. Unknown external outcomes must be reconciled first. The bounded packet is not a full transcript or inventory of arbitrary background shell jobs; a known terminal Runtime turn is not scientific validation or proof that every external job has ended.
+
+### Published-result observation (observe-1)
+
+The canonical `project.result.published` Inbox handler reserves a durable local queued observation before acknowledging the event. One local drain starts an attempt only after taking the model slot; busy work stays queued without consuming its attempts. The same Coordinator state bounds the retained queue/history at 1000 records; capacity errors prevent acknowledgement rather than silently dropping a publication. Queue waiting is capped at five minutes; expired waiting becomes explicit unknown without starting a model turn. The existing Coordinator owner and its exact bound Runtime Session assess only the sealed Delivery summary with `allowedTools: []`; they cannot confirm requirements, dispatch work, adopt results or publish conclusions. Results are proposals (`no_action`, `update_context`, `propose_next_step`, `human_decision`), not scientific validation. Negative results remain useful evidence.
+
+The local observation policy allows at most two attempts for one exact input and twenty attempts per Project Coordinator authority epoch, with one model slot and a 60-second whole-observation deadline. These are local observation limits, not the Cloud task/coordination budget or a token-cost guarantee. Every record includes the policy and its actual limits. Retries preserve the Host `clientDirectiveId`; timeout, unavailable data, integrity failure, changed authority or invalid output remain unknown. The Host must enforce the explicit empty tool set and structured output; unsupported Runtimes fail closed.
+
+Startup and reconnect only recover already-reserved queued/running/unknown Inbox intents. They never backfill historical results or start a model run merely because the application was launched. Fresh Project authority, requirements, publication frontier and exact manifest digest are checked before dispatch and before accepting a response; a changed baseline discards or hides old suggestions. Lifecycle disposal aborts pending observation work. Research view shows source identity/digest and limitations, and can place a suggestion into the existing question composer without sending it. Full raw-evidence review, autonomous continuation/requirements changes, cross-owner Evidence binding and scientific benefit remain separate work.

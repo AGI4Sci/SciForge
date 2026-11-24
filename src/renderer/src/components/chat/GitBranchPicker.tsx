@@ -137,7 +137,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
     <div ref={wrapRef} className="ds-git-branch-picker ds-no-drag relative min-w-0">
       <button
         type="button"
-        className="flex h-8 max-w-[320px] min-w-0 items-center gap-2 rounded-lg px-2 text-[14px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+        className="flex h-8 max-w-[320px] min-w-0 items-center gap-2 rounded-lg px-2 text-ds-lg font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
         onClick={() => setOpen((v) => !v)}
         title={t('gitBranch')}
       >
@@ -169,24 +169,24 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
                 }
               }}
               placeholder={t('gitSearchBranches')}
-              className="min-w-0 flex-1 bg-transparent text-[15px] text-ds-ink outline-none placeholder:text-ds-faint"
+              className="min-w-0 flex-1 bg-transparent text-ds-xl text-ds-ink outline-none placeholder:text-ds-faint"
             />
           </div>
 
           <div className="max-h-[320px] overflow-y-auto px-3 py-3">
-            <div className="mb-2 px-1 text-[13px] font-medium text-ds-faint">
+            <div className="mb-2 px-1 text-ds-md font-medium text-ds-faint">
               {t('gitBranches')}
             </div>
 
             {loading && !result ? (
-              <div className="flex items-center gap-2 px-1 py-3 text-[13px] text-ds-muted">
+              <div className="flex items-center gap-2 px-1 py-3 text-ds-md text-ds-muted">
                 <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2} />
                 {t('gitBranchLoading')}
               </div>
             ) : null}
 
             {error ? (
-              <div className="mb-2 flex gap-2 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/35 dark:text-amber-100">
+              <div className="mb-2 flex gap-2 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-ds-sm leading-5 text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/35 dark:text-amber-100">
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2} />
                 <span className="min-w-0 break-words">{error}</span>
               </div>
@@ -202,9 +202,9 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
               >
                 <GitBranch className="mt-0.5 h-4 w-4 shrink-0 text-ds-faint" strokeWidth={1.8} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px] font-medium">{branch.name}</span>
+                  <span className="block truncate text-ds-xl font-medium">{branch.name}</span>
                   {branch.current && result?.ok && result.dirtyCount > 0 ? (
-                    <span className="mt-0.5 block text-[12px] text-ds-faint">
+                    <span className="mt-0.5 block text-ds-sm text-ds-faint">
                       {t('gitDirtyFiles', { count: result.dirtyCount })}
                     </span>
                   ) : null}
@@ -218,7 +218,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
             ))}
 
             {!loading && result?.ok && filteredBranches.length === 0 ? (
-              <div className="px-1 py-3 text-[13px] text-ds-faint">{t('gitNoBranches')}</div>
+              <div className="px-1 py-3 text-ds-md text-ds-faint">{t('gitNoBranches')}</div>
             ) : null}
           </div>
 
@@ -226,7 +226,7 @@ export function GitBranchPicker({ workspaceRoot }: Props): ReactElement | null {
             <button
               type="button"
               disabled={!canCreate || actingBranch != null}
-              className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left text-[14px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
+              className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left text-ds-lg font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
               onClick={() => void createBranch()}
             >
               {actingBranch === query.trim() ? (

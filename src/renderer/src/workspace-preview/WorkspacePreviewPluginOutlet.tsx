@@ -108,15 +108,15 @@ export function WorkspacePreviewPluginSummaryBody({
 
   return (
     <section
-      className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4 pr-20 text-sm text-ds-text"
+      className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-4 pr-20 text-ds-lg text-ds-text"
       data-workspace-preview-plugin-summary
       data-route-reason={routeReason}
     >
       <header>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="mt-1 text-xs text-ds-muted">{message}</p>
+        <h3 className="text-ds-lg font-semibold">{title}</h3>
+        <p className="mt-1 text-ds-sm text-ds-muted">{message}</p>
       </header>
-      <p className="max-w-xl text-xs text-ds-muted">
+      <p className="max-w-xl text-ds-sm text-ds-muted">
         Use Inspect for plugin details, asset transport state, and agent-readable observation metadata.
       </p>
     </section>

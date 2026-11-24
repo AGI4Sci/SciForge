@@ -621,6 +621,7 @@ describe('chat-store-navigation-actions chooseWorkspace', () => {
 
   it('does not create an empty thread when selecting an empty workspace', async () => {
     const { chooseWorkspace, state } = buildChooseWorkspaceHarness()
+    state.activeThreadId = null
 
     await expect(chooseWorkspace()).resolves.toBe('/workspace/new')
 
@@ -639,6 +640,19 @@ describe('chat-store-navigation-actions chooseWorkspace', () => {
 
     expect(state.createThread).toHaveBeenCalledWith({ workspaceRoot: '/workspace/new' })
     expect(state.activeThreadId).toBe('old-thread')
+  })
+
+  it('keeps the original session and workspace when migration fails', async () => {
+    const { chooseWorkspace, state } = buildChooseWorkspaceHarness()
+    registryMock.getProvider.mockReturnValue({
+      updateThreadWorkspace: vi.fn(async () => { throw new Error('workspace update rejected') })
+    })
+    await expect(chooseWorkspace()).resolves.toBeNull()
+    expect(state.activeThreadId).toBe('old-thread')
+    expect(state.workspaceRoot).toBe('/workspace/old')
+    expect(state.error).toContain('workspace update rejected')
+    expect(state.selectThread).not.toHaveBeenCalled()
+    expect(runtimeClientMock.setSettings).not.toHaveBeenCalled()
   })
 })
 
@@ -1155,6 +1169,8 @@ describe('chat-store-navigation-actions probeRuntime', () => {
     expect(state.runtimeConnection).toBe('checking')
 
     await vi.advanceTimersByTimeAsync(8_000)
+    expect(state.runtimeConnection).toBe('checking')
+    await vi.advanceTimersByTimeAsync(82_000)
     await task
 
     expect(state.runtimeConnection).toBe('offline')
@@ -1322,7 +1338,7 @@ describe('chat-store-navigation-actions probeRuntime', () => {
     state.probeRuntime = actions.probeRuntime
 
     const task = actions.probeRuntime('background')
-    await vi.advanceTimersByTimeAsync(8_000)
+    await vi.advanceTimersByTimeAsync(90_000)
     await task
 
     expect(state.activeThreadId).toBeNull()

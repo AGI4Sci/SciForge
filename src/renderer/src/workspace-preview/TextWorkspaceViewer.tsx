@@ -1,4 +1,5 @@
 import { TextareaLineGutter } from '../components/write/TextareaLineGutter'
+import { CodeSelectionAction } from '../components/CodeSelectionAction'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
@@ -373,14 +374,14 @@ export function TextWorkspaceViewer({
       data-editable={resolvedModel.editable ? 'true' : 'false'}
     >
       {resolvedModel.status.kind !== 'ready' ? (
-        <div className="p-4 text-sm text-ds-text" role={statusRole}>
+        <div className="p-4 text-ds-lg text-ds-text" role={statusRole}>
           <strong>{resolvedModel.status.title}</strong>
           <p className="mt-1 text-ds-muted">{resolvedModel.status.message}</p>
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 pr-20">
           {externalChange !== null ? (
-            <div className="flex items-center justify-between gap-3 rounded-md border border-ds-warning/40 bg-ds-warning/10 px-3 py-2 text-xs text-ds-text" role="alert" data-text-external-change>
+            <div className="flex items-center justify-between gap-3 rounded-md border border-ds-warning/40 bg-ds-warning/10 px-3 py-2 text-ds-sm text-ds-text" role="alert" data-text-external-change>
               <span>{t('workspacePreviewTextExternalChange')}</span>
               <span className="flex gap-2">
                 <button type="button" className="rounded border border-ds-border px-2 py-1" data-text-load-remote onClick={loadExternalText}>{t('workspacePreviewTextLoadRemote')}</button>
@@ -392,7 +393,7 @@ export function TextWorkspaceViewer({
             <TextareaLineGutter editorRef={editorRef} value={draft} />
             <textarea
               ref={setEditorElement}
-              className="min-h-0 w-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-xs leading-5 text-ds-text outline-none focus:border-ds-accent"
+              className="min-h-0 w-0 flex-1 resize-none rounded-md border border-ds-border bg-ds-panel p-3 font-mono text-ds-sm leading-5 text-ds-text outline-none focus:border-ds-accent"
               data-text-preview-editor
               aria-label={resolvedModel.title}
               data-initial-selection={initialTextRange ? 'true' : 'false'}
@@ -421,7 +422,11 @@ export function TextWorkspaceViewer({
               }}
             />
           </div>
-          <div className="flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center justify-between gap-3 text-ds-sm">
+            {observation && <CodeSelectionAction filePath={observation.file.path} workspaceRoot={observation.file.workspaceRoot} read={() => {
+              const editor = editorRef.current
+              return editor && editor.selectionStart !== editor.selectionEnd ? { text: editor.value, start: editor.selectionStart, end: editor.selectionEnd, bounds: editor.getBoundingClientRect() } : null
+            }} />}
             <p
               className={saveState.kind === 'error' ? 'text-ds-danger' : 'text-ds-muted'}
               data-text-save-status={saveState.kind}

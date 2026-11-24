@@ -11,7 +11,7 @@ test('Project immutable reader uses the production Evidence storage owner by def
   const config = projectDagSidecarConfig({
     appRoot: '/repo', userDataDir, environment: {}
   }, { baseUrl: 'http://localhost/v1', apiKey: 'fixture', model: 'fixture' }, 'fixture')
-  assert.equal(config.sessionDir, join(userDataDir, 'evidence-dag', 'python'))
+  assert.equal(config.sessionDir, join(userDataDir, 'evidence-dag', 'threads'))
   assert.equal(config.env.PDAG_SESSION_DIR, config.sessionDir)
   assert.equal(config.sessionDir, evidenceDagStorageRoot(userDataDir, {}))
 })

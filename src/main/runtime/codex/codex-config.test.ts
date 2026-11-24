@@ -24,7 +24,8 @@ import {
   expandHome,
   probeCodexRuntime,
   prepareCodexAppServerLaunch,
-  resolveCodexProbeInvocation
+  resolveCodexProbeInvocation,
+  resolveManagedCodexHome
 } from './codex-config'
 
 const catalogFetch = vi.fn<typeof fetch>()
@@ -983,6 +984,72 @@ describe('codex config launch helpers', () => {
     const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
     expect(config).not.toContain('[mcp_servers.')
     expect(config).not.toContain('computer-use-mcp-node-entry')
+  })
+
+  it('composes the production runtime from Electron userData without a development path branch', async () => {
+    const source = await readFile(new URL('../../index.ts', import.meta.url), 'utf8')
+    const composition = source.slice(source.indexOf('function getCodexRuntime()'), source.indexOf('function getClaudeCodeRuntime()'))
+    expect(composition).toContain("managedCodexHome: resolveManagedCodexHome(app.getPath('userData'))")
+    expect(composition).not.toContain('app.isPackaged')
+    expect(composition).not.toContain('process.cwd()')
+  })
+
+  it('isolates same-workspace profiles through config generation, cleanup and relaunch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-profile-isolation-'))
+    try {
+      const profileA = join(root, 'profile-a')
+      const profileB = join(root, 'profile-b')
+      const homeA = resolveManagedCodexHome(profileA)
+      const homeB = resolveManagedCodexHome(profileB)
+      const sharedSettingsHome = join(root, 'shared-settings-home')
+      const settingsA = settings(sharedSettingsHome)
+      const settingsB = settings(sharedSettingsHome)
+      settingsB.modelRouter!.baseUrl = 'http://127.0.0.1:49877/v1'
+      settingsB.modelRouter!.runtimeApiKey = 'profile-b-router-key'
+      const hookLaunch = { appPath: root, execPath: process.execPath, isPackaged: false }
+      const [launchA, launchB] = await Promise.all([
+        prepareTestCodexAppServerLaunch({
+          settings: settingsA, managedCodexHome: homeA, preToolUseHookLaunch: hookLaunch
+        }),
+        prepareTestCodexAppServerLaunch({
+          settings: settingsB, managedCodexHome: homeB, preToolUseHookLaunch: hookLaunch
+        })
+      ])
+      expect(launchA.cwd).toBe(launchB.cwd)
+      expect(homeA).toBe(join(profileA, 'runtime-codex', 'codex-home'))
+      expect(launchA.env.CODEX_HOME).toBe(homeA)
+      expect(launchB.env.CODEX_HOME).toBe(homeB)
+      expect(launchA.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
+      expect(launchB.env.SCIFORGE_RUNTIME_API_KEY).toBe('profile-b-router-key')
+      const configA = await readFile(join(homeA, 'config.toml'), 'utf8')
+      const configB = await readFile(join(homeB, 'config.toml'), 'utf8')
+      expect(configA).toContain(settingsA.modelRouter!.baseUrl)
+      expect(configA).toContain(JSON.stringify(join(homeA, 'model-catalog.json')))
+      expect(configB).toContain(settingsB.modelRouter!.baseUrl)
+      expect(configB).toContain(JSON.stringify(join(homeB, 'model-catalog.json')))
+      const hooksB = await readFile(join(homeB, 'hooks.json'), 'utf8')
+      await writeFile(join(homeA, 'auth.json'), '{"profile":"a"}\n', { mode: 0o600 })
+      await writeFile(join(homeB, 'auth.json'), '{"profile":"b"}\n', { mode: 0o600 })
+
+      // Reconstruct the home from the same userData after a restart and change only A's mode.
+      const relaunchA = await prepareTestCodexAppServerLaunch({
+        settings: { ...settingsA, modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' } },
+        managedCodexHome: resolveManagedCodexHome(profileA),
+        standardCodexAuthPath: join(homeB, 'auth.json'),
+        planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' }
+      })
+      expect(relaunchA.env.CODEX_HOME).toBe(homeA)
+      expect(relaunchA.env.SCIFORGE_RUNTIME_API_KEY).toBeUndefined()
+      expect(await readFile(join(homeA, 'config.toml'), 'utf8')).toContain(CODEX_PLAN_GATEWAY_PROVIDER_ID)
+      await expect(readFile(join(homeA, 'hooks.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readFile(join(homeA, 'auth.json'), 'utf8')).toBe('{"profile":"a"}\n')
+      expect(await readFile(join(homeB, 'auth.json'), 'utf8')).toBe('{"profile":"b"}\n')
+      expect(await readFile(join(homeB, 'config.toml'), 'utf8')).toBe(configB)
+      expect(await readFile(join(homeB, 'hooks.json'), 'utf8')).toBe(hooksB)
+      await expect(readFile(join(sharedSettingsHome, 'config.toml'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('uses the managed Codex home instead of a persisted global Codex home', async () => {

@@ -1,5 +1,7 @@
 # SciForge plug-in services
 
+> **Current public composition (2026-11-24):** the independently discoverable plugins are Anchored Comments 0.2.3, Change Inspector 0.1.3 and Scientific Plotting 0.4.0-mvp.13. The four early standalone Evidence DAG, Project DAG, Git Checkpoints and Research Checkpoints backends are retired; their original license texts are retained as archives. Their six built-in domain counterparts (including Artifact Versions and Research Dossier) remain installed through the canonical manifest/generated composition. This is a source migration, not a signed market release or a claim that historical acceptance was rerun. The versioning-group tables and acceptance counts below are **historical**, not current discovery or installation instructions.
+
 Optional service modules. Model Router owns translator roles directly.
 
 Scientific Compute is **retired** in both built-in domain and DSH plugin forms.
