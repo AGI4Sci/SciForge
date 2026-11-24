@@ -47,6 +47,7 @@ export function MarketCatalog(): ReactElement {
     setConfirming(null)
     setApprovedPorts([])
     setLoading(true)
+    setNotice(current => current?.tone === 'error' ? null : current)
     try {
       setView(await window.sciforge.market.list())
     } catch (error) {
@@ -166,7 +167,7 @@ export function MarketCatalog(): ReactElement {
         <button
           type="button"
           onClick={() => void refresh()}
-          disabled={loading}
+          disabled={loading || busy !== null}
           className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-ds-md font-semibold text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
         >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />}
@@ -174,7 +175,7 @@ export function MarketCatalog(): ReactElement {
         </button>
       </div>
 
-      {notice ? (
+      {notice && view !== null ? (
         <div
           role="status"
           className={`mt-4 rounded-xl border px-3 py-2 text-ds-md ${
@@ -192,15 +193,8 @@ export function MarketCatalog(): ReactElement {
           role="alert"
           className="mt-4 rounded-xl border border-amber-300/60 bg-amber-50 px-3 py-2 text-ds-md text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100"
         >
-          <div className="font-semibold">{t('marketUnavailableTitle')}</div>
+          <div className="font-semibold">{t('marketLoadFailedTitle')}</div>
           <div className="mt-1">{notice?.text ?? t('marketUnavailableHint')}</div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="mt-2 rounded-lg bg-ds-subtle px-2.5 py-1 text-ds-sm font-semibold text-ds-ink"
-          >
-            {t('marketRefresh')}
-          </button>
         </div>
       ) : null}
 
@@ -211,13 +205,6 @@ export function MarketCatalog(): ReactElement {
         >
           <div className="font-semibold">{t('marketLocalOnlyTitle')}</div>
           <div className="mt-1">{t('marketLocalOnlyHint')}</div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="mt-2 rounded-lg bg-ds-card px-2.5 py-1 text-ds-sm font-semibold text-ds-ink"
-          >
-            {t('marketRefresh')}
-          </button>
         </div>
       ) : null}
 
@@ -226,22 +213,18 @@ export function MarketCatalog(): ReactElement {
           <div className="font-semibold text-ds-ink">{t('marketIndexUnavailable')}</div>
           <div className="mt-1 break-words">{view.error}</div>
           <div className="mt-1 text-ds-sm">{t('marketIndexUnavailableHint')}</div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="mt-2 rounded-lg bg-ds-card px-2.5 py-1 text-ds-sm font-semibold text-ds-ink"
-          >
-            {t('marketRefresh')}
-          </button>
         </div>
       ) : null}
 
       {view?.source ? (
-        <p className="mt-3 font-mono text-ds-xs text-ds-faint">
-          {t('marketIndexSource')}: {view.source.location}
-          {view.dshRuntimeVersion ? ` · DSH ${view.dshRuntimeVersion}` : ''}
-          {view.generatedAt ? ` · ${view.generatedAt}` : ''}
-        </p>
+        <details className="mt-3 text-ds-sm text-ds-muted">
+          <summary className="cursor-pointer hover:text-ds-ink">{t('marketCatalogDetails')}</summary>
+          <p className="mt-2 break-all font-mono text-ds-xs text-ds-faint">
+            {t('marketIndexSource')}: {view.source.location}
+            {view.dshRuntimeVersion ? ` · DSH ${view.dshRuntimeVersion}` : ''}
+            {view.generatedAt ? ` · ${view.generatedAt}` : ''}
+          </p>
+        </details>
       ) : null}
 
       <div className="mt-5 flex flex-col gap-3">
@@ -266,7 +249,7 @@ export function MarketCatalog(): ReactElement {
               <div className="min-w-0 flex-1">
                 <h3 className="text-ds-2xl font-semibold text-ds-ink">{plugin.title}</h3>
                 <div className="mt-1 font-mono text-ds-xs text-ds-faint">
-                  {plugin.name} · {plugin.version} · {formatSize(plugin.sizeBytes)}
+                  {plugin.version} · {formatSize(plugin.sizeBytes)}
                 </div>
                 {plugin.installed && plugin.installedVersion !== null && plugin.installedVersion !== plugin.version ? (
                   <p className="mt-1 font-mono text-ds-xs text-ds-muted">
@@ -295,7 +278,7 @@ export function MarketCatalog(): ReactElement {
                   <button
                     type="button"
                     onClick={() => { setApprovedPorts([]); setConfirming(plugin) }}
-                    disabled={busy === plugin.name || view?.fallback === true}
+                    disabled={loading || busy !== null || view?.fallback === true}
                     className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-ds-md font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90 disabled:opacity-60"
                   >
                     {busy === plugin.name ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />}
@@ -307,7 +290,7 @@ export function MarketCatalog(): ReactElement {
                     <button
                       type="button"
                       onClick={() => void toggle(plugin)}
-                      disabled={busy === plugin.name || view?.fallback === true}
+                      disabled={loading || busy !== null || view?.fallback === true}
                       className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-1.5 text-ds-sm font-semibold text-ds-ink transition hover:bg-ds-hover disabled:opacity-60"
                     >
                       {busy === plugin.name ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : <Power className="h-3 w-3" aria-hidden="true" />}
@@ -316,7 +299,7 @@ export function MarketCatalog(): ReactElement {
                     <button
                       type="button"
                       onClick={() => void uninstall(plugin)}
-                      disabled={busy === plugin.name}
+                      disabled={loading || busy !== null}
                       className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-1.5 text-ds-sm font-semibold text-ds-muted transition hover:bg-ds-hover disabled:opacity-60"
                     >
                       <Trash2 className="h-3 w-3" aria-hidden="true" />
@@ -339,8 +322,8 @@ export function MarketCatalog(): ReactElement {
             ) : null}
 
             {plugin.installed ? (
-              <div className="mt-3 rounded-xl border border-ds-border-muted bg-ds-subtle p-3">
-                <div className="text-ds-sm font-semibold text-ds-ink">{t('marketHowToUse')}</div>
+              <details className="mt-3 rounded-xl border border-ds-border-muted bg-ds-subtle p-3">
+                <summary className="cursor-pointer text-ds-sm font-semibold text-ds-ink">{t('marketHowToUse')}</summary>
                 <p className="mt-1 text-ds-sm text-ds-muted">{t('marketHowToUseHint')}</p>
                 <ul className="mt-2 flex flex-col gap-1">
                   {plugin.capabilities.length === 0 ? (
@@ -361,17 +344,28 @@ export function MarketCatalog(): ReactElement {
                     </li>
                   ))}
                 </ul>
-              </div>
+              </details>
             ) : null}
+
+            <details className="mt-3 text-ds-sm text-ds-muted">
+              <summary className="cursor-pointer hover:text-ds-ink">{t('marketPackageDetails')}</summary>
+              <div className="mt-2 break-all font-mono text-ds-xs">
+                {plugin.name}@{plugin.version}<br />
+                SHA-256: {plugin.sha256}
+              </div>
+            </details>
 
             {confirming?.name === plugin.name ? (
               <div className="mt-4 rounded-xl border border-ds-border-muted bg-ds-subtle p-3">
                 <div className="text-ds-md font-semibold text-ds-ink">{t('marketConfirmInstall')}</div>
-                <div className="mt-2 break-all font-mono text-ds-sm text-ds-muted">
-                  {plugin.name}@{plugin.version} · {plugin.publisher ?? 'unsigned'}<br />
-                  SHA-256: {plugin.sha256}<br />
-                  {plugin.approvalSnapshot.entry} · {plugin.hostDependencies.join(', ')}
-                </div>
+                <details className="mt-2 text-ds-sm text-ds-muted">
+                  <summary className="cursor-pointer hover:text-ds-ink">{t('marketPackageDetails')}</summary>
+                  <div className="mt-2 break-all font-mono">
+                    {plugin.name}@{plugin.version} · {plugin.publisher ?? 'unsigned'}<br />
+                    SHA-256: {plugin.sha256}<br />
+                    {plugin.approvalSnapshot.entry}
+                  </div>
+                </details>
                 {(plugin.approvalSnapshot.hostServices?.length ?? 0) > 0 ? (
                   <p className="mt-2 text-ds-sm text-ds-muted">
                     {t('marketHostServices')}: <span className="font-mono">{plugin.approvalSnapshot.hostServices?.join(', ')}</span>
@@ -421,7 +415,7 @@ export function MarketCatalog(): ReactElement {
                   <button
                     type="button"
                     onClick={() => void install(plugin)}
-                    disabled={view?.fallback === true || approvedPorts.length !== plugin.ports.length || plugin.ports.some(port => !approvedPorts.includes(port))}
+                    disabled={loading || busy !== null || view?.fallback === true || approvedPorts.length !== plugin.ports.length || plugin.ports.some(port => !approvedPorts.includes(port))}
                     className="rounded-xl bg-ds-userbubble px-3 py-1.5 text-ds-sm font-semibold text-ds-userbubbleFg transition hover:opacity-90 disabled:opacity-60"
                   >
                     {t('marketApproveAndInstall')}
@@ -434,8 +428,10 @@ export function MarketCatalog(): ReactElement {
       </div>
 
       {(view?.notInstallable.length ?? 0) > 0 ? (
-        <section className="mt-8">
-          <h2 className="text-ds-2xl font-semibold text-ds-ink">{t('marketNotInstallable')}</h2>
+        <details className="mt-5 rounded-xl border border-ds-border-muted px-3 py-2">
+          <summary className="cursor-pointer text-ds-sm font-semibold text-ds-muted hover:text-ds-ink">
+            {t('marketNotInstallable')} · {view?.notInstallable.length}
+          </summary>
           <p className="mt-1 text-ds-sm text-ds-muted">{t('marketNotInstallableHint')}</p>
           <ul className="mt-3 flex flex-col gap-2">
             {view?.notInstallable.map((entry) => (
@@ -445,7 +441,7 @@ export function MarketCatalog(): ReactElement {
               </li>
             ))}
           </ul>
-        </section>
+        </details>
       ) : null}
     </div>
   )

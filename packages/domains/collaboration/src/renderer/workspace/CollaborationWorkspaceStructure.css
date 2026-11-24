@@ -1764,7 +1764,9 @@
 
 .collaboration-workspace-page-panel {
   width: 100%;
+  min-width: 0;
   max-width: 1080px;
+  margin-inline: auto;
   padding: 28px 32px 48px;
 }
 
@@ -3168,11 +3170,18 @@ button.collaboration-workspace-personal-row:hover {
 }
 
 /* Personal list toolbar: search + status scope. Keeps the long task lists usable. */
-.collaboration-workspace-personal-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
-.collaboration-workspace-personal-search { display: inline-flex; align-items: center; gap: 8px; min-width: 240px; padding: 6px 10px; border: 1px solid rgba(0, 0, 0, 0.12); border-radius: 8px; background: #fff; }
+.collaboration-workspace-personal-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.collaboration-workspace-personal-search { display: inline-flex; flex: 1 1 240px; align-items: center; gap: 8px; min-width: 0; max-width: 360px; padding: 6px 10px; border: 1px solid var(--ds-border-muted); border-radius: 8px; background: var(--ds-surface-card); color: var(--ds-text); }
+.collaboration-workspace-personal-search:focus-within { border-color: var(--ds-accent); box-shadow: 0 0 0 1px var(--ds-accent); }
 .collaboration-workspace-personal-search svg { width: 15px; height: 15px; opacity: 0.55; flex: none; }
-.collaboration-workspace-personal-search input { width: 100%; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
-.collaboration-workspace-personal-scopes { display: inline-flex; gap: 4px; }
+.collaboration-workspace-personal-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
+.collaboration-workspace-personal-search input::placeholder { color: var(--ds-text-faint); opacity: 1; }
+.collaboration-workspace-personal-scopes { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .collaboration-workspace-personal-scope { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-.collaboration-workspace-personal-scope:hover { background: rgba(0, 0, 0, 0.04); }
-.collaboration-workspace-personal-scope.is-active { background: rgba(0, 0, 0, 0.06); border-color: rgba(0, 0, 0, 0.08); font-weight: 600; }
+.collaboration-workspace-personal-scope:hover { background: var(--ds-surface-hover); }
+.collaboration-workspace-personal-scope.is-active { background: var(--ds-surface-hover); border-color: var(--ds-border-muted); font-weight: 600; }
+
+@container (max-width: 640px) {
+  .collaboration-workspace-page-panel { padding: 24px 16px 40px; }
+  .collaboration-workspace-personal-search { flex-basis: 100%; max-width: none; }
+}

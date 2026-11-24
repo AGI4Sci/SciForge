@@ -531,7 +531,7 @@ function isHostProductionPath(path) {
 }
 
 function isGeneratedComposition(path, source) {
-  return source.startsWith(GENERATED_HEADER) && [
+  return (source.startsWith(GENERATED_HEADER) || source.startsWith(GENERATED_HEADER.replace('\n', '\r\n'))) && [
     'src/shared/installed-domain-packages.ts',
     'src/main/modules/installed-domain-main.ts',
     'src/main/modules/installed-domain-headless.ts',

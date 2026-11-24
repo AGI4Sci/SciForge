@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, symlink, rm, readFile, readdir, lstat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import { discoverDomainPackages, isLicenseOnlyDomainArchive } from './domain-packages.mjs'
@@ -17,6 +18,34 @@ const licenseSHA256 = {
   'packages/domains/content-space': 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30',
   'packages/domains/content-space-mock-provider': 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
 }
+
+test('Windows autocrlf checkout preserves archived license and inert provenance bytes', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'public-license-checkout-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', ['-c', 'core.autocrlf=true', ...args], { cwd: dir, stdio: 'pipe' })
+  git('init', '-q')
+  await writeFile(join(dir, '.gitattributes'), await readFile(join(root, '.gitattributes')))
+  const paths = [
+    ...Object.keys(licenseSHA256).map(directory => `${directory}/LICENSE`),
+    'plugins/project-dag/tests/fixtures/legacy-runtime.source.json',
+    'plugins/project-dag/tests/fixtures/legacy-runtime.ts.txt'
+  ]
+  for (const path of paths) {
+    await mkdir(dirname(join(dir, path)), { recursive: true })
+    await writeFile(join(dir, path), await readFile(join(root, path)))
+  }
+  git('add', '--all')
+  git('checkout-index', '--all', '--prefix=checkout/')
+  for (const path of paths) {
+    const expected = path.endsWith('/LICENSE')
+      ? licenseSHA256[path.slice(0, -'/LICENSE'.length)]
+      : {
+          'plugins/project-dag/tests/fixtures/legacy-runtime.source.json': '7a007e1c6a3ccb13b9ad4df82c748fcb82b2057123fa2ae59559414a4fbcfdee',
+          'plugins/project-dag/tests/fixtures/legacy-runtime.ts.txt': '36f50cead195817f4c891ec05c5e9447d065e72b43ba0e3327ef6eb926e83af4'
+        }[path]
+    assert.equal(createHash('sha256').update(await readFile(join(dir, 'checkout', path))).digest('hex'), expected, path)
+  }
+})
 
 test('only nonempty regular license-text-only directories are archives', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'public-license-archive-'))

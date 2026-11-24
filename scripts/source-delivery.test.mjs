@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile, rm, symlink } from 'node:fs/promis
 import { fileURLToPath } from 'node:url'
 import { loadMigrationFixtureLicenseSnapshot, verifyMigrationFixtureLicenseSnapshot } from './migration-fixture-licenses.mjs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 
 const root = new URL('../', import.meta.url)
@@ -56,6 +56,23 @@ test('retained nine immutable fixtures have a complete scoped offline third-part
   assert.deepEqual(verifyMigrationFixtureLicenseSnapshot(await retainedFixtureSnapshot()), {
     fixtures: 9, inlinePackages: 8, helperAttributions: 1, moduleOccurrences: 316
   })
+})
+
+test('Windows autocrlf checkout preserves authenticated fixture and license bytes', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'source-delivery-autocrlf-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const git = (...args) => execFileSync('git', ['-c', 'core.autocrlf=true', ...args], { cwd: directory, stdio: 'pipe' })
+  git('init', '-q')
+  await writeFile(join(directory, '.gitattributes'), await readFile(new URL('.gitattributes', root)))
+  for (const [path, bytes] of await retainedFixtureSnapshot()) {
+    await mkdir(dirname(join(directory, path)), { recursive: true })
+    await writeFile(join(directory, path), bytes)
+  }
+  git('add', '--all')
+  git('checkout-index', '--all', '--prefix=checkout/')
+  assert.deepEqual(verifyMigrationFixtureLicenseSnapshot(
+    await loadMigrationFixtureLicenseSnapshot(join(directory, 'checkout'))
+  ), { fixtures: 9, inlinePackages: 8, helperAttributions: 1, moduleOccurrences: 316 })
 })
 
 test('unreviewed inlined packages fail instead of inheriting the root project license', async () => {

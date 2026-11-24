@@ -13,6 +13,7 @@ import { createHash, createPrivateKey, generateKeyPairSync, sign as signEd25519 
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { join, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -732,7 +733,7 @@ describe('createDshMarketSurface', () => {
       plugins: [],
       blocked: [{
         name: '@sciforge/plugin-blocked', plugin: 'blocked', version: '1.0.0',
-        reason: 'not ready for listing', detail: null, runtimeGap: null
+        reason: 'not ready for listing', detail: null, runtimeGap: null, source: 'plugins/blocked'
       }]
     })}\n`)
     const surface = createDshMarketSurface({
@@ -748,7 +749,10 @@ describe('createDshMarketSurface', () => {
     expect(view.fallback).toBe(true)
     expect(view.source).toEqual({ kind: 'file', location: bundled })
     expect(view.plugins).toEqual([])
-    expect(view.notInstallable.map((entry) => entry.name)).toEqual(['@sciforge/plugin-blocked'])
+    expect(view.notInstallable).toEqual([{
+      name: '@sciforge/plugin-blocked', plugin: 'blocked', version: '1.0.0',
+      reason: 'not ready for listing', detail: null, runtimeGap: null
+    }])
   })
 
   it('reports the configured index error when the bundled fallback is unreadable too', async () => {
@@ -793,8 +797,9 @@ describe('market artifact locations and downloads', () => {
     expect(resolveDshMarketSource({ env: {} })).toBeUndefined()
     expect(resolveDshMarketSource({ configured: 'HTTPS://example.com/market/index.json', env: { SCIFORGE_MARKET_INDEX: configuredPath } }))
       .toEqual({ kind: 'url', url: 'https://example.com/market/index.json' })
-    expect(resolveDshMarketSource({ configured: 'file:///tmp/market%20catalog/index.json', env: {} }))
-      .toEqual({ kind: 'file', path: '/tmp/market catalog/index.json' })
+    const spacedPath = resolve(tmpdir(), 'market catalog', 'index.json')
+    expect(resolveDshMarketSource({ configured: pathToFileURL(spacedPath).href, env: {} }))
+      .toEqual({ kind: 'file', path: spacedPath })
     expect(() => resolveDshMarketSource({ configured: 'ftp://example.com/index.json', env: {} }))
       .toThrow(/local path, file URL or HTTP/)
 

@@ -112,6 +112,7 @@ describe('extensionCatalogItemsFromDefinitions', () => {
       resources: {
         en: {
           common: {
+            catalogOpenDetails: 'Show details for {{name}}',
             extensionOfficial: 'Official',
             extensionBundled: 'Bundled',
             extensionPublisher: 'Publisher',
